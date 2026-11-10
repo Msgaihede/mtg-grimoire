@@ -126,6 +126,36 @@ export const MENU_MIN_HEIGHT = 42;
 export const MENU_EDGE_GUTTER = 8;
 
 /**
+ * The window's own caption, which a panel keeps clear of as well as the gutter: `TitleBar`'s
+ * `BAR_H`, written as a number (`panel.test.ts` holds the two together through `BELOW_CAPTION`).
+ *
+ * **A bound rather than a rung**, which is the opposite of the call `LAYER.tooltip` made, and the
+ * difference is what each surface takes. A tooltip is transient and `pointer-events-none`, so
+ * drawing it over the caption costs the reader nothing; a menu is a surface the reader *presses*,
+ * and lifting it over the frame would put rows over Close. Kept under the caption, a panel that
+ * reached up into the bar had its first rows painted behind it — unreadable and unpressable —
+ * which is issue #1572's half that `placeMenu` shared with `placeSubmenu`.
+ *
+ * The header band is drawn in every edition (the light one drops only the window verbs), so the
+ * inset is unconditional. A face with no band loses 34px of a tall menu's room, never a row.
+ */
+export const MENU_TOP_INSET = 34;
+
+/**
+ * The tallest a panel may be drawn, in px: the window between the caption and the bottom gutter.
+ *
+ * **Every panel scrolls past this, and before issue #1572 none of them could.** "Add to ▸ Deck"
+ * lists every unarchived deck and folder at a level, uncapped, so a reader with a few dozen decks
+ * had a panel taller than the window — and with no `max-h` and no `overflow` anywhere in this
+ * module its last rows were unreachable by pointer and by caret alike. Read at render, like
+ * `placeMenu`'s viewport: a resize closes the menu, so the number cannot go stale under a panel.
+ */
+export function menuMaxHeight(): number {
+  const room = document.documentElement.clientHeight - MENU_TOP_INSET - 2 * MENU_EDGE_GUTTER;
+  return Math.max(room, MENU_MIN_HEIGHT);
+}
+
+/**
  * The four transform origins, written out whole.
  *
  * **Tailwind scans source text for whole class names**, so `` `origin-${v}-${h}` `` emits no rule
@@ -138,9 +168,31 @@ const ORIGIN = {
   bottom: { left: "origin-bottom-left", right: "origin-bottom-right" },
 } as const;
 
-/** The panel's own look, shared by the root and every submenu so the cascade is one surface. */
+/**
+ * The panel's own look, shared by the root and every submenu so the cascade is one surface.
+ *
+ * **A flex column with no padding, because the panel is not what scrolls.** The rows sit in
+ * {@link PANEL_SCROLL_CLASS}'s box inside it, and the split is load-bearing: a submenu is
+ * `absolute` and its containing block is *this* box (the nearest positioned ancestor — the row
+ * box between them is deliberately static), so it escapes the scroller's clip. Put `overflow` on
+ * the panel itself and every submenu opening out of a long panel is cut off at its edge. The flex
+ * column is what lets the scroller shrink to the panel's `max-height` (`min-h-0`) rather than
+ * overflowing it by its own border.
+ */
 export const PANEL_CLASS =
-  "min-w-56 rounded-lg border border-border bg-surface p-1 shadow-lg outline-none";
+  "flex min-w-56 flex-col rounded-lg border border-border bg-surface shadow-lg outline-none";
+
+/**
+ * The box inside a panel that holds its rows and scrolls once they outgrow {@link menuMaxHeight}.
+ *
+ * **Static, never positioned** — see {@link PANEL_CLASS}: an `overflow` box clips only the
+ * descendants whose containing block it is or lies inside, and a submenu's is the panel outside
+ * it. `overscroll-contain` keeps a wheel at the end of the list from chaining to the page behind,
+ * whose scroll would close the whole menu. `rounded-[inherit]` keeps a scrollbar inside the
+ * panel's rounded corners.
+ */
+export const PANEL_SCROLL_CLASS =
+  "min-h-0 overflow-y-auto overscroll-contain rounded-[inherit] p-1";
 
 /** A row's shared geometry. The colours differ by state and are the row's own to add. */
 export const ROW_CLASS =
@@ -155,8 +207,12 @@ export interface Placement {
   origin: string;
 }
 
-const clamp = (value: number, size: number, viewport: number): number =>
-  Math.max(MENU_EDGE_GUTTER, Math.min(value, viewport - size - MENU_EDGE_GUTTER));
+/** Into `[min, viewport - size - gutter]`; `min` wins when the two cross. */
+const clamp = (value: number, size: number, viewport: number, min = MENU_EDGE_GUTTER): number =>
+  Math.max(min, Math.min(value, viewport - size - MENU_EDGE_GUTTER));
+
+/** The highest a panel's top edge may sit: under the caption, by the gutter. */
+const MENU_MIN_TOP = MENU_TOP_INSET + MENU_EDGE_GUTTER;
 
 /**
  * Where a menu opened at `at` goes, given the room it needs.
@@ -168,30 +224,43 @@ const clamp = (value: number, size: number, viewport: number): number =>
  * the bottom-right corner grows up *and* left, and the corner it is pinned by is the corner it
  * grows from.
  */
-export function placeMenu(at: MenuPosition, width: number, height: number): Placement {
+export function placeMenu(at: MenuPosition, width: number, measured: number): Placement {
   const viewportWidth = document.documentElement.clientWidth;
   const viewportHeight = document.documentElement.clientHeight;
+  // The height the panel is drawn at, which `max-height` already caps in a browser; capped here
+  // too so the arithmetic agrees with it before (and without) a measurement.
+  const height = Math.min(measured, menuMaxHeight());
   const flipX = at.x + width + MENU_EDGE_GUTTER > viewportWidth;
   const flipY = at.y + height + MENU_EDGE_GUTTER > viewportHeight;
   return {
     left: clamp(flipX ? at.x - width : at.x, width, viewportWidth),
-    top: clamp(flipY ? at.y - height : at.y, height, viewportHeight),
+    // Clamped under the caption, not under the window's top edge: a menu flipped up off a
+    // right-click near the top of a view used to tuck its first rows behind the title bar.
+    top: clamp(flipY ? at.y - height : at.y, height, viewportHeight, MENU_MIN_TOP),
     origin: ORIGIN[flipY ? "bottom" : "top"][flipX ? "right" : "left"],
   };
 }
 
 /**
- * Where a submenu goes relative to its parent row — as classes rather than as pixels.
+ * Where a submenu goes: a side of its parent panel as a class, and a top edge in viewport px.
  *
- * A submenu is **`absolute` inside its parent row's box** and the root panel is `fixed`, and that
+ * A submenu is **`absolute` inside its parent panel** and the root panel is `fixed`, and that
  * difference is not stylistic. The root panel animates a `scale`, and a transformed ancestor
  * becomes the containing block for every `fixed` descendant — so a `fixed` submenu inside it would
- * be positioned against the panel it is trying to escape. Positioning it in the cascade sidesteps
- * that entirely and needs no pixel arithmetic; the measurement below decides only *which* way.
+ * be positioned against the panel it is trying to escape.
+ *
+ * **The containing block is the panel, not the row, since issue #1572.** It used to be the row's
+ * own box (`relative`), which made the vertical side a class too — `top-0` or `bottom-0` — and
+ * needed no pixel arithmetic. Two things ended that. A panel now scrolls (see
+ * {@link PANEL_CLASS}), and a row box inside the scroller that was a containing block would have
+ * had its submenu clipped by it. And a pair of classes can only *flip*, never clamp: a row at
+ * `y = 300` with a 600px panel flipped to `bottom-0` and drew the panel from `y = -268`.
  */
 export interface SubmenuPlacement {
-  /** `left-full` or `right-full`, and `top-0` or `bottom-0`. */
-  position: string;
+  /** `left-full` or `right-full` — of the parent panel's box. */
+  side: "left-full" | "right-full";
+  /** Where the panel's top edge goes, in viewport px. The caller turns it into the parent's. */
+  top: number;
   origin: string;
 }
 
@@ -204,22 +273,41 @@ export interface SubmenuPlacement {
  * `truncate`, i.e. `white-space: nowrap`, which makes a panel's min-content equal its
  * max-content: a panel holding a long deck name really is wider than 224 and **cannot shrink to
  * it**. Deciding the flip against the floor therefore reads "it fits" about a panel that does
- * not, and the overflow is unreachable rather than merely ugly — the ancestor is `fixed` and this
- * module has no `max-h`, no `max-w` and no `overflow` anywhere, so nothing clips it and nothing
- * scrolls to it.
+ * not, and the overflow is unreachable — nothing in this module bounds a panel's width.
+ *
+ * **The vertical axis is a preference order, then a clamp** (issue #1572):
+ *
+ * 1. Level with the row, growing down — where all but the bottom of the window's submenus go.
+ * 2. Else level with the row's *bottom*, growing up, if that fits under the caption.
+ * 3. Else — the panel is taller than the room on either side — it grows towards whichever side
+ *    has more room and is clamped into the window. {@link menuMaxHeight} caps the height at the
+ *    room between the caption and the bottom gutter, so the clamp always has an answer, and the
+ *    panel scrolls for whatever that cap cut off.
+ *
+ * The flip used to be unconditional and unbounded: it never asked whether the upward side had
+ * more room, and nothing stopped it leaving the window. A row at `top: 398` with a 458px panel in
+ * an 800px window was sent to `bottom-0`, i.e. a panel from `y = -28`, with its first rows above
+ * the window and under the caption, and the caret walking onto rows nobody could see.
+ *
+ * `parent` is the panel the row is drawn in — the submenu's containing block — whose right edge is
+ * where a `left-full` panel starts.
  */
-export function placeSubmenu(row: DOMRect, width: number, height: number): SubmenuPlacement {
-  const toLeft = row.right + width + MENU_EDGE_GUTTER > document.documentElement.clientWidth;
-  const upward = row.top + height + MENU_EDGE_GUTTER > document.documentElement.clientHeight;
+export function placeSubmenu(
+  row: DOMRect,
+  parent: DOMRect,
+  width: number,
+  measured: number,
+): SubmenuPlacement {
+  const viewportHeight = document.documentElement.clientHeight;
+  const toLeft = parent.right + width + MENU_EDGE_GUTTER > document.documentElement.clientWidth;
+  const height = Math.min(measured, menuMaxHeight());
+  const bottomLimit = viewportHeight - MENU_EDGE_GUTTER;
+  const fitsDown = row.top + height <= bottomLimit;
+  const fitsUp = row.bottom - height >= MENU_MIN_TOP;
+  const upward = !fitsDown && (fitsUp || row.bottom - MENU_MIN_TOP > bottomLimit - row.top);
   return {
-    // Whole literals, all four of them, for the reason `ORIGIN` is written out.
-    position: toLeft
-      ? upward
-        ? "right-full bottom-0"
-        : "right-full top-0"
-      : upward
-        ? "left-full bottom-0"
-        : "left-full top-0",
+    side: toLeft ? "right-full" : "left-full",
+    top: clamp(upward ? row.bottom - height : row.top, height, viewportHeight, MENU_MIN_TOP),
     origin: ORIGIN[upward ? "bottom" : "top"][toLeft ? "right" : "left"],
   };
 }
@@ -295,7 +383,11 @@ export function moveCaret(panel: HTMLElement, move: CaretMove): void {
  * panel holding both rows and a field must land on whichever comes first rather than on the field.
  */
 export function focusInto(panel: HTMLElement): void {
+  // `preventScroll`, because a panel that has just opened is already where it should be and its
+  // first stop is at the top of its scroller. Left to scroll, `focus()` may also move a scroller
+  // the panel only *sits* in — the parent panel's — and an in-menu scroll closes every panel
+  // deeper than the one that scrolled, this one included.
   const rows = menuRowsIn(panel);
-  if (rows.length > 0) rows[0].focus();
-  else panel.focus();
+  if (rows.length > 0) rows[0].focus({ preventScroll: true });
+  else panel.focus({ preventScroll: true });
 }

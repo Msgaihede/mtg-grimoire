@@ -47,11 +47,11 @@ export const FOCUS_INSET =
  * The *what* is a separate question, and it has a separate answer: *some elements should carry
  * no focus outline at all, in any modality.*
  *
- * **A `tabIndex={-1}` container is a landing pad, not a control.** Ten of them exist here —
+ * **A `tabIndex={-1}` container is a landing pad, not a control.** Eleven of them exist here —
  * the dialog shell's panel, the deck editor's root, `AnchoredPopup`, `DeckBracket`,
  * `ValidationPanel`, `MoveToFolder`, `PickCopies`, `DeckTile`'s and `DecksPage`'s delete
- * confirmations, `CollectionPage`'s. It was eleven until the card *pane* was replaced by a
- * modal; that modal is drawn by the dialog shell, so it needs no entry of its own — the first
+ * confirmations, `CollectionPage`'s, and the playtest board's frame (`PlaytestPage`, issue
+ * #1592). The card *pane* was one more until it was replaced by a modal; that modal is drawn by the dialog shell, so it needs no entry of its own — the first
  * name on this list already covers it. Every one exists so that focus can be *put*
  * somewhere when a layer opens or a menu closes, instead of being dropped on `<body>` where the
  * next Tab starts the tab order over. A reader can never Tab to one and can never arrow onto
@@ -69,3 +69,21 @@ export const FOCUS_INSET =
  * landing pad and this note stops applying to it.
  */
 
+/**
+ * **Did this `focusout` happen because the window lost focus, rather than because the reader
+ * moved on inside it?** For a root's `onBlur` that closes or cancels on "focus left me" — a
+ * popup, a dropdown, a half-typed name field — and should not do it on Alt+Tab.
+ *
+ * Chromium fires `focusout` with `relatedTarget === null` when the window deactivates, which is
+ * the same shape as a press on non-focusable content dropping the caret on `<body>`. The two are
+ * told apart by `document.hasFocus()`: a press anywhere inside the window keeps the document
+ * focused, and switching away does not. The caret stays on the element meanwhile and comes back
+ * with the window, so closing would hand the reader a caret on `<body>` and discard what they had
+ * half-made (issue #1571).
+ *
+ * Structural rather than `FocusEvent`, so a React synthetic event and a DOM one both pass, and
+ * this file keeps its zero imports.
+ */
+export function blurLeftTheWindow(e: { relatedTarget: EventTarget | null }): boolean {
+  return e.relatedTarget === null && !document.hasFocus();
+}

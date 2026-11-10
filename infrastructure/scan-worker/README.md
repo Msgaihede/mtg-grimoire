@@ -268,6 +268,13 @@ A full, deliberate purge of the corpus is refused locally until the mirror folde
 hand, because an empty listing is also what an unreadable bucket looks like (`remove` names what
 it deletes, so that refusal does not stop it).
 
+**A removed scan has one more place to leave since 2026-11-10**: the card finder trains on readers'
+frames, kept as a folder built from this mirror and, once the owner puts it there, on the training's
+Modal Volume (`crates/card-neural/train/README.md`, "The readers' scenes"; the privacy policy names
+both copies). `remove` does not reach either. After a removal, **build the folder again**
+(`real_scenes.py build` writes it anew from the mirror, without the scan) **and replace the Volume's
+copy** (`modal volume rm -r card-neural /real-scenes`, then `modal volume put`).
+
 **By hand**, when the tool is not at hand:
 
 ```

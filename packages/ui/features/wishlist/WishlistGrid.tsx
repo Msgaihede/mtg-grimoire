@@ -81,15 +81,29 @@ const NO_TILES: readonly WishTile[] = [];
  *
  * The set and number are carried anyway, from the *wish*, so the tile keeps a truthful pair for
  * anything that reads the shape — {@link tileCaption} is what actually draws them.
+ *
+ * `key` is the **wish** and `ringKey` the printing (issue #1577): the picked set, the drag group
+ * and a menu's set are about the tile a reader pressed, and two wishes can be drawn as one
+ * printing; only the open card's ring is about the printing.
  */
 /** Whether a wish's tile turns over — the layout of the printing it is drawn as. Module-level, so
  *  `CardGrid`'s `flips` is handed one function for the life of the wall. */
 const wishFlips = (tile: WishTile): boolean => hasBackFace(tile.wish.layout);
 
 function toTile(wish: WishRow, managed: boolean): WishTile {
+  const art = wish.artCardId ?? "";
   return {
     managed,
-    id: wish.artCardId ?? "",
+    id: art,
+    // **The tile is the wish, so its key is the wish's** (issue #1577). Two wishes can draw as one
+    // printing — the same printing wished in two folders, a foil and a nonfoil wish of it, an
+    // any-printing wish beside a pinned wish for its cheapest printing — and keyed by `id` they
+    // were one key to `CardGrid`: a Ctrl-click rang both, a second Ctrl-click on the twin put the
+    // pair down, and a drag or a menu on the set acted on the twin the reader never picked.
+    key: `wish:${wish.id}`,
+    // The open card still rings every tile drawn as it — the pane shows the printing, not the
+    // wish — which is the collection wall's arrangement (`GridCard.ringKey`).
+    ringKey: art,
     // Never null: a wish carries its own name, because it outlives the printing it was made
     // from and may never have had one. It is the `alt`, and the whole of what an orphan's
     // no-art frame has to show.

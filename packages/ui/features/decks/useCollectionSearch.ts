@@ -39,6 +39,7 @@ import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { autoCategoryFor } from "./autoCategory";
+import { isTokenPrinting } from "./deckTokens";
 import { oracleTagsFor } from "./useDeckCore";
 import { playKey, useDeckPlays } from "./useDeckPlays";
 
@@ -207,8 +208,23 @@ export function copySource(
  * **Nothing here is the fence.** `collection_alloc::NOT_IN_DECK` refuses the write in the same
  * words at the backend, and this is that refusal said *early*: it saves a round trip and puts the
  * route on the button, and it is deliberately not the only thing holding the rule.
+ *
+ * ## The fifth: `token` (issue #1540)
+ *
+ * **A token or an emblem is outside the fence, because Rust puts it there.** `collection_to_deck`
+ * asks `deck_tokens::printing_is_token` *before* `NOT_IN_DECK` and files such a row as a **token
+ * entry** (token-stacks spec §4.6), moving no copy — a deck never "plays" a token, since
+ * `deck::add_card` reroutes one into `deck_token_printings` rather than writing a `deck_cards` row,
+ * so `played_keys` can never name one and the fence would refuse every token for ever. Fencing it
+ * here greyed every owned token with advice that could not be followed: adding it from the Card
+ * search tab files a token entry too, and the tile stayed grey.
+ *
+ * So it is pressable, and it is its own word rather than `plays` because the press is different:
+ * it lands in Tokens & Emblems whatever pile the deck names, and it takes no copy out of anywhere.
+ * It is answered **before the census**, for the same reason — the backend's token arm never reads
+ * the census, so there is nothing for an unanswered one to fail closed about.
  */
-export type PlayState = "plays" | "notPlayed" | "unread" | "unreadable";
+export type PlayState = "plays" | "notPlayed" | "unread" | "unreadable" | "token";
 
 /**
  * As much of a tile as a play key is built from.
@@ -221,6 +237,11 @@ export type PlayState = "plays" | "notPlayed" | "unread" | "unreadable";
 export interface PlayableTile {
   id: string;
   oracleId: string | null;
+  /** With {@link typeLine}, whether the tile is a token — {@link isTokenPrinting}, Rust's
+   *  `printing_is_token`'s twin. Required rather than optional, so a caller cannot forget it and
+   *  quietly fence every token again. */
+  layout: string | null;
+  typeLine: string | null;
 }
 
 /**
@@ -244,6 +265,7 @@ export function playStateFor(
   plays: ReadonlySet<string>,
   census: { isSuccess: boolean; isError: boolean },
 ): PlayState {
+  if (isTokenPrinting(tile.layout, tile.typeLine)) return "token";
   if (census.isSuccess) {
     return plays.has(playKey({ oracleId: tile.oracleId, cardId: tile.id })) ? "plays" : "notPlayed";
   }

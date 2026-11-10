@@ -225,8 +225,18 @@ export type Layer =
    * `wishes` is never empty — {@link chooseWish} writes outright for none and asks for one or
    * more, because the read answers every printing and finish of the card and a lone line is not
    * certainly the cardboard just recorded.
+   *
+   * `openedAt` is the press's clock (`Date.now()`), and it is what makes the panel's refusal
+   * this opening's own: a refusal whose write was submitted before it is about an earlier
+   * opening, even of the same row on the same card (see `unwishFailure`).
    */
-  | { kind: "quickUnwish"; card: DeckCard; copies: number; wishes: readonly DeckQuickAddWish[] }
+  | {
+      kind: "quickUnwish";
+      card: DeckCard;
+      copies: number;
+      wishes: readonly DeckQuickAddWish[];
+      openedAt: number;
+    }
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
@@ -276,8 +286,11 @@ export type Layer =
    * {@link DragPayload} says and a card id does not. It is also frozen on purpose, unlike
    * `export`, `deleteCategory` and `clearCategory` above: those name a row the deck is re-read
    * into, while this names a gesture that is over. There is nothing live to look it up from.
+   *
+   * **Every card the drag carried, primary first, and never empty** (issue #1534) — a drag from
+   * a picked tile carries the whole set, and this arm held the grabbed card alone until then.
    */
-  | { kind: "quickCategory"; payload: DragPayload }
+  | { kind: "quickCategory"; payloads: readonly DragPayload[] }
   /**
    * A card's **Label card ▸ New label…** was pressed, and the label it will wear has no name
    * and no colour yet.
@@ -539,11 +552,17 @@ export function DeckEditorLayers({
    * `variables` are what tell the two apart — this dialog is the only presser that sends both a
    * `wishId` and *this* card — and reading them is a derivation rather than a `reset()`, which
    * would take the banner's memory of that earlier refusal away with it.
+   *
+   * **And the write's `submittedAt` against the opening's `openedAt`**, which is the case the
+   * variables cannot see: a refused Record, Cancel, and the same row opened again on the same
+   * card sends the same `wishId` and card, so without it the fresh question opened already
+   * showing the last attempt's refusal (issue #1543). Still a derivation, for the reason above.
    */
   const unwishVariables = deck.quickAddToCollection.variables;
   const unwishFailure =
     unwish !== null &&
     deck.quickAddToCollection.isError &&
+    deck.quickAddToCollection.submittedAt >= unwish.openedAt &&
     unwishVariables !== undefined &&
     unwishVariables.wishId !== null &&
     unwishVariables.card.cardId === unwish.card.cardId
@@ -554,7 +573,7 @@ export function DeckEditorLayers({
   const clearCategory = deck.clearCategory.mutate;
   const clearPending = deck.clearCategory.isPending;
   const writeQuickAdd = deck.quickAddToCollection.mutate;
-  const quickCategoryPayload = layer?.kind === "quickCategory" ? layer.payload : null;
+  const quickCategoryPayloads = layer?.kind === "quickCategory" ? layer.payloads : null;
 
   return (
     <>
@@ -923,7 +942,7 @@ export function DeckEditorLayers({
           the delete confirmation's reason one dialog up: that banner is behind this scrim. */}
       <QuickCategoryDialog
         open={layer?.kind === "quickCategory"}
-        cardName={quickCategoryPayload?.name ?? ""}
+        cardNames={quickCategoryPayloads?.map((p) => p.name) ?? []}
         pending={meta.createCategory.isPending}
         failure={
           meta.createCategory.isError

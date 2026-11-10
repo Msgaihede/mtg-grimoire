@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -466,10 +466,133 @@ const DATE_FIELD = cn(
 );
 
 /**
+ * How long a typed date has to sit still before it is sent — long enough to cover the gap between
+ * one keystroke and the next, short enough that a pick from the calendar reads as applied at once.
+ */
+export const DATE_SETTLE_MS = 500;
+
+/** A date field's raw value whose year a reader could mean: four digits, `1000` or later. */
+function settled(raw: string): boolean {
+  const m = /^(\d{4})-\d{2}-\d{2}$/.exec(raw);
+  return m !== null && Number(m[1]) >= 1000;
+}
+
+/** A cleared date field reports `""`; the session's word for "no bound" is `null`. */
+const dateOf = (raw: string): string | null => (raw === "" ? null : raw);
+
+/**
+ * One of the Released bounds: a date field that **sends a date once it is whole**, not on every
+ * keystroke (issue #1556).
+ *
+ * A date typed into `<input type="date">` reports each year digit as it lands — `05/01/2021` is
+ * `0002-05-01`, `0020-05-01`, `0202-05-01`, `2021-05-01`, and a fifth digit is `20219-05-01`.
+ * Sent as they came, the session refused the To field's first one (no printing before year 2), the
+ * page put the filters back, and the field the reader was typing in was emptied under them; the
+ * From field's were accepted and persisted, so a final refusal put it back to `0202` rather than
+ * to what it held before the edit.
+ *
+ * So the field keeps **its own draft while it has focus** and draws that, never the filters, which
+ * a refusal can rewrite at any moment. The draft is sent:
+ *
+ * - **{@link DATE_SETTLE_MS} after the last change, when it is a settled date or a cleared one** —
+ *   which is also how a calendar pick lands, since the field keeps focus through the popup;
+ * - **at once on blur or Enter**, whatever it holds, a year the reader left at `0202` included —
+ *   leaving the field is the reader saying they are done.
+ *
+ * A draft already sent is not sent again on blur, so a refused date is not pushed twice; once focus
+ * has gone the field draws the filters again, which after a refusal is the last accepted date.
+ */
+function DateField({
+  id,
+  label,
+  value,
+  min,
+  max,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  value: string | null;
+  min?: string | null;
+  max?: string | null;
+  onCommit: (date: string | null) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The raw value last handed to `onCommit` during this focus — not sent twice. */
+  const sentRef = useRef<string | null>(null);
+  // The caller's closure carries the other bound as it is now; a debounced send must use the
+  // newest one, not the one from the render that scheduled it.
+  const commitRef = useRef(onCommit);
+  useEffect(() => {
+    commitRef.current = onCommit;
+  });
+
+  const cancel = () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    timerRef.current = null;
+  };
+  const send = (raw: string) => {
+    cancel();
+    if (raw === sentRef.current) return;
+    sentRef.current = raw;
+    commitRef.current(dateOf(raw));
+  };
+  // A send still waiting when the popover closes goes out rather than being lost: it was settled.
+  const pendingRef = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (timerRef.current === null || pendingRef.current === null) return;
+      clearTimeout(timerRef.current);
+      commitRef.current(dateOf(pendingRef.current));
+    },
+    [],
+  );
+
+  return (
+    <input
+      id={id}
+      type="date"
+      aria-label={label}
+      value={draft ?? value ?? ""}
+      min={min ?? undefined}
+      max={max ?? undefined}
+      onFocus={() => {
+        const raw = value ?? "";
+        sentRef.current = raw;
+        setDraft(raw);
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        cancel();
+        pendingRef.current = null;
+        if (raw !== "" && !settled(raw)) return;
+        pendingRef.current = raw;
+        timerRef.current = setTimeout(() => {
+          timerRef.current = null;
+          pendingRef.current = null;
+          send(raw);
+        }, DATE_SETTLE_MS);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && draft !== null) send(draft);
+      }}
+      onBlur={() => {
+        if (draft !== null) send(draft);
+        pendingRef.current = null;
+        setDraft(null);
+      }}
+      className={DATE_FIELD}
+    />
+  );
+}
+
+/**
  * What the scan is narrowed to: sets, a release window, and the way back to everything.
  *
- * **Every change is sent as it is made** — a set ticked, a date settled — rather than held for an
- * Apply. The camera is running while this is open, so the next frame the reader holds up should
+ * **Every change is sent as it is made** — a set ticked, a date settled ({@link DateField}) —
+ * rather than held for an Apply. The camera is running while this is open, so the next frame the reader holds up should
  * already be read against what the popover says; a draft here would be a popover and a scanner
  * disagreeing for as long as it was open.
  *
@@ -493,8 +616,6 @@ function FiltersBody({
         ? filters.sets.filter((s) => s !== code)
         : [...filters.sets, code],
     });
-  // A cleared date field reports `""`; the session's word for "no bound" is `null`.
-  const dateOf = (raw: string): string | null => (raw === "" ? null : raw);
   const skipPromos = filters.exclude_promos === true;
 
   return (
@@ -539,26 +660,22 @@ function FiltersBody({
         <div className="grid grid-cols-2 gap-2">
           <label htmlFor={`${id}-from`} className="flex min-w-0 flex-col gap-1 text-xs text-dim">
             From
-            <input
+            <DateField
               id={`${id}-from`}
-              type="date"
-              aria-label="Released from"
-              value={filters.released_from ?? ""}
-              max={filters.released_to ?? undefined}
-              onChange={(e) => onFilters({ ...filters, released_from: dateOf(e.target.value) })}
-              className={DATE_FIELD}
+              label="Released from"
+              value={filters.released_from}
+              max={filters.released_to}
+              onCommit={(date) => onFilters({ ...filters, released_from: date })}
             />
           </label>
           <label htmlFor={`${id}-to`} className="flex min-w-0 flex-col gap-1 text-xs text-dim">
             To
-            <input
+            <DateField
               id={`${id}-to`}
-              type="date"
-              aria-label="Released to"
-              value={filters.released_to ?? ""}
-              min={filters.released_from ?? undefined}
-              onChange={(e) => onFilters({ ...filters, released_to: dateOf(e.target.value) })}
-              className={DATE_FIELD}
+              label="Released to"
+              value={filters.released_to}
+              min={filters.released_from}
+              onCommit={(date) => onFilters({ ...filters, released_to: date })}
             />
           </label>
         </div>

@@ -101,6 +101,45 @@ function asOf(updatedAt: number): string | null {
   );
 }
 
+/** One row of the wall: a card of the snapshot and the key a tick on it is filed under. */
+interface Row {
+  card: ShareCard;
+  key: string;
+}
+
+/**
+ * Each card with **a key that names the same row in the next snapshot of the same link**
+ * (issue #1578): its grain — printing, finish, folder, condition, language — and its ordinal among
+ * the rows before it that share that grain.
+ *
+ * ⚠️ **Nothing about a card identifies it on its own, and its position does not either.** Two rows
+ * of one binder can agree on every field and still be two rows — `{id}:{finish}:{folder}` looked
+ * unique and was not, and the web viewer measured React reporting *two children with the same
+ * key* on the golden's own shape — which is what the ordinal is for: grain and ordinal together
+ * are unique by construction. The key was once the bare array index, on the reasoning that a
+ * snapshot is immutable. It is not, under one link: a re-check replaces it, and a card the owner
+ * added in front of the ticked one moved every tick behind it onto the next card down, so *Add to
+ * wishlist* wrote a card the reader never picked. A grain does not move when a different card is
+ * added or removed.
+ *
+ * What is left out is what a republish changes about a row that is still the same copy: the
+ * quantity, the price and the picture. When the owner removes one of two rows of one grain the
+ * tick on the second lands on the first, which is a row indistinguishable from it — the wish it
+ * writes is the same wish.
+ */
+function keyRows(cards: readonly ShareCard[]): Row[] {
+  const seen = new Map<string, number>();
+  return cards.map((card) => {
+    // `JSON.stringify` over an array rather than a joined string: a field that contains the
+    // separator cannot then make two grains one, and a malformed field (this document is not
+    // ours — see {@link asText}) still stringifies rather than throwing.
+    const grain = JSON.stringify([card.id, card.f, card.fo, card.c ?? null, card.l ?? null]);
+    const ordinal = seen.get(grain) ?? 0;
+    seen.set(grain, ordinal + 1);
+    return { card, key: `${grain}#${ordinal}` };
+  });
+}
+
 /** Which currency the prices on the wire are in. The snapshot's own answer wins. */
 function shareCurrency(snapshot: ShareSnapshot): Currency {
   const named = asText(snapshot.currency).toLowerCase();
@@ -274,22 +313,31 @@ function SharedView() {
              * ⚠️ **The key is load-bearing and its absence was a wrong write.**
              *
              * Every piece of this component's state is about *one* binder, and the ticks are about
-             * one binder's **positions**: {@link rows} keys a row by its index in the snapshot's own
-             * array, which is the only unique key this document has. Switching binders is a shipped
+             * one binder's **rows**: {@link rows} keys a row by its grain and its ordinal among
+             * the rows that share it ({@link keyRows}), and two binders can each hold a row with the
+             * same key — a nonfoil Lightning Bolt at the root is one in both. Switching binders is a shipped
              * control — {@link Switcher} draws a tab per open share — and it does not unmount
              * anything: `Switcher`'s `useQueries` holds an observer on every open link, so the
              * target snapshot is already warm and `isPending` is false
              * on the same render.
              *
              * Without a key, `picked` therefore survived the switch and `pickedCards` resolved keys
-             * `"0"`, `"1"` against the **new** binder's rows: *Add to wishlist* wrote the first two
-             * cards of a collection the reader had never looked at, with no error and no cue. The
-             * search box, the drawer, the sort and the report carried over too, which is merely
-             * wrong-looking.
+             * (then positions, `"0"`, `"1"`) against the **new** binder's rows: *Add to wishlist*
+             * wrote the first two cards of a collection the reader had never looked at, with no
+             * error and no cue. The search box, the drawer, the sort and the report carried over
+             * too, which is merely wrong-looking.
              *
              * A key rather than an effect that clears the state, because "this is a different
              * binder" is exactly what a key says and an effect would have to be remembered by
              * whoever adds the next field.
+             *
+             * **`url` alone, and not the snapshot's `updatedAt`** (issue #1578). A re-check — the
+             * *Check for an update* press or the `SNAPSHOT_RECHECK_MS` timer — replaces
+             * `share.data` under the same link, and that is the *same* binder a little later: a
+             * key that changed with it would throw away the reader's search, sort, folder and
+             * ticks every fifteen minutes, mid-read. The ticks survive it because their keys are
+             * a row's identity rather than its position, and the folder because {@link Binder}
+             * reads it through the drawers the new snapshot still draws.
              */
             key={url}
             snapshot={share.data}
@@ -488,12 +536,13 @@ function Binder({
   onRefresh: () => void;
   onClose: () => void;
 }) {
+  /** The folder the reader picked, as they picked it — read through {@link activeDrawer}. */
   const [drawer, setDrawer] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [match, setMatch] = useState<Match>("all");
   const [sort, setSort] = useState<Sort>("name");
   /**
-   * The rows the reader has ticked, by the snapshot-position key {@link rows} hands out.
+   * The rows the reader has ticked, by the key {@link rows} hands out ({@link keyRows}).
    *
    * **Keyed on the row and folded to a card only on the way out** ({@link AddToWishlist}'s
    * `fold`): the wall draws rows, so a tick is about the row that was under the pointer, and two
@@ -518,25 +567,21 @@ function Binder({
   const stamp = asOf(snapshot.updatedAt);
 
   const tree = useMemo(() => drawers(snapshot), [snapshot]);
+  /**
+   * The picked folder **as the wall reads it**: only while the snapshot still draws that drawer
+   * (issue #1578). A re-check can bring a snapshot whose owner removed or renamed-away the folder,
+   * and a uid left standing filtered the wall to nothing while the `<select>` — which has no
+   * option for it — showed *All folders*. Fenced on the read, as the deck editor's label chips
+   * are (issue #1532), so a folder that comes back finds itself still picked.
+   */
+  const activeDrawer = drawer !== null && tree.some((d) => d.uid === drawer) ? drawer : null;
   const copies = useMemo(() => snapshot.cards.reduce((n, c) => n + c.q, 0), [snapshot]);
 
-  /**
-   * The cards paired with **their position in the snapshot's own array**, which is the only
-   * unique key this document has.
-   *
-   * ⚠️ **Nothing about a card identifies it.** A row is a printing, a finish, a folder and a
-   * grade, and two rows of one binder can agree on every one of those and still be two rows.
-   * `{id}:{finish}:{folder}` looked unique and was not — the web viewer measured React reporting
-   * *two children with the same key* on the golden's own shape. The index is stable because the
-   * snapshot is immutable: filtering and sorting derive from this list rather than replacing it.
-   */
-  const rows = useMemo(
-    () => snapshot.cards.map((card, index) => ({ card, key: String(index) })),
-    [snapshot],
-  );
+  /** The cards, each paired with a key that names the same row across a re-check. */
+  const rows = useMemo(() => keyRows(snapshot.cards), [snapshot]);
 
   const shown = useMemo(() => {
-    const kept = drawer === null ? null : subtreeOf(tree, drawer);
+    const kept = activeDrawer === null ? null : subtreeOf(tree, activeDrawer);
     const needle = text.trim().toLowerCase();
     const matches = (card: ShareCard) =>
       needle === "" ||
@@ -568,7 +613,7 @@ function Binder({
       price: (a, b) => byPrice(a.p, b.p) || a.n.localeCompare(b.n) || a.s.localeCompare(b.s),
     };
     return filtered.sort((a, b) => by[sort](a.card, b.card));
-  }, [rows, tree, drawer, text, match, sort, index, figuresReady]);
+  }, [rows, tree, activeDrawer, text, match, sort, index, figuresReady]);
 
   const shownCopies = useMemo(() => shown.reduce((n, r) => n + r.card.q, 0), [shown]);
 
@@ -577,8 +622,14 @@ function Binder({
    *
    * A pick is about a card and a filter is about the wall, so narrowing the wall must not quietly
    * drop what the reader has already chosen — they tick as they scroll and then press a chip to
-   * check themselves. `rows` is the whole snapshot and the snapshot is immutable, so a key that
-   * was ticked always resolves.
+   * check themselves. `rows` is the whole snapshot, so a key that was ticked resolves for as long
+   * as its row is in it.
+   *
+   * **A re-check is read the same way** (issue #1578): the keys name rows by what they are, so a
+   * tick on Sol Ring is still on Sol Ring after the owner republishes with a card that sorts in
+   * front of it, and a tick whose row the new snapshot dropped resolves to nothing — the bar
+   * counts what will be sent, never a stale key. The key stays in the set, so a row that comes
+   * back on a later re-check comes back ticked.
    */
   const pickedCards = useMemo(
     () => rows.filter(({ key }) => picked.has(key)).map(({ card }) => card),
@@ -669,7 +720,7 @@ function Binder({
           <Picker
             id="shared-drawer"
             label="Folder"
-            value={drawer ?? ""}
+            value={activeDrawer ?? ""}
             onPick={(v) => setDrawer(v === "" ? null : v)}
             options={[
               { value: "", label: `All folders (${COUNT.format(copies)})` },

@@ -144,6 +144,28 @@ const TEFERI_HERO_OF_DOMINARIA = inZone({
 });
 
 /**
+ * Issue #1547. A legendary planeswalker that never says "can be your commander" and is one
+ * all the same: its first line makes it a creature everywhere but the battlefield, and the
+ * official ruling applies that during deck construction.
+ */
+const GRIST = inZone({
+  name: "Grist, the Hunger Tide",
+  typeLine: "Legendary Planeswalker — Grist",
+  manaCost: "{1}{B}{G}",
+  cmc: 3,
+  colors: "BG",
+  colorIdentity: "BG",
+  rarity: "mythic",
+  oracleText:
+    "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature " +
+    "in addition to its other types.\n" +
+    "+1: Create a 1/1 black and green Insect creature token, then mill a card. If an Insect " +
+    "card was milled this way, put a loyalty counter on Grist and repeat this process.\n" +
+    "−2: You may sacrifice a creature. When you do, destroy target creature or planeswalker.\n" +
+    "−5: Each opponent loses life equal to the number of creature cards in your graveyard.",
+});
+
+/**
  * A transform card, and the reason `frontFace` exists. Scryfall's top-level `type_line` is
  * both halves joined and its top-level `oracle_text` is absent entirely; only `card_faces[0]`
  * says what the front of the card is. The back is a planeswalker, which would be the wrong
@@ -649,6 +671,25 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(TEFERI_HERO_OF_DOMINARIA, "edh", spec("commander"))).toBe(
       `Teferi, Hero of Dominaria is not a legal commander in Commander: ${EDH_REQUIREMENT}.`,
     );
+  });
+
+  /** Issue #1547: a creature in the command zone by its own text is a creature there. */
+  it("takes a legendary card that is a creature everywhere but the battlefield", () => {
+    expect(commanderIneligibility(GRIST, "edh", spec("commander"))).toBeNull();
+    expect(commandZoneIneligibility(GRIST, "edh", spec("commander"))).toBeNull();
+    expect(commanderIneligibility(GRIST, "duel", spec("duel"))).toBeNull();
+    // It is still a planeswalker, so Oathbreaker takes it as it always did.
+    expect(commanderIneligibility(GRIST, "oathbreaker", spec("oathbreaker"))).toBeNull();
+    // The sentence makes it a creature, not an uncommon: Pauper Commander's rarity rule stands.
+    expect(commanderIneligibility(GRIST, "pdh", spec("paupercommander"))).toBe(
+      "Grist, the Hunger Tide has never been printed at uncommon, so it cannot be your " +
+        "commander in Pauper Commander.",
+    );
+    // And the deck check agrees with the predicate.
+    const eligibility = validateDeck(padTo(100, [GRIST]), spec("commander")).filter(
+      (i) => i.code === "commander-eligibility",
+    );
+    expect(eligibility).toEqual([]);
   });
 
   /** The front face decides. Read the joined `type_line` instead and this card is half a

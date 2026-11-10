@@ -36,6 +36,8 @@ import { ImportLabels, useLabelChoice } from "../shared/ImportLabels";
 import { planCollectionImport } from "./collection";
 import {
   buildImportPlan,
+  deferToHeldCommander,
+  livePicks,
   tallyOf,
   toImportItems,
   type CategoryTally,
@@ -175,12 +177,39 @@ export function DeckPreviewBody({
     [into.cards],
   );
 
-  const plan = useMemo(
+  /**
+   * The names already in this list's command zone — what a `merge` lands on top of.
+   *
+   * Read off `into.cards`, which this step already holds for {@link cardsInVariant}, so it costs
+   * no read. Any pile of kind `commander`, the switched-off ones included: the reader put that
+   * card there, and a second commander beside it is not something to do without asking.
+   */
+  const heldCommanders = useMemo(
+    () => [
+      ...new Set(
+        into.cards.filter((card) => card.categoryKind === "commander").map((card) => card.name),
+      ),
+    ],
+    [into.cards],
+  );
+
+  /**
+   * The plan, and on a `merge` into a deck that already has its commander, the plan **asking**
+   * rather than stating — see {@link deferToHeldCommander} (issue #1551). Rebuilt with `mode`, so
+   * turning the radio to Replace, which clears the command zone too, gives the one candidate
+   * back its `automatic`.
+   */
+  const built = useMemo(
     () => buildImportPlan(list, resolved, spec, tags, forcedCategoryName),
     [list, resolved, spec, tags, forcedCategoryName],
   );
+  const deferring = mode === "merge" && heldCommanders.length > 0;
+  const plan = useMemo(() => (deferring ? deferToHeldCommander(built) : built), [built, deferring]);
 
-  const commanderIds = commanderIdsOf(plan, picked);
+  /** The pick kept to what the plan offers now — what the step draws as pressed and what Import
+   *  sends are the same answer. */
+  const live = useMemo(() => livePicks(plan, picked), [plan, picked]);
+  const commanderIds = commanderIdsOf(plan, live);
   /** Which of the file's labels are coming across — all of them until the reader says otherwise.
    *  Held here beside `mode` and `picked`, and it dies on Back with both of them. */
   const { dropped, chosen, toggle } = useLabelChoice(plan.labels);
@@ -269,7 +298,13 @@ export function DeckPreviewBody({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
         <Headline totalCards={plan.totalCards} categories={categories} />
         <Tally categories={categories} />
-        <Commander plan={plan} picked={picked} onPick={setPicked} labelId={`${id}-commander`} />
+        <Commander
+          plan={plan}
+          picked={live}
+          onPick={setPicked}
+          labelId={`${id}-commander`}
+          held={deferring ? heldCommanders : NO_COMMANDERS}
+        />
         {/* After the commander and before the problems: a label is filing, like the tally above
             it, and the problems are about lines that are not landing at all. */}
         <ImportLabels labels={plan.labels} dropped={dropped} onToggle={toggle} />
@@ -378,7 +413,10 @@ export function DeckImportSubtitle({
  */
 export function commanderIdsOf(plan: ImportPlan, picked: readonly string[]): readonly string[] {
   if (plan.commander.kind === "automatic") return plan.commander.cardIds;
-  if (plan.commander.kind === "ask") return picked;
+  // **Never `picked` as it stands**: it is state that outlives a rebuilt plan, and a pick that is
+  // no longer a candidate is not a commander (issue #1551). `livePicks` answers `picked` itself
+  // when nothing is stale, so a caller memoising on this answer is not recomputed for nothing.
+  if (plan.commander.kind === "ask") return livePicks(plan, picked);
   return NO_COMMANDERS;
 }
 
@@ -613,17 +651,26 @@ export function Tally({ categories }: { categories: readonly CategoryTally[] }) 
  * **Multi-select, because partners are two commanders.** Nothing pairs by itself — a pairing is
  * a choice and `validateCommanderZone` judges it once the deck exists — so this offers the
  * choice and refuses none of it.
+ *
+ * `picked` is the **live** pick ({@link livePicks}), never the raw state: a stale pick drawn as
+ * pressed, or hiding the No commander chip's pressed state, is a step saying one thing while
+ * Import sends another (issue #1551).
+ *
+ * `held` names the commander a `merge` would land beside, when there is one — the reason a
+ * single candidate is being asked about rather than stated (see `deferToHeldCommander`).
  */
 export function Commander({
   plan,
   picked,
   onPick,
   labelId,
+  held = [],
 }: {
   plan: ImportPlan;
   picked: readonly string[];
   onPick: (ids: readonly string[]) => void;
   labelId: string;
+  held?: readonly string[];
 }) {
   if (plan.commander.kind === "fromFile" || plan.commander.kind === "notApplicable") return null;
 
@@ -657,10 +704,17 @@ export function Commander({
         </p>
       ) : (
         <>
-          <p className="text-[0.6875rem] text-dim">
-            {plural(candidates.length, "card")} could be the commander. Pick one (or two partners),
-            or skip for now.
-          </p>
+          {held.length > 0 ? (
+            <p className="text-[0.6875rem] text-dim">
+              {held.join(" and ")} {held.length === 1 ? "is" : "are"} already this deck’s commander.
+              Pick a card only to add it to the command zone.
+            </p>
+          ) : (
+            <p className="text-[0.6875rem] text-dim">
+              {plural(candidates.length, "card")} could be the commander. Pick one (or two
+              partners), or skip for now.
+            </p>
+          )}
           {/* Scrolled rather than wrapped: the reference list offers dozens of legendary
               creatures, and a cloud of chips at that count is a wall no name can be found in. */}
           <ul className="max-h-56 divide-y divide-border overflow-y-auto rounded-md border border-border">

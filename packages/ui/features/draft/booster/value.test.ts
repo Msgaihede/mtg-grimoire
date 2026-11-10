@@ -199,6 +199,30 @@ describe("the distribution's figures", () => {
     expect(percentileOf(new Float64Array(0), 1)).toBe(0);
   });
 
+  // Issue #1587: the simulation sums each copy's price as a float, the opened pack's reduced value
+  // is rounded to cents — fourteen $0.01 bulk copies are 0.13999999999999999 on one side and 0.14
+  // on the other. They are the same money, so they tie.
+  it("percentileOf and chanceToBeat compare in whole cents", () => {
+    const sum = (price: number, n: number) => {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += price;
+      return s;
+    };
+    const under = sum(0.01, 14);
+    const over = sum(0.05, 14);
+    expect(under).not.toBe(0.14);
+    expect(over).not.toBe(0.7);
+    const bulk = Float64Array.from([0.05, under, under, under, 5]);
+    expect(percentileOf(bulk, 0.14)).toBe(50);
+    expect(chanceToBeat(bulk, 0.14)).toBe(0.2);
+    const pricier = Float64Array.from([0.05, over, over, over, 5]);
+    expect(percentileOf(pricier, 0.7)).toBe(50);
+    expect(chanceToBeat(pricier, 0.7)).toBe(0.2);
+    // A cent apart is still apart.
+    expect(percentileOf(bulk, 0.13)).toBe(20);
+    expect(percentileOf(bulk, 0.15)).toBe(80);
+  });
+
   it("median", () => {
     expect(median(Float64Array.from([1, 2, 3]))).toBe(2);
     expect(median(sorted)).toBe(2);

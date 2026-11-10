@@ -159,6 +159,19 @@ function bubbleOwner(): symbol | undefined {
  * need. `enabled` and `layer` stay dependencies on purpose — `enabled: false → true` is a layer
  * *opening*, and re-pushing it to the top is exactly right.
  *
+ * **An `"outer"` layer can open *over* an inner one, and `overOpenLayers` is how it says so**
+ * (issue #1542). The phase handshake assumes the outer layer was open first, which is true of
+ * everything drawn beside a view and false of `KeyMap`'s shortcuts panel: `F1` works with a dialog
+ * up, the panel is drawn over it, and in the bubble phase the dialog's capture rung took the press
+ * — closing the dialog, and its unsaved state with it, out from under the panel still on screen.
+ * With the flag, a layer that opens while a capture rung is listening joins the **capture** stack
+ * on top of it, so it is the innermost thing for exactly as long as it is; opened with nothing
+ * over the view it is an ordinary bubble rung, and a dialog opened after it still beats it. The
+ * phase is decided once, at the moment the layer opens, because that moment is what "drawn over"
+ * means. Opt-in rather than the rule for every `"outer"` layer: a picked set on a wall arms
+ * itself on a click, and a press that happened to land while some popup was up must not lift it
+ * above the filter box's own Escape for the rest of its life.
+ *
  * Pinned by `App.test.tsx`'s Escape-stack test and by this hook's own phase test. Every
  * new dismissible layer uses this, or it will close something it did not open.
  */
@@ -166,11 +179,17 @@ export function useDismissOnEscape({
   layer,
   onDismiss,
   enabled = true,
+  overOpenLayers = false,
 }: {
   layer: DismissLayer;
   onDismiss: () => void;
   /** Usually the layer's own "am I open" flag. An outer layer is open for as long as it exists. */
   enabled?: boolean;
+  /**
+   * `"outer"` only: when this layer opens while an `"inner"` one is already listening, it is drawn
+   * over that layer and joins the capture stack on top of it. See the hook's doc.
+   */
+  overOpenLayers?: boolean;
 }): void {
   // Latched every render, in a *layout* effect: the ref is current before the browser can paint,
   // let alone deliver a key, so the listener never calls a callback a render behind.
@@ -181,7 +200,8 @@ export function useDismissOnEscape({
 
   useEffect(() => {
     if (!enabled) return;
-    const capture = layer === "inner";
+    const capture =
+      layer === "inner" || (layer === "outer" && overOpenLayers && captureStack.length > 0);
     // Identity for this registration, minted per mount so two layers sharing one `onDismiss`
     // are still two entries.
     const token = Symbol("dismissLayer");
@@ -210,7 +230,7 @@ export function useDismissOnEscape({
         : bubbleStack.findIndex((entry) => entry.token === token);
       if (at !== -1) (capture ? captureStack : bubbleStack).splice(at, 1);
     };
-  }, [enabled, layer]);
+  }, [enabled, layer, overOpenLayers]);
 }
 
 /**

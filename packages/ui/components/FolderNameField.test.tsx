@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { NOT_A_DRAG } from "@/features/decks/dnd";
@@ -121,13 +121,29 @@ describe("FolderNameField", () => {
   it("empties and keeps the caret for the next name on a new round", async () => {
     const user = userEvent.setup();
     const props = stubs();
-    const view = render(<FolderNameField mode="create" label="New folder name" submitLabel="Create folder" round={0} {...props} />);
+    const view = render(
+      <FolderNameField
+        mode="create"
+        label="New folder name"
+        submitLabel="Create folder"
+        round={0}
+        {...props}
+      />,
+    );
 
     const input = screen.getByRole("textbox", { name: "New folder name" });
     await user.type(input, "Foils{Enter}");
     expect(props.onSubmit).toHaveBeenCalledWith("Foils");
 
-    view.rerender(<FolderNameField mode="create" label="New folder name" submitLabel="Create folder" round={1} {...props} />);
+    view.rerender(
+      <FolderNameField
+        mode="create"
+        label="New folder name"
+        submitLabel="Create folder"
+        round={1}
+        {...props}
+      />,
+    );
     expect(screen.getByRole("textbox", { name: "New folder name" })).toBe(input);
     expect(input).toHaveValue("");
     expect(input).toHaveFocus();
@@ -187,6 +203,52 @@ describe("FolderNameField", () => {
     expect(props.onCancel).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(props.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **Alt+Tab is not looking away** (issue #1571). Chromium fires `focusout` with no
+   * `relatedTarget` when the window deactivates, and the caret comes back with the window — so a
+   * reader who switched away to copy the name must find it still half-typed. The same blur with
+   * the document still focused is a press on nothing, and that one does discard.
+   */
+  it("keeps a half-typed name when the window loses focus, and discards on a blur that stays", async () => {
+    const user = userEvent.setup();
+    const props = stubs();
+    render(creating(props));
+    const field = screen.getByRole("textbox", { name: "New folder name" });
+    await user.type(field, "Trade");
+
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    fireEvent.focusOut(field, { relatedTarget: null });
+    expect(props.onCancel).not.toHaveBeenCalled();
+
+    hasFocus.mockReturnValue(true);
+    fireEvent.focusOut(field, { relatedTarget: null });
+    expect(props.onCancel).toHaveBeenCalledTimes(1);
+    hasFocus.mockRestore();
+  });
+
+  /**
+   * **A host's `onClose` is the blur's, and the ✕ stays `onCancel`'s** (issue #1545). The gallery's
+   * cancel hands the caret back to an opener, which on a blur would pull it off whatever the reader
+   * just clicked — so a host that passes `onClose` gets it for looking away and nothing else.
+   */
+  it("answers a blur with onClose when the host gives one, and the ✕ with onCancel", async () => {
+    const user = userEvent.setup();
+    const props = { ...stubs(), onClose: vi.fn() };
+    render(
+      <>
+        {creating(props)}
+        <button type="button">Elsewhere</button>
+      </>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    expect(props.onCancel).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(props.onCancel).toHaveBeenCalledTimes(1);
   });
 

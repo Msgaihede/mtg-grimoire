@@ -184,6 +184,14 @@ describe("UpdatePanel", () => {
     expect(primary(/Downloading/)).toBeDisabled();
   });
 
+  /** Issue #1596: `busy` is a check as well as a download, and a check is not a download. Check
+   *  now over an offered release — or the startup check over a cached one — keeps the label. */
+  it("keeps the download label while a check, not a download, is running", () => {
+    render(panel(update({ busy: true, progress: null })));
+    expect(primary(/^Download 6\.5 MB$/)).toBeDisabled();
+    expect(screen.queryByText("Downloading…")).not.toBeInTheDocument();
+  });
+
   /** A total of zero has no percentage, and `aria-valuenow="0"` would claim there was one. */
   it("omits the value rather than claiming zero when the size is unknown", () => {
     render(panel(update({ progress: { done: 0, total: 0 } })));

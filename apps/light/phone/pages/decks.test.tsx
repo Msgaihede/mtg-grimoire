@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ import { deckDetailKey } from "@grimoire/ui/features/decks/deckQuery";
 import { ipc, type DeckDetail } from "@grimoire/ui/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@grimoire/ui/lib/marketplace";
 import { PhoneFace } from "../PhoneApp";
+import { navigate } from "../router";
 import { installLayout, renderPhone } from "../testing";
 
 beforeAll(installLayout);
@@ -219,6 +220,65 @@ describe("the deck gallery", () => {
     const made = (await ipc.deckList()).find((deck) => deck.id === id);
     expect(made?.folderId).toBe(1);
     expect(made?.cardCount).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The header's `‹` on a deck and on a folder goes *up*: a Back where the place above is the entry
+ * beneath, so Android's back gesture goes on to the start view rather than into the deck or the
+ * folder just left (issue #1597) — and a replace where it is not.
+ */
+describe("the way back", () => {
+  it("leaves a deck for the gallery, and Back from there is the start view", async () => {
+    renderPhone(<PhoneFace />, { path: "/search" });
+    await userEvent.click(tab("Decks"));
+    await userEvent.click(await screen.findByRole("link", { name: /^Modern Goodstuff/ }, SETTLE));
+    expect(window.location.pathname).toBe("/decks/1");
+    const length = window.history.length;
+
+    await userEvent.click(screen.getByRole("link", { name: "Back to decks" }));
+    expect(await screen.findByRole("list", { name: "Your decks" }, SETTLE)).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/decks");
+    expect(window.history.length).toBe(length);
+
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/search"), SETTLE);
+  });
+
+  it("walks out of a folder one Back at a time, and never into the folder left", async () => {
+    renderPhone(<PhoneFace />, { path: "/search" });
+    await userEvent.click(tab("Decks"));
+    await userEvent.click(
+      within(await screen.findByRole("list", { name: "Folders" }, SETTLE)).getByRole("link", {
+        name: /^Constructed/,
+      }),
+    );
+    expect(window.location.search).toBe("?folder=1");
+
+    await userEvent.click(screen.getByRole("link", { name: "Back to all decks" }));
+    await waitFor(() => expect(window.location.search).toBe(""), SETTLE);
+    expect(window.location.pathname).toBe("/decks");
+
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/search"), SETTLE);
+  });
+
+  it("renames a deck that was opened from somewhere else, so Back goes there", async () => {
+    // The collection's deck link: the collection is beneath the deck rather than the gallery,
+    // and a Back would land there while the arrow said decks.
+    renderPhone(<PhoneFace />, { path: "/search" });
+    await userEvent.click(tab("Collection"));
+    act(() => navigate({ view: "decks", deckId: 1, cardId: null }));
+    await screen.findByRole("heading", { level: 2, name: "Modern Goodstuff" }, SETTLE);
+    const length = window.history.length;
+
+    await userEvent.click(screen.getByRole("link", { name: "Back to decks" }));
+    expect(await screen.findByRole("list", { name: "Your decks" }, SETTLE)).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/decks");
+    expect(window.history.length).toBe(length);
+
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/collection"), SETTLE);
   });
 });
 

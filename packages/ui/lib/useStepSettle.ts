@@ -13,7 +13,7 @@ export const STEP_SETTLE_QUIET_MS = 300;
 /**
  * A stepper write's **settle, held until the presses stop** (issue #1402).
  *
- * The collection's and the deck's quantity writes are optimistic on the number the stepper draws,
+ * The collection's, the wishlist's (since issue #1535) and the deck's quantity writes are optimistic on the number the stepper draws,
  * and what each *settles* is everything counted from it: the collection's header, folder subtotals,
  * headings, wishes and decks; the deck's whole `["decks"]` root (the detail, its tokens, notes,
  * labels, to-dos, owned-elsewhere and undo state) and the wishlist. Fired per press, that was a

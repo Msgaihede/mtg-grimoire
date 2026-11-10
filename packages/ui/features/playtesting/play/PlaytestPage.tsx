@@ -1,4 +1,4 @@
-import { useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import type { PlaytestPlayer } from "@/lib/ipc";
 import { BELOW_CAPTION } from "@/components/TitleBar";
 import { useEdition } from "@/lib/edition";
@@ -27,6 +27,11 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
  * **The way back and New game ask first while the game is underway** (`EndGameDialog`): either
  * one puts the game away for good. A game the engine has ended, or one still being dealt, is left
  * at once.
+ *
+ * **The board takes the focus as it comes up** (issue #1592): the frame is a landing pad
+ * (`tabIndex={-1}`, no outline — `@/lib/focus`'s rule), so the press that opened it — Start game,
+ * Goldfish this deck — is not left holding the caret under the board, where Enter would press it
+ * again and deal a new game over this one.
  *
  * **Below the caption, over the rail and `main` both, at `LAYER.stage`** — above the shell,
  * below every popup and dialog, so the board's own menus open over it and the caption stays
@@ -72,6 +77,12 @@ export function PlaytestPage({
   onBack: () => void;
 }): JSX.Element {
   const game = usePlaytestGame(picks, held);
+  const frame = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Unless something on the board already has it (a kept game's board coming back).
+    if (!frame.current?.contains(document.activeElement))
+      frame.current?.focus({ preventScroll: true });
+  }, []);
   // Every action the board takes goes through the sounds, so a press can sound and its answer
   // be heard with what it was.
   const act = useTableSounds(game.lastHappened, game.act);
@@ -102,10 +113,12 @@ export function PlaytestPage({
   return (
     <>
       <div
+        ref={frame}
         role="region"
         aria-label={goldfish ? "Goldfish" : "Playtest"}
+        tabIndex={-1}
         className={cn(
-          "fixed inset-x-0 bottom-0",
+          "fixed inset-x-0 bottom-0 outline-none",
           edition.caption ? BELOW_CAPTION : "top-0",
           LAYER.stage,
         )}

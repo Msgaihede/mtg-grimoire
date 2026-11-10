@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { landedFrom, type LandedCard } from "./reader/AddedToast";
+import { LANDED_HOLD_MS, landedFrom, type LandedCard } from "./reader/AddedToast";
 import type { LastAdded } from "./reader/readerText";
 import { addDecision, addPicked, type PickedPrinting } from "./reader/tray";
 import { trayFinish } from "./reader/trayFinish";
@@ -32,13 +32,22 @@ export interface TrayLanding {
   /** The card the tray just took, as the Match strip names it — never cleared. */
   lastAdded: LastAdded;
   /**
-   * The card laid over the camera for the length of its hold — what just landed, drawn from the
-   * tray's head row rather than from the decision, because the row is what was filed: a bump,
-   * a re-read and a row waiting for a pick all say something different to a reader holding the
-   * card. Cleared through {@link TrayLanding.clearLanded} by the overlay once its hold runs out.
+   * The newest landing — every one, a hand-add made while stopped included — drawn from the tray's
+   * head row rather than from the decision, because the row is what was filed: a bump, a re-read
+   * and a row waiting for a pick all say something different to a reader holding the card. **A new
+   * object each landing and never cleared**, so `useScanSounds` plays once for each one.
    */
   landed: LandedCard | null;
-  clearLanded: () => void;
+  /**
+   * The card laid over the camera (`AddedToast`, and so the confetti) — {@link TrayLanding.landed}
+   * for {@link LANDED_HOLD_MS} after a landing made **while armed**, then `null`.
+   *
+   * **The hold runs here, not in the overlay** (issue #1555): it used to be the toast's own timer,
+   * which ran only while the toast was shown, so a card that landed with the reader stopped — a
+   * hand-add, or a Stop inside the hold — was never put away, and the next Start raised it again as
+   * news. Now a landing made while not armed is never shown, and a Stop puts the card away at once.
+   */
+  shown: LandedCard | null;
   /** The row just added or bumped, for the tray's flash — `null` again after {@link FLASH_MS}. */
   flashKey: string | null;
 }
@@ -64,9 +73,30 @@ export interface TrayLanding {
 export function useTrayLanding(
   tray: Pick<TrayState, "latest" | "setRows">,
   finishPref: ScannerFinishPref,
+  /**
+   * Whether the reader is scanning at all — the page's `armed`: continuous scanning running, or
+   * point and shoot on. Only a card that lands while it is on is laid over the camera, and the
+   * card there is put away the moment it goes off.
+   */
+  armed: boolean,
 ): TrayLanding {
   const [lastAdded, setLastAdded] = useState<LastAdded>(null);
   const [landed, setLanded] = useState<LandedCard | null>(null);
+  const [shown, setShown] = useState<LandedCard | null>(null);
+  // A Stop puts the card over the camera away in the same render — "adjusting state when a prop
+  // changes" — so neither the popup nor the confetti draws a frame of it once the reader stopped.
+  const [wasArmed, setWasArmed] = useState(armed);
+  if (wasArmed !== armed) {
+    setWasArmed(armed);
+    if (!armed) setShown(null);
+  }
+  // The hold: each landing is a new object, so a card landing inside the last one's hold gets a
+  // whole hold of its own rather than the remainder.
+  useEffect(() => {
+    if (shown === null) return;
+    const timer = setTimeout(() => setShown(null), LANDED_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [shown]);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -87,7 +117,11 @@ export function useTrayLanding(
       bumpedTo: bumped ? head.quantity : null,
       replaced,
     });
-    setLanded(landedFrom(head, bumped, replaced));
+    const card = landedFrom(head, bumped, replaced);
+    setLanded(card);
+    // Read from this render's closure: the loop calls the newest `onDecision` through its ref,
+    // and *Add card…* the newest `onPicked`.
+    if (armed) setShown(card);
     setFlashKey(head.key);
     if (flashTimer.current !== null) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => {
@@ -118,5 +152,5 @@ export function useTrayLanding(
     land(rows, bumped, false);
   };
 
-  return { onDecision, onPicked, lastAdded, landed, clearLanded: () => setLanded(null), flashKey };
+  return { onDecision, onPicked, lastAdded, landed, shown, flashKey };
 }

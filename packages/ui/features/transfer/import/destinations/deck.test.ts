@@ -16,6 +16,8 @@ import { parseDecklist } from "../parse";
 import {
   SECTION_CATEGORY,
   buildImportPlan,
+  deferToHeldCommander,
+  livePicks,
   tallyOf,
   toImportItems,
   type CategoryTally,
@@ -940,6 +942,49 @@ Deck
     );
 
     expect(plan.commander).toEqual({ kind: "ask", candidates: [] });
+  });
+
+  /** Issue #1551: a merge onto a deck that already has its commander. The one candidate stays
+   *  offered — replacing a commander is a thing people do — but nobody is picked by default. */
+  it("asks about the one candidate when the deck already has a commander", () => {
+    const plan = planFor(
+      "1 Captain Sisay\n1 Captain Sisay\n1 Sol Ring",
+      { "Captain Sisay": SISAY, "Sol Ring": SOL_RING },
+      spec("commander"),
+    );
+
+    expect(deferToHeldCommander(plan).commander).toEqual({ kind: "ask", candidates: [SISAY] });
+  });
+
+  it("leaves every other answer as it came", () => {
+    const asking = planFor(
+      "1 Captain Sisay\n1 Kenrith, the Returned King",
+      { "Captain Sisay": SISAY, "Kenrith, the Returned King": KENRITH },
+      spec("commander"),
+    );
+    const none = planFor("1 Captain Sisay", { "Captain Sisay": SISAY }, spec("modern"));
+
+    expect(deferToHeldCommander(asking)).toBe(asking);
+    expect(deferToHeldCommander(none)).toBe(none);
+  });
+
+  /** Issue #1551: `picked` outlives a rebuilt plan, and a pick no longer offered is no pick. */
+  it("keeps a pick to the cards the plan offers now", () => {
+    const commander = planFor(
+      "1 Captain Sisay\n1 Kenrith, the Returned King",
+      { "Captain Sisay": SISAY, "Kenrith, the Returned King": KENRITH },
+      spec("commander"),
+    );
+    const oathbreaker = planFor(
+      "1 Captain Sisay\n1 Kenrith, the Returned King",
+      { "Captain Sisay": SISAY, "Kenrith, the Returned King": KENRITH },
+      spec("oathbreaker"),
+    );
+    const picked = [SISAY.cardId];
+
+    // The same array when nothing is stale, so a memo on the answer does not churn.
+    expect(livePicks(commander, picked)).toBe(picked);
+    expect(livePicks(oathbreaker, picked)).toEqual([]);
   });
 });
 

@@ -275,10 +275,24 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
 /** A chord key that is one of the digit row's, matched on `e.code` too — see {@link matchesChord}. */
 const DIGIT = /^[0-9]$/;
 
+/** A chord key that is a Latin letter, matched on `e.code` when the layout's letter is not one. */
+const LETTER = /^[a-z]$/i;
+
+/**
+ * Whether `e.key` is one character outside ASCII — a Cyrillic `я`, a Greek `ζ`, a Hebrew `ז`.
+ *
+ * Counted by code point, not UTF-16 unit, so a character beyond the BMP is still one character.
+ * Named keys (`Dead`, `Unidentified`, `Process`) are several characters and are not this.
+ */
+function isNonAsciiCharacter(key: string): boolean {
+  const chars = [...key];
+  return chars.length === 1 && (chars[0].codePointAt(0) ?? 0) > 0x7f;
+}
+
 /**
  * Whether a keypress *is* this chord.
  *
- * Four rules, each with a failure behind it:
+ * Five rules, each with a failure behind it:
  *
  * * **`ctrl: true` matches `ctrlKey` or `metaKey`.** Not hedging about macOS — it is the rule
  *   `multiSelect.ts:61` already states and tests, and this app's whole component suite runs in
@@ -297,8 +311,16 @@ const DIGIT = /^[0-9]$/;
  *   Shift, which the exactness rule above refuses. So `Ctrl+1` was unreachable there by either
  *   spelling. `Digit1` is the same key on every layout, and it is the key the panel's cap draws.
  *   `e.key` still matches too, which is what keeps the numeric keypad (`Numpad1` prints `1`)
- *   working on every layout. Only digits: a letter chord follows the letter a reader sees, which
- *   is why `Ctrl+Z` is undo on AZERTY where the key sits top-left.
+ *   working on every layout.
+ * * **A Latin letter matches on its physical key only when the layout's letter is not Latin**
+ *   (issue #1568). On a Russian, Greek or Hebrew layout `e.key` is the layout's own character —
+ *   Russian `Ctrl+Z` arrives as `key: "я"`, `code: "KeyZ"` — so every letter chord was dead the
+ *   moment a reader switched layout to type a card name, where native Windows apps keep `Ctrl+Z`.
+ *   `KeyZ` is accepted only when `e.key` is a single non-ASCII character: a Latin layout keeps the
+ *   rule that a letter chord follows the letter a reader sees, which is why `Ctrl+Z` is undo on
+ *   AZERTY where the key sits top-left (its `KeyW`, printing `z`, is not `Ctrl+W`), and an ASCII
+ *   layout that prints punctuation on a letter key (Dvorak's `KeyZ` prints `;`) gains no second
+ *   undo key.
  *
  * **A pointer chord returns `false` and there is nothing to configure about that** — it carries
  * no `key`, so the answer falls out of the shape rather than out of a guard. See the module doc.
@@ -315,6 +337,12 @@ export function matchesChord(chord: Chord, e: KeyboardEvent): boolean {
   if (e.shiftKey !== (chord.shift === true)) return false;
   if (e.altKey !== (chord.alt === true)) return false;
   if (DIGIT.test(chord.key) && e.code === `Digit${chord.key}`) return true;
+  if (
+    LETTER.test(chord.key) &&
+    isNonAsciiCharacter(e.key) &&
+    e.code === `Key${chord.key.toUpperCase()}`
+  )
+    return true;
   return chord.key.length === 1
     ? chord.key.toLowerCase() === e.key.toLowerCase()
     : chord.key === e.key;

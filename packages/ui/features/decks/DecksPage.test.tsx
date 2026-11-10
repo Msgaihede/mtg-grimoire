@@ -1686,6 +1686,93 @@ describe("DecksPage", () => {
   });
 
   /**
+   * **A rename reopened after a cancelled one opens on the name, selected** (issue #1545). The
+   * tile does not unmount when the field closes, so the draft outlived the cancel: the input
+   * mounted with `Sunburn`, `select()` ran over it, and the re-render that wrote `Burn` back
+   * collapsed the selection to the end — typing `Zoo` gave `BurnZoo`.
+   */
+  it("opens a rename reopened after a cancel on the name, selected", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+    await userEvent.keyboard("Sunburn");
+    await userEvent.keyboard("{Escape}");
+    expect(tile).toHaveFocus();
+
+    await userEvent.keyboard("{F2}");
+
+    const field = await screen.findByLabelText<HTMLInputElement>("Rename Burn");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Burn");
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 4]);
+    await userEvent.keyboard("Zoo");
+    expect(field).toHaveValue("Zoo");
+  });
+
+  /** F2 → Enter on the name as it stands closes the field and writes nothing: `update_deck`
+   *  stamps `updated_at` whatever it is sent, so the write would reorder a "Last updated" wall. */
+  it("writes nothing when a rename is submitted unchanged", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    await userEvent.keyboard("  Burn {Enter}");
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(tile).toHaveFocus();
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Looking away closes the field and leaves the caret where the reader put it** (issue #1545):
+   * the blur is the tile's `onClosePanel`, not the Escape/✕ path's hand-back, which would pull the
+   * caret off the filter box and onto the tile — where typing goes nowhere and Enter opens the deck.
+   */
+  it("leaves the caret where the reader clicked when a rename is looked away from", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    // jsdom lets the click's own focus land after a `focus()` called inside the blur, so where the
+    // caret ends up cannot tell the two paths apart here — whether the tile was *asked* can.
+    const focusTile = vi.spyOn(tile, "focus");
+    const filter = screen.getByLabelText("Filter decks by name");
+    await userEvent.click(filter);
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(filter).toHaveFocus();
+    expect(focusTile).not.toHaveBeenCalled();
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /** The ✓ and the ✕ are in the tray over the art, outside the form — so a Tab on past the ✕ is a
+   *  look away too, and the field may not be left standing with the caret on the next tile. */
+  it("closes a rename when the caret is tabbed past its ✕", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Save name" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(screen.getByLabelText("Rename Burn")).toBeInTheDocument();
+    await userEvent.tab();
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(document.activeElement).not.toBe(tile);
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
    * **`DeckSettingsDialog` gets a third host, and the gallery is it.**
    *
    * Everything a deck carries that is not a card in it — format, description, notes, cover,
@@ -2482,6 +2569,25 @@ describe("DecksPage folders", () => {
         },
       ]),
     );
+  });
+
+  /**
+   * **Archived decks are decks the delete moves**, so the question counts them (issue #1546).
+   * `node.count` is what the wall draws and skips them, so a folder holding only an archived deck
+   * said "It's empty." and then the receipt said one had moved.
+   */
+  it("counts archived decks in the folder-delete question", async () => {
+    deckFolderList.mockResolvedValue([EDH]);
+    deckList.mockResolvedValue([BURN, { ...FILED, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 0 decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Delete Commander" });
+    expect(confirm).toHaveTextContent("Its 1 deck will move to the top level.");
+    expect(confirm).not.toHaveTextContent("It's empty.");
   });
 
   /**
@@ -3677,6 +3783,27 @@ describe("the folder row's menu", () => {
     expect(deckFolderCreate).not.toHaveBeenCalled();
   });
 
+  /**
+   * **The wall's folder card writes the same ref**, from its `⋯` (issue #1546). It never did, so
+   * a layer its menu raised handed the caret to whatever opened the *previous* menu — or, on a
+   * fresh page, to `<body>`.
+   */
+  it("hands the caret back to a folder card's ⋯ when a menu-raised field is dropped", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    const more = screen.getByRole("button", { name: "Manage Commander" });
+    await userEvent.click(more);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New subfolder…" }));
+    await screen.findByLabelText("New folder name");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(more);
+    expect(deckFolderCreate).not.toHaveBeenCalled();
+  });
+
   it("hands the caret back to the row when a menu-raised folder delete is dropped", async () => {
     withFolders();
 
@@ -4422,6 +4549,102 @@ describe("creating folders while the tree is folded", () => {
     } finally {
       width.mockRestore();
     }
+  });
+});
+
+/**
+ * Issue #1544: the heading's `Folder ▾ → Rename…` renames "at the tree", and a folded or railed
+ * tree draws no rows and no fields — so the wall draws the field instead, as it does for a new
+ * folder, and Escape closes the field the reader can see rather than an invisible layer.
+ */
+describe("renaming the open folder while the tree is folded", () => {
+  async function renameFromHeading() {
+    await userEvent.click(await screen.findByRole("button", { name: "Commander folder, 2 decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+  }
+
+  it("draws the rename field in the wall when the saved pane is collapsed", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: "Expand folders" });
+    await renameFromHeading();
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Commander");
+    expect(screen.getAllByLabelText("Rename Commander")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Folders" })).queryByLabelText(
+        "Rename Commander",
+      ),
+    ).toBeNull();
+
+    await userEvent.keyboard("EDH{Enter}");
+    await waitFor(() => expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH"));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Expand folders" })).toBeInTheDocument();
+    expect(setDeckFolderPane).not.toHaveBeenCalled();
+  });
+
+  it("closes the field on the first Escape, hands the caret back, and walks up on the second", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: "Expand folders" });
+    await renameFromHeading();
+    expect(await screen.findByLabelText("Rename Commander")).toHaveFocus();
+
+    await userEvent.keyboard("Discarded{Escape}");
+    expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+    expect(deckFolderRename).not.toHaveBeenCalled();
+    // One press closed one thing: the reader is still standing in the folder.
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Folder actions" })).toHaveFocus(),
+    );
+
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByRole("heading", { name: "All decks" })).toBeInTheDocument();
+  });
+
+  it("draws the field in the wall when a narrow desk rails the tree", async () => {
+    // useDeskWidth reads the desk's clientWidth; jsdom otherwise reports an unmeasured zero.
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    try {
+      withFolders();
+      wrap(<DecksPage />);
+      await screen.findByRole("button", { name: "Expand folders" });
+      await renameFromHeading();
+
+      const field = await screen.findByLabelText("Rename Commander");
+      expect(field).toHaveFocus();
+      expect(screen.getAllByLabelText("Rename Commander")).toHaveLength(1);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("keeps the rename in the tree while the tree is expanded", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(screen.getAllByLabelText("Rename Commander")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Folders" })).getByLabelText(
+        "Rename Commander",
+      ),
+    ).toBe(field);
   });
 });
 

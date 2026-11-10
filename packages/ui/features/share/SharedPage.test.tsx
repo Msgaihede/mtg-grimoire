@@ -264,6 +264,34 @@ describe("a shared collection, opened in the app", () => {
     expect(screen.getByRole("listitem", { name: /^Tundra/ })).toBeInTheDocument();
   });
 
+  /**
+   * A folder the re-check took away stops narrowing (issue #1578): its uid left standing filtered
+   * the wall to nothing while the `<select>`, which has no option for it, read *All folders*.
+   */
+  it("widens to every folder when a re-check removes the one that was picked", async () => {
+    const binder = { uid: "binder", name: "Trade binder", parent: null };
+    const bolt = card({ id: "bolt", n: "Lightning Bolt", fo: "binder" });
+    shareOpen.mockResolvedValue(
+      snapshot({
+        folders: [binder, { uid: "duals", name: "Duals", parent: "binder" }],
+        cards: [bolt, card({ id: "tundra", n: "Tundra", fo: "duals" })],
+      }),
+    );
+    mount();
+
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+    await userEvent.selectOptions(screen.getByLabelText("Folder"), "duals");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+
+    shareOpen.mockResolvedValue(
+      snapshot({ updatedAt: 1757395200, folders: [binder], cards: [bolt] }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Check for an update/ }));
+
+    expect(await screen.findByRole("listitem", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Folder")).toHaveValue("");
+  });
+
   /** A reader with nothing open is given the way in rather than an apology. */
   it("offers the paste box when no share has been opened", async () => {
     useAppStore.setState({ openedShares: [] });
@@ -460,11 +488,11 @@ describe("building a want list out of somebody else's binder", () => {
   });
 
   /**
-   * ⚠️ **A pick is about a *position* in one snapshot, so it may not outlive the snapshot.**
+   * ⚠️ **A pick is about a row of one binder, so it may not outlive the binder.**
    *
-   * `rows` keys each row by its index in the snapshot's own array — the only unique key this
-   * document has, since two rows of a binder can agree on printing, finish, folder and grade and
-   * still be two rows. Switching binders does not unmount anything: `Switcher` holds an observer
+   * `rows` keys each row by its grain and its ordinal among the rows of that grain, and two
+   * binders can each hold a row under the same key — a nonfoil Bolt at the root is one in both.
+   * Switching binders does not unmount anything: `Switcher` holds an observer
    * on every open link, so the target is warm and `isPending` is false on
    * the same render. Without a key on `<Binder>` the ticks survived and resolved against the
    * *new* binder's rows, and *Add to wishlist* wrote two cards from a collection the reader had
@@ -498,9 +526,70 @@ describe("building a want list out of somebody else's binder", () => {
       expect(screen.getByRole("heading", { level: 2 })).toHaveAccessibleName("Ashiok’s Spares"),
     );
     // …with nothing picked, and the row that *is* there is not ticked. A bar reading `1 picked`
-    // here would be one card of somebody else's binder, addressed by position.
+    // here would be one card of somebody else's binder, addressed by a key minted in another.
     expect(screen.queryByText(/picked/)).toBeNull();
     expect(tick("Tundra")).not.toBeChecked();
+  });
+
+  /**
+   * ⚠️ **A re-check is the same binder a little later, and a tick stays on its card across it**
+   * (issue #1578). A tick was once the row's index in the snapshot's array, and the
+   * *Check for an update* press (or the fifteen-minute timer) replaces that array under the same
+   * link: an owner who republished with a card in front of the ticked one moved the tick onto
+   * the next card down, and *Add to wishlist* wrote a card the reader never picked.
+   */
+  it("keeps a tick on its card when a re-check brings a card in front of it", async () => {
+    const user = userEvent.setup();
+    const bolt = card({ id: "bolt", n: "Lightning Bolt" });
+    const sol = card({ id: "sol", n: "Sol Ring" });
+    shareOpen.mockResolvedValue(snapshot({ cards: [bolt, sol] }));
+    mount();
+
+    await waitFor(() => expect(tick("Sol Ring")).toBeInTheDocument());
+    await user.click(tick("Sol Ring"));
+    await user.type(screen.getByLabelText("Search this collection"), "o");
+
+    shareOpen.mockResolvedValue(
+      snapshot({
+        updatedAt: 1757395200,
+        cards: [card({ id: "lotus", n: "Black Lotus" }), bolt, sol],
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: /Check for an update/ }));
+    await waitFor(() => expect(tick("Black Lotus")).toBeInTheDocument());
+
+    expect(tick("Sol Ring")).toBeChecked();
+    expect(tick("Lightning Bolt")).not.toBeChecked();
+    expect(tick("Black Lotus")).not.toBeChecked();
+    expect(screen.getByText("1 picked")).toBeInTheDocument();
+    // The re-check is not a different binder: what the reader typed is still there.
+    expect(screen.getByLabelText("Search this collection")).toHaveValue("o");
+
+    await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
+    await screen.findByRole("option", { name: "Trade targets" });
+    await user.selectOptions(screen.getByLabelText("Add them to"), "7");
+    await user.click(screen.getByRole("button", { name: "Add 1 card" }));
+
+    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(1));
+    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "sol", quantity: 1, folderId: 7 });
+  });
+
+  /** …and a tick whose card the re-check took away is not counted or sent. */
+  it("stops counting a tick whose card a re-check removed", async () => {
+    const user = userEvent.setup();
+    const bolt = card({ id: "bolt", n: "Lightning Bolt" });
+    shareOpen.mockResolvedValue(snapshot({ cards: [bolt, card({ id: "sol", n: "Sol Ring" })] }));
+    mount();
+
+    await waitFor(() => expect(tick("Sol Ring")).toBeInTheDocument());
+    await user.click(tick("Sol Ring"));
+
+    shareOpen.mockResolvedValue(snapshot({ updatedAt: 1757395200, cards: [bolt] }));
+    await user.click(screen.getByRole("button", { name: /Check for an update/ }));
+    await waitFor(() => expect(screen.queryByRole("listitem", { name: /^Sol Ring/ })).toBeNull());
+
+    expect(tick("Lightning Bolt")).not.toBeChecked();
+    expect(screen.queryByText(/picked/)).toBeNull();
   });
 
   it("puts the picks down when the reader clears them", async () => {

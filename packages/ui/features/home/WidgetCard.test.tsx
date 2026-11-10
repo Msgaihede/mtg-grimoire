@@ -360,7 +360,9 @@ describe("WidgetCard", () => {
         })}
       />,
     );
-    expect(within(screen.getByRole("region", { name: TITLE })).getByText("Set")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: TITLE })).getByText("Set"),
+    ).toBeInTheDocument();
 
     const narrow = widget({ w: 3, config: { dimension: "set" } });
     view.rerender(
@@ -415,6 +417,53 @@ describe("WidgetCard", () => {
         expect(screen.queryByRole("dialog", { name: `${TITLE} settings` })).toBeNull(),
       );
       expect(trigger).toHaveFocus();
+    });
+    /**
+     * **A press that picks a card up closes the popover** (issue #1582). The page's gesture
+     * `preventDefault()`s the press, which suppresses the browser's own focus move — so without
+     * the card moving the caret itself, a popover that closes on blur stayed open through the drag.
+     * `fireEvent` moves no focus either, which is what makes this the bug's own shape.
+     */
+    it.each([
+      ["the card's body", () => screen.getByRole("region", { name: TITLE }), GRIP],
+      ["the grip", () => screen.getByRole("button", { name: GRIP }), GRIP],
+      ["the resize corner", () => screen.getByRole("button", { name: RESIZE }), RESIZE],
+    ])(
+      "closes when %s is pressed, and the caret lands on the gesture's control",
+      async (_, target, focused) => {
+        const user = userEvent.setup();
+        // The page's own handling of the press: no focus move of the browser's.
+        const swallow = (event: { preventDefault: () => void }) => event.preventDefault();
+        render(
+          <WidgetCard
+            {...props({ editing: true, onDragStart: swallow, onResizeStart: swallow })}
+          />,
+        );
+
+        await user.click(screen.getByRole("button", { name: SETTINGS }));
+        await screen.findByRole("dialog", { name: `${TITLE} settings` });
+
+        fireEvent.pointerDown(target());
+
+        await waitFor(() =>
+          expect(screen.queryByRole("dialog", { name: `${TITLE} settings` })).toBeNull(),
+        );
+        expect(screen.getByRole("button", { name: focused })).toHaveFocus();
+      },
+    );
+
+    it("closes the remove question the same way", async () => {
+      const user = userEvent.setup();
+      render(<WidgetCard {...props({ editing: true })} />);
+
+      await user.click(screen.getByRole("button", { name: REMOVE }));
+      await screen.findByRole("dialog", { name: `Remove ${TITLE}?` });
+
+      fireEvent.pointerDown(screen.getByRole("region", { name: TITLE }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: `Remove ${TITLE}?` })).toBeNull(),
+      );
     });
   });
 

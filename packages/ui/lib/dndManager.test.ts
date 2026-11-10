@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { Feedback, PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
 import css from "@/index.css?raw";
 import { folderDraggable } from "@/lib/folderDrag";
-import { dndManager, DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
+import { dndManager, DRAGGING_ATTRIBUTE, pressCost } from "@/lib/dndManager";
 import { dndDraggable } from "@/lib/dndTarget";
 import { boxed, startPointerDrag } from "@/test-drag";
 
@@ -452,8 +452,52 @@ describe("the manager's sensors", () => {
       element.remove();
     }
   });
-});
 
+  /**
+   * **Issue #1566 — a still mouse press held past 200ms was a drag**, because the library's own
+   * mouse default is `Delay(200)` *or* `Distance(5)`. A drag's `beforedragstart` runs a card
+   * wall's record, which throws the picked set away when the press is outside it — so a slow
+   * Ctrl-click cleared the selection it was meant to extend. Held well past that delay here, and
+   * the drag must not have started; then the same press travels, and it must.
+   */
+  it("starts no drag from a still mouse press, however long it is held", async () => {
+    const element = boxed(document.createElement("div"), 0);
+    document.body.append(element);
+    const starts = vi.fn();
+    const stopListening = dndManager.monitor.addEventListener("beforedragstart", starts);
+    const stop = dndDraggable({ element, data: () => ({ cardId: "sol-ring" }) });
+    try {
+      const held = await startPointerDrag(element, { move: false });
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      expect(held.started).toBe(false);
+      expect(starts).not.toHaveBeenCalled();
+      expect(dndManager.dragOperation.status.idle).toBe(true);
+
+      await held.moveTo(100, 40);
+      await held.moveTo(100, 48);
+      expect(dndManager.dragOperation.status.idle).toBe(false);
+      await held.cancel();
+    } finally {
+      stopListening();
+      stop();
+      element.remove();
+    }
+  });
+
+  /** A finger keeps the library's hold, because on a touch screen travel alone is a scroll. */
+  it("asks a finger for a hold and a mouse or a pen for travel", () => {
+    const [touch] = pressCost({ pointerType: "touch" });
+    expect(touch).toBeInstanceOf(PointerActivationConstraints.Delay);
+    expect(touch).toMatchObject({ options: { value: 250, tolerance: 5 } });
+    for (const pointerType of ["mouse", "pen"]) {
+      const constraints = pressCost({ pointerType });
+      expect(constraints).toHaveLength(1);
+      expect(constraints[0]).toBeInstanceOf(PointerActivationConstraints.Distance);
+      expect(constraints[0]).toMatchObject({ options: { value: 5 } });
+    }
+  });
+});
 
 /**
  * Every source file in the app, in the workbench and in the light app, as text. `?raw` through
@@ -546,7 +590,9 @@ describe("the drag library is the only drag library", () => {
       ),
     ).toBe(true);
     expect(
-      PRAGMATIC_IMPORT.test(` * \`${ATLAS}/pragmatic-drag-and-drop\` keeps one drop target per element.`),
+      PRAGMATIC_IMPORT.test(
+        ` * \`${ATLAS}/pragmatic-drag-and-drop\` keeps one drop target per element.`,
+      ),
     ).toBe(false);
   });
 });

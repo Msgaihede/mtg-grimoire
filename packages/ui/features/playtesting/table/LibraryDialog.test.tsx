@@ -155,6 +155,22 @@ describe("LibraryDialog", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
 
+  // Issue #1590: the board keeps the dialog open while a move is with the engine, held.
+  it("holds every button but Done while a move is with the engine", () => {
+    render(
+      <LibraryDialog
+        look={{ zone: "library", mode: "search", count: "all" }}
+        view={tableView()}
+        disabled
+        onAct={vi.fn()}
+        onClose={() => {}}
+      />,
+    );
+    for (const b of screen.getAllByRole("button", { name: /^(Hand|Battlefield|Top|Shuffle)$/ }))
+      expect(b).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+  });
+
   // Issue #1521: another player's graveyard offers what the reader's own does.
   it("offers an opponent's graveyard the places the reader's own has", async () => {
     const onAct = vi.fn();

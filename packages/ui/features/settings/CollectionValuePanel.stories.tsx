@@ -68,9 +68,9 @@ export const SetABulkPrice: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText(/only full values are shown/);
     const bulk = canvas.getByRole("textbox", { name: /Bulk price/ });
-    await expect(bulk).toBeDisabled();
+    await expect(bulk).toHaveAttribute("aria-disabled", "true");
     await userEvent.type(canvas.getByRole("textbox", { name: /Minimum card value/ }), "1{Enter}");
-    await waitFor(() => expect(bulk).toBeEnabled());
+    await waitFor(() => expect(bulk).not.toHaveAttribute("aria-disabled"));
     await userEvent.type(bulk, "0.01{Enter}");
     await expect(await canvas.findByText(/^Bulk at \$0\.01 · /)).toBeInTheDocument();
   },

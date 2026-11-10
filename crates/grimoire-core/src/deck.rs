@@ -2074,6 +2074,18 @@ pub(crate) fn release_unclaimed_copies(
 /// [`entry_finish`]) displaces nothing. Every other copy in the group is still the sweep's to
 /// judge, with the plan's claims, so issue #1112's eviction cannot come back through here.
 ///
+/// **The cut is a caller too** ([issue #1536](https://github.com/Msgaihede/mtg-grimoire/issues/1536)).
+/// [`crate::collection_alloc::deck_to_collection`] — the press the editor sends every live step
+/// down through — released up to the cut quantity through [`release_group_copies`], which clamps
+/// only at what the group holds. On a line the folder backs only in part (4 listed, 2 held) a
+/// step down filed an owned copy although the copy that was cut was one the reader never had,
+/// and cutting a Main row whose one copy the Sideboard still names took that copy out. It calls
+/// this now, after its `deck_cards` write, so the two kinds of removal agree whatever the
+/// folder holds.
+///
+/// The answer is [`release_group_copies`]' [`Released`] — what moved and where it landed, the
+/// two facts that cut reports — and nothing when the clamp left nothing to take.
+///
 /// The `live` fence is here for [`release_unclaimed_copies`]' reason: a plan holds no cards.
 /// Called inside the caller's transaction, **after** the `deck_cards` write, so the claim it reads
 /// is the finished list's.
@@ -2084,12 +2096,16 @@ pub(crate) fn release_displaced_copies(
     card_id: &str,
     finish: Option<&str>,
     displaced: i64,
-) -> Result<(), String> {
+) -> Result<Released, String> {
+    let nothing = Released {
+        moved: 0,
+        landed: None,
+    };
     if variant != LIVE || displaced <= 0 {
-        return Ok(());
+        return Ok(nothing);
     }
     let Some(group) = deck_group(tx, deck_id)? else {
-        return Ok(());
+        return Ok(nothing);
     };
     let finishes = printing_finishes(tx, card_id)?;
     let played = entry_finish(finish, finishes.as_deref());
@@ -2124,10 +2140,9 @@ pub(crate) fn release_displaced_copies(
         .map_err(|e| e.to_string())?;
     let take = displaced.min(held - still_claimed);
     if take <= 0 {
-        return Ok(());
+        return Ok(nothing);
     }
-    release_group_copies(tx, deck_id, card_id, finish, take)?;
-    Ok(())
+    release_group_copies(tx, deck_id, card_id, finish, take)
 }
 
 /// What the **live** list claims, per `(card_id, played finish)` — [`entry_finish`]'s grain, the
@@ -14411,6 +14426,11 @@ mod tests {
     /// against. Custody cannot, so the number is simply read — and the two halves that mattered
     /// still do: a row stepped down says so, and a row taken to zero is **deleted** (v24's
     /// rule) and holds nothing at all.
+    ///
+    /// **The row is changed by statement, not by `collection::set_quantity`**, which refuses a
+    /// row in a deck's group since issue #1537 (`ENTRY_IN_A_DECK`) — asserted first, because the
+    /// reader's stepper is exactly what must not move a deck's copies behind its back. What is
+    /// left to pin is the read: whatever moves the group's row, the deck follows it.
     #[test]
     fn owned_quantity_follows_the_group_row_down_to_zero() {
         let conn = seeded();
@@ -14420,14 +14440,29 @@ mod tests {
         let entry = file_into_group(&conn, deck.id, "bolt-lea", 4);
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
 
-        crate::collection::set_quantity(&conn, entry, 1).unwrap();
+        assert_eq!(
+            crate::collection::set_quantity(&conn, entry, 1).unwrap_err(),
+            crate::collection_folders::ENTRY_IN_A_DECK,
+            "the reader's stepper is fenced off a deck's copies"
+        );
+        assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
+
+        conn.execute(
+            "UPDATE collection_entries SET quantity = 1 WHERE id = ?1",
+            params![entry],
+        )
+        .unwrap();
         assert_eq!(
             owned_of(&conn, deck.id, "bolt-lea", main),
             1,
             "a shrunken row is a shrunken deck, with no write to the deck at all"
         );
 
-        crate::collection::set_quantity(&conn, entry, 0).unwrap();
+        conn.execute(
+            "DELETE FROM collection_entries WHERE id = ?1",
+            params![entry],
+        )
+        .unwrap();
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 0);
         assert_eq!(
             count(&conn, "collection_entries"),

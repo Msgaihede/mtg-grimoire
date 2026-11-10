@@ -479,6 +479,15 @@ field only when it carries a comma, a quote or a newline, and the reader is a ch
 scanner (a quoted field can hold a comma or a newline, so there is no line-oriented shortcut that is
 correct).
 
+**A quote opens a quoted cell only at the start of one** (blanks before it allowed, so
+`1, "Aragorn, the Uniter"` still reads), and is an ordinary character anywhere else — `7" playmat
+promo` is a note about a seven-inch playmat (issue #1553). Until then a mid-cell quote opened quoted
+mode, and with nothing to close it every row below went into that one note with no issue raised. A
+quote that *does* open a cell and is never closed is taken back as a literal character: the scanner
+reads on from it, so the rows after it are rows, and the row that carried it is flagged
+`unterminated` and reaches the preview as a `ParseIssue` ("a quote in this row is never closed")
+rather than as a card. `detectDelimiter` counts separators under the same rule.
+
 **Reading a CSV is the one *file-level* judgement `parse.ts` makes; every other rule in it is
 per-line.** A format detector would have to choose a reader before it had read anything and would
 be wrong about exactly the lists somebody had hand-edited — which is why every other shape is read
@@ -706,6 +715,25 @@ the grain, a line for a card the reader has already filed in `Ordered` lands as 
 the root instead of folding into the one they filed. `WishRow.elsewhere` is what tells them — the
 imported row draws an "also on your list" mark. Whole reasoning:
 [wishlist-folders.md](wishlist-folders.md).
+
+### The commander step checks what is already decided — issue #1551, 2026-11-10
+
+`commanderChoice` reads the pasted list alone, and two answers it gave were wrong once the step's
+own state was taken into account:
+
+- **A pick outlived the format that offered it.** On the new-deck step a format change rebuilds the
+  plan, but `picked` is plain state — so Sisay picked under Commander rode to the commit under
+  Oathbreaker, beneath a step that said nothing could be the commander and drew no way out.
+  `livePicks` now keeps the pick to the plan's current candidates, on both deck arms, and the step
+  draws that answer, so what is pressed is what Import sends. Filtered rather than cleared: turning
+  the format back offers the same pick again.
+- **A merge forced a second commander.** One legendary creature in a paste is `automatic`, which has
+  no "No commander" and outranks every filing, `forcedCategoryName` included — so pasting `Captain
+  Sisay` into a deck Kenrith already leads made two commanders. On a `merge` into a list that holds a
+  card in a `commander`-kind pile, `deferToHeldCommander` turns `automatic` into `ask` with the one
+  candidate offered and **No commander** pressed, under a line naming the commander already there. A
+  `replace` clears the command zone with the rest, so the radio moved to Replace gives the
+  `automatic` back. `fromFile` is untouched: a Commander heading in the file is the file saying so.
 
 ### A Virtual deck moves two sentences and takes one control away
 

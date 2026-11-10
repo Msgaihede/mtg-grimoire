@@ -21,9 +21,9 @@
  *
  * ## The autosave, which is the only genuinely new interaction in this feature
  *
- * `DeckNotesPanel` is an explicit Save with no debounce and no unsaved-change guard. That is
- * tolerable in a band a reader deliberately opened to edit and it is not tolerable here: this
- * dialog closes on a scrim press, on Escape and on the ✕, and none of the three asks first. So a
+ * `DeckNotesPanel`'s editor is an explicit Save with no debounce, and since issue #1549 it asks
+ * *Discard …?* before any way out loses words. This dialog does neither: it closes on a scrim
+ * press, on Escape and on the ✕, and none of the three asks first. So a
  * draft is written on a debounce, the writing is reported in words, and **the pending draft is
  * flushed from a mount-only effect's cleanup** — without that last part the last keystrokes before
  * a close are precisely the ones lost, which is the failure the design exists to avoid.
@@ -47,6 +47,12 @@
  * `noteColor` reads any such word as `slate`. Seeding the draft from `noteColor(note.color)` and
  * saving it back would therefore silently repaint a `teal` note `slate` the moment the reader
  * opened it and typed a letter. So the pick is `null` until a swatch is actually pressed.
+ *
+ * **It does not write a pin the reader did not press, for the colour's reason.** The pin is the
+ * one way a note is lifted to the front of the board and seeds the Pad (issue #1583 — until this
+ * toggle, no surface sent `pinned` and the widget's *Pinned note first* switch did nothing), and it
+ * travels in the same partial patch as everything else: `null` until the toggle is pressed, then
+ * compared against the row. A pin pressed twice is no patch at all.
  *
  * **It does not write a field the reader did not change, and it follows the row under one they
  * have not changed** (issue #1579). The note it was handed can be replaced under it at any time —
@@ -73,6 +79,8 @@ import {
   useState,
   type ReactElement,
 } from "react";
+
+import { Pin } from "lucide-react";
 
 import { Dialog } from "@/components/Dialog";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
@@ -250,6 +258,8 @@ function StickyNoteBody({
   /** `null` until a swatch is pressed — see the header: a colour this build cannot name must
    *  survive being looked at. */
   const [pickedColor, setPickedColor] = useState<NoteColor | null>(null);
+  /** `null` until the pin is pressed — the colour's rule, so opening a note writes nothing. */
+  const [pickedPinned, setPickedPinned] = useState<boolean | null>(null);
   /**
    * The last patch this dialog handed over, and when — `null` until it has handed over one.
    *
@@ -267,7 +277,12 @@ function StickyNoteBody({
    */
   const [handed, setHanded] = useState<StickyNotePatch>({});
   /** The row as this dialog last saw it — what each field is compared with when the row changes. */
-  const [seen, setSeen] = useState({ title: note.title, body: note.body, color: note.color });
+  const [seen, setSeen] = useState({
+    title: note.title,
+    body: note.body,
+    color: note.color,
+    pinned: note.pinned,
+  });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   /**
@@ -278,8 +293,8 @@ function StickyNoteBody({
    *
    * "Agreed" is either the row as last seen, or the last value handed over — the second only while
    * no refusal stands, because a refused write is owed and adopting over it would drop words the
-   * store never took. A colour follows the row by going back to `null`, the "nothing picked"
-   * state the header gives its reasons for.
+   * store never took. A colour and a pin follow the row by going back to `null`, the "nothing
+   * picked" state the header gives its reasons for.
    *
    * A foreign adoption also drops {@link sent}: the line then answers from the row's own
    * `updatedAt` rather than claiming *Saved* for text the row no longer holds.
@@ -287,7 +302,12 @@ function StickyNoteBody({
    * Spelled inline rather than through a helper for `TodoListDialog`'s measured reason — handing
    * state to a helper makes the React Compiler treat it as possibly mutated.
    */
-  if (note.title !== seen.title || note.body !== seen.body || note.color !== seen.color) {
+  if (
+    note.title !== seen.title ||
+    note.body !== seen.body ||
+    note.color !== seen.color ||
+    note.pinned !== seen.pinned
+  ) {
     const settled = writeError === undefined;
     let foreign = false;
     if (
@@ -312,11 +332,20 @@ function StickyNoteBody({
       if (pickedColor !== note.color) foreign = true;
       setPickedColor(null);
     }
+    if (
+      note.pinned !== seen.pinned &&
+      pickedPinned !== null &&
+      (pickedPinned === seen.pinned || (settled && pickedPinned === handed.pinned))
+    ) {
+      if (pickedPinned !== note.pinned) foreign = true;
+      setPickedPinned(null);
+    }
     if (foreign) setSent(null);
-    setSeen({ title: note.title, body: note.body, color: note.color });
+    setSeen({ title: note.title, body: note.body, color: note.color, pinned: note.pinned });
   }
 
   const shownColor = pickedColor ?? noteColor(note.color);
+  const shownPinned = pickedPinned ?? note.pinned;
 
   /**
    * What would be written right now, or `null` if the draft and the row already agree.
@@ -335,8 +364,18 @@ function StickyNoteBody({
     if (draftTitle !== note.title) next.title = draftTitle;
     if (draftBody !== note.body) next.body = draftBody;
     if (pickedColor !== null && pickedColor !== note.color) next.color = pickedColor;
+    if (pickedPinned !== null && pickedPinned !== note.pinned) next.pinned = pickedPinned;
     return Object.keys(next).length === 0 ? null : next;
-  }, [draftTitle, draftBody, pickedColor, note.title, note.body, note.color]);
+  }, [
+    draftTitle,
+    draftBody,
+    pickedColor,
+    pickedPinned,
+    note.title,
+    note.body,
+    note.color,
+    note.pinned,
+  ]);
 
   /** The patch as one comparable string — what {@link sent} is matched against, and what the
    *  writer below dedupes on. `null` when the draft and the row already agree. */
@@ -468,37 +507,64 @@ function StickyNoteBody({
         />
       </div>
 
-      <div role="group" aria-label="Note color" className="flex shrink-0 items-center gap-2">
-        {NOTE_COLORS.map((color) => {
-          const picked = color === shownColor;
-          return (
-            <button
-              key={color}
-              type="button"
-              aria-label={COLOR_LABEL[color]}
-              aria-pressed={picked}
-              onClick={() => setPickedColor(color)}
-              // The paper, with its strip across the top: a swatch that is a small note rather
-              // than a dot, so the choice is made against what it will look like. The ring is a
-              // `box-shadow` rather than a second border, which would move the strip by a pixel
-              // as the reader walked the row.
-              style={{
-                background: NOTE_PAPER[color].fill,
-                boxShadow: picked ? "0 0 0 2px var(--color-accent)" : undefined,
-              }}
-              className={cn(
-                "relative size-7 shrink-0 overflow-hidden rounded-md border border-border",
-                FOCUS,
-              )}
-            >
-              <span
-                aria-hidden="true"
-                className="absolute inset-x-0 top-0 block h-1"
-                style={{ background: NOTE_PAPER[color].strip }}
-              />
-            </button>
-          );
-        })}
+      <div className="flex shrink-0 items-center gap-2">
+        <div role="group" aria-label="Note color" className="flex items-center gap-2">
+          {NOTE_COLORS.map((color) => {
+            const picked = color === shownColor;
+            return (
+              <button
+                key={color}
+                type="button"
+                aria-label={COLOR_LABEL[color]}
+                aria-pressed={picked}
+                onClick={() => setPickedColor(color)}
+                // The paper, with its strip across the top: a swatch that is a small note rather
+                // than a dot, so the choice is made against what it will look like. The ring is a
+                // `box-shadow` rather than a second border, which would move the strip by a pixel
+                // as the reader walked the row.
+                style={{
+                  background: NOTE_PAPER[color].fill,
+                  boxShadow: picked ? "0 0 0 2px var(--color-accent)" : undefined,
+                }}
+                className={cn(
+                  "relative size-7 shrink-0 overflow-hidden rounded-md border border-border",
+                  FOCUS,
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 top-0 block h-1"
+                  style={{ background: NOTE_PAPER[color].strip }}
+                />
+              </button>
+            );
+          })}
+        </div>
+        <span className="flex-1" />
+        {/* A toggle with one name and its state in `aria-pressed`, the swatches' own grammar —
+            so the words never change under the reader's pointer and a screen reader hears
+            *pressed* rather than a second label. Gold when on: the same accent as the dot a
+            pinned tile wears. */}
+        <button
+          type="button"
+          aria-pressed={shownPinned}
+          onClick={() => setPickedPinned(!shownPinned)}
+          className={cn(
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs",
+            "transition-colors duration-[var(--duration-fast)] ease-standard motion-reduce:transition-none",
+            shownPinned
+              ? "border-accent text-accent"
+              : "border-border text-dim hover:border-dim hover:text-text",
+            FOCUS,
+          )}
+        >
+          <Pin
+            className="size-3.5"
+            aria-hidden="true"
+            fill={shownPinned ? "currentColor" : "none"}
+          />
+          Pin note
+        </button>
       </div>
 
       {/* A sentence rather than a spinner: the chunk arrives off local disk, so what a reader

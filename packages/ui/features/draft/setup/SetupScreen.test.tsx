@@ -3,16 +3,33 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SET } from "@/features/draft/booster/fixture";
-import type { BoosterSetSummary, DraftSetup, DraftView, ImportResolveLine } from "@/lib/ipc";
+import type {
+  BoosterSetSummary,
+  DraftSaved,
+  DraftSetup,
+  DraftView,
+  ImportResolveLine,
+  LobbyState,
+} from "@/lib/ipc";
 
 const packsBoosterSets = vi.hoisted(() => vi.fn());
 const packsBoosterSet = vi.hoisted(() => vi.fn());
 const onPacksRefreshed = vi.hoisted(() => vi.fn());
 const draftStart = vi.hoisted(() => vi.fn());
 const importResolve = vi.hoisted(() => vi.fn());
+const lobbyState = vi.hoisted(() => vi.fn());
+const draftSaved = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { packsBoosterSets, onPacksRefreshed, packsBoosterSet, draftStart, importResolve },
+  ipc: {
+    packsBoosterSets,
+    onPacksRefreshed,
+    packsBoosterSet,
+    draftStart,
+    importResolve,
+    lobbyState,
+    draftSaved,
+  },
 }));
 
 import { SetupScreen, type SetupMode } from "./SetupScreen";
@@ -36,6 +53,8 @@ beforeEach(() => {
   packsBoosterSet.mockReset().mockResolvedValue(SET);
   draftStart.mockReset().mockResolvedValue(VIEW);
   importResolve.mockReset();
+  lobbyState.mockReset().mockResolvedValue(null);
+  draftSaved.mockReset().mockResolvedValue(null);
 });
 
 function setup(mode: SetupMode) {
@@ -145,6 +164,31 @@ describe("SetupScreen", () => {
     expect(draftStart).not.toHaveBeenCalled();
   });
 
+  /**
+   * A cube's unknown names and its "Draft without them" are about the cube tab's list: carried to
+   * the Sealed tab they were an alert about a list not on screen and a button that dealt a cube
+   * draft from Sealed (issue #1543).
+   */
+  it("drops the cube's unknown names when the reader switches tab", async () => {
+    importResolve.mockImplementation((lines: ImportResolveLine[]) =>
+      Promise.resolve(lines.map((_, index) => ({ index, matched: null, hintMissed: false }))),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screenFor = (mode: SetupMode) => (
+      <QueryClientProvider client={client}>
+        <SetupScreen mode={mode} onMode={vi.fn()} onBack={vi.fn()} onStarted={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(screenFor("cube"));
+    await userEvent.type(screen.getByRole("textbox", { name: "Cube list" }), "1 Not A Card");
+    await userEvent.click(start());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not A Card");
+
+    rerender(screenFor("sealed"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Draft without them" })).not.toBeInTheDocument();
+  });
+
   it("deals a Commander draft to you and three bots, for a 60-card deck", async () => {
     packsBoosterSets.mockResolvedValue([TEST_SET, CMR]);
     setup("commander");
@@ -201,5 +245,69 @@ describe("SetupScreen", () => {
     ]);
     expect(setupArg.packs).toHaveLength(2);
     expect(setupArg.packs.every((seat) => seat.length === 3)).toBe(true);
+  });
+
+  /** Issue #1586: the app holds one draft, and Start never puts one away unasked. */
+  describe("a draft already in progress", () => {
+    const SAVED: DraftSaved = {
+      label: "Bloomburrow",
+      mode: "quick",
+      status: "drafting",
+      packNumber: 1,
+      packCount: 3,
+      pickNumber: 4,
+      updatedAt: 0,
+    };
+
+    const chooseSealed = async () => {
+      setup("sealed");
+      const wall = await screen.findByRole("list", { name: "Sets" });
+      await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+      await userEvent.click(screen.getByRole("button", { name: /Open sealed pool/ }));
+    };
+
+    it("asks before a new pool replaces the saved draft, and starts it once agreed", async () => {
+      draftSaved.mockResolvedValue(SAVED);
+      await chooseSealed();
+      const dialog = await screen.findByRole("dialog", { name: "Replace the draft in progress?" });
+      expect(dialog).toHaveTextContent("Bloomburrow (Quick Draft · Pack 2 of 3 · Pick 5)");
+      expect(draftStart).not.toHaveBeenCalled();
+      expect(packsBoosterSet).not.toHaveBeenCalled();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Open the new pool" }));
+      await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    });
+
+    it("starts nothing when the question is cancelled", async () => {
+      draftSaved.mockResolvedValue(SAVED);
+      await chooseSealed();
+      const dialog = await screen.findByRole("dialog", { name: "Replace the draft in progress?" });
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(draftStart).not.toHaveBeenCalled();
+    });
+
+    it("refuses while a pod this app hosts is drafting", async () => {
+      lobbyState.mockResolvedValue({
+        role: "host",
+        kind: "draft",
+        code: "K7QX2M",
+        phase: "drafting",
+        name: "Ada",
+        hostName: "Ada",
+        hostOnline: true,
+        peers: [],
+        label: "",
+        closedReason: null,
+        trade: null,
+      } satisfies LobbyState);
+      draftSaved.mockResolvedValue(SAVED);
+      await chooseSealed();
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "You are hosting a pod draft. Finish it or leave its lobby before starting another draft.",
+      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(draftStart).not.toHaveBeenCalled();
+    });
   });
 });

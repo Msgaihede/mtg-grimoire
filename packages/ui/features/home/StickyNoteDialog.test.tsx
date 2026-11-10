@@ -173,6 +173,23 @@ describe("a row that changes under an open sticky note (issue #1579)", () => {
     expect(screen.getByRole("button", { name: "Rose" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("does not re-pin a note that was pinned, saved and then unpinned elsewhere", async () => {
+    const { onSave, arrive } = await renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Pin note" }));
+    await wait();
+    expect(onSave).toHaveBeenCalledWith({ pinned: true });
+
+    arrive({ ...NOTE, pinned: true, updatedAt: 2 });
+    arrive({ ...NOTE, pinned: false, updatedAt: 3 });
+    await wait();
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Pin note" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("still flushes the reader's last words at unmount", async () => {
     const { onSave, unmount } = await renderDialog();
     fireEvent.change(body(), { target: { value: "last phrase" } });

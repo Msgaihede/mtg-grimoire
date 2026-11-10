@@ -88,8 +88,35 @@ function depthOf(state: unknown): number {
     : 0;
 }
 
-/** {@link PUSHED}, stamped with how deep the entry sits — see {@link depthOf}. */
-const pushedAt = (depth: number) => ({ ...PUSHED, depth });
+/**
+ * {@link PUSHED}, stamped with how deep the entry sits ({@link depthOf}) and **the place it was
+ * pushed over** ({@link pushedOver}) — the entry the browser was on, by its place's own spelling.
+ */
+const pushedAt = (depth: number, over: string) => ({
+  ...PUSHED,
+  depth,
+  over: placeHref(placeAt(over)),
+});
+
+/**
+ * The place the entry the browser is on was pushed over, as {@link placeHref} spells it — or
+ * `null` where the entry is not one this router pushed, or was pushed before entries said so.
+ *
+ * **What {@link up} asks before it goes back**: a way up from a deck lands on the gallery, but
+ * the entry beneath the deck is the gallery only for a reader who walked there from it. One who
+ * came from the collection's deck link has the collection beneath, and a Back would land them
+ * there instead of where the arrow says. A replace keeps the entry's state, and with it this —
+ * what is beneath an entry does not change when the entry is renamed.
+ */
+function pushedOver(state: unknown): string | null {
+  return isPushed(state) &&
+    typeof state === "object" &&
+    state !== null &&
+    "over" in state &&
+    typeof state.over === "string"
+    ? state.over
+    : null;
+}
 
 /** The walk back a tab switch is waiting on, and what it writes once it lands. */
 let traversal: (() => void) | null = null;
@@ -148,10 +175,10 @@ function write(how: "push" | "replace", next: string): void {
       const page = placeHref({ ...place, cardId: null });
       const overItsPage = place.cardId === null || landed(page);
       if (!overItsPage) {
-        window.history.pushState(pushedAt(depthOf(window.history.state) + 1), "", page);
+        window.history.pushState(pushedAt(depthOf(window.history.state) + 1, actual()), "", page);
       }
       if (overItsPage || landed(page)) {
-        window.history.pushState(pushedAt(depthOf(window.history.state) + 1), "", next);
+        window.history.pushState(pushedAt(depthOf(window.history.state) + 1, actual()), "", next);
       }
     }
   } catch {
@@ -164,7 +191,7 @@ function write(how: "push" | "replace", next: string): void {
 /**
  * Go somewhere. A push by default, so Back undoes it — opening a card is one, which is what lets
  * Android's back gesture close the sheet; `replace` for a correction the reader did not make.
- * Closing what a push opened is {@link back}, not a second push.
+ * Closing what a push opened is {@link back}, not a second push, and a way up is {@link up}.
  *
  * **Nothing happens for the place the reader is already on, and that is asked of the place
  * rather than of the string.** `/` names the start view without spelling it, and it is where a
@@ -219,8 +246,9 @@ export function adoptOverlay(): void {
   if (place.cardId === null) return;
   const card = placeHref(place);
   try {
-    window.history.replaceState(null, "", placeHref({ ...place, cardId: null }));
-    window.history.pushState(pushedAt(1), "", card);
+    const page = placeHref({ ...place, cardId: null });
+    window.history.replaceState(null, "", page);
+    window.history.pushState(pushedAt(1, page), "", card);
   } catch {
     try {
       window.history.replaceState(state, "", card);
@@ -281,7 +309,14 @@ export function back(fallback: Place): void {
     navigate(fallback, { replace: true });
     return;
   }
+  goBack(fallback);
+}
 
+/**
+ * The traversal {@link back} and {@link up} make once they know the entry beneath is the one to
+ * land on: one Back, latched until it lands, and a rename of the entry if it never does.
+ */
+function goBack(fallback: Place): void {
   const from = href();
   leaving = true;
   const release = (): void => {
@@ -301,6 +336,33 @@ export function back(fallback: Place): void {
     release();
     navigate(fallback, { replace: true });
   }
+}
+
+/**
+ * Go up — to `parent`, the place a header's `‹` names (a deck's gallery or folder, a folder's
+ * parent, a trade's list) — **by a real Back where the entry beneath is `parent`, and a replace
+ * where it is not.**
+ *
+ * **Never a push.** A way back that pushed left the place the reader had just left one Back
+ * beneath the one they went up to, so Android's back gesture — the way back a phone reader uses —
+ * reopened the deck, the trade or the folder instead of going on towards the start view, and each
+ * `‹` made history one entry longer. {@link back}'s reason, for a page rather than a card.
+ *
+ * **`back` alone is not enough**, because what is beneath an entry is where the reader came from,
+ * which is not always the place above it: a deck opened from the collection's deck link has the
+ * collection beneath it. A Back there would land on the collection while the arrow said decks. So
+ * each push is stamped with the place it was pushed over ({@link pushedOver}), and the Back is
+ * made only where that is `parent`. Anywhere else — that deck, a page opened from a link, a place
+ * this router is only holding — the entry is renamed to `parent`, which adds no entry, keeps
+ * what was beneath it, and leaves Back walking where the reader walked.
+ *
+ * Asked after {@link uncover}, so a sheet's entry on top is gone before the entry beneath is read.
+ */
+export function up(parent: Place): void {
+  if (leaving || isHere(parent)) return;
+  if (uncover(() => up(parent))) return;
+  if (held() === null && pushedOver(window.history.state) === placeHref(parent)) goBack(parent);
+  else navigate(parent, { replace: true });
 }
 
 /**
@@ -327,6 +389,17 @@ export function linkTo(
   onClick: (event: MouseEvent<HTMLAnchorElement>) => void;
 } {
   return anchorTo(place, () => navigate(place, { replace }));
+}
+
+/**
+ * {@link linkTo} for a way up — a header's `‹`: a press goes by {@link up}, so it takes the reader
+ * back off the place they leave rather than pushing the place above it on top.
+ */
+export function upLinkTo(parent: Place): {
+  href: string;
+  onClick: (event: MouseEvent<HTMLAnchorElement>) => void;
+} {
+  return anchorTo(parent, () => up(parent));
 }
 
 /** An `<a>` to `place` whose unmodified primary click is `go` — {@link linkTo}'s rule, shared. */

@@ -321,6 +321,12 @@ export function QuantityStepper({
     onChange(next);
   };
 
+  /**
+   * Set while the wheel is taking the focus out of the box, so the blur that follows is not a
+   * commit — see the `onWheel` below.
+   */
+  const wheeledOut = useRef(false);
+
   // A press is not held: it reports at once and the box follows `value` exactly as it always
   // has. It only clears a typed number still in flight, which it counted from.
   const step = (next: number) => {
@@ -415,7 +421,29 @@ export function QuantityStepper({
           setDraft(null);
         }
       }}
-      onBlur={commit}
+      onWheel={(e) => {
+        // Chromium steps a *focused* number box on each wheel notch and keeps the scroll for
+        // itself, so a reader rolling the wheel over the box they just clicked to scroll the list
+        // stepped the count instead — and the next blur wrote it, to 0 and a delete in the
+        // collection (issue #1569). The step is the field's default action, which runs after this
+        // listener: let go of the focus here and there is no step, and the wheel scrolls the list
+        // as it would over anything else. Not `preventDefault` — that would cancel the scroll too.
+        //
+        // The blur this causes **throws a typed draft away** rather than committing it: a wheel
+        // is a gesture at the list, not a reader saying they have finished typing, and committing
+        // a half-typed number is the write issue #1110 exists to prevent.
+        if (document.activeElement !== e.currentTarget) return;
+        wheeledOut.current = true;
+        e.currentTarget.blur();
+        wheeledOut.current = false;
+      }}
+      onBlur={() => {
+        if (wheeledOut.current) {
+          setDraft(null);
+          return;
+        }
+        commit();
+      }}
       className={cn(
         "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
         NO_NATIVE_STEPS,

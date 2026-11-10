@@ -9191,7 +9191,10 @@ function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPul
         // `nonfoil` are compared in one spelling rather than beside each other.
         entryFinish(db, e.cardId, e.finish) === want &&
         e.quantity > 0 &&
-        !inADeckFolder(db, e.folderId),
+        !inADeckFolder(db, e.folderId) &&
+        // Issue #1541: a drawer the reader set aside — by its own flag or an ancestor's — is
+        // not on the desk either, `CANDIDATE_SQL`'s `LOCKED_FOLDER_IDS` arm.
+        !collectionFolderLocked(db, e.folderId),
     )
     .sort((a, b) => {
       const [aRank, aOrder] = pullOrder(db, a);
@@ -9227,8 +9230,9 @@ function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPul
 }
 
 /**
- * `deck_pull::why_not_offered` — which of three things to tell a caller whose pick is not in the
- * plan.
+ * `deck_pull::why_not_offered` — which of four things to tell a caller whose pick is not in the
+ * plan. The fourth, {@link ENTRY_IN_A_LOCKED_FOLDER}, is a row whose folder was locked under an
+ * open dialog (issue #1541).
  *
  * Asked only on the refusal path, so the happy path pays nothing for it, and the three arms are
  * three different things to tell a stale dialog: the row has gone, the row is spoken for, or the
@@ -9244,6 +9248,7 @@ function whyNotOffered(db: FakeDb, entryId: number): string {
   const row = db.collectionEntries.find((e) => e.id === entryId);
   if (!row) return ENTRY_GONE;
   if (inADeckFolder(db, row.folderId)) return ENTRY_IN_A_DECK;
+  if (collectionFolderLocked(db, row.folderId)) return ENTRY_IN_A_LOCKED_FOLDER;
   return NOT_SHORT_OF_THAT;
 }
 
@@ -14887,6 +14892,10 @@ const ALREADY_HERE = "Those copies are already in this deck.";
 const NOTHING_PICKED = "Pick at least one copy to pull into this deck.";
 const NOT_SHORT_OF_THAT = "This deck is not short of that printing any more.";
 const MORE_THAN_MISSING = "That is more copies than this deck is short of.";
+/** `deck_pull::ENTRY_IN_A_LOCKED_FOLDER` (issue #1541) — a stale pick naming a row in a drawer
+ *  the reader has since set aside. Not {@link NOT_SHORT_OF_THAT}: the deck is still short. */
+const ENTRY_IN_A_LOCKED_FOLDER =
+  "Those copies are in a locked folder. Unlock it to pull them into a deck.";
 /**
  * `deck_missing`'s two, and the pair reuses the two above rather than respelling them —
  * {@link NOT_SHORT_OF_THAT} and {@link MORE_THAN_MISSING} say exactly what the batch needs to
@@ -16755,6 +16764,17 @@ function inADeckFolder(db: FakeDb, folderId: number | null): boolean {
   return collectionFolderById(db, folderId)?.kind === COLLECTION_DECK_KIND;
 }
 
+/**
+ * `collection::refuse_in_a_deck` — the deck-custody fence on the reader's own writes to a row
+ * (issue #1537): {@link ENTRY_IN_A_DECK} for a row filed in a deck's group. Asked by
+ * `collection_set_quantity`, `collection_update` (its finish and its count), `collection_set_printing`,
+ * `collection_remove` and `collection_remove_many`, and never by {@link removeEntry} or
+ * {@link foldEntry}, which the deck's own writes are built from.
+ */
+function refuseInADeck(db: FakeDb, row: { folderId: number | null }): void {
+  if (inADeckFolder(db, row.folderId)) throw refuse(ENTRY_IN_A_DECK);
+}
+
 /** `collection_alloc::removed_folder` — the one holding area, or {@link NO_REMOVED_FOLDER}. A
  *  partial unique index makes a second impossible in the app; here the seed is the assertion. */
 function removedFolder(db: FakeDb): FakeCollectionFolder {
@@ -17547,8 +17567,11 @@ function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant
  * just took off the **live** list (`displaced` of them), never more and never one the list still
  * claims at that grain afterwards (issue #1494). The stepper's step down calls it, so a card that
  * leaves the deck by `deck_set_card_quantity` sends its cardboard to `Recently removed` exactly as
- * `deck_to_collection` does. Called **after** the `deckCards` write, so the claim it reads is the
- * finished list's; a theory row and a deck with no group move nothing.
+ * `deck_to_collection` does — and since issue #1536 the cut calls it too, so neither press takes
+ * a copy the list still claims when the folder holds fewer than the list names. Called **after**
+ * the `deckCards` write, so the claim it reads is the finished list's; a theory row and a deck
+ * with no group move nothing. Answers {@link releaseGroupCopies}'s `{ moved, landed }`, which the
+ * cut reports.
  */
 function releaseDisplacedCopies(
   db: FakeDb,
@@ -17557,10 +17580,11 @@ function releaseDisplacedCopies(
   cardId: string,
   finish: DeckFinish,
   displaced: number,
-): void {
-  if (variant !== LIVE || displaced <= 0) return;
+): { moved: number; landed: number | null } {
+  const nothing = { moved: 0, landed: null };
+  if (variant !== LIVE || displaced <= 0) return nothing;
   const group = deckGroup(db, deckId);
-  if (group === undefined) return;
+  if (group === undefined) return nothing;
   const key = entryKey(db, cardId, finish);
   const stillClaimed = db.deckCards
     .filter(
@@ -17578,7 +17602,7 @@ function releaseDisplacedCopies(
     )
     .reduce((n, e) => n + e.quantity, 0);
   const take = Math.min(displaced, held - stillClaimed);
-  if (take > 0) releaseGroupCopies(db, deckId, cardId, finish, take);
+  return take > 0 ? releaseGroupCopies(db, deckId, cardId, finish, take) : nothing;
 }
 
 /**
@@ -19050,6 +19074,7 @@ export function writeHandlers(db: FakeDb) {
       validQuantity(args.quantity, "collection quantity");
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
+      refuseInADeck(db, row);
       if (args.quantity === 0) {
         db.collectionEntries = db.collectionEntries.filter((e) => e.id !== row.id);
         return { id: row.id, quantity: 0, removed: true };
@@ -19121,6 +19146,13 @@ export function writeHandlers(db: FakeDb) {
       const grading = canonicalGrading(patch.grading);
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
+      // The deck-custody fence, on the two fields a deck reads and only on a change.
+      if (
+        (patch.finish !== undefined && patch.finish !== row.finish) ||
+        (patch.quantity !== undefined && patch.quantity !== row.quantity)
+      ) {
+        refuseInADeck(db, row);
+      }
 
       const quantity = patch.quantity ?? row.quantity;
       const next: FakeEntry = {
@@ -19222,6 +19254,7 @@ export function writeHandlers(db: FakeDb) {
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
       if (row.cardId === cardId) return { id: row.id, quantity: row.quantity, removed: false };
+      refuseInADeck(db, row);
       const card = requireCard(db, cardId);
       const from = cardById(db, row.cardId);
       if (from !== null && from.oracleId !== card.oracleId) {
@@ -19254,6 +19287,8 @@ export function writeHandlers(db: FakeDb) {
      *  otherwise is an error dialog over a success. */
     collection_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (row) refuseInADeck(db, row);
       removeEntry(db, args.id);
       return { id: args.id, quantity: 0, removed: true };
     },
@@ -19267,8 +19302,8 @@ export function writeHandlers(db: FakeDb) {
      * {@link removeEntry} per id, so an id that names nothing is skipped exactly as the single
      * command skips it — a stale selection is still a success — and `removed`/`copies` count only
      * the rows that were really there, and an id sent twice is removed once ({@link distinctIds}).
-     * **No deck fence**, because the single command has none: removing is the unconditional
-     * delete, and a copy in a deck's group goes the way any other does. **No feed row either**:
+     * **The deck fence refuses the whole press** ({@link refuseInADeck}, issue #1537), before
+     * anything is deleted — the crate's transaction rolls back whole. **No feed row**:
      * the crate's twin records one line for the press, and no write in this fake records any.
      *
      * The ticket it answers takes every deleted row back through {@link putBack}; a press that
@@ -19277,6 +19312,10 @@ export function writeHandlers(db: FakeDb) {
     collection_remove_many: (args: { ids: readonly number[] }): BulkRemoveOutcome => {
       refuseIfBusy(db);
       const before = db.collectionEntries.map((e) => ({ ...e }));
+      for (const id of args.ids) {
+        const row = db.collectionEntries.find((e) => e.id === id);
+        if (row) refuseInADeck(db, row);
+      }
       let removed = 0;
       let copies = 0;
       for (const id of distinctIds(args.ids)) {
@@ -19867,18 +19906,6 @@ export function writeHandlers(db: FakeDb) {
       if (args.quantity > row.quantity) throw refuse(NOT_THAT_MANY);
       const deck = requireDeck(db, row.deckId);
 
-      // **{@link releaseGroupCopies}, and nothing else** — the crate's one walk over a group's
-      // rows, which this handler used to spell inline while the two pile writes spelled it
-      // nowhere. What the cut has that a cleared pile does not is exactly what follows: the
-      // `deck_cards` write and the `MoveOutcome` it answers.
-      const { moved, landed } = releaseGroupCopies(
-        db,
-        row.deckId,
-        row.cardId,
-        row.finish,
-        args.quantity,
-      );
-
       const wholeRow = args.quantity === row.quantity;
       const held = row.quantity;
       if (wholeRow) {
@@ -19886,6 +19913,19 @@ export function writeHandlers(db: FakeDb) {
       } else {
         row.quantity -= args.quantity;
       }
+      // **{@link releaseDisplacedCopies}, after the write** — the stepper's release, over the
+      // crate's one walk ({@link releaseGroupCopies}). Until issue #1536 this released up to the
+      // cut quantity before the write, clamped only at what the group held: a 4-copy line backed
+      // by 2 filed an owned copy on its first step down, and cutting a Main row took the copy the
+      // Sideboard still names. Read after the write, the claim is the finished list's.
+      const { moved, landed } = releaseDisplacedCopies(
+        db,
+        row.deckId,
+        row.variant,
+        row.cardId,
+        row.finish,
+        args.quantity,
+      );
       // **`deck::set_card_quantity`'s row, verbatim** — this command *replaces* the stepper for a
       // decrease on the live list, and a reader cannot see which one ran, so a deck's history has
       // to read continuously across the change of command. `reason` stays `null`: that key is

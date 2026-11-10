@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 
 /**
@@ -16,7 +16,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import type { CameraDevice } from "../useCamera";
-import { ScanDock, type ScanDockProps } from "./ScanDock";
+import { DATE_SETTLE_MS, ScanDock, type ScanDockProps } from "./ScanDock";
 
 /**
  * Three cameras in the order a driver might list them — deliberately not alphabetical, so a list
@@ -430,17 +430,96 @@ describe("ScanDock", () => {
     // `fireEvent` rather than `user.clear`: a date field has no text selection for user-event to
     // drive, and what is under test is what the row does with the value the field reports.
     const from = await screen.findByLabelText("Released from");
+    fireEvent.focus(from);
     fireEvent.change(from, { target: { value: "" } });
+    fireEvent.blur(from);
     expect(onFilters).toHaveBeenLastCalledWith({
       sets: [],
       released_from: null,
       released_to: null,
     });
-    fireEvent.change(screen.getByLabelText("Released to"), { target: { value: "2024-12-31" } });
+    const to = screen.getByLabelText("Released to");
+    fireEvent.focus(to);
+    fireEvent.change(to, { target: { value: "2024-12-31" } });
+    fireEvent.keyDown(to, { key: "Enter" });
     expect(onFilters).toHaveBeenLastCalledWith({
       sets: [],
       released_from: "2023-06-23",
       released_to: "2024-12-31",
+    });
+  });
+
+  describe("a date typed digit by digit (issue #1556)", () => {
+    /** What Chromium reports for `05/01/2021` typed into a date field, one year digit at a time. */
+    const TYPED = ["0002-05-01", "0020-05-01", "0202-05-01", "2021-05-01"];
+
+    async function openTo(over: Partial<ScanDockProps> = {}) {
+      const onFilters = vi.fn();
+      const view = wrap(<ScanDock {...props({ onFilters, ...over })} />);
+      fireEvent.click(screen.getByRole("button", { name: /^Filters:/ }));
+      const to = await screen.findByLabelText("Released to");
+      return { onFilters, to, view };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("sends the date once, after it settles, and no year below 1000", async () => {
+      const { onFilters, to } = await openTo();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      fireEvent.focus(to);
+      for (const value of TYPED.slice(0, 3)) {
+        fireEvent.change(to, { target: { value } });
+        // A reader slower than any debounce: still nothing sent for a three-digit year.
+        act(() => void vi.advanceTimersByTime(DATE_SETTLE_MS * 4));
+      }
+      expect(onFilters).not.toHaveBeenCalled();
+      fireEvent.change(to, { target: { value: TYPED[3] } });
+      act(() => void vi.advanceTimersByTime(DATE_SETTLE_MS - 1));
+      expect(onFilters).not.toHaveBeenCalled();
+      act(() => void vi.advanceTimersByTime(1));
+      expect(onFilters).toHaveBeenCalledTimes(1);
+      expect(onFilters).toHaveBeenLastCalledWith({
+        sets: [],
+        released_from: null,
+        released_to: "2021-05-01",
+      });
+      // Leaving the field sends nothing more: that date has gone already.
+      fireEvent.blur(to);
+      expect(onFilters).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps what the reader typed while the filters are put back under it", async () => {
+      const { onFilters, to, view } = await openTo();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      fireEvent.focus(to);
+      fireEvent.change(to, { target: { value: "2021-05-01" } });
+      act(() => void vi.advanceTimersByTime(DATE_SETTLE_MS));
+      expect(onFilters).toHaveBeenCalledTimes(1);
+      // The session refused it: the page draws the last accepted filters, with the sentence.
+      view.rerender(
+        <ScanDock {...props({ onFilters, filterError: "No printing matches these filters." })} />,
+      );
+      expect(to).toHaveValue("2021-05-01");
+      fireEvent.blur(to);
+      // Not pushed a second time, and the field now draws what is in force.
+      expect(onFilters).toHaveBeenCalledTimes(1);
+      expect(to).toHaveValue("");
+    });
+
+    it("sends whatever the field holds when the reader leaves it", async () => {
+      const { onFilters, to } = await openTo();
+      fireEvent.focus(to);
+      fireEvent.change(to, { target: { value: "0202-05-01" } });
+      expect(onFilters).not.toHaveBeenCalled();
+      fireEvent.blur(to);
+      expect(onFilters).toHaveBeenCalledTimes(1);
+      expect(onFilters).toHaveBeenLastCalledWith({
+        sets: [],
+        released_from: null,
+        released_to: "0202-05-01",
+      });
     });
   });
 });

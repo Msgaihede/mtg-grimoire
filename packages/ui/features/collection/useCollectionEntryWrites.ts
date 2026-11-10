@@ -13,12 +13,14 @@
  * snapshot and the restore were this file's copy of the wishlist's, almost verbatim, and are one
  * hook over both lists now. What stays here is what is the collection's own: the two settle sets.
  */
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { COLLECTION_ENTRY_HOME_PREFIXES } from "@/features/home/keys";
 import { offerUndo } from "@/lib/bulkUndo";
 import { plural } from "@/lib/counts";
 import { ipc, type CollectionRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { useLatestPress } from "@/lib/useLatestPress";
 import { useOptimisticEntries } from "@/lib/useOptimisticEntries";
 import { useStepSettle } from "@/lib/useStepSettle";
 
@@ -70,6 +72,21 @@ export function useCollectionEntryWrites() {
     // heading over it by exactly what it moved the header — and the counts query is mounted for the
     // life of the page, so a stale mark alone would change nothing.
     void queryClient.invalidateQueries({ queryKey: ["collection", "shelfCounts"] });
+    // And the folder rules' verdicts (issue #1570): `["collection", "ruleConflicts", marketplace]`
+    // counts, per folder, the copies that break a rule of the folder they are filed in — so a
+    // stepper press on a filed row moves a folder badge's count by the copies it added or took
+    // away, and a removal can empty it. Left out, the badge went on saying `2` over a folder that
+    // now broke nothing, and pressing it opened an empty "breaks rules" wall. Its reader is
+    // mounted for the life of the page, for the same reason as the two above.
+    void queryClient.invalidateQueries({ queryKey: ["collection", "ruleConflicts"] });
+    // And the home page's reads counted from the same entries (issue #1570) — the value
+    // breakdown's bars, Set completion, the value graph's live point and Price movers. The header's
+    // summary above already reaches the home total, so a quick return to Home within the app's 30 s
+    // `staleTime` drew a fresh total over all four of these stale. Named by the prefixes
+    // `features/home/keys.ts` spells for exactly this, for the list's reason above.
+    for (const queryKey of COLLECTION_ENTRY_HOME_PREFIXES) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
     // The wishlist counts this list: a wish's `ownedQuantity` is computed from
     // `collection_entries`, so a stepper press has just made every cached wish for that card
     // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
@@ -112,6 +129,27 @@ export function useCollectionEntryWrites() {
    * costs the header a third of a second and saves it, and the page, a round of reads per press.
    */
   const steps = useStepSettle(SET_QUANTITY_KEY);
+  /** Which press of a row is the newest — only it writes its answer back (issue #1535). */
+  const presses = useLatestPress();
+  /**
+   * A press cancelled a re-read of the list that something else had started (issue #1535) — a
+   * drag onto a folder heading settles `["collection"]` whole, and every loaded page is re-read.
+   * That read was asked before the press and answers the old number, and the stepper's own
+   * {@link settle} deliberately leaves the list alone, so a row it landed on stayed wrong for
+   * good. So the press cancels it, and the run's one settle puts it back.
+   */
+  const listOwed = useRef(false);
+  const settleSteps = useCallback(() => {
+    settle();
+    if (!listOwed.current) return;
+    listOwed.current = false;
+    void queryClient.invalidateQueries({ queryKey: COLLECTION_LIST_KEY });
+  }, [settle, queryClient]);
+  const failSteps = useCallback(() => {
+    // `settleFailure` re-reads `["collection"]` whole, the list included.
+    listOwed.current = false;
+    settleFailure();
+  }, [settleFailure]);
 
   const setQuantity = useMutation({
     mutationKey: SET_QUANTITY_KEY,
@@ -122,17 +160,32 @@ export function useCollectionEntryWrites() {
     // Optimistic on the row's own number and nothing else. Without it, holding `+` sends
     // the same number three times — the box is controlled by the cache, so a second press
     // before the first answer would be computed from a stale value.
-    onMutate: ({ row, quantity }) => {
+    //
+    // **And ordered, per row (issue #1535).** Each press is its own concurrent mutation, so an
+    // older answer — or a list re-read asked before the press — could land after a newer guess and
+    // put the old number back in the box; the next press was then computed from it and a press
+    // was lost. A press cancels the list reads in flight (the deck editor's `cancelQueries`, made
+    // here), and only a row's newest press writes its answer or rolls back its refusal.
+    onMutate: async ({ row, quantity }) => {
       steps.hold();
+      const slot = String(row.id);
+      const ticket = presses.press(slot);
+      if (queryClient.isFetching({ queryKey: COLLECTION_LIST_KEY }) > 0) listOwed.current = true;
+      await queryClient.cancelQueries({ queryKey: COLLECTION_LIST_KEY });
       const saved = snapshot();
       patchEntry(row.id, (r) => ({ ...r, quantity }));
-      return saved;
+      return { saved, slot, ticket };
     },
-    onError: (_error, _variables, saved) => {
-      if (saved) restore(saved);
-      steps.now(settleFailure);
+    onError: (_error, _variables, context) => {
+      // A refusal superseded by a newer press leaves the row to that press: its snapshot is older
+      // than the newer guess, and putting it back would draw a number nobody pressed to.
+      if (context && presses.isLatest(context.slot, context.ticket)) restore(context.saved);
+      steps.now(failSteps);
     },
-    onSuccess: (change) => {
+    onSettled: (_data, _error, _variables, context) => {
+      if (context) presses.release(context.slot, context.ticket);
+    },
+    onSuccess: (change, _variables, context) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored — **or says the row is not there any more**.
       //
@@ -148,13 +201,18 @@ export function useCollectionEntryWrites() {
       // so `patchEntry` hands every cached list back as itself and nothing re-renders. Rewriting
       // it with an equal copy redrew the whole page a second time per press, to show the number
       // the press had already drawn.
-      patchEntry(
-        change.id,
-        change.removed
-          ? null
-          : (r) => (r.quantity === change.quantity ? r : { ...r, quantity: change.quantity }),
-      );
-      steps.schedule(settle);
+      //
+      // **An answer a newer press of the same row has superseded writes nothing** (issue #1535):
+      // that press's guess is the number on screen, or its answer is already in.
+      if (presses.isLatest(context.slot, context.ticket)) {
+        patchEntry(
+          change.id,
+          change.removed
+            ? null
+            : (r) => (r.quantity === change.quantity ? r : { ...r, quantity: change.quantity }),
+        );
+      }
+      steps.schedule(settleSteps);
     },
   });
 

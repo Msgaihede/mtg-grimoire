@@ -2314,8 +2314,10 @@ import reads `Imported 4 cards into your collection.` with `Undo`. Export sweeps
 the host hands it through `useExportScope` (the wall it draws, the desktop's rule), gated on the
 sheet being open; with none it sweeps the whole collection, says `N cards in your collection` and
 draws no box to widen what is already everything. A host that already draws the collection's undo
-notice passes `undoNotice={false}`. **It is mounted nowhere yet**: the collection header takes it
-at merge.
+notice passes `undoNotice={false}`. The Collection page mounts it on every state: in the wall's
+header beside the figures, and over the sentence when there is no wall — an empty collection, a
+filter that matched nothing, a folder that is gone — because a new install has no other way to
+fill the page (issue #1598).
 
 **The file seam is a browser stand-in, and every install draws it the same way.** The spec puts
 file open and save below `Core` (§3.5); phase 3 adds no command and no host seam, so
@@ -2564,6 +2566,13 @@ became (`apps/light/CLAUDE.md` §4 carries the rules):
   launcher"). Decided: Android's bottom navigation — a tab sits one step over the start view, Back
   from any tab is Search, Back from Search leaves. `router.ts`'s `switchTo` walks back by the depth
   each push now records, then pushes or renames.
+- **A header's `‹` pushed the place above** (issue #1597, 2026-11-10): the deck's *Back to decks*,
+  a folder's *Up one folder* / *Back to all decks* and a trade's *All trades* were plain
+  `linkTo`s, so the place just left stayed one Back beneath, Android's back gesture reopened it,
+  and each `‹` made history one entry longer; a deleted trade's replace left a dead step. They go
+  by `router.ts`'s `up` (`upLinkTo`) now: a real Back where the entry beneath is the place above,
+  a replace where it is not. Each push records the place it was pushed over (`over`), because a
+  deck opened from the collection's deck link has the collection beneath it, not the gallery.
 - **A pinch zoomed the app.** The phone face locks the page (`user-scalable=no` and
   `touch-action: pan-x pan-y`, `phone/touchShell.ts`) and gives the pinch to content: the card
   sheet's picture zooms in its frame, and a wall's pinch steps its columns (remembered).

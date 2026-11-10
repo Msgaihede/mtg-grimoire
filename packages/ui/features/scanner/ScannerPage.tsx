@@ -49,7 +49,7 @@ import { SEND_SCAN } from "./submit/submitText";
 import { useMaySendScans } from "./submit/useMaySendScans";
 import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerTrayRow } from "./types";
-import { useCamera, useCameraDevices } from "./useCamera";
+import { cameraPress, useCamera, useCameraDevices } from "./useCamera";
 import { usePointAndShoot } from "./usePointAndShoot";
 import { useScanLoop } from "./useScanLoop";
 import { useScannerElsewhere } from "./useScannerElsewhere";
@@ -185,7 +185,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // of them, and opening the default on mount only to reopen the stored camera a moment later is
   // two `getUserMedia` calls, a flicker, and on some platforms a second permission prompt. A
   // released window is `undefined` too — its tracks are stopped, and a restore asks again.
-  const camera = useCamera(videoRef, loaded && !parked.released ? prefs.cameraId : undefined);
+  // Bumped to reopen the stored camera when the default is open in its place (`cameraPress`).
+  const [cameraAttempt, setCameraAttempt] = useState(0);
+  const camera = useCamera(
+    videoRef,
+    loaded && !parked.released ? prefs.cameraId : undefined,
+    cameraAttempt,
+  );
+  const openCamera = camera.kind === "live" ? camera.deviceId : prefs.cameraId;
   // Keyed on the camera that opened, because a browser names no camera until one has been
   // granted: the list read before that is `Camera 1`, `Camera 2`, and the one read after it has
   // the real names.
@@ -213,11 +220,21 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    */
   const writeRows = (rows: ScannerTrayRow[]) => tray.setRows(rows);
 
+  /**
+   * Whether the reader is scanning at all — continuous scanning running, or point and shoot on,
+   * whose shot ends on the card it read. Above the landing, which lays a card over the camera only
+   * while it is on (issue #1555).
+   */
+  const armed = prefs.pointAndShoot || scanning;
+
   // One card, into the tray — once per `decision_seq`, built on `tray.latest()`, in the finish
-  // the dock's Finish menu holds as the card lands (`useTrayLanding`).
-  const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
+  // the dock's Finish menu holds as the card lands (`useTrayLanding`). `shown` is the card over
+  // the camera — the popup's, and so the confetti's: nothing lands over a picture whose reader is
+  // not scanning, and a Stop puts it away.
+  const { onDecision, onPicked, lastAdded, landed, shown, flashKey } = useTrayLanding(
     tray,
     prefs.finish,
+    armed,
   );
 
   /**
@@ -244,9 +261,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * **Point and shoot** (`usePointAndShoot`): with the pref on, the dock's *Scan card* runs the
    * pump until one card lands, and Start/Stop is not drawn. Over anything that pauses the pump the
    * shot is over, so a dialog closing never resumes one. `reading` is whichever of the two is
-   * running — what the overlay, the progress bar and the notes over the picture follow; `armed` is
-   * whether the reader is scanning at all, so a card that ended its own shot still lands over the
-   * camera.
+   * running — what the overlay, the progress bar and the notes over the picture follow; `armed`
+   * (above) is whether the reader is scanning at all, so a card that ended its own shot still
+   * lands over the camera.
    */
   const pointAndShoot = prefs.pointAndShoot;
   const shot = usePointAndShoot({
@@ -254,7 +271,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     interrupted: parked.paused || sending || picking,
   });
   const reading = pointAndShoot ? shot.shooting : scanning;
-  const armed = pointAndShoot || scanning;
 
   const loop = useScanLoop({
     videoRef,
@@ -280,11 +296,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     },
   });
 
-  // The card over the camera — the popup's, and so the confetti's: nothing lands over a picture
-  // whose reader is not scanning.
-  const shown = armed ? landed : null;
-  // What it costs — at the tray's marketplace, so it is its row's figure — and the rung of the
-  // sound ladder that reaches, which colours the figure and throws the confetti.
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure —
+  // and the rung of the sound ladder that reaches, which colours the figure and throws the
+  // confetti.
   const landedPrice = useLandedPrice(shown, destination?.marketplace);
   const landedTier = useLandedTier(shown, destination?.marketplace);
   // **A sound for each card that lands, and for each row the reader settles** — `needs-input`
@@ -683,13 +697,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                     : null
                 }
               />
-              <AddedToast
-                card={shown}
-                onDone={clearLanded}
-                price={landedPrice}
-                tier={landedTier}
-                raised={pack}
-              />
+              <AddedToast card={shown} price={landedPrice} tier={landedTier} raised={pack} />
               {camera.kind === "error" && (
                 <p
                   role="alert"
@@ -784,11 +792,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               cameras={cameras}
               // The camera that opened; while a switch is starting, the one asked for — so the
               // trigger does not read `Default` for the moment between two cameras.
-              cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
-              // A press on the camera already chosen changes nothing, and must not restart the
-              // stream.
+              cameraId={openCamera}
+              // A press on the ticked camera changes nothing; on the stored one while the fallback
+              // is open, it reopens it (issue #1554). See `cameraPress`.
               onCamera={(cameraId) => {
-                if (cameraId !== prefs.cameraId) update({ cameraId });
+                const press = cameraPress(cameraId, openCamera, prefs.cameraId);
+                if (press === "store") update({ cameraId });
+                else if (press === "reopen") setCameraAttempt((n) => n + 1);
               }}
               // **The pack opener's bar**: the same dock in one row over the picture's foot, with
               // the HUD's two presses and the way out at its end, gone while idle and back with

@@ -9,6 +9,15 @@ symbol and collector band networks — and writes `DONE.json`;
 `.github/workflows/neural-deliver.yml` turns a finished run into a pull request. The layout of the Volume and the contract with the delivery are
 `docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`.
 
+**The detector trains on readers' frames among its synthetic scenes, or not at all** (issue #1526).
+`real-scenes/` on the Volume is a folder real_scenes.py built from the scan inbox's mirror — the
+frames of sent scans with the card's corners — put there by the owner (`train/README.md`, "The
+readers' scenes"). With it the detector's training mixes them in, scores the scans it holds out,
+and is held to floors on them. Without it the run **keeps the current `detector.onnx`** and says
+so: a detector trained on drawn scenes alone scored the same on drawn scenes and lost the card on
+a reader's desk (the 2026-11 run), and which card it is does not matter to a detector, so a
+month's new printings are no reason to make another.
+
 **Sized for a CPU-bound trainer.** On the owner's machine one data worker draws ~41 embedder views
 or ~31 detector scenes a second, and the GPU alone could take 8 400 and 2 000 (bf16): the GPU waits
 on the CPU at any affordable core count, so each training gets 16 physical cores (two data workers
@@ -49,8 +58,11 @@ CODE_DIR = "/root/train"
 VOL = Path(VOL_MOUNT)
 DATA = VOL / "data" / "scryfall"
 RUNS = VOL / "runs"
+# Readers' frames with their corners (real_scenes.py's folder), the owner's to put here.
+REAL = VOL / "real-scenes"
 CODE = Path(CODE_DIR)
 LOCAL_DATA = Path("/tmp/scryfall")
+LOCAL_REAL = Path("/tmp/real-scenes")
 GPU = "L4"
 # What each training container gets unless the launch says otherwise (see the module doc).
 TRAIN_CPU = 16.0
@@ -62,10 +74,20 @@ PIPELINE_MEMORY_GIB = 0.5
 # Below these the run is a failure and is not delivered — well under what the shipped files
 # reached (retrieval top-1 0.9997; found 0.993, corner error 2.8 %; within-card top-1 0.927 for the
 # set symbol and 0.946 for the collector band, ~90 % of which are the evidence's floors), so only
-# a broken run trips them.
+# a broken run trips them. The detector's `real_*` are on the readers' scans its training held out
+# (`qd_detect_train.py --real`) — the card found, its corners, the box round a card found for the
+# card, and a card found in a frame its reader sent as empty: what the drawn scenes' floors passed
+# in 2026-11 and a reader's desk did not. The detectors shipped before readers' frames were trained
+# on scored 0.92 and 0.83 found, 0.107 and 0.085 corner error, the box on 22 % and 21 % of the
+# cards and a card in 35 % and 48 % of the empty frames there; the first trained on them (`det-b`)
+# 1.0, 0.025, none and none. Its drawn scenes are harder than theirs were — a card in a box, a
+# barred feed, grain — and it found 0.990 of their cards (0.982 to 0.990 over its last five
+# evaluations) at corner error 0.031, so `found` is 0.975 where it was 0.98.
 FLOORS = {
     "embedder": {"retrieval_top1": 0.99},
-    "detector": {"found": 0.98, "corner_err_max": 0.04, "wrong_way_max": 0.01},
+    "detector": {"found": 0.975, "corner_err_max": 0.04, "wrong_way_max": 0.01,
+                 "real_found": 0.97, "real_corner_err_max": 0.05, "real_container_max": 0.03,
+                 "real_empty_hit_max": 0.1},
     "symbol": {"within_top1": 0.83},
     "band": {"within_top1": 0.85},
 }
@@ -209,6 +231,27 @@ def _stage_local_copy(stop: threading.Event) -> Path:
     return LOCAL_DATA
 
 
+def _real_scenes() -> Path | None:
+    """The readers' scenes on the container's own disk, or None when the Volume holds none. A few
+    hundred megabytes of frames, read every step: copied once, like the dataset."""
+    if not (REAL / "scenes.jsonl").exists():
+        return None
+    marker = LOCAL_REAL / ".copied"
+    if not marker.exists():
+        shutil.copytree(REAL, LOCAL_REAL, dirs_exist_ok=True)
+        marker.write_text(_now(), encoding="utf-8")
+    return LOCAL_REAL
+
+
+def _detector_kept() -> str | None:
+    """Why this run keeps the current detector, or None when it may train one: only among readers'
+    frames (the module doc)."""
+    if (REAL / "scenes.jsonl").exists():
+        return None
+    return (f"no readers' scenes on the Volume ({VOLUME_NAME}:/real-scenes/scenes.jsonl), and a detector is not "
+            "trained on drawn scenes alone")
+
+
 def _workers(cpu: float) -> int:
     """Two data workers a physical core (Modal's cores are two vCPUs each), less the trainer's own."""
     return max(1, int(cpu * 2) - 2)
@@ -274,11 +317,15 @@ def train_embedder(run: str, cpu: float, memory_gib: float, limit_usd: float, sm
 @app.function(volumes={VOL_MOUNT: volume}, gpu=GPU, cpu=TRAIN_CPU, memory=TRAIN_MEMORY_GIB * 1024,
               timeout=4 * 3600, retries=modal.Retries(max_retries=2, initial_delay=30.0))
 def train_detector(run: str, cpu: float, memory_gib: float, limit_usd: float, smoke: bool) -> dict:
-    """The corner detector on synthetic scenes (`qd_detect_train.py`'s defaults), and its export."""
+    """The corner detector on synthetic scenes with the readers' among them (`qd_detect_train.py`'s
+    defaults and `--real`), and its export."""
 
     def cmd(data: Path, out: Path) -> list[str]:
         args = [sys.executable, "-u", "qd_detect_train.py", str(data), str(out),
                 "--workers", str(_workers(cpu)), "--prefetch", "2"]
+        real = _real_scenes()
+        if real is not None:
+            args += ["--real", str(real)]
         if smoke:
             args += ["--steps", "300", "--eval-every", "150", "--eval-batches", "4"]
         return args
@@ -294,6 +341,10 @@ def train_detector(run: str, cpu: float, memory_gib: float, limit_usd: float, sm
         "corner_err": last.get("corner_err"),
         "corner_err_p90": last.get("corner_err_p90"),
         "wrong_way": last.get("wrong_way"),
+        "real_found": last.get("real_found"),
+        "real_corner_err": last.get("real_corner_err"),
+        "real_container": last.get("real_container"),
+        "real_empty_hit": last.get("real_empty_hit"),
         "scenes_per_s": last.get("scenes_per_s"),
         "steps": last.get("step"),
         "usd": result["spend"]["usd"],
@@ -358,6 +409,19 @@ def _floors_failed(metrics: dict) -> list[str]:
             failed.append(f"detector corner error {d.get('corner_err')} over {f['corner_err_max']}")
         if (d.get("wrong_way") or 1) > f["wrong_way_max"]:
             failed.append(f"detector wrong way {d.get('wrong_way')} over {f['wrong_way_max']}")
+        # A detector is trained only among readers' frames, so a run that scored none of them is broken.
+        if (d.get("real_found") or 0) < f["real_found"]:
+            failed.append(f"detector found {d.get('real_found')} of the readers' cards, under {f['real_found']}")
+        if (d.get("real_corner_err") or 1) > f["real_corner_err_max"]:
+            failed.append(f"detector corner error on readers' frames {d.get('real_corner_err')} over {f['real_corner_err_max']}")
+        # A box found for the card in it is "found", and a few of them hide in a mean corner error.
+        if (1 if d.get("real_container") is None else d["real_container"]) > f["real_container_max"]:
+            failed.append(f"detector took what holds the card for the card on {d.get('real_container')} of the readers' "
+                          f"cards, over {f['real_container_max']}")
+        # None is a held-out set with no empty frame in it: nothing to judge.
+        if (d.get("real_empty_hit") or 0) > f["real_empty_hit_max"]:
+            failed.append(f"detector found a card in {d.get('real_empty_hit')} of the readers' empty frames, "
+                          f"over {f['real_empty_hit_max']}")
     for kind in EVIDENCE:
         got = (metrics.get(kind) or {}).get("within_top1")
         if (got or 0) < FLOORS[kind]["within_top1"]:
@@ -384,12 +448,17 @@ def pipeline(run: str, detector: bool = True, cpu: float = TRAIN_CPU, memory_gib
     run_dir = RUNS / run
     if (run_dir / "DONE.json").exists():
         return _read_json(run_dir / "DONE.json")
+    # Asked once, at the run's start: a restarted orchestrator reads its answer from run.json.
+    begun = _read_json(run_dir / "run.json")
+    asked = begun is not None and "detector_kept" in begun  # a run begun by an older deploy never asked
+    kept = begun["detector_kept"] if asked else (_detector_kept() if detector else None)
+    detector = detector and kept is None
     rate = budget.rate_per_s(GPU, cpu, memory_gib)
     share = budget.shares(budget_usd, detector, rate)
-    info = _read_json(run_dir / "run.json") or {
+    info = begun or {
         "run": run, "git_sha": git_sha, "started_at": _now(), "detector": detector, "smoke": smoke,
         "resources": {"gpu": GPU, "cpu": cpu, "memory_gib": memory_gib},
-        "budget_usd": budget_usd, "shares_usd": share,
+        "budget_usd": budget_usd, "shares_usd": share, "detector_kept": kept,
     }
     _write_json(run_dir / "run.json", info)
     ledger = budget.Ledger(run_dir, "pipeline", budget.rate_per_s(None, PIPELINE_CPU, PIPELINE_MEMORY_GIB), share["pipeline"])
@@ -398,6 +467,9 @@ def pipeline(run: str, detector: bool = True, cpu: float = TRAIN_CPU, memory_gib
     volume.commit()
     started = time.monotonic()
     done = {"run": run, "git_sha": info["git_sha"], "smoke": info["smoke"], "detector": detector}
+    if kept is not None:
+        done["detector_kept"] = kept
+        print(json.dumps({"detector_kept": kept}), flush=True)
     try:
         _call(stages, "refresh", lambda: refresh.spawn(run, share["refresh"]), run_dir).get()
         # A training's timeout is its share of the budget at its rate, with ten minutes over: even

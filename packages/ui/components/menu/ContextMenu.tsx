@@ -21,11 +21,13 @@ import {
   MENU_MIN_HEIGHT,
   MENU_MIN_WIDTH,
   PANEL_CLASS,
+  PANEL_SCROLL_CLASS,
   ROW_CLASS,
   ROW_SELECTOR,
   depthOf,
   focusInto,
   isTextEntry,
+  menuMaxHeight,
   moveCaret,
   panelAtDepth,
   panelOf,
@@ -568,8 +570,32 @@ export function ContextMenu({
     // including one no reader caused, an image settling or a `scrollIntoView` from a background
     // query — and such a scroll must close the menu without also seizing focus from wherever it
     // legitimately is.
-    const onAway = () => {
-      if (panelRef.current?.contains(document.activeElement)) {
+    //
+    // **Except a scroll inside the menu itself** (issue #1572), which since panels scroll is the
+    // reader reaching a row, not the page moving out from under the menu. What it does move is
+    // every row in the panel that scrolled, so a submenu hung off one of them is now beside a row
+    // that has gone: the panels deeper than the one that scrolled close, and nothing else does.
+    // The caret, if it was in one of them, comes back to the row the shallowest of them hung off
+    // — ArrowLeft's target — with `preventScroll` for the reason above: that row may be the one
+    // the reader has just scrolled away from.
+    const onAway = (e: Event) => {
+      const root = panelRef.current;
+      const scrolled = e.target instanceof Element ? e.target : null;
+      if (root && scrolled && root.contains(scrolled)) {
+        const panel = panelOf(scrolled);
+        if (!panel) return;
+        const depth = depthOf(panel);
+        const caret = document.activeElement;
+        const caretPanel = caret instanceof Element ? panelOf(caret) : null;
+        if (caretPanel && root.contains(caretPanel) && depthOf(caretPanel) > depth) {
+          const doomed = root.querySelector<HTMLElement>(panelAtDepth(depth + 1));
+          const parentRow = doomed?.closest<HTMLElement>(ROW_SELECTOR);
+          if (parentRow) rowButtonOf(parentRow)?.focus({ preventScroll: true });
+        }
+        setOpenPath((prev) => (prev.length > depth ? prev.slice(0, depth) : prev));
+        return;
+      }
+      if (root?.contains(document.activeElement)) {
         opener?.focus({ preventScroll: true });
       }
       onClose();
@@ -707,9 +733,9 @@ export function ContextMenu({
    * every other close in this file already keeps.**
    *
    * ArrowLeft focuses the parent row before it collapses, `Submenu`'s Escape focuses its own row
-   * before it closes, and a click on a parent row is focused by the click that closed it. A
-   * hover-collapse writes `openPath` with nothing under the pointer having taken the caret, so it
-   * is the one route that can unmount the element holding `document.activeElement`. That drops the
+   * before it closes, and an in-menu scroll hands it back before it closes the panels it moved
+   * (a click on a parent row no longer closes anything — issue #1572). A hover-collapse writes
+   * `openPath` with nothing under the pointer having taken the caret, so it is the one route that can unmount the element holding `document.activeElement`. That drops the
    * caret on `<body>`, which is **outside the React root** — so the panel's `onKeyDown` stops
    * firing altogether and the arrows, Home, End *and Tab* go dead while the panel is still up.
    * Tab is the one that does damage: unhandled, it falls through to the browser and walks focus
@@ -807,7 +833,8 @@ export function ContextMenu({
       data-menu-depth="0"
       // Pixels, so a class cannot carry them: this is a measurement, and Tailwind emits no rule
       // for a class name it never saw in the source text.
-      style={{ left: placement.left, top: placement.top }}
+      // `maxHeight` is read at render, like `placeMenu`'s viewport: a resize closes the menu.
+      style={{ left: placement.left, top: placement.top, maxHeight: menuMaxHeight() }}
       onKeyDown={onKeyDown}
       onPointerOver={onPointerOver}
       className={cn(
@@ -820,9 +847,12 @@ export function ContextMenu({
         !present && "pointer-events-none",
       )}
     >
-      <CascadeLevel ctx={ctx} depth={0}>
-        <MenuRows items={items} />
-      </CascadeLevel>
+      {/* The rows scroll; the panel does not — `PANEL_CLASS` says why the two are apart. */}
+      <div className={PANEL_SCROLL_CLASS}>
+        <CascadeLevel ctx={ctx} depth={0}>
+          <MenuRows items={items} />
+        </CascadeLevel>
+      </div>
     </motion.div>
   );
 }

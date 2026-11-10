@@ -7,6 +7,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const shareOpen = vi.hoisted(() => vi.fn());
@@ -28,6 +29,41 @@ function mount(onOpened = vi.fn()) {
   render(
     <QueryClientProvider client={client}>
       <OpenShareDialog open onClose={onClose} onOpened={onOpened} />
+    </QueryClientProvider>,
+  );
+  return { onClose, onOpened };
+}
+
+/**
+ * The dialog under a host that closes it, as `SharedPage` does: `onClose` sets `open` to false,
+ * which unmounts the form. `mount` keeps it open whatever is pressed, so a press that outlives the
+ * form is reachable only from here.
+ */
+function mountHosted() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const onClose = vi.fn();
+  const onOpened = vi.fn();
+  function Host() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open another
+        </button>
+        <OpenShareDialog
+          open={open}
+          onClose={() => {
+            onClose();
+            setOpen(false);
+          }}
+          onOpened={onOpened}
+        />
+      </>
+    );
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <Host />
     </QueryClientProvider>,
   );
   return { onClose, onOpened };
@@ -109,6 +145,37 @@ describe("the link a reader pastes", () => {
     expect(useAppStore.getState().openedShares).toEqual([]);
   });
 
+  /**
+   * ⚠️ **A cancelled open stays cancelled** (issue #1578). The fetch outlives the press of Cancel
+   * on *Opening…*, and when a slow link answered it used to be remembered and navigated to anyway —
+   * switching the reader off the binder they were looking at, and dropping its ticks with it.
+   */
+  it("does not open a link whose dialog was cancelled while it was still answering", async () => {
+    let answer!: (value: unknown) => void;
+    shareOpen.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { onClose, onOpened } = mountHosted();
+    await userEvent.type(field(), LINK);
+    await userEvent.click(openButton());
+    expect(await screen.findByRole("button", { name: "Opening…" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    answer(JSON.parse(golden));
+    // The answer is in (it is cached: the reader's next paste of it is answered at once), and
+    // nothing acted on it.
+    await waitFor(() => expect(shareOpen).toHaveBeenCalledTimes(1));
+    await new Promise((settle) => setTimeout(settle, 0));
+    expect(onOpened).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().openedShares).toEqual([]);
+  });
+
   /** An empty box has nothing to open, and the control says so without leaving the tab order. */
   it("greys the press until something has been typed", async () => {
     mount();
@@ -134,6 +201,29 @@ describe("the link a reader pastes", () => {
   });
 
   /**
+   * Cancel and "Open another" is a fresh question: the last attempt's link and its refusal are
+   * about a paste the reader has already given up on (issue #1543).
+   */
+  it("opens again on an empty box, with no refusal from the last time", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const dialog = (open: boolean) => (
+      <QueryClientProvider client={client}>
+        <OpenShareDialog open={open} onClose={vi.fn()} onOpened={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(dialog(true));
+    await userEvent.type(field(), "not a link");
+    await userEvent.click(openButton());
+    expect(await screen.findByText(NOT_A_SHARE_LINK)).toBeInTheDocument();
+
+    rerender(dialog(false));
+    await waitFor(() => expect(screen.queryByText(NOT_A_SHARE_LINK)).not.toBeInTheDocument());
+    rerender(dialog(true));
+    expect(field()).toHaveValue("");
+    expect(screen.queryByText(NOT_A_SHARE_LINK)).not.toBeInTheDocument();
+  });
+
+  /**
    * **The one user-visible sentence this feature spells twice, fenced.**
    *
    * The same paste can be refused on either side of the boundary — this dialog checks the shape
@@ -148,7 +238,10 @@ describe("the link a reader pastes", () => {
    */
   it("says exactly what the crate says, word for word", () => {
     const declared = /pub const NOT_A_LINK: &str = "([^"]*)";/.exec(publishRs);
-    expect(declared, "share::publish::NOT_A_LINK is no longer a plain string literal").not.toBeNull();
+    expect(
+      declared,
+      "share::publish::NOT_A_LINK is no longer a plain string literal",
+    ).not.toBeNull();
     expect(declared?.[1]).toBe(NOT_A_SHARE_LINK);
   });
 });

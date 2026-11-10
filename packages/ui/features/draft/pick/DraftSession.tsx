@@ -4,6 +4,7 @@ import { ipc, ipcError, type DraftCard, type DraftMode, type DraftView } from "@
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { BuildPanel, type DraftRole } from "../build/BuildPanel";
+import { lobbyFor, useLobbyState } from "../lobby/useLobby";
 import { FlowBar, QUIET_BUTTON } from "../setup/parts";
 import { currentDraft } from "./current";
 import { PickScreen } from "./PickScreen";
@@ -21,20 +22,6 @@ export const MODE_TITLE: Record<DraftMode, string> = {
   winston: "Winston Draft",
 };
 
-/** One Winston turn's place, as a key: whose turn, which pile, and what is on the table. Any
- *  decision moves at least one of them. */
-export function winstonTurn(view: DraftView): string | null {
-  const stack = view.stack;
-  if (stack === null) return null;
-  return [
-    stack.turnSeat,
-    stack.activePile ?? "-",
-    stack.mainCount,
-    ...stack.piles.map((p) => p.count),
-    view.pool.length,
-  ].join(":");
-}
-
 /**
  * A draft under way, from the reader's seat: the Draft step while it is picking, the Build step
  * once the table is done.
@@ -45,9 +32,15 @@ export function winstonTurn(view: DraftView): string | null {
  * one when a guest's pick moves its seat on — and keeps a pushed view only when it is this seat's
  * and no older than the one on screen (`acceptsView`).
  *
- * A Winston turn is the same split: `draft_winston` answers the host's next view, a guest's
- * `lobby_winston` is answered by the push — and until that push the turn it was sent on is held
- * (`winstonSent`), so a second press cannot decline the next pile by accident.
+ * **A guest's sent pick is held beside the view, never written into it** (issue #1585). A
+ * `lobby_pick` or `lobby_winston` that resolves has only queued a frame: the relay drops it while
+ * the host is off the relay, and the host may refuse it. So the view the decision went out on is
+ * kept (`sentOn`) and drawn as waiting — the pack greyed, a Winston turn's buttons down — until any
+ * view of this seat is pushed, the host's re-send of the seat as it stands included. A view marked
+ * `waiting` here would score past that re-send and turn it away, for good.
+ *
+ * While the host is off the relay a guest's pick is greyed, and the host coming back is asked to
+ * push the seat again (`lobby_rejoin`), as a guest's arrival is.
  *
  * Going back to the hub keeps the draft (`./current.ts`; a solo draft is saved by the host too),
  * and coming back to it asks again for the view this seat missed meanwhile — `draft_view` for a
@@ -57,8 +50,9 @@ export function winstonTurn(view: DraftView): string | null {
  * **Which picks are on the sideboard is this component's** (issue #1471, `./split.ts`): a pick's
  * list is applied once the pick is taken — the host's answer, or a guest's send — so a refused
  * pick leaves nothing behind; a press on a picked card moves it, through the Build step too. It is
- * kept per device as it changes, started over by a draft that opens with an empty pool, and
- * forgotten when the draft is put away.
+ * kept per device as it changes, started over by a draft that opens with an empty pool (and by
+ * every new deal and the hub's Abandon, which are `DraftPage`'s — issue #1588), and forgotten
+ * when the draft is put away.
  */
 export function DraftSession({
   draft,
@@ -106,6 +100,7 @@ export function DraftSession({
     currentDraft.keep({ draft, role, view });
   }, [draft, role, view]);
 
+  // Any accepted push is a new view object, so it lets go of a guest's sent decision (`sentOn`).
   useEffect(
     () => ipc.onDraftView((pushed) => setView((cur) => (acceptsView(cur, pushed) ? pushed : cur))),
     [],
@@ -140,6 +135,23 @@ export function DraftSession({
     });
   }, [role]);
 
+  // A host off the relay hears none of a guest's frames (issue #1585): the pick is greyed until
+  // it is back, and then it is asked to push the seat again — a pick sent just before it dropped
+  // went by unheard. `null` is a lobby not known yet, read as online.
+  const lobby = lobbyFor(useLobbyState(), "draft");
+  const hostOnline =
+    role === "guest" && lobby !== null && lobby.phase !== "closed" ? lobby.hostOnline : null;
+  const hostOffline = hostOnline === false;
+  const wasOnline = useRef(hostOnline);
+  useEffect(() => {
+    const back = wasOnline.current === false && hostOnline === true;
+    wasOnline.current = hostOnline;
+    if (!back) return;
+    ipc.lobbyRejoin().catch(() => {
+      // As on arrival: the view on screen stays.
+    });
+  }, [hostOnline]);
+
   const run = async (work: () => Promise<void>) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -155,26 +167,30 @@ export function DraftSession({
     }
   };
 
-  /** The Winston turn a guest's decision went out on — the buttons stay down until it moves. */
-  const [winstonSentOn, setWinstonSentOn] = useState<string | null>(null);
+  /**
+   * The view a guest's pick or Winston decision went out on, by identity: drawn as waiting while
+   * it is the view on screen. Any pushed view replaces the object, and so lets go of it — the
+   * host's answer, or its re-send of a seat whose decision it never applied.
+   */
+  const [sentOn, setSentOn] = useState<DraftView | null>(null);
+  /** Hold `at` as sent while `work` sends it — let go if the send is refused. Held from before
+   *  the send, so a push that lands before `work` resolves still lets go of it. */
+  const sending = async (at: DraftView | null, work: () => Promise<void>) => {
+    setSentOn(at);
+    try {
+      await work();
+    } catch (e) {
+      setSentOn(null);
+      throw e;
+    }
+  };
 
   const pick = (cards: DraftCard[], to: Destination) =>
     void run(async () => {
       const ids = cards.map((c) => c.instanceId);
       if (role === "guest" || draft === null) {
-        const at = view;
-        await ipc.lobbyPick(ids);
+        await sending(view, () => ipc.lobbyPick(ids));
         send(ids, to);
-        // Drawn as waiting until the host's push — unless that push has already landed.
-        setView((cur) =>
-          cur !== null &&
-          at !== null &&
-          cur.packNumber === at.packNumber &&
-          cur.pickNumber === at.pickNumber &&
-          cur.status === "drafting"
-            ? { ...cur, waiting: true }
-            : cur,
-        );
         return;
       }
       const next = await ipc.draftPick(draft, ids);
@@ -185,9 +201,7 @@ export function DraftSession({
   const decide = (pile: number, take: boolean) =>
     void run(async () => {
       if (role === "guest" || draft === null) {
-        const at = view === null ? null : winstonTurn(view);
-        await ipc.lobbyWinston(pile, take);
-        setWinstonSentOn(at);
+        await sending(view, () => ipc.lobbyWinston(pile, take));
         return;
       }
       setView(await ipc.draftWinston(draft, pile, take));
@@ -211,6 +225,7 @@ export function DraftSession({
     });
 
   const building = view?.status === "deckbuilding";
+  const sent = sentOn !== null && sentOn === view;
   // The pool in a tray beside the pack (issue #1474): the pick screen splits the height between
   // the pack's scroller and the tray's, so this box gives it the whole height and scrolls nothing
   // itself. A Winston table and the Build step keep the pool underneath, in this one scroller.
@@ -252,6 +267,14 @@ export function DraftSession({
           sideTray ? "flex flex-col overflow-hidden" : "overflow-y-auto pb-8 pr-1",
         )}
       >
+        {hostOffline && view !== null && !building && (
+          <p
+            role="status"
+            className="m-0 mb-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm"
+          >
+            The host is offline — your pick waits until they are back.
+          </p>
+        )}
         {notice !== null && (
           <p
             role="status"
@@ -280,13 +303,13 @@ export function DraftSession({
           </div>
         ) : (
           <PickScreen
-            view={view}
-            busy={busy}
+            view={sent && view.stack === null ? { ...view, waiting: true } : view}
+            busy={busy || hostOffline}
             error={error}
             onPick={pick}
             onAutoPick={autoPick}
             onWinston={decide}
-            winstonSent={winstonSentOn !== null && winstonSentOn === winstonTurn(view)}
+            winstonSent={sent}
             sideboard={sideboard}
             onMove={move}
           />
