@@ -37,9 +37,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
 import type {
   CardSummary,
   CollectionFolder,
+  CollectionQuery,
   CollectionRow,
   DeckFolder,
   DeckRow,
+  QueryPredicate,
   RecentCard,
   WishRow,
   WishlistFolder,
@@ -76,6 +78,13 @@ const wish = (over: Partial<WishRow> & { name: string }) =>
 const card = (over: Partial<CardSummary> & { id: string; name: string }) =>
   ({ setCode: "m10", ...over }) as CardSummary;
 
+/** The words a name-only read asks for — the `name:` terms the typed collection read sends. */
+const nameWords = (predicates?: QueryPredicate[]) =>
+  (predicates ?? [])
+    .filter((p) => p.field === "name")
+    .map((p) => p.value)
+    .join(" ");
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => (resolve = r));
@@ -110,11 +119,11 @@ beforeEach(() => {
     { id: 9, parentId: null, name: "Burn wants", managedDeckId: 1, managedTokens: false },
   ] as WishlistFolder[]);
   const bolt = (text?: string) => text?.includes("bolt") === true;
-  collectionList.mockImplementation(({ text }: { text?: string }) =>
+  collectionList.mockImplementation(({ text, predicates }: CollectionQuery) =>
     Promise.resolve(
-      text === undefined
+      text === undefined && predicates === undefined
         ? { items: [copy({ name: "Sol Ring", setCode: "cmm", collectorNumber: "1" })], total: 1 }
-        : bolt(text)
+        : bolt(text ?? nameWords(predicates))
           ? { items: [copy({ name: "Lightning Bolt", folderId: 4, quantity: 2 })], total: 1 }
           : { items: [], total: 0 },
     ),
@@ -169,8 +178,8 @@ describe("QuickSearch", () => {
 
   it("never draws the corpus before the collection has answered the same text", async () => {
     const slow = deferred<{ items: CollectionRow[]; total: number }>();
-    collectionList.mockImplementation(({ text }: { text?: string }) =>
-      text ? slow.promise : Promise.resolve({ items: [], total: 0 }),
+    collectionList.mockImplementation(({ text, predicates }: CollectionQuery) =>
+      text || predicates ? slow.promise : Promise.resolve({ items: [], total: 0 }),
     );
     mount();
     await userEvent.type(field(), "bolt");
@@ -179,6 +188,68 @@ describe("QuickSearch", () => {
     expect(headings()).not.toContain("All cards");
     await act(async () => slow.resolve({ items: [copy({ name: "Lightning Bolt" })], total: 1 }));
     await waitFor(() => expect(headings()).toEqual(["Collection", "Wishlist", "All cards"]));
+  });
+
+  it("finds an owned card by its name though more cards merely mention the word", async () => {
+    // Issue #1563: the free-text page is alphabetical and reads rules text, so `sol`'s first
+    // page is Soldiers; the owned Sol Ring arrives only by the name read, and goes first.
+    const soldiers = Array.from({ length: 18 }, (_, i) =>
+      copy({ id: 100 + i, name: `Aven Soldier ${String(i)}`, cardId: `soldier-${String(i)}` }),
+    );
+    const ring = copy({ id: 1, name: "Sol Ring", setCode: "cmm", collectorNumber: "1" });
+    collectionList.mockImplementation(({ text, predicates }: CollectionQuery) =>
+      Promise.resolve(
+        text === "sol"
+          ? { items: soldiers, total: 300 }
+          : nameWords(predicates) === "sol"
+            ? { items: [ring], total: 1 }
+            : { items: [], total: 0 },
+      ),
+    );
+    mount();
+    await userEvent.type(field(), "sol");
+    const collection = await screen.findByRole("group", { name: "Collection" });
+    await waitFor(() =>
+      expect(within(collection).getAllByRole("option")[0]).toHaveTextContent("Sol Ring"),
+    );
+    expect(collectionList).toHaveBeenCalledWith({
+      predicates: [{ field: "name", op: "colon", value: "sol", negated: false }],
+      limit: 18,
+      offset: 0,
+    });
+    expect(collectionList).toHaveBeenCalledWith({ text: "sol", limit: 18, offset: 0 });
+  });
+
+  it("keeps the list open when a group heading is pressed", async () => {
+    mount();
+    await userEvent.type(field(), "bolt");
+    const collection = await screen.findByRole("group", { name: "Collection" });
+    const heading = document.getElementById(collection.getAttribute("aria-labelledby") ?? "");
+    await userEvent.click(heading as HTMLElement);
+    expect(field()).toHaveFocus();
+    expect(field()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("does not hand the caret back to a Ctrl+K origin from an earlier session", async () => {
+    mount(
+      <>
+        <button type="button">Origin</button>
+        <button type="button">Elsewhere</button>
+        <QuickSearch />
+      </>,
+    );
+    const origin = screen.getByRole("button", { name: "Origin" });
+    origin.focus();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(field()).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(field()).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(field());
+    expect(field()).toHaveAttribute("aria-expanded", "true");
+    await userEvent.keyboard("{Escape}");
+    expect(origin).not.toHaveFocus();
+    expect(field()).not.toHaveFocus();
+    expect(field()).toHaveAttribute("aria-expanded", "false");
   });
 
   it("opens the lit deck on Enter, walking the rows with the arrows", async () => {

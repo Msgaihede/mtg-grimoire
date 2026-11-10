@@ -19,7 +19,10 @@ light edition never offers the three panels it does not draw.
 
 `Ctrl+K` (catalogue id `quickSearch`) focuses the field from anywhere except under a modal, and
 Escape closes the list and hands the caret back to wherever it was. `Ctrl+P` was the other
-candidate; in the light edition's browser tab it is Print.
+candidate; in the light edition's browser tab it is Print. That origin belongs to the one session
+the chord started: blurring the field forgets it, so a later session opened with a click ends on
+Escape with a plain blur (issue #1563). A press anywhere on the open panel — a row, a group
+heading, the list's padding — keeps the caret in the field.
 
 ## Sources and order
 
@@ -56,6 +59,12 @@ Inside a group, `rankName` orders name matches (whole name, then prefix, then a 
 then anywhere); the backend's searches also match type lines and rules text, and those rows stay,
 below the cards actually called what was typed. Collection and wishlist rows are merged to one per
 printing per folder, quantities summed.
+
+The collection's list pages alphabetically, so its typed read is two requests (issue #1563): one
+with each typed word as a `name:` term, merged ahead of the free-text page. With only the
+free-text page, a few hundred cards are enough for `sol`'s first page to be all Soldiers, and the
+owned Sol Ring shows only under All cards. The corpus needs no second read (bm25 weighs the name
+×10), and the wishlist's free text is a name search already.
 
 ## Where a result goes
 
