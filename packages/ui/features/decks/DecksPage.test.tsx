@@ -1686,6 +1686,93 @@ describe("DecksPage", () => {
   });
 
   /**
+   * **A rename reopened after a cancelled one opens on the name, selected** (issue #1545). The
+   * tile does not unmount when the field closes, so the draft outlived the cancel: the input
+   * mounted with `Sunburn`, `select()` ran over it, and the re-render that wrote `Burn` back
+   * collapsed the selection to the end — typing `Zoo` gave `BurnZoo`.
+   */
+  it("opens a rename reopened after a cancel on the name, selected", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+    await userEvent.keyboard("Sunburn");
+    await userEvent.keyboard("{Escape}");
+    expect(tile).toHaveFocus();
+
+    await userEvent.keyboard("{F2}");
+
+    const field = await screen.findByLabelText<HTMLInputElement>("Rename Burn");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Burn");
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 4]);
+    await userEvent.keyboard("Zoo");
+    expect(field).toHaveValue("Zoo");
+  });
+
+  /** F2 → Enter on the name as it stands closes the field and writes nothing: `update_deck`
+   *  stamps `updated_at` whatever it is sent, so the write would reorder a "Last updated" wall. */
+  it("writes nothing when a rename is submitted unchanged", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    await userEvent.keyboard("  Burn {Enter}");
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(tile).toHaveFocus();
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Looking away closes the field and leaves the caret where the reader put it** (issue #1545):
+   * the blur is the tile's `onClosePanel`, not the Escape/✕ path's hand-back, which would pull the
+   * caret off the filter box and onto the tile — where typing goes nowhere and Enter opens the deck.
+   */
+  it("leaves the caret where the reader clicked when a rename is looked away from", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    // jsdom lets the click's own focus land after a `focus()` called inside the blur, so where the
+    // caret ends up cannot tell the two paths apart here — whether the tile was *asked* can.
+    const focusTile = vi.spyOn(tile, "focus");
+    const filter = screen.getByLabelText("Filter decks by name");
+    await userEvent.click(filter);
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(filter).toHaveFocus();
+    expect(focusTile).not.toHaveBeenCalled();
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /** The ✓ and the ✕ are in the tray over the art, outside the form — so a Tab on past the ✕ is a
+   *  look away too, and the field may not be left standing with the caret on the next tile. */
+  it("closes a rename when the caret is tabbed past its ✕", async () => {
+    wrap(<DecksPage />);
+    const tile = await tileFor("Burn");
+    tile.focus();
+    await userEvent.keyboard("{F2}");
+    await screen.findByLabelText("Rename Burn");
+
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Save name" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(screen.getByLabelText("Rename Burn")).toBeInTheDocument();
+    await userEvent.tab();
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(document.activeElement).not.toBe(tile);
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
    * **`DeckSettingsDialog` gets a third host, and the gallery is it.**
    *
    * Everything a deck carries that is not a card in it — format, description, notes, cover,
