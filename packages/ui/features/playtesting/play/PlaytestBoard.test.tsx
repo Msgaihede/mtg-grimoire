@@ -665,10 +665,34 @@ describe("PlaytestBoard's sandbox", () => {
     expect(screen.getByRole("spinbutton", { name: "Opponent's life" })).toBeEnabled();
   });
 
-  it("takes no hand edits outside the reader's main phase, though it is on", () => {
-    const { onAct } = setup(sandboxed(respondStep().view));
+  it("takes the hand edits at a response too, not only in the main phase (issue #1522)", () => {
+    const { view, elves } = respondStep();
+    const { onAct } = setup(sandboxed(view));
     fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [elves.id], tapped: true });
+    fireEvent.click(screen.getByRole("button", { name: /^Library, 48 cards\. Click to draw/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "draw", count: 1 });
+    expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
+    expect(screen.getByRole("spinbutton", { name: "Opponent's life" })).toBeEnabled();
+  });
+
+  it("picks an attacker on a click in the attack step, and taps by T (issue #1522)", () => {
+    const { view, elves } = attackStep();
+    const { onAct } = setup(sandboxed(view));
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
     expect(onAct).not.toHaveBeenCalled();
+    expect(within(yours()).getByRole("button", { name: /^Tarmogoyf/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.mouseEnter(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    fireEvent.keyDown(window, { key: "t" });
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [elves.id], tapped: true });
+    expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
+  });
+
+  it("takes no hand edits in the middle of a question, though it is on", () => {
+    setup(sandboxed(targetPrompt().view));
     expect(screen.getByRole("button", { name: "Library, 48 cards" })).toBeDisabled();
     // The steppers are there, greyed, to come back to.
     expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeDisabled();

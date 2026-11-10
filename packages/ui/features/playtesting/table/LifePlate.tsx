@@ -22,7 +22,7 @@ const SETTLE_MS = 400;
  *
  * **A stepper only while the sandbox is on**: a life total set by hand is a sandbox move
  * (`setLife`). With it off the plate is `readOnly` — the number as plain text, nothing to press —
- * and with it on but its moves not working now (not the reader's main phase, the engine busy) the
+ * and with it on but its moves not working now (a question asked, the engine busy) the
  * stepper is drawn `disabled`, so the reader sees it is there to come back to.
  *
  * The number shown is the reader's draft while one is in flight, and the game's otherwise: it
@@ -51,8 +51,8 @@ export function LifePlate({
   cardId?: string | null;
   /** The plate's edge goes gold: the winner, or the goldfish dead on a turn of the reader's. */
   highlight?: boolean;
-  /** A stepper that cannot be pressed now: a game being dealt, the engine busy, not the reader's
-   *  main phase. */
+  /** A stepper that cannot be pressed now: a game being dealt, the engine busy, a question
+   *  asked. */
   disabled?: boolean;
   /** No stepper at all, the life as plain text: the sandbox is off. */
   readOnly?: boolean;

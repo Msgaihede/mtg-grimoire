@@ -27,8 +27,8 @@ import type { Pointed, ZoneLook } from "./types";
  * reader's seat as it is. `size` is the card's box — the board's two tables share the window's
  * height — and absent, the artboard's 180 × 252 is drawn (the classes, no inline size).
  *
- * **`sandbox` is whether the sandbox's moves work now** (on, the reader's main phase, nothing
- * out). Off, the zones keep only what the rules do: the commander is cast (double-click, drag onto
+ * **`sandbox` is whether the sandbox's moves work now** (on, the reader playing or
+ * declaring, nothing out). Off, the zones keep only what the rules do: the commander is cast (double-click, drag onto
  * the table, its menu's Cast), the graveyard and exile are opened to look through, read-only — and
  * the library is a pile with a count, not drawn from, not looked through and not dropped on.
  */

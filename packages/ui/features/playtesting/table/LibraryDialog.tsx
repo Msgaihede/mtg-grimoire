@@ -24,7 +24,7 @@ import type { Pointed, ZoneLook } from "./types";
  * the top stays in it (it is reordering the window, not leaving it).
  *
  * **`readOnly` turns it into a look and nothing more** — the reader's own graveyard or exile with
- * the sandbox's moves not working (it is off, or it is not the reader's main phase): the cards are
+ * the sandbox's moves not working (it is off, or the reader is not playing or declaring): the cards are
  * public and worth reading, but moving one by hand is the sandbox's, so no card carries a place to
  * go and the search's Shuffle is gone. The board never opens the library this way: with the
  * sandbox off a library is not looked through at all.

@@ -75,12 +75,17 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   reader's priority is passed for them except where `stops_here` stops them (their main phase, a
   step they asked for, the opponent's spell or combat after blocks when they could respond). The
   reader is stopped only at a `PlaytestStage`. A new stop is a new stage or a new `stops_here`
-  rule, never a pause elsewhere in `advance`.
+  rule, never a pause elsewhere in `advance` — the one exception is a sandbox edit's own decision
+  (`play_on`'s `held`, below), which keeps the reader where they already were.
 - **The sandbox is a setting, checked in `run`** (`is_sandbox`). `SetSandbox`, like `SetStops`, is
   taken at any stage, plays nothing on and is not remembered by undo. Off, every hand edit is
-  refused; on, hand edits are taken in the reader's main phase only, on the reader's cards and on
-  any card the table shows (`editable`) — **never an opponent's hand or library**. Never check the
-  sandbox action by action, and never let a hand edit reach the engine some other way.
+  refused; on, hand edits are taken wherever the game waits on the reader to play or to declare —
+  `main`, `respond`, `attack`, `block` (`edit`, issue #1522) — never in a question or at the
+  opening hand, on the reader's cards and on any card the table shows (`editable`) — **never an
+  opponent's hand or library**. Outside the main phase an edit keeps the reader at the decision it
+  was made at (`play_on`'s `held`): it never passes a priority or a stop. The board's
+  `sandboxEditsAt` (`packages/ui/features/playtesting/play/sandbox.ts`) mirrors the stages. Never
+  check the sandbox action by action, and never let a hand edit reach the engine some other way.
 - **Tapping for mana is the rules', never the sandbox's** (`tap_for_mana`, issue #1326). It is
   taken sandbox or not, wherever the reader has priority, from phase's own board list
   (`activatable_mana_actions_for_player`) — never a list of this crate's, and never the
