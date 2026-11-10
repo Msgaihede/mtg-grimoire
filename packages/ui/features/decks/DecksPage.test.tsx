@@ -4392,6 +4392,102 @@ describe("creating folders while the tree is folded", () => {
 });
 
 /**
+ * Issue #1544: the heading's `Folder ▾ → Rename…` renames "at the tree", and a folded or railed
+ * tree draws no rows and no fields — so the wall draws the field instead, as it does for a new
+ * folder, and Escape closes the field the reader can see rather than an invisible layer.
+ */
+describe("renaming the open folder while the tree is folded", () => {
+  async function renameFromHeading() {
+    await userEvent.click(await screen.findByRole("button", { name: "Commander folder, 2 decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+  }
+
+  it("draws the rename field in the wall when the saved pane is collapsed", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: "Expand folders" });
+    await renameFromHeading();
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Commander");
+    expect(screen.getAllByLabelText("Rename Commander")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Folders" })).queryByLabelText(
+        "Rename Commander",
+      ),
+    ).toBeNull();
+
+    await userEvent.keyboard("EDH{Enter}");
+    await waitFor(() => expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH"));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Expand folders" })).toBeInTheDocument();
+    expect(setDeckFolderPane).not.toHaveBeenCalled();
+  });
+
+  it("closes the field on the first Escape, hands the caret back, and walks up on the second", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: "Expand folders" });
+    await renameFromHeading();
+    expect(await screen.findByLabelText("Rename Commander")).toHaveFocus();
+
+    await userEvent.keyboard("Discarded{Escape}");
+    expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+    expect(deckFolderRename).not.toHaveBeenCalled();
+    // One press closed one thing: the reader is still standing in the folder.
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Folder actions" })).toHaveFocus(),
+    );
+
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByRole("heading", { name: "All decks" })).toBeInTheDocument();
+  });
+
+  it("draws the field in the wall when a narrow desk rails the tree", async () => {
+    // useDeskWidth reads the desk's clientWidth; jsdom otherwise reports an unmeasured zero.
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    try {
+      withFolders();
+      wrap(<DecksPage />);
+      await screen.findByRole("button", { name: "Expand folders" });
+      await renameFromHeading();
+
+      const field = await screen.findByLabelText("Rename Commander");
+      expect(field).toHaveFocus();
+      expect(screen.getAllByLabelText("Rename Commander")).toHaveLength(1);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("keeps the rename in the tree while the tree is expanded", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(screen.getAllByLabelText("Rename Commander")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Folders" })).getByLabelText(
+        "Rename Commander",
+      ),
+    ).toBe(field);
+  });
+});
+
+/**
  * **The page's half of the folder tree's width**: the stored answers reaching the sidebar, the
  * two gestures reaching the command, and the cap coming off a measurement of the desk row rather
  * than out of a constant.
