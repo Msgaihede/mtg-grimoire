@@ -186,6 +186,10 @@ const DECK_HEIGHT_FLOOR = "min-h-96";
  *  needs no such identity. */
 const NO_LABELS: readonly number[] = [];
 
+/** "No stack is hidden" for the range order — what every view but Stacks hands it (issue #1533),
+ *  one identity so a switch between the other three is not a new order. */
+const NO_HIDDEN: ReadonlySet<number> = new Set();
+
 /** How a deck is drawn, and what the switch calls each one. */
 type DeckView = "stacks" | "table" | "text" | "grid";
 const VIEWS: readonly { id: DeckView; label: string }[] = [
@@ -592,8 +596,17 @@ export function DeckDesk({
    * order: the walk drops orphaned rows because it steps *through printings*, and an orphan is
    * still a card the reader can see and pick. A range that silently skipped a row on screen is
    * the one failure this list cannot have.
+   *
+   * **A stack hidden in Stacks view is off it** (issue #1533), for the Ctrl+A handler's reason
+   * below: its cards are not drawn, so a range must not run through them, and a pick already in
+   * one is pruned the moment the stack is hidden. Only in Stacks — the other three views draw every
+   * card of a hidden stack. `NO_HIDDEN` rather than an empty `new Set()` in the memo, so a switch
+   * to another view is one stable identity rather than a fresh order per render.
    */
-  const slotOrder = useMemo(() => deckSlotOrder(groups), [groups]);
+  const slotOrder = useMemo(
+    () => deckSlotOrder(groups, view === "stacks" ? hiddenStacks : NO_HIDDEN),
+    [groups, view, hiddenStacks],
+  );
 
   /**
    * The cards the reader has Ctrl- and Shift-clicked, scoped to **this deck**.
