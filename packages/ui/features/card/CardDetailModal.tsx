@@ -517,6 +517,27 @@ function useRecentCardRecorder(cardId: string | null): void {
   }, [cardId, queryClient]);
 }
 
+/**
+ * A counter that moves on every render whose `signal` differs from the last one — the shape
+ * `DialogProps.caretPulse` asks for, out of any number of things that can each drop the caret.
+ *
+ * **A count of changes rather than arithmetic over the inputs** (issue #1559). The pulse used to be
+ * `returnDepth * 2 + (room ? 1 : 0)`, and every input folded in by hand is another chance for
+ * two changes landing in one render to sum to nothing — a removal that steps the reader on moves
+ * the depth *and* the card, an undo moves them in opposite directions. Comparing a joined key
+ * re-arms on any change at all, so nothing has to be weighed against anything else.
+ *
+ * Written during render, as `shown` is, so the pulse moves in the same commit as whatever
+ * unmounted the control under the caret — an effect would leave the settle armed a render late.
+ */
+function useChangePulse(signal: string): number {
+  const [seen, setSeen] = useState({ signal, pulse: 0 });
+  if (seen.signal === signal) return seen.pulse;
+  const next = { signal, pulse: seen.pulse + 1 };
+  setSeen(next);
+  return next.pulse;
+}
+
 export function CardDetailModal() {
   const cardId = useAppStore((s) => s.selectedCardId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
@@ -673,6 +694,9 @@ export function CardDetailModal() {
   // rather than a pair of nulls, because that is what tells the shell to leave its scrim exactly
   // as every other dialog draws it.
   const room = useFlankRoom();
+  // What `Dialog`'s settle is re-armed on — see `caretPulse` below, where each of the three is
+  // argued. JSON rather than a hand-picked separator because `shown` is a free string.
+  const caretPulse = useChangePulse(JSON.stringify([shown, returnDepth, room]));
   const flanks: DialogFlanks | undefined = room && pair !== null ? pair : undefined;
   const chevrons: ReactNode =
     !room && pair !== null ? (
@@ -765,9 +789,21 @@ export function CardDetailModal() {
       // `activeElement` on `<body>` and ArrowRight walking nothing. It was unreachable while the
       // crossing sat at 900, under the window's floor. `room` is folded into the same number
       // rather than given a prop of its own because it is the same signal — the host saying a
-      // control may have just vanished — and `2n + bit` keeps the two from cancelling when a
-      // removal and a resize land in one render.
-      caretPulse={returnDepth * 2 + (room ? 1 : 0)}
+      // control may have just vanished.
+      //
+      // **And a fifth, which is every step (issue #1559): the card on screen changing.** A step
+      // unmounts whatever held the caret — the whole grid is gated on `card !== null`, which it
+      // is while the next `card_detail` loads, and `CardModalArt` is keyed on the card id — so a
+      // reader who had clicked `View as foil`, `Flip card`, the stepper's `+` or a rail entry got
+      // one ArrowRight and then nothing, and a press on a row of the Printings list (which turns
+      // that row from a `<button>` into a `<span>`) got none. Measured in this suite as
+      // `activeElement === BODY` with the Next chevron still enabled. `shown` is the card the
+      // panel draws, so a chevron, an arrow, a printing picked from the list or from the printings
+      // modal, and a removal's step on are all one signal.
+      //
+      // All three are folded by {@link useChangePulse}, which counts changes instead of adding
+      // the inputs up, so no two of them landing in one render can cancel.
+      caretPulse={caretPulse}
       // **Two different functions, and the difference is the caret.** Escape and the ✕ are the
       // reader saying "put me back", so they go through the body's own close and whatever opened
       // the card gets the caret. A press on the **scrim** is not: they have already moved the
