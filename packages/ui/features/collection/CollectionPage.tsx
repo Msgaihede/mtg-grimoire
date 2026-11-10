@@ -136,7 +136,7 @@ import { parseEntryTags } from "@/features/entryTags/entryTags";
 import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { collectionTileDragData, type CollectionCopy } from "./collectionDrag";
 import { CollectionFolderPanel, LockedMoveConfirm, ROOT_LABEL } from "./CollectionFolderPanel";
-import { PickCopies, type CopyChoice } from "./PickCopies";
+import { PickCopies, spansCards, type CopyChoice } from "./PickCopies";
 import { ShareFolderMenu, shareTargetFor } from "./ShareFolderMenu";
 import { pinnedFolders } from "./PinnedFolders";
 import { COLLECTION_TRAY, useCollection, type Collection } from "./useCollection";
@@ -1112,7 +1112,6 @@ export function CollectionPage() {
    * took the drop is gone from the conversation by the time the reader answers.
    */
   const [picking, setPicking] = useState<{
-    cardName: string;
     entryIds: readonly number[];
     folderId: number | null;
   } | null>(null);
@@ -1171,20 +1170,14 @@ export function CollectionPage() {
    * drag's did not; a second implementation of "which copies?" is the same mistake one layer up,
    * so the row hands its ids here and this sets the very state a drop sets.
    *
-   * The name is read off the first row rather than passed down: `moveItem` knows entry ids and
-   * nothing about printings, and the list is the page's.
+   * **No name travels with the question, from either door** (issue #1575). `moveItem` knows entry
+   * ids and nothing about printings, and a picked set's ids are several cards — so the heading is
+   * worded where the rows are drawn ({@link pickHeading}), off the very rows the reader is
+   * choosing between, and the two doors cannot word one question two ways.
    */
-  const pickCopies = useCallback(
-    (entryIds: readonly number[], folderId: number | null) => {
-      const first = rows.find((row) => row.id === entryIds[0]);
-      setPicking({
-        cardName: first?.name ?? "these copies",
-        entryIds,
-        folderId,
-      });
-    },
-    [rows],
-  );
+  const pickCopies = useCallback((entryIds: readonly number[], folderId: number | null) => {
+    setPicking({ entryIds, folderId });
+  }, []);
 
   /**
    * The other question a row's menu can raise — `Edit copy…`, which is a grade and a price rather
@@ -2299,6 +2292,10 @@ export function CollectionPage() {
       return [
         {
           entryId,
+          // `rowTarget`'s fallback for an orphan, so a row the card database has lost is still
+          // named by the set and number the entry was written with.
+          cardName: row.name ?? `${row.setCode.toUpperCase()} ${row.collectorNumber}`,
+          printing: `${row.setCode.toUpperCase()} #${row.collectorNumber}`,
           finish: isFinish(row.finish) ? FINISH_LABEL[row.finish] : row.finish,
           condition: conditionLabel(row.condition),
           lang: row.lang,
@@ -2309,6 +2306,18 @@ export function CollectionPage() {
       ];
     });
   }, [picking, rows, blockedReason]);
+
+  /**
+   * What the question is about, for its heading: the card's name when every row is one card, and
+   * a count of the cards when they are not — `Move 3 cards to Trade binder` (issue #1575), where
+   * it named whichever card happened to be first and left the other two unmentioned. A card is a
+   * name and a printing, `spansCards`' rule, so the count and the rows' labels agree.
+   */
+  const pickHeading = useMemo(() => {
+    if (!spansCards(pickChoices)) return pickChoices[0]?.cardName ?? "these copies";
+    const cards = new Set(pickChoices.map((c) => `${c.cardName}\u0000${c.printing}`));
+    return plural(cards.size, "card");
+  }, [pickChoices]);
 
   // The list's refusal, or the counts' — the wall is laid out from the counts, so a refusal there
   // is a wall that never arrives and has to be said as surely as the list's.
@@ -3566,7 +3575,7 @@ export function CollectionPage() {
         {picking !== null && (
           <PickCopies
             key={`${picking.entryIds.join(",")}:${String(picking.folderId)}`}
-            cardName={picking.cardName}
+            cardName={pickHeading}
             destination={folderNameOf(picking.folderId) ?? ROOT_LABEL}
             copies={pickChoices}
             onConfirm={(entryIds) => {
@@ -3583,7 +3592,10 @@ export function CollectionPage() {
               // the dialog closes on the answer, so it is the receipt, once for the whole press
               // and counted off the one write. The bulk move's `UndoNotice` stays the way back.
               const destination = folderNameOf(picking.folderId) ?? ROOT_LABEL;
-              const { cardName } = picking;
+              // The receipt names the card when every ticked row is one card — it is counted in
+              // entries either way, so the name is said only where the count comes to one.
+              const ticked = pickChoices.filter((c) => entryIds.includes(c.entryId));
+              const cardName = spansCards(ticked) ? null : (ticked[0]?.cardName ?? null);
               if (entryIds.length > 1) {
                 report(
                   setFolderMany.mutateAsync({ entryIds, folderId: picking.folderId, destination }),
@@ -3598,9 +3610,9 @@ export function CollectionPage() {
                   },
                 );
               } else if (entryIds.length === 1) {
-                // The ticked row's own name where the list still has it: a picked set asks under
-                // a count (`3 cards`, issue #1501), and one card moved is named, not counted.
-                const name = rows.find((row) => row.id === entryIds[0])?.name || cardName;
+                // The ticked row's own name: a picked set asks under a count (`3 cards`, issue
+                // #1501), and one card moved is named, not counted.
+                const name = cardName ?? "that card";
                 report(moveCopy.mutateAsync({ entryId: entryIds[0], folderId: picking.folderId }), {
                   done: () => movedReceipt(1, name, destination),
                   failed: `Couldn't move “${name}” to “${destination}”`,

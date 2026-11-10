@@ -146,7 +146,12 @@ const BOLT = row();
  * `CollectionRow.cardId` under the wall's own name, and `PlayableTile` is written down precisely
  * so that a row's numeric `id` cannot be passed where a printing is wanted.
  */
-const BOLT_TILE = { id: BOLT.cardId, oracleId: BOLT.oracleId };
+const BOLT_TILE = {
+  id: BOLT.cardId,
+  oracleId: BOLT.oracleId,
+  layout: BOLT.layout,
+  typeLine: BOLT.typeLine,
+};
 
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
@@ -769,6 +774,13 @@ describe("copySource", () => {
  * this is not a fourth `CopySource` arm.
  */
 describe("playStateFor", () => {
+  /** A plain card — `normal` layout, a type line no token router reads as a token. */
+  const card = (id: string, oracleId: string | null) => ({
+    id,
+    oracleId,
+    layout: "normal",
+    typeLine: "Instant",
+  });
   const ANSWERED = { isSuccess: true, isError: false };
   const IN_FLIGHT = { isSuccess: false, isError: false };
   const FAILED = { isSuccess: false, isError: true };
@@ -778,15 +790,13 @@ describe("playStateFor", () => {
    *  is for: a copy the reader owns of a card their deck plays. */
   it("matches on the oracle card rather than on the printing", () => {
     const plays = new Set(["o-bolt"]);
-    expect(playStateFor({ id: "bolt-2xm", oracleId: "o-bolt" }, plays, ANSWERED)).toBe("plays");
-    expect(playStateFor({ id: "bolt-lea", oracleId: "o-bolt" }, plays, ANSWERED)).toBe("plays");
+    expect(playStateFor(card("bolt-2xm", "o-bolt"), plays, ANSWERED)).toBe("plays");
+    expect(playStateFor(card("bolt-lea", "o-bolt"), plays, ANSWERED)).toBe("plays");
   });
 
   /** A card the list does not name — the refusal that sends the reader to the Card search tab. */
   it("refuses a card the deck does not play", () => {
-    expect(playStateFor({ id: "sol", oracleId: "o-sol" }, new Set(["o-bolt"]), ANSWERED)).toBe(
-      "notPlayed",
-    );
+    expect(playStateFor(card("sol", "o-sol"), new Set(["o-bolt"]), ANSWERED)).toBe("notPlayed");
   });
 
   /**
@@ -796,12 +806,8 @@ describe("playStateFor", () => {
    * rather than an oracle id.
    */
   it("falls back to the printing for a copy with no oracle id", () => {
-    expect(playStateFor({ id: "ghost", oracleId: null }, new Set(["ghost"]), ANSWERED)).toBe(
-      "plays",
-    );
-    expect(playStateFor({ id: "ghost", oracleId: null }, new Set(["o-bolt"]), ANSWERED)).toBe(
-      "notPlayed",
-    );
+    expect(playStateFor(card("ghost", null), new Set(["ghost"]), ANSWERED)).toBe("plays");
+    expect(playStateFor(card("ghost", null), new Set(["o-bolt"]), ANSWERED)).toBe("notPlayed");
   });
 
   /**
@@ -812,7 +818,59 @@ describe("playStateFor", () => {
    */
   it("greys a card the census has not answered for, even one it would allow", () => {
     const plays = new Set(["o-bolt"]);
-    expect(playStateFor({ id: "bolt", oracleId: "o-bolt" }, plays, IN_FLIGHT)).toBe("unread");
-    expect(playStateFor({ id: "bolt", oracleId: "o-bolt" }, plays, FAILED)).toBe("unreadable");
+    expect(playStateFor(card("bolt", "o-bolt"), plays, IN_FLIGHT)).toBe("unread");
+    expect(playStateFor(card("bolt", "o-bolt"), plays, FAILED)).toBe("unreadable");
+  });
+
+  /**
+   * **A token is outside the fence, because Rust puts it there** (issue #1540):
+   * `collection_to_deck` files one as a token entry before `NOT_IN_DECK` is asked, and a deck's
+   * census can never name a token — `deck::add_card` never writes it a `deck_cards` row. So the
+   * census does not hold it back in any of its three states, and the fixture census names nothing
+   * the token is, which is the state every real deck is in.
+   */
+  it("answers a token before the census, whatever the census says", () => {
+    const treasure = {
+      id: "treasure",
+      oracleId: "o-treasure",
+      layout: "token",
+      typeLine: "Token Artifact — Treasure",
+    };
+    const plays = new Set(["o-bolt"]);
+    expect(playStateFor(treasure, plays, ANSWERED)).toBe("token");
+    expect(playStateFor(treasure, plays, IN_FLIGHT)).toBe("token");
+    expect(playStateFor(treasure, plays, FAILED)).toBe("token");
+  });
+
+  /** The widened half of `isTokenPrinting`: a `reversible_card` whose face is a token, and an
+   *  emblem. A `normal` card whose line happens to start `Token` stays a card. */
+  it("reads a two-sided token and an emblem by the type line, and nothing else", () => {
+    const none = new Set<string>();
+    expect(
+      playStateFor(
+        {
+          id: "dino",
+          oracleId: null,
+          layout: "reversible_card",
+          typeLine: "Token Creature — Dinosaur // Token Artifact — Treasure",
+        },
+        none,
+        ANSWERED,
+      ),
+    ).toBe("token");
+    expect(
+      playStateFor(
+        { id: "emb", oracleId: null, layout: "emblem", typeLine: "Emblem — Chandra" },
+        none,
+        ANSWERED,
+      ),
+    ).toBe("token");
+    expect(
+      playStateFor(
+        { id: "odd", oracleId: "o-odd", layout: "normal", typeLine: "Token Thing" },
+        none,
+        ANSWERED,
+      ),
+    ).toBe("notPlayed");
   });
 });

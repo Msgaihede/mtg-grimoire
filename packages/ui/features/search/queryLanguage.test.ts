@@ -781,7 +781,40 @@ describe("parseQuery — the long tail of keywords (issue #909)", () => {
     }
     expect(tree("c=2")).toEqual(["colors:eq:2"]);
     expect(tree("id>=3")).toEqual(["colorIdentity:gte:3"]);
-    expect(parseQuery("c:green").text).toBe("c:green");
+    // The plain colour names are terms too, as on Scryfall (issue #1564).
+    expect(tree("c:green")).toEqual(["colors:gte:green"]);
+    expect(parseQuery("c:green").text).toBe("");
+  });
+
+  it("reads the plain colour names and colourless as terms, negated too (issue #1564)", () => {
+    for (const value of [
+      "white",
+      "blue",
+      "black",
+      "red",
+      "green",
+      "c",
+      "colorless",
+      "colourless",
+      "multi",
+      "multicolour",
+    ]) {
+      expect(tree(`c:${value}`), value).toHaveLength(1);
+      expect(tree(`id:${value}`), value).toHaveLength(1);
+    }
+    expect(tree("c:red t:goblin")).toEqual(["colors:gte:red", "typeLine:colon:goblin"]);
+    expect(parseQuery("c:red t:goblin").text).toBe("");
+    // `-c:red` is a negated colour term, not a name exclusion that matches nothing.
+    const negated = parseQuery("t:goblin -c:red");
+    expect(negated.text).toBe("");
+    expect(negated.predicates.map(show)).toEqual(["typeLine:colon:goblin", "-colors:gte:red"]);
+  });
+
+  it("sends a colour name as its key, so Rust compares it whole", () => {
+    expect(tree("id:glint-eye")).toEqual(["colorIdentity:lte:glinteye"]);
+    expect(tree("c:Red")).toEqual(["colors:gte:red"]);
+    // Letters still go out as typed — Rust folds their case itself.
+    expect(tree("c:RG")).toEqual(["colors:gte:RG"]);
   });
 
   it("compares a number with another column as @field", () => {

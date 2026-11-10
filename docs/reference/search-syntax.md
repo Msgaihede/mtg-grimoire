@@ -850,7 +850,7 @@ beside it.
 | text | `name` `!` `fo` `fulloracle` (aliases of `o:` — `search_text` already holds reminder text) `ft` `flavor` `wm` `watermark` |
 | mana | `m` `mana` (symbol multiset), `devotion`, `produces`, `cmc:even`/`cmc:odd` |
 | stats | `loy` `loyalty`, `pt` `powtou`, and `pow>tou`-style comparisons between two stats |
-| colours | guild, college, shard, wedge and four-colour names, `m`/`multicolor`, and a bare number as a colour *count* (`c=2`, `id>=3`), on both `c:` and `id:` |
+| colours | the colour names (`white` `blue` `black` `red` `green`, and `c` `colorless` `colourless`), guild, college, shard, wedge and four-colour names, `m`/`multi`/`multicolor`/`multicolour`, and a bare number as a colour *count* (`c=2`, `id>=3`), on both `c:` and `id:` |
 | printing | `cn` `number`, `st` `settype`, `b` `block`, `in`, `game`, `lang`, `year`, `date`, `border`, `frame`, `stamp`, `new` |
 | prices | `usd`, `eur`, `tix` |
 | legality | `banned`, `restricted` |

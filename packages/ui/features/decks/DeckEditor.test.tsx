@@ -8912,6 +8912,41 @@ describe("DeckEditor multi-select", () => {
   });
 
   /**
+   * **Issue #1534: the quick zones' New category takes the whole set too.** It read the grabbed
+   * card alone, so the dialog named one card and only that card moved — the other two stayed put
+   * and stayed picked. Now every picked card is filed into the new pile, said in one toast with
+   * the count, and the set is put down.
+   */
+  it("files every picked card into a pile made on New category", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const held = await startPointerDrag(row("Lightning Bolt"));
+    await held.over(
+      boxed(document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="New category"]`)!, 100, 60),
+    );
+    await held.drop();
+
+    const dialog = await screen.findByRole("dialog", { name: "New category" });
+    expect(within(dialog).getByText("2 cards")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("New category name"), "Removal");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, 9, null, "live", null);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, 9, null, "live", null);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Created “Removal” and filed 2 cards in it",
+        tone: "success",
+      }),
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useAppStore.getState().cardSelection).toBeNull();
+  });
+
+  /**
    * **A card picked up from outside the set takes only itself, and throws the set away.**
    *
    * Every file manager's rule, and the one thing about multi-drag a reader will get wrong if it

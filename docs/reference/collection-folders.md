@@ -1210,10 +1210,19 @@ above its copies fall under. The two are deliberately **separate axes and not a 
   between two unrelated facts.
 * One is decided by a rule over rows, the other by the card's identity.
 
-So `PlayState` (`plays | notPlayed | unread | unreadable`) sits beside `sourceOf` on the hook's
+So `PlayState` (`plays | notPlayed | unread | unreadable`, and since #1540 `token`) sits beside `sourceOf` on the hook's
 return, and the Add button's existing refusal ladder asks the census first, the fence second and
 the copy third. **The tab is assign-only now**: it answers *which copies I own back this deck's
 list*, and adding a card the deck does not play is the Card search tab beside it.
+
+**Tokens and emblems are outside the fence (issue #1540), because Rust puts them there.**
+`collection_to_deck` asks `printing_is_token` before `NOT_IN_DECK` and files such a row as a token
+entry, moving no copy — and a deck never "plays" a token (`deck::add_card` reroutes one into
+`deck_token_printings`, never a `deck_cards` row), so the census can never name one. Fencing them
+greyed every owned token for ever, with advice that could not be followed. `PlayState` has a fifth
+word, `token`, answered by `isTokenPrinting` before the census: the tile presses, names
+**Tokens & Emblems** as where it lands (the card-search tab's rule), is never asked about or named
+as a taking, and the `quantity: 0` / no-deck-row outcome still raises its receipt.
 
 The third row is the one that needs a sentence: the side effect lands on a deck the reader is not
 looking at. Taking the copies decrements that deck's live list as well as emptying its group,
@@ -1397,6 +1406,14 @@ of a card the list names once. Two holes let that happen, and both are closed by
   sold only in foil, where the unsaid and the `foil` row play the same copy). Then the sweep runs as
   before, with the plan's claims, over everything else. A cut (`deck_to_collection`) never asked the
   plan, so the two kinds of removal now agree.
+- **The cut releases through the same helper** (issue #1536, 2026-11-10). `deck_to_collection` —
+  the press the editor sends every live step down through — released up to the cut quantity
+  through `release_group_copies`, which clamps only at what the group holds. Where the folder holds
+  fewer copies than the list claims that disagreed with the stepper: a line of four backed by two
+  filed an owned copy on its first step down (3 listed, 1 owned, where the copy cut was one the
+  reader never had), and cutting a Main row took the one copy the Sideboard still names. It now
+  writes `deck_cards` first and then calls `release_displaced_copies(…, quantity)`, reporting the
+  `Released` that helper answers — so the two kinds of removal agree whatever the folder holds.
 - **Not every removal was a cut.** `set_card_quantity` took a live row down or out and moved no
   copy; the editor sends a live cut through `deck_to_collection` when it has the row's id, but the
   card modal's stepper did not hand one. The stepper write releases the displaced copies itself
