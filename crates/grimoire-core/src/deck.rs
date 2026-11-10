@@ -14411,6 +14411,11 @@ mod tests {
     /// against. Custody cannot, so the number is simply read — and the two halves that mattered
     /// still do: a row stepped down says so, and a row taken to zero is **deleted** (v24's
     /// rule) and holds nothing at all.
+    ///
+    /// **The row is changed by statement, not by `collection::set_quantity`**, which refuses a
+    /// row in a deck's group since issue #1537 (`ENTRY_IN_A_DECK`) — asserted first, because the
+    /// reader's stepper is exactly what must not move a deck's copies behind its back. What is
+    /// left to pin is the read: whatever moves the group's row, the deck follows it.
     #[test]
     fn owned_quantity_follows_the_group_row_down_to_zero() {
         let conn = seeded();
@@ -14420,14 +14425,29 @@ mod tests {
         let entry = file_into_group(&conn, deck.id, "bolt-lea", 4);
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
 
-        crate::collection::set_quantity(&conn, entry, 1).unwrap();
+        assert_eq!(
+            crate::collection::set_quantity(&conn, entry, 1).unwrap_err(),
+            crate::collection_folders::ENTRY_IN_A_DECK,
+            "the reader's stepper is fenced off a deck's copies"
+        );
+        assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
+
+        conn.execute(
+            "UPDATE collection_entries SET quantity = 1 WHERE id = ?1",
+            params![entry],
+        )
+        .unwrap();
         assert_eq!(
             owned_of(&conn, deck.id, "bolt-lea", main),
             1,
             "a shrunken row is a shrunken deck, with no write to the deck at all"
         );
 
-        crate::collection::set_quantity(&conn, entry, 0).unwrap();
+        conn.execute(
+            "DELETE FROM collection_entries WHERE id = ?1",
+            params![entry],
+        )
+        .unwrap();
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 0);
         assert_eq!(
             count(&conn, "collection_entries"),

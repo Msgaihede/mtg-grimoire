@@ -16764,6 +16764,17 @@ function inADeckFolder(db: FakeDb, folderId: number | null): boolean {
   return collectionFolderById(db, folderId)?.kind === COLLECTION_DECK_KIND;
 }
 
+/**
+ * `collection::refuse_in_a_deck` — the deck-custody fence on the reader's own writes to a row
+ * (issue #1537): {@link ENTRY_IN_A_DECK} for a row filed in a deck's group. Asked by
+ * `collection_set_quantity`, `collection_update` (its finish and its count), `collection_set_printing`,
+ * `collection_remove` and `collection_remove_many`, and never by {@link removeEntry} or
+ * {@link foldEntry}, which the deck's own writes are built from.
+ */
+function refuseInADeck(db: FakeDb, row: { folderId: number | null }): void {
+  if (inADeckFolder(db, row.folderId)) throw refuse(ENTRY_IN_A_DECK);
+}
+
 /** `collection_alloc::removed_folder` — the one holding area, or {@link NO_REMOVED_FOLDER}. A
  *  partial unique index makes a second impossible in the app; here the seed is the assertion. */
 function removedFolder(db: FakeDb): FakeCollectionFolder {
@@ -19059,6 +19070,7 @@ export function writeHandlers(db: FakeDb) {
       validQuantity(args.quantity, "collection quantity");
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
+      refuseInADeck(db, row);
       if (args.quantity === 0) {
         db.collectionEntries = db.collectionEntries.filter((e) => e.id !== row.id);
         return { id: row.id, quantity: 0, removed: true };
@@ -19130,6 +19142,13 @@ export function writeHandlers(db: FakeDb) {
       const grading = canonicalGrading(patch.grading);
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
+      // The deck-custody fence, on the two fields a deck reads and only on a change.
+      if (
+        (patch.finish !== undefined && patch.finish !== row.finish) ||
+        (patch.quantity !== undefined && patch.quantity !== row.quantity)
+      ) {
+        refuseInADeck(db, row);
+      }
 
       const quantity = patch.quantity ?? row.quantity;
       const next: FakeEntry = {
@@ -19231,6 +19250,7 @@ export function writeHandlers(db: FakeDb) {
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
       if (row.cardId === cardId) return { id: row.id, quantity: row.quantity, removed: false };
+      refuseInADeck(db, row);
       const card = requireCard(db, cardId);
       const from = cardById(db, row.cardId);
       if (from !== null && from.oracleId !== card.oracleId) {
@@ -19263,6 +19283,8 @@ export function writeHandlers(db: FakeDb) {
      *  otherwise is an error dialog over a success. */
     collection_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (row) refuseInADeck(db, row);
       removeEntry(db, args.id);
       return { id: args.id, quantity: 0, removed: true };
     },
@@ -19276,8 +19298,8 @@ export function writeHandlers(db: FakeDb) {
      * {@link removeEntry} per id, so an id that names nothing is skipped exactly as the single
      * command skips it — a stale selection is still a success — and `removed`/`copies` count only
      * the rows that were really there, and an id sent twice is removed once ({@link distinctIds}).
-     * **No deck fence**, because the single command has none: removing is the unconditional
-     * delete, and a copy in a deck's group goes the way any other does. **No feed row either**:
+     * **The deck fence refuses the whole press** ({@link refuseInADeck}, issue #1537), before
+     * anything is deleted — the crate's transaction rolls back whole. **No feed row**:
      * the crate's twin records one line for the press, and no write in this fake records any.
      *
      * The ticket it answers takes every deleted row back through {@link putBack}; a press that
@@ -19286,6 +19308,10 @@ export function writeHandlers(db: FakeDb) {
     collection_remove_many: (args: { ids: readonly number[] }): BulkRemoveOutcome => {
       refuseIfBusy(db);
       const before = db.collectionEntries.map((e) => ({ ...e }));
+      for (const id of args.ids) {
+        const row = db.collectionEntries.find((e) => e.id === id);
+        if (row) refuseInADeck(db, row);
+      }
       let removed = 0;
       let copies = 0;
       for (const id of distinctIds(args.ids)) {

@@ -2018,9 +2018,10 @@ export function CollectionPage() {
    * from the right-click menu.** {@link readersOwnLevel} plus `Recently removed`, and nothing else.
    *
    * Issue #506. The fence on a count exists for **deck custody**: a copy in a deck's group is the
-   * deck's arithmetic, `collection::set_quantity` has no folder fence of its own, and a stepper
-   * there would change what a deck says it owns without the deck being touched — which is why
-   * those copies leave through `deck_to_collection` and nowhere else. `Recently removed` is the
+   * deck's arithmetic, and a stepper there would change what a deck says it owns without the deck
+   * being touched — which is why those copies leave through `deck_to_collection` and nowhere else.
+   * The backend refuses the write too since issue #1537 (`collection::refuse_in_a_deck`); this is
+   * the page saying so before the press. `Recently removed` is the
    * opposite case. Its copies are the ones a deck *let go of*, they belong to no deck, and changing
    * their count changes no deck's list; fencing them made the holding area a pile the reader could
    * sort out only by dragging every copy back into a binder first, including the ones they meant
