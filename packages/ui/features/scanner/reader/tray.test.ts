@@ -27,6 +27,7 @@ import {
   unresolvedCount,
 } from "./tray";
 import { VERDICTS } from "../fixtures";
+import { trayFinishChoices } from "./trayFinish";
 
 /**
  * The fixture's resolved card, **as a printing sold in both finishes** — Alpha's Lotus was
@@ -468,6 +469,7 @@ describe("tray", () => {
       name: "Lightning Bolt",
       setCode: "2x2",
       collectorNumber: "117",
+      finishes: ["nonfoil", "foil"],
     };
 
     it("lands as a settled newest row in the reader's finish", () => {
@@ -501,6 +503,35 @@ describe("tray", () => {
       const waiting = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "w").rows;
       const sameAsProvisional = { ...picked, cardId: waiting[0].cardId };
       expect(addPicked(waiting, sameAsProvisional, "nonfoil", 2, "b").rows).toHaveLength(2);
+    });
+
+    /** Issue #1557: a hand-added row offered every finish, so a foil-only card filed as nonfoil. */
+    describe("a printing made in one finish", () => {
+      const promo = { ...picked, cardId: "bolt-jgp", setCode: "jgp", collectorNumber: "1" };
+      const foilOnly = { ...promo, finishes: ["foil"] };
+
+      it("offers only its finishes, as a scanned row of it does", () => {
+        const row = addPicked([], foilOnly, "foil", 1, "a").rows[0];
+        expect(row.finishes).toEqual(["foil"]);
+        expect(trayFinishChoices(row.finishes)).toEqual(["foil", "unknown"]);
+      });
+
+      it("refuses a finish it was never made in, in the menu and from the caller", () => {
+        const rows = addPicked([], foilOnly, "foil", 1, "a").rows;
+        expect(setFinish(rows, "a", "nonfoil")[0].finish).toBe("foil");
+        expect(addPicked([], foilOnly, "nonfoil", 1, "a").rows[0].finish).toBe("foil");
+      });
+
+      it("bumps by the finish it lands in, not the one it was handed", () => {
+        const once = addPicked([], foilOnly, "foil", 1, "a").rows;
+        expect(addPicked(once, foilOnly, "nonfoil", 2, "b").bumped).toBe(true);
+      });
+
+      it("constrains nothing when the card database did not say", () => {
+        const row = addPicked([], { ...promo, finishes: [] }, "nonfoil", 1, "a").rows[0];
+        expect(row.finish).toBe("nonfoil");
+        expect(trayFinishChoices(row.finishes)).toEqual(["nonfoil", "foil", "etched", "unknown"]);
+      });
     });
   });
 
@@ -597,6 +628,7 @@ describe("tray", () => {
           name: "Hand-picked",
           setCode: "lea",
           collectorNumber: "1",
+          finishes: [],
         },
         "nonfoil",
         5,
