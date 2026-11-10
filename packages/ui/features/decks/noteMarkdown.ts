@@ -21,6 +21,12 @@
  * had no rule for it, and that is the rule the whole file is arranged around: every branch
  * below either recognises a shape or hands the characters on untouched.
  *
+ * **Two shapes are recognised as nothing, and are the only things this reader leaves out**: the
+ * editor's empty-paragraph marker ({@link EMPTY_PARAGRAPH}) and an empty list item (a bare `-` or
+ * `2.`). Both are the editor's spelling of a blank line, which the editor itself draws as nothing,
+ * so drawing their characters would be the reader's markup typed back at them — and, as the note's
+ * first line, its title. A reader who *typed* `&nbsp;` is stored `&amp;nbsp;` and is shown it.
+ *
  * **Reading a note loads no editor.** The band's list, the card menu's submenu and the card
  * modal's overlay all draw through here. Mounting a ProseMirror instance per note to render a
  * paragraph would put an editing surface and 141.5 kB gzip behind a read.
@@ -104,10 +110,18 @@ const HEADING = /^\s*(#{1,6})[ \t]+(.*)$/;
  * `*` followed by another `*` is not a list. It is also what keeps `---` out — a thematic break
  * is outside the dialect and reads as written.
  */
-const BULLET = /^\s*[*+-][ \t]+(.*)$/;
+const BULLET = /^\s*[*+-](?:[ \t]+(.*))?$/;
 
-/** `1.` or `1)`, at any start number. CommonMark caps the digits at nine and so does this. */
-const ORDERED = /^\s*(\d{1,9})[.)][ \t]+(.*)$/;
+/**
+ * `1.` or `1)`, at any start number. CommonMark caps the digits at nine and so does this.
+ *
+ * The text is optional on both list rules, because **a bare marker is an empty item** and Tiptap
+ * writes one for every item a reader left empty — `- Sol Ring\n- ` is what saving with the caret
+ * on a fresh bullet stores. Requiring text made that `- ` a lazy continuation of the item above,
+ * drawn as `Sol Ring -`. The editor reads a bare marker back as an empty item too, so a paragraph
+ * that is only `-` or `1.` is one in both renderers.
+ */
+const ORDERED = /^\s*(\d{1,9})[.)](?:[ \t]+(.*))?$/;
 
 /** `> quoted`. The single optional space after the marker is the marker's, not the text's. */
 const QUOTE = /^\s*>[ \t]?(.*)$/;
@@ -123,6 +137,25 @@ const QUOTE = /^\s*>[ \t]?(.*)$/;
  * Exported because `todoMarkdown.ts` reads a to-do's hard break by this same rule.
  */
 export const HARD_BREAK = / {2,}$|(?<!\\)\\$/;
+
+/**
+ * What the editor writes for a paragraph with nothing in it, which its own reader reads back as
+ * empty — the paragraph extension's marker, entity and character both. Tiptap writes the first
+ * empty paragraph of a run as a blank line and **every one after it as `&nbsp;`**, so a reader who
+ * pressed Enter three times between two lines stores `one\n\n\n\n&nbsp;\n\ntwo`. Read as blank
+ * here, or it would draw as the six characters of an entity, and become the title of a note that
+ * starts with a blank line. The character is spelled as an escape because a literal no-break space
+ * is invisible in source and one rewrite of `todoMarkdown.ts` already turned it into a plain space.
+ *
+ * Exported because `todoMarkdown.ts` reads a to-do body's empty paragraph by this same rule.
+ */
+export const EMPTY_PARAGRAPH: readonly string[] = ["&nbsp;", "\u00a0"];
+
+/** A line's words, or `""` when they are only {@link EMPTY_PARAGRAPH}'s marker. */
+function words(text: string): string {
+  const trimmed = text.trim();
+  return EMPTY_PARAGRAPH.includes(trimmed) ? "" : trimmed;
+}
 
 /**
  * The six inline shapes, scanned left to right in one pass, **with the backslash escape first**.
@@ -350,8 +383,9 @@ export function parseNoteBody(body: string): Block[] {
   // continuation, and the shape Tiptap writes a hard break inside a list item as. Parsing each
   // item as it arrived would leave nothing to append that continuation to.
   let items: Run[][] = [];
+  // Each item's own number, read only to find the first one drawn — see `flushList`.
+  let numbers: number[] = [];
   let ordered = false;
-  let start = 1;
   // A blank line inside a list does **not** end it — CommonMark's loose list, which is what
   // `- one\n\n- two` is and what a reader gets for pressing Enter twice. So the flush is deferred
   // until the next line says what it was: another item continues the list, anything else ends it.
@@ -359,16 +393,25 @@ export function parseNoteBody(body: string): Block[] {
   let listBlank = false;
 
   const flushList = (): void => {
-    if (items.length) {
+    // An empty item is the editor's, and is not drawn: a list of nothing but empty items is no
+    // list at all. Only the first *drawn* item's number is read — the rest are the reader's, and
+    // CommonMark renumbers them anyway, so a list written `1. 1. 1.` is still one, two, three. It
+    // is the first drawn and not the first written because the editor puts `two` in
+    // `1. \n2. two` at 2, under the empty item it draws, and this reader draws no empty item.
+    const kept = items
+      .map((runs, i) => ({ text: joinRuns(runs), n: numbers[i] }))
+      .filter((item) => item.text);
+    if (kept.length) {
+      const start = kept[0].n;
       out.push({
         kind: "list",
         ordered,
-        items: items.map((runs) => parseInlines(joinRuns(runs))),
+        items: kept.map((item) => parseInlines(item.text)),
         ...(ordered && start !== 1 ? { start } : {}),
       });
     }
     items = [];
-    start = 1;
+    numbers = [];
     listBlank = false;
   };
   const flushQuote = (): void => {
@@ -387,7 +430,7 @@ export function parseNoteBody(body: string): Block[] {
     // Read before the trim, because two trailing spaces are a hard break and `trimEnd` eats
     // exactly the evidence.
     const br = HARD_BREAK.test(line);
-    const content = line.replace(HARD_BREAK, "").trim();
+    const content = words(line.replace(HARD_BREAK, ""));
 
     if (!content) {
       flushQuote();
@@ -411,12 +454,14 @@ export function parseNoteBody(body: string): Block[] {
     if (quoted) {
       flushList();
       flushParagraph();
-      if (quoted[1].trim()) {
-        quote.push({ text: quoted[1].trim(), br });
+      const text = words(quoted[1]);
+      if (text) {
+        quote.push({ text, br });
       } else {
         // A bare `>` is the paragraph break inside a blockquote that Tiptap writes when a
-        // reader presses Enter in one. A `quote` holds inlines and cannot hold two paragraphs,
-        // so it becomes the line break it looks like rather than nothing.
+        // reader presses Enter in one, and `> &nbsp;` is the second and later of a run of them.
+        // A `quote` holds inlines and cannot hold two paragraphs, so it becomes the line break it
+        // looks like rather than nothing.
         const last = quote[quote.length - 1];
         if (last) last.br = true;
       }
@@ -431,7 +476,8 @@ export function parseNoteBody(body: string): Block[] {
       if (ordered) flushList();
       ordered = false;
       listBlank = false;
-      items.push([{ text: bullet[1], br }]);
+      items.push([{ text: words(bullet[1] ?? ""), br }]);
+      numbers.push(1);
       continue;
     }
 
@@ -440,12 +486,10 @@ export function parseNoteBody(body: string): Block[] {
       flushQuote();
       flushParagraph();
       if (!ordered) flushList();
-      // Only the first item's number is read. The rest are the reader's, and CommonMark
-      // renumbers them anyway — a list written `1. 1. 1.` is still one, two, three.
-      if (!items.length) start = Number(numbered[1]);
       ordered = true;
       listBlank = false;
-      items.push([{ text: numbered[2], br }]);
+      items.push([{ text: words(numbered[2] ?? ""), br }]);
+      numbers.push(Number(numbered[1]));
       continue;
     }
 
@@ -454,8 +498,11 @@ export function parseNoteBody(body: string): Block[] {
     // line under the marker, and starting a paragraph here would split one item into a
     // one-item list and a stray paragraph. CommonMark calls it a lazy continuation, and a blank
     // line is what ends the item's reach: past one, this is a new block and the list is closed.
+    // **An empty item has no reach either** — CommonMark's rule, and the editor's: it reads
+    // `-\nfoo` as an empty item and a paragraph, and writes a hard break in an empty item as
+    // exactly that shape, which it then reads back the same way.
     const openItem = items[items.length - 1];
-    if (openItem && !listBlank) {
+    if (openItem && !listBlank && joinRuns(openItem)) {
       openItem.push({ text: content, br });
       continue;
     }
