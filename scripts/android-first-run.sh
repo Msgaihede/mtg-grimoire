@@ -6,8 +6,9 @@
 #   bash scripts/android-first-run.sh <apk> <out-dir>
 #
 # It installs the APK and measures, in this order: the APK and its `.so`; how long the emulator
-# took to make an unmetered network its default (waited for, since 2026-10-08, because a launch
-# on the cellular one is held); the first launch, which
+# took to make a validated unmetered network its default, with its cellular link switched off and
+# its Wi-Fi restarted if that does not validate (waited for since 2026-10-08, because a launch on
+# the cellular network is held; hardened 2026-11-10, below); the first launch, which
 # also creates the databases; the first corpus ingest, from that launch until the host prints
 # `launch: card sync finished in N ms` (`apps/light/src-tauri/src/lib.rs`, `spawn_downloads`); the two
 # databases' size on the device; a screenshot of the phone face; three cold starts, each after a
@@ -34,7 +35,6 @@ ACTIVITY=$PKG/.MainActivity
 # `dataDir`, and the host opens `data/` under it (`lib.rs`, `data_dir`).
 DATA=/data/data/$PKG/data
 STARTED_WITHIN_S=60
-UNMETERED_WITHIN_S=90
 INGEST_TIMEOUT_S=$((45 * 60))
 SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/stdout}
 
@@ -107,32 +107,81 @@ private() {
 # databases were 4096 bytes. Until then the Wi-Fi had always won the race, which is what
 # "expected, not checked here" in light-app.md §8.5 was relying on.
 #
-# So the default network is waited for, and the wait is a figure in the report. If it never
-# becomes an unmetered one the run goes on: then *held* is the truth about the emulator.
+# So the default network is waited for, and the wait is a figure in the report.
+#
+# **That wait was not enough on 2026-11-10** (run 42792532314, the push that released 0.68.0). The
+# Wi-Fi network came up as it does in every run (`AndroidWifi`, `NOT_METERED`, the same addresses),
+# but its validation never passed: `EVER_EVALUATED` and no `IS_VALIDATED` for the whole 90 s.
+# In passing runs that day it validated about a second after it connected. The cellular network
+# beside it, over the same host link, validated at once and stayed the default, so the app held
+# (correctly, on a metered default) and the run failed with nothing wrong in the app. The
+# emulator was 37.2.13.0 in that run and in the runs that passed, so this was the emulator's Wi-Fi
+# misbehaving, not a change to it.
+#
+# So, since then:
+# - **The cellular link is switched off first** (`svc data disable`). Then the only network that
+#   can become the default is the Wi-Fi, and there is no longer a race for the wait to wait out.
+#   No run's figures came over it: in every passing run the default at the launch was the Wi-Fi.
+# - **The wait is for a *validated* unmetered default**, and **a Wi-Fi that has not validated
+#   after a round is restarted** (`svc wifi disable`, then `enable`, so it associates and is
+#   probed afresh), up to `WIFI_RESTARTS` times.
+#
+# If it never validates the run still goes on. With the cellular link off the default is the
+# unvalidated Wi-Fi, which is unmetered, so the launch is not held: the downloads either work,
+# because only the probe failed, or fail, and the outcome then says which.
+NETWORK_ROUND_S=45
+WIFI_RESTARTS=2
 
-# Whether the default network in a `dumpsys connectivity` on stdin is an unmetered one: the id on
-# the `Active default network:` line, and `IS_UNMETERED` among that network's score policies.
-default_is_unmetered() {
+# The default network's score policies in a `dumpsys connectivity` on stdin, `&`-joined
+# (`TRANSPORT_PRIMARY&EVER_EVALUATED&IS_UNMETERED&EVER_VALIDATED&IS_VALIDATED`): the id on the
+# `Active default network:` line, and that network's `Score(Policies : …)`. Empty with no default.
+default_policies() {
   tr -d '\r' | awk '
     /^Active default network:/ { id = $NF }
-    id != "" && index($0, "NetworkAgentInfo{network{" id "}") {
-      hit = index($0, "IS_UNMETERED") > 0
+    id != "" && p == "" && index($0, "NetworkAgentInfo{network{" id "}") {
+      if (match($0, /Policies : [A-Z_&]+/)) p = substr($0, RSTART + 11, RLENGTH - 11)
     }
-    END { exit hit ? 0 : 1 }'
+    END { print p }'
+}
+
+# Whether `&`-joined policies <1> name policy <2>, exactly.
+has_policy() { case "&$1&" in *"&$2&"*) return 0 ;; *) return 1 ;; esac; }
+
+# Wait up to <1> seconds for the default network to be a validated unmetered one.
+wait_validated() {
+  local deadline policies
+  deadline=$(($(date +%s) + $1))
+  while :; do
+    policies=$({ adb shell dumpsys connectivity 2> /dev/null || true; } | default_policies)
+    if has_policy "$policies" IS_UNMETERED && has_policy "$policies" IS_VALIDATED; then
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 2
+  done
 }
 
 network_wait_from=$(now_ms)
-unmetered=""
-for _ in $(seq 1 $((UNMETERED_WITHIN_S / 2))); do
-  if adb shell dumpsys connectivity 2> /dev/null | default_is_unmetered; then
-    unmetered=yes
-    break
-  fi
-  sleep 2
+adb shell svc data disable || true
+validated=""
+wifi_restarts=0
+if wait_validated "$NETWORK_ROUND_S"; then validated=yes; fi
+while [ -z "$validated" ] && [ "$wifi_restarts" -lt "$WIFI_RESTARTS" ]; do
+  adb shell svc wifi disable || true
+  sleep 3
+  adb shell svc wifi enable || true
+  wifi_restarts=$((wifi_restarts + 1))
+  if wait_validated "$NETWORK_ROUND_S"; then validated=yes; fi
 done
 network_wait_ms=$(($(now_ms) - network_wait_from))
-# The network as the launch finds it, for the artifact.
+# The network as the launch finds it, for the artifact — and what the report reads off it: whether
+# the default is unmetered (validated or not), and whether a cellular network is still up.
 adb shell dumpsys connectivity > "$OUT/connectivity.txt" 2>&1 || true
+launch_policies=$(default_policies < "$OUT/connectivity.txt")
+unmetered=""
+if has_policy "$launch_policies" IS_UNMETERED; then unmetered=yes; fi
+cellular_up=no
+if grep -q 'NetworkAgentInfo{network{[0-9]*}.*ni{MOBILE' "$OUT/connectivity.txt"; then cellular_up=yes; fi
 
 # --- The first launch and the first ingest -------------------------------------------------------
 adb logcat -c
@@ -160,6 +209,7 @@ if [ -z "$started" ]; then
   elif [ -n "$unmetered" ]; then
     # Not the hold: the network was an unmetered one before the launch, and still nothing started.
     outcome="no card sync started within $STARTED_WITHIN_S s, on an unmetered network"
+    [ -n "$validated" ] || outcome="$outcome (one that never validated)"
   else
     outcome="held — the emulator reported a metered network"
   fi
@@ -319,8 +369,11 @@ note "| --- | ---: |"
 note "| APK | $apk_bytes bytes ($(mib "$apk_bytes") MiB) |"
 note "| \`libgrimoire_light_lib.so\`, uncompressed | $(or_dash "$so_bytes") bytes ($(mib "$so_bytes") MiB) |"
 note "| \`adb install\` | $install_ms ms |"
-network_reached=$([ -n "$unmetered" ] && echo reached || echo "never, in $UNMETERED_WITHIN_S s")
-note "| An unmetered default network, waited for before the launch | $network_wait_ms ms ($network_reached) |"
+network_reached=$([ -n "$validated" ] && echo reached || echo never)
+note "| The cellular link, switched off before the launch: still up | $cellular_up |"
+note "| A validated unmetered default network, waited for before the launch | $network_wait_ms ms ($network_reached) |"
+note "| Wi-Fi restarted while waiting | $wifi_restarts of $WIFI_RESTARTS |"
+note "| The default network at the launch, its score policies | \`${launch_policies:-no default network}\` |"
 note "| First launch, \`TotalTime\` | $(or_dash "$first_launch_ms") ms |"
 note "| First corpus ingest, the host's own figure | $(or_dash "$ingest_ms") ms |"
 note "| First launch to the \`finished\` line, wall clock (±10 s) | $(or_dash "$ingest_wall_ms") ms |"
@@ -366,6 +419,8 @@ jq -n \
   --arg outcome "$outcome" \
   --arg apk "$apk_bytes" --arg so "$so_bytes" --arg install "$install_ms" \
   --arg network_wait "$network_wait_ms" --arg unmetered "$unmetered" \
+  --arg validated "$validated" --arg wifi_restarts "$wifi_restarts" --arg cellular_up "$cellular_up" \
+  --arg launch_policies "$launch_policies" \
   --arg first "$first_launch_ms" --arg ingest "$ingest_ms" --arg wall "$ingest_wall_ms" \
   --arg corpus "$corpus_bytes" --arg user "$user_bytes" --arg app "$app_kib" \
   --arg c1 "${cold[0]}" --arg c2 "${cold[1]}" --arg c3 "${cold[2]}" --arg median "$cold_median" \
@@ -378,6 +433,8 @@ jq -n \
    def s: if . == "" then null else . end;
    { outcome: $outcome, apk_bytes: ($apk|n), so_bytes: ($so|n), install_ms: ($install|n),
      network_wait_ms: ($network_wait|n), unmetered_at_launch: ($unmetered == "yes"),
+     validated_at_launch: ($validated == "yes"), wifi_restarts: ($wifi_restarts|n),
+     cellular_up_at_launch: ($cellular_up == "yes"), default_policies_at_launch: ($launch_policies|s),
      first_launch_ms: ($first|n), ingest_ms: ($ingest|n), ingest_wall_ms: ($wall|n),
      corpus_db_bytes: ($corpus|n), user_db_bytes: ($user|n), app_data_kib: ($app|n),
      cold_start_ms: [$c1, $c2, $c3 | n], cold_start_median_ms: ($median|n),
