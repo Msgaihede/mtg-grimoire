@@ -218,7 +218,8 @@ class Rewrite(Scratch):
         self.assertIn("symbol within-card top-1 0.931 after 12 epochs, 2 004 classes", line)
         self.assertIn("band within-card top-1 0.947 after 14 epochs, 108 000 classes", line)
         self.assertEqual(text.count("(training run `2026-12`)"), 4)
-        self.assertNotIn("2026-11", text)
+        # The run before is named nowhere; a date in the README's prose is not a run.
+        self.assertNotIn("run `2026-11`", text)
         # Below the table, above the paragraph that held it first.
         lines = text.split("\n")
         _, end = ur.find_table(lines)

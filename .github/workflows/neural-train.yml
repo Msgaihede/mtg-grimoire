@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       detector:
-        description: Retrain the corner detector too (off keeps the current detector.onnx)
+        description: Retrain the corner detector too, if the Volume holds readers' scenes (off, or none there, keeps the current detector.onnx)
         type: boolean
         default: true
       cpu:
@@ -163,7 +163,8 @@ jobs:
           if [ "$SMOKE" = true ]; then args+=(--smoke); fi
           python crates/card-neural/train/launch.py "${args[@]}" | tee launch.json
           call=$(tail -n 1 launch.json | jq -er .call_id)
-          if [ "$DETECTOR" = true ]; then nets="the embedder and the detector"; else nets="the embedder (the detector stays)"; fi
+          # The run itself keeps the detector when the Volume holds no readers' scenes (modal_app._detector_kept).
+          if [ "$DETECTOR" = true ]; then nets="the embedder, and the detector if the Volume holds readers' scenes (\`real-scenes/\`; it stays otherwise)"; else nets="the embedder (the detector stays)"; fi
           {
             echo "### Neural training: run \`$RUN\`"
             echo

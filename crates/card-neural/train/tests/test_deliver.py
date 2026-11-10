@@ -253,6 +253,20 @@ class Body(unittest.TestCase):
         self.assertIn("`detector.onnx` stays as it is", body)
         self.assertNotIn("detector: cards found", body)
 
+    def test_a_run_that_kept_the_detector_for_want_of_readers_scenes_says_so(self):
+        done = done_for(detector=False)
+        done["detector_kept"] = "no readers' scenes on the Volume"
+        body = deliver.pr_body(done, self.info, self.before, 70402)
+        self.assertIn("did not retrain the detector (no readers' scenes on the Volume)", body)
+        self.assertNotIn("--no-detector", body)
+
+    def test_a_retrained_detector_shows_what_readers_frames_said(self):
+        done = done_for()
+        done["metrics"]["detector"].update({"real_found": 0.99, "real_corner_err": 0.031, "real_empty_hit": 0.0})
+        body = deliver.pr_body(done, self.info, self.before, 70950)
+        self.assertIn("| detector: readers' cards found (higher is better) | 0.99 |", body)
+        self.assertIn("| detector: readers' empty frames a card was found in | 0 |", body)
+
     def test_a_smoke_run_is_marked_as_one(self):
         body = deliver.pr_body(done_for(run="2026-11-05-1200-smoke", smoke=True), self.info, self.before, 70950, tested=False)
         self.assertTrue(body.startswith("> **Smoke run**"))

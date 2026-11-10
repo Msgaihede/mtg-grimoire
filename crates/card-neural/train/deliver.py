@@ -404,6 +404,10 @@ def pr_body(done: dict, info: dict | None, before: dict, looks: int, fetch: dict
             f"| detector: corner error, 90th percentile | {ur.number(d.get('corner_err_p90'))} | {ur.number(old_dm.get('corner_err_p90'))} |",
             f"| detector: wrong way up (lower is better) | {ur.number(d.get('wrong_way'))} | {ur.number(old_dm.get('wrong_way'))} |",
             f"| detector: steps | {ur.number(d.get('steps'))} | {ur.number(old_dm.get('steps'))} |",
+            f"| detector: readers' cards found (higher is better) | {ur.number(d.get('real_found'))} | {ur.number(old_dm.get('real_found'))} |",
+            f"| detector: corner error on readers' frames | {ur.number(d.get('real_corner_err'))} | {ur.number(old_dm.get('real_corner_err'))} |",
+            f"| detector: readers' cards it drew the box for | {ur.number(d.get('real_container'))} | {ur.number(old_dm.get('real_container'))} |",
+            f"| detector: readers' empty frames a card was found in | {ur.number(d.get('real_empty_hit'))} | {ur.number(old_dm.get('real_empty_hit'))} |",
         ]
     for kind in ur.EVIDENCE:
         if kind in nets:
@@ -421,11 +425,12 @@ def pr_body(done: dict, info: dict | None, before: dict, looks: int, fetch: dict
         current.append(f"the {kind} network from run `{old.get('run', '?')}` ({old.get('where', '?')})")
     out += ["", f"The current files: {', '.join(current)}."]
     if "detector" not in nets:
-        out += ["This run did not retrain the detector (`--no-detector`), so `detector.onnx` stays as it is."]
+        why = done.get("detector_kept") or "`--no-detector`"
+        out += [f"This run did not retrain the detector ({why}), so `detector.onnx` stays as it is."]
     if not any(kind in nets for kind in ur.EVIDENCE):
         out += ["This run did not train the printing evidence, so `symbol.onnx`, `band.onnx` and their galleries stay as they are."]
     out += ["Retrieval top-1 is the embedder's check on held-out Scryfall scans; the detector's numbers are on "
-            "synthetic scenes; within-card top-1 asks, of camera-drawn crops of 1 000 cards with several printings, "
+            "synthetic scenes, and its readers' rows on the sent scans its training held out; within-card top-1 asks, of camera-drawn crops of 1 000 cards with several printings, "
             "whether the true printing's class is the best of that card's. None is a reader's camera — that is the "
             "replay below.", ""]
 

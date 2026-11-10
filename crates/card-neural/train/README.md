@@ -18,6 +18,12 @@ the shipped files, are suspect. **The exception is the budget's**: the set symbo
 12 epochs (the shipped file 16) and the collector band network 14 (the shipped file 20), so that
 the four trainings fit the owner's ~$9 a run (below, [The budget](#the-budget)).
 
+**The detector's recipe changed on 2026-11-10** (issue #1526; run `det-b`): its scenes gained what a
+reader's camera really sees, and readers' own frames are mixed in — [The readers'
+scenes](#the-readers-scenes). The first monthly run (2026-11) had remade the detector on the drawn
+scenes alone; it scored what the lab's had on drawn scenes and, on a reader's deck scanner, lost
+the card on one frame in five and jumped between the card and the box round it on the rest.
+
 ## The scripts
 
 | file                 | what it does                                                                                                             |
@@ -29,9 +35,10 @@ the four trainings fit the owner's ~$9 a run (below, [The budget](#the-budget)).
 | `qd_model.py`        | the embedder (timm `mobilenetv4_conv_small.e2400_r224_in1k` + `Linear(1280→128)`) and the ArcFace head                   |
 | `qd_train.py`        | trains the embedder: ArcFace over every look, 30 epochs                                                                  |
 | `qd_export.py`       | `embedder.onnx` and the gallery (`gallery.head.matrix` + `gallery.json`; with the clean-scan pass also `gallery.matrix`) |
-| `qd_detect_data.py`  | the detector's synthetic scenes and their CenterNet targets                                                              |
+| `qd_detect_data.py`  | the detector's synthetic scenes, readers' frames cut as the scanner cuts them, and their CenterNet targets               |
+| `real_scenes.py`     | readers' sent scans as detector scenes: the card's corners found by matching its Scryfall scan to each frame             |
 | `qd_detector.py`     | the detector (timm `mobilenetv3_small_075.lamb_in1k` + FPN-lite neck + 10-channel head) and its export                   |
-| `qd_detect_train.py` | trains the detector, 30 000 steps                                                                                        |
+| `qd_detect_train.py` | trains the detector, 30 000 steps, one scene in four a reader's frame when `--real` is given                             |
 | `ev_data.py`         | the evidence networks' classes (symbol: set, rarity, promo stamp; band: printing face), crops and training views         |
 | `ev_train.py`        | trains one evidence network (timm `mobilenetv3_small_075.lamb_in1k` body + 1×1 conv + `Linear(→64)`), ArcFace            |
 | `ev_export.py`       | `<kind>.onnx` and its gallery's rows (`<kind>s.matrix` + `<kind>s.json`), and the crop's `neural.json` entry             |
@@ -50,8 +57,11 @@ python looks.py <dataset dir>
 python qd_train.py <dataset dir> <run dir> [--epochs 30] [--batch 256] [--workers N] [--prefetch 2]
     [--lr 2e-3] [--head-lr 1e-2] [--margin 0.3] [--warmup 500] [--eval-every 3] [--eval-looks 3000] [--seed 0]
 python qd_export.py <dataset dir> <run dir>/last.pt <out dir> [--head-only] [--detector <detector.onnx>] [--workers 16]
+python real_scenes.py build <scan mirror> <dataset dir> <out dir> [--refs <dir>] [--after 20261016] [--val-every 4]
+    [--min-inliers 15]
 python qd_detect_train.py <dataset dir> <run dir> [--steps 30000] [--batch 64] [--workers N] [--prefetch 2]
     [--lr 2e-3] [--warmup 1000] [--eval-every 2500] [--eval-batches 24] [--corner-weight 1.0] [--flip-weight 0.5]
+    [--real <real scenes dir>] [--real-share 0.25] [--init <weights.pt>]
 python qd_detector.py export <run dir>/last.pt <out dir> [--meta <neural.meta.json>]
 python ev_train.py <dataset dir> <run dir> --kind symbol|band [--epochs 12|14] [--repeats 64|1] [--batch 256]
     [--workers N] [--prefetch 2] [--lr 2e-3] [--head-lr 1e-2] [--margin 0.3] [--dim 64] [--warmup 500]
@@ -123,6 +133,87 @@ minutes at 48 connections; the `*.scryfall.io` hosts have no rate limit, and the
 no file-system call a lookup). Fetching into a flat dataset moves nothing: a scan with no row in
 `fetched.jsonl` is taken as fetched from the URL the previous `index.jsonl` gave it (`adopted`),
 and a new or refreshed scan goes into its shard, where it is read before the flat file.
+
+## The readers' scenes
+
+**What went wrong without them.** Every scan a reader had sent by 2026-11-10 — 199 of them — was
+replayed through the lab's detector (`det-a`) and the first monthly run's (2026-11), and each
+frame's quad held against where the card really was (below): on the 69 scans of a card newer than
+the test set, both outlined **what holds the card** on a third of the frames — a deck scanner's
+white well, a deck box — the 2026-11 detector found nothing on 6 % more and switched between the
+card and the box from one frame to the next, and on a reader's empty mat, empty box or sheet of
+paper the first found "a card" on two frames in three and the second on every one. Nothing in a
+drawn scene had been a rectangle of a card's shape that was not a card; and nothing in the run's
+own scores is a reader's camera, so the two detectors scored alike there (found 0.993 both, corner
+error 2.8 % both). **With them** (`det-b`, the detector in `models/` since 2026-11-10): the quad
+is the card on every one of those frames, no empty frame has one, and the 124 test scans it never
+saw go from 108 printings right and one wrong card to 111 and none
+(`../models/README.md` has the table).
+
+**The scenes now hold what a camera sees** (`qd_detect_data.py`): a card at the bottom of a box
+(16 % of scenes), a feed between black bars — a phone used as a webcam sends its upright picture
+that way, and the picture is about a card's shape (14 % of whole-frame scenes) — a dark speckled
+mat (10 %), a sensor's grain (30 %), and scenes with **nothing to find** where the card would lie:
+an empty box, a blank sheet, a bare desk (6 %; half of the whole-frame ones keep the other cards
+of a spread, so about one scene in twenty has no card at all and every cell a negative). The label
+is still the card and never what is around it.
+
+**And readers' own frames, with their corners** (`real_scenes.py`). A sent scan names its card but
+not where it is, so the card's Scryfall scan is matched to each frame (SIFT, a ratio test, a RANSAC
+homography) and its corners carried over; a frame the match fails on is left out. On those 69
+scans it labelled 1 335 of 1 380 frames, a card at rest moving 0.1 % of its width from one frame
+to the next. A scan sent as _no card in the picture_ (six so far) is kept as frames with nothing
+to find — each frame that shows what the scan's last one does, since the last frame is the one its
+reader vouched for and a run reaches two seconds back (`like_last`; all 120 frames of the six).
+
+```bash
+D=/path/to/scryfall-default-cards
+python real_scenes.py build /path/to/.scanner-corpus $D /path/to/real-scenes --refs /path/to/extra-scans
+python qd_detect_train.py $D runs/det --real /path/to/real-scenes
+```
+
+- **The test set never trains**: scans received before 2026-10-16 (the 124 the replay scores every
+  scanner on, `docs/reference/card-scanner.md` §10) are left out, and `--after` refuses to reach
+  back past them. One scan in four of the rest, by a hash of its id, is held out (`split: "val"`)
+  and scored at every evaluation — `real_found`, `real_corner_err`, `real_container` (the share of
+  found cards whose quad is the box round the card: it shares the card's middle, so it counts as
+  found) and `real_empty_hit` (the share of frames sent as empty a card was found in) — so a run
+  says what it does on a reader's desk, not only on a drawn one. They are the same readers' desks
+  as the training's: a floor, not a proof.
+- **Never give `build` a folder it did not write**: it replaces `<out dir>` whole, and refuses one
+  that is not empty and holds no `scenes.jsonl`.
+- **How a frame is used** (`real_view`): cut the way the scanner's two passes cut a frame — whole,
+  or the second pass's box round the card, sometimes the far wider box that pass cuts when the
+  first took the box for the card; turned or cut upright for an upright input; and a third of the
+  time with **another card's Scryfall scan warped onto the quad**, so the desk, the box and the
+  light are the reader's and the card is any card. In a frame with a card only the card's own
+  surroundings are judged for the centre map: a pile's edge or a neighbour nobody labelled must
+  not be taught as background. A frame sent as empty is background everywhere.
+- **`--refs`**: a printing newer than the dataset has no scan in it; put `<printing id>.jpg` (its
+  Scryfall `normal` image) there. A card with no reference is reported and left out.
+- **It holds readers' photographs** — the folder is frames copied from the mirror. **Never in
+  git.** `build` writes it anew every time, so a scan removed for a deletion request
+  (`pnpm scanner:corpus remove`) is gone from the next build: **rebuild after every removal, and
+  copy the new folder over wherever the old one went.**
+
+**On Modal**, the pipeline trains a detector only when the Volume holds the folder as
+`real-scenes/` (`modal_app.REAL`), and otherwise keeps the current `detector.onnx` and says so in
+`DONE.json` (`detector_kept`) and the pull request. The owner puts it there, from a terminal of
+their own:
+
+```bash
+modal volume put card-neural /path/to/real-scenes /real-scenes --force
+```
+
+⚠️ **The privacy policy says where these copies are** (`apps/light/public/privacy.html`, _Sending
+a scan_, since 2026-11-10, the owner's decision): on the maker's own computer and on Modal, the
+pictures with the scan's reference and where the card lies, and nothing else of what was sent.
+**That is all the folder may hold** — a field added to `scenes.jsonl` that says what the card is,
+or anything of the label, is a sentence owed there first. And a deletion request has those copies
+to reach: `pnpm scanner:corpus remove`, then rebuild, and `modal volume rm -r card-neural
+/real-scenes` before putting the new folder. **A detector is no reason for a monthly run** — which card it is does not
+matter to it, so new printings change nothing — and one trained without readers' frames is what
+issue #1526 was.
 
 ## A run directory
 
@@ -206,21 +297,25 @@ neural-train → Run workflow_ (run `YYYY-MM-DD-HHMM`, UTC, with `-smoke` after 
 
 | input        | default | what it does                                                                             |
 | ------------ | ------- | ---------------------------------------------------------------------------------------- |
-| `detector`   | on      | off keeps the current `detector.onnx`; the embedder and the evidence networks retrain    |
+| `detector`   | on      | retrains it if the Volume holds readers' scenes; off, or none there, keeps the current   |
 | `cpu`        | 16      | physical cores for each training container, 1 to 64                                      |
 | `memory_gib` | 24      | GiB for each training container, 4 to 256                                                |
 | `budget_usd` | 15      | the run's limit in dollars; more than 15 is refused before anything is deployed          |
 | `smoke`      | off     | one epoch and 300 detector steps, for cents: proves the plumbing, and is never delivered |
 
-With `detector` off the three other trainings share the budget in the same proportions.
+With `detector` off — or on, on a Volume with no `real-scenes/` (["The readers'
+scenes"](#the-readers-scenes)) — the three other trainings share the budget in the same
+proportions, and the run's `DONE.json` and pull request say the detector was kept and why.
 
 It deploys `modal_app.py` from the commit it runs on (`modal deploy`, the client pinned in
 `requirements-ci.txt`), spawns `pipeline` through `launch.py` and returns at once; the four
 trainings run at once, the run takes about an hour and a half on Modal, ~$8.65 at the defaults
 ([The budget](#the-budget)), and `budget.py` holds it to its budget. A run fails, and is not
 delivered, under `modal_app.FLOORS`: the embedder's retrieval top-1 0.99, the detector's found
-0.98, corner error 0.04 and wrong way 0.01, and within-card top-1 0.83 (symbol) and 0.85 (band),
-~90 % of the shipped runs' 0.927 and 0.946.
+0.975, corner error 0.04 and wrong way 0.01 on drawn scenes and — on the readers' scans its
+training holds out — found 0.97, corner error 0.05, the box drawn for at most 3 % of the cards
+and a card in at most 10 % of the frames sent as empty, and within-card top-1 0.83 (symbol) and
+0.85 (band), ~90 % of the shipped runs' 0.927 and 0.946.
 
 **Delivery** — every six hours, or _Run workflow_ with `run` set to one run's name. `deliver.py`
 finds a run whose `DONE.json` says `ok` and that has no `DELIVERED.json`, the oldest first, and in
