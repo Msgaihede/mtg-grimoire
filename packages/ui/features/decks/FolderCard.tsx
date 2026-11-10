@@ -16,7 +16,7 @@
  * frame and face, none of the drags, the rename or the menu.
  */
 import { useEffect, useRef, useState } from "react";
-import type { MouseEventHandler, ReactNode } from "react";
+import type { MouseEventHandler, ReactNode, RefObject } from "react";
 import { Check, Folder, FolderUp, MoreHorizontal, Pencil, X } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { FolderDropLine } from "@/components/FolderDropLine";
@@ -490,6 +490,7 @@ export function FolderCard({
   onStartRename,
   rename,
   rowMenu,
+  menuOpenerRef,
 }: {
   node: FolderNode;
   members: readonly DeckRow[];
@@ -576,6 +577,13 @@ export function FolderCard({
     onCancel: () => void;
   };
   rowMenu: (folder: FolderNode["folder"]) => FolderCardMenu;
+  /**
+   * Where this card writes the button its menu was opened from, before the menu opens — the deck
+   * tile's and the tree row's arrangement, sharing `DecksPage`'s one ref. The page reads it when a
+   * row is chosen, to hand the caret back; a card that never wrote it sent the caret to whatever
+   * opened the *previous* menu, or to `<body>` (issue #1546).
+   */
+  menuOpenerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const ref = useRef<HTMLLIElement>(null);
   const folderRef = useRef<HTMLDivElement>(null);
@@ -673,8 +681,14 @@ export function FolderCard({
               // WCAG 2.5.3, and the reason the count is not spliced into the middle of the name.
               aria-label={`${node.folder.name} folder, ${plural(node.count, "deck")}`}
               onClick={() => onOpen(node.folder.id)}
-              onContextMenu={menu.onContextMenu}
-              onKeyDown={menu.onKeyDown}
+              onContextMenu={(e) => {
+                menuOpenerRef.current = e.currentTarget;
+                menu.onContextMenu(e);
+              }}
+              onKeyDown={(e) => {
+                menuOpenerRef.current = e.currentTarget;
+                menu.onKeyDown(e);
+              }}
               className={cn(
                 // The frame, and it is a deck tile's: the same border, the same radius, the same
                 // surface under it. `relative` is load-bearing rather than tidy — the crops and
@@ -738,7 +752,10 @@ export function FolderCard({
                 aria-label={`Manage ${node.folder.name}`}
                 aria-haspopup="menu"
                 {...tip("Folder actions", { describes: false })}
-                onClick={menu.onClick}
+                onClick={(e) => {
+                  menuOpenerRef.current = e.currentTarget;
+                  menu.onClick(e);
+                }}
                 className={TRAY_BUTTON}
               >
                 <MoreHorizontal className={TRAY_ICON} aria-hidden="true" />

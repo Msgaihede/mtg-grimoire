@@ -1782,6 +1782,10 @@ export function DecksPage() {
                 {panel?.kind === "deleteFolder" && (
                   <DeleteFolderConfirm
                     node={openNode}
+                    // Every deck in the subtree, archived ones included — the count the receipt
+                    // below states and the backend moves. `node.count` skips archived decks, so a
+                    // folder holding only those said "It's empty." and then moved them (#1546).
+                    decks={decksUnder(openNode, decks.decks, folderOf).length}
                     pending={folders.remove.isPending}
                     onConfirm={() => {
                       // Destructive, and the wall it was asked over is gone with it — so a
@@ -2103,6 +2107,7 @@ export function DecksPage() {
                   // drawings of one folder cannot come to two sets of verbs. What differs is the
                   // `⋯`'s door, which only a card draws, and where a rename asked here stands.
                   rowMenu={folderCardMenu}
+                  menuOpenerRef={menuOpenerRef}
                 />
               ))}
               {shown.map((deck) => (
@@ -2589,12 +2594,16 @@ function DeckFilterRow({
  */
 function DeleteFolderConfirm({
   node,
+  decks,
   pending,
   onConfirm,
   onCancel,
   onClose,
 }: {
   node: FolderNode;
+  /** How many decks the delete moves to the top level: every one under the folder, archived
+   *  included — not `node.count`, which counts only what the wall draws. */
+  decks: number;
   pending: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -2628,9 +2637,7 @@ function DeleteFolderConfirm({
     >
       <p>Delete “{node.folder.name}”?</p>
       <p className="mt-1 leading-relaxed text-dim">
-        {node.count === 0
-          ? "It's empty."
-          : `Its ${plural(node.count, "deck")} will move to the top level.`}
+        {decks === 0 ? "It's empty." : `Its ${plural(decks, "deck")} will move to the top level.`}
         {inside > 0 &&
           ` ${plural(inside, "folder")} inside it will also be deleted.`}
       </p>
