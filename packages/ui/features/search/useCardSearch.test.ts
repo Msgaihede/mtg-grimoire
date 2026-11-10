@@ -1918,6 +1918,23 @@ describe("useCardSearch, reading typed predicates out of the box", () => {
     await waitFor(() => expect(lastSearchRequest().predicates).toBeUndefined());
   });
 
+  /** Issue #1565: a doubled or leading space before the first term shifted its span once the
+   *  later one was taken out, and the ✕ left a stray `c` as free text. */
+  it.each([
+    ["bolt  cmc>=3 mv>=3", "bolt"],
+    [" cmc>=3 mv>=3", ""],
+  ])("removes every term behind a chip from %j however it is spaced", async (input, expected) => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText(input));
+    await waitFor(() => expect(result.current.predicateChips.length).toBe(1));
+
+    act(() => result.current.removePredicateChip("cmc|gte|3"));
+
+    expect(result.current.text).toBe(expected);
+  });
+
   /** The include/exclude press rewrites each term where it stands rather than moving it to the
    *  end of the reader's own sentence. */
   it("flips a chip by writing the dash into the box", async () => {

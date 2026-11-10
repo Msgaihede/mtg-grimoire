@@ -7,7 +7,9 @@ import {
   QUERY_KEYWORDS,
   QUERY_SECTIONS,
   removeToken,
+  removeTokens,
   setTokenNegated,
+  setTokenValue,
   tokenKey,
   wirePredicate,
   type PredicateToken,
@@ -121,6 +123,54 @@ describe("removeToken", () => {
     const input = "atag:dog otag:ramp atag:dog";
     const second = parseQuery(input).tags[2];
     expect(removeToken(input, second)).toBe("atag:dog otag:ramp");
+  });
+});
+
+describe("removeTokens", () => {
+  const cmc = (input: string): PredicateToken[] => parseQuery(input).predicates;
+
+  // Issue #1565: folding `removeToken` right to left collapsed the spaces before an earlier
+  // term and shifted its span, leaving a stray `c` behind.
+  it.each([
+    ["bolt  cmc>=3 mv>=3", "bolt"],
+    [" cmc>=3 mv>=3", ""],
+    ["  cmc>=3   bolt  mv>=3 ", "bolt"],
+  ])("takes every term out of %j however it is spaced", (input, expected) => {
+    expect(removeTokens(input, cmc(input))).toBe(expected);
+  });
+
+  it("does not care which order the spans arrive in", () => {
+    const input = "bolt  cmc>=3 x mv>=3";
+    expect(removeTokens(input, cmc(input))).toBe("bolt x");
+    expect(removeTokens(input, [...cmc(input)].reverse())).toBe("bolt x");
+  });
+});
+
+describe("setTokenValue", () => {
+  const only = (input: string): TagToken => parseQuery(input).tags[0];
+
+  it("keeps the keyword and replaces the value", () => {
+    const input = "bolt -atag:dogg x";
+    expect(setTokenValue(input, only(input), "dog")).toBe("bolt -atag:dog x");
+  });
+
+  it("quotes a value with a space in it", () => {
+    const input = "otag:spot";
+    expect(setTokenValue(input, only(input), "spot removal")).toBe('otag:"spot removal"');
+  });
+
+  // Issue #1565: a lone child of a parenthesised group carries the group's span, and the keyword
+  // was looked for at the `(` — so the whole group became the bare value.
+  it.each([
+    ["(otag:remov", "(otag:removal"],
+    ["(otag:remov)", "(otag:removal)"],
+    ["-(otag:remov)", "-(otag:removal)"],
+    ["(otag:remov or ", "(otag:removal or "],
+    ["(otag:remov t:", "(otag:removal t:"],
+    ["bolt ((-otag:remov))", "bolt ((-otag:removal))"],
+    ["(otag:remov t:elf)", "(otag:removal t:elf)"],
+  ])("edits only the value inside %j", (input, expected) => {
+    expect(setTokenValue(input, only(input), "removal")).toBe(expected);
   });
 });
 
