@@ -51,6 +51,14 @@ export interface CsvRecord {
   /** The row's text exactly as it arrived — quotes, delimiters and all, line break excluded —
    *  so a preview can quote the reader's own file back to them rather than a re-joined guess. */
   raw: string;
+  /**
+   * `true` when a quote opened in this row is **never closed** before the file ends (issue
+   * #1553). Read strictly, everything from that quote to the end of the file is one cell, and
+   * every row after it would vanish into it with nothing said. The scanner instead takes that
+   * quote as a literal character and reads on, so the rows after it come back as rows — and this
+   * flag is how the row that carried it reaches the preview as an issue rather than as a card.
+   */
+  unterminated?: true;
 }
 
 /** A whole CSV, read: the separator it turned out to use, and its rows. */
@@ -74,6 +82,13 @@ function scan(text: string, delimiter: string, from: number, firstLine: number):
   let line = firstLine;
   let start = from;
   let startLine = firstLine;
+  // Where the open quote is and what was in hand when it opened — everything needed to go back
+  // and read it as a literal character if the file ends before it closes (issue #1553).
+  let opened: { at: number; line: number; row: string[]; field: string } | null = null;
+  // Quotes this scan has already taken as literal, because each of them was never closed.
+  const literal = new Set<number>();
+  // Whether the row in hand carried one of those, which is what flags it `unterminated`.
+  let rowUnterminated = false;
 
   const endField = () => {
     row.push(field);
@@ -81,11 +96,29 @@ function scan(text: string, delimiter: string, from: number, firstLine: number):
   };
   const endRow = (end: number) => {
     endField();
-    records.push({ cells: row, line: startLine, raw: text.slice(start, end) });
+    const record: CsvRecord = { cells: row, line: startLine, raw: text.slice(start, end) };
+    if (rowUnterminated) record.unterminated = true;
+    records.push(record);
     row = [];
+    rowUnterminated = false;
   };
 
-  while (i < text.length) {
+  for (;;) {
+    if (i >= text.length) {
+      if (!quoted || opened === null) break;
+      // The file ended inside a quoted cell. Strictly that cell is the rest of the file — and
+      // every row below the quote is gone into it, silently. Back to the quote instead, which
+      // is read as a literal this time, and on from there: the rows after it are rows again,
+      // and the row it sat in says, through `unterminated`, that it was malformed.
+      literal.add(opened.at);
+      i = opened.at;
+      line = opened.line;
+      row = opened.row;
+      field = opened.field;
+      quoted = false;
+      opened = null;
+      continue;
+    }
     const ch = text[i];
     if (quoted) {
       if (ch === '"') {
@@ -96,6 +129,7 @@ function scan(text: string, delimiter: string, from: number, firstLine: number):
           continue;
         }
         quoted = false;
+        opened = null;
         i += 1;
         continue;
       }
@@ -106,11 +140,17 @@ function scan(text: string, delimiter: string, from: number, firstLine: number):
       i += 1;
       continue;
     }
-    if (ch === '"') {
+    // A quote opens a quoted cell **only at the start of one** (issue #1553) — blanks before it
+    // allowed, which is what `1, "Aragorn, the Uniter"` has always relied on. Anywhere else it is
+    // a character of the cell: `7" playmat promo` is a note about a seven-inch playmat, and
+    // reading its quote as an opening one put every row below it into that note.
+    if (ch === '"' && field.trim() === "" && !literal.has(i)) {
+      opened = { at: i, line, row: [...row], field };
       quoted = true;
       i += 1;
       continue;
     }
+    if (ch === '"' && literal.has(i)) rowUnterminated = true;
     if (ch === delimiter) {
       endField();
       i += 1;
@@ -170,16 +210,27 @@ function detectDelimiter(text: string, from: number): CsvDelimiter {
   let semicolons = 0;
   let tabs = 0;
   let quoted = false;
+  // Whether the cell in hand is still blank — the scanner's rule for when a quote opens one
+  // (issue #1553), so `7" playmat` is no more a quoted cell here than it is there.
+  let blank = true;
   for (let i = from; i < text.length; i += 1) {
     const ch = text[i];
     // A doubled quote toggles twice, which is the same as not toggling — so `""` inside a quoted
     // cell needs no rule of its own here.
-    if (ch === '"') quoted = !quoted;
-    else if (quoted) continue;
+    if (quoted) {
+      if (ch === '"') quoted = false;
+      continue;
+    }
+    if (ch === '"' && blank) quoted = true;
     else if (ch === "\r" || ch === "\n") break;
-    else if (ch === ",") commas += 1;
-    else if (ch === ";") semicolons += 1;
-    else if (ch === "\t") tabs += 1;
+    else if (ch === "," || ch === ";" || ch === "\t") {
+      if (ch === ",") commas += 1;
+      else if (ch === ";") semicolons += 1;
+      else tabs += 1;
+      blank = true;
+      continue;
+    }
+    if (ch !== " " && ch !== '"') blank = false;
   }
   if (semicolons > commas && semicolons >= tabs) return ";";
   if (tabs > commas && tabs > semicolons) return "\t";

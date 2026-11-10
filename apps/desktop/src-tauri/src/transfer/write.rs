@@ -197,6 +197,7 @@ fn write_line(card: &Card, fields: &[FieldId], spec: LineSpec) -> String {
         format!("{}{}", card.quantity, spec.quantity_suffix),
         card.name.clone(),
     ];
+    let mut set_written = false;
     if fields.contains(&FieldId::SetCode) {
         if let Some(code) = card.set_code.as_deref().filter(|s| !s.is_empty()) {
             let set = match spec.set_case {
@@ -207,13 +208,17 @@ fn write_line(card: &Card, fields: &[FieldId], spec: LineSpec) -> String {
                 SetWrap::Brackets => format!("[{set}]"),
                 SetWrap::Parens => format!("({set})"),
             });
+            set_written = true;
         }
     }
+    // Only behind a set that was written (issue #1553): a number with no `(SET)` in front of it
+    // reads back as part of the card's name, so no set on the line means no number on it.
+    //
     // Absence and not emptiness, exactly as TypeScript spells it: an empty collector number is
     // still a collector number the card claims to have, and it writes the trailing space that
     // says so. Nothing in the corpus carries one; the asymmetry with the set code above is the
     // port being faithful rather than tidy.
-    if fields.contains(&FieldId::CollectorNumber) {
+    if set_written && fields.contains(&FieldId::CollectorNumber) {
         if let Some(number) = card.collector_number.as_deref() {
             parts.push(number.to_string());
         }
@@ -1104,10 +1109,11 @@ mod tests {
     }
 
     /// An empty set code is not a set code — the wishlist really holds one, from an exporter
-    /// that had a collector number and no set and wrote the parentheses anyway. The number
-    /// survives; the brackets do not.
+    /// that had a collector number and no set and wrote the parentheses anyway. Neither the
+    /// brackets nor the number are written: a bare `76` after the name would read back as part
+    /// of it (issue #1553).
     #[test]
-    fn an_empty_set_code_writes_no_printing_hint_but_keeps_the_collector_number() {
+    fn an_empty_set_code_writes_no_printing_hint_and_no_collector_number() {
         let card = Card {
             set_code: Some(String::new()),
             collector_number: Some("76".into()),
@@ -1121,7 +1127,7 @@ mod tests {
         ];
         assert_eq!(
             format_export(&[card], Format::Tcgplayer, &fields),
-            "1 Lightning Bolt 76\n"
+            "1 Lightning Bolt\n"
         );
     }
 }
