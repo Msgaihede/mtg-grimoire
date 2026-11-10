@@ -83,7 +83,7 @@ import { parseEntryTags } from "@/features/entryTags/entryTags";
 import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { sweep } from "@/features/transfer/export/scope";
 import { MENU_CONDITION } from "@/lib/conditions";
-import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import { listedFinish, parseFinishes, recordableFinishes, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
@@ -924,6 +924,21 @@ function Body({
    */
   const paneFinish = useAppStore((s) => s.paneFinish);
   /**
+   * {@link paneFinish} **as a fact about the printing now open** — the seed where this printing
+   * was made in that finish, and `null` where it was not (issue #1561).
+   *
+   * `viewPrinting` keeps `paneFinish` across a step to another printing on purpose: it is a view
+   * seed, and a foil tile browsed to another printing that also has a foil should still open on
+   * the foil. But three readers below treat it as *this copy's* finish — the rail's link and the
+   * art's menu ({@link railFinish}), and which rows `Edit` offers ({@link editableRows}) — and a
+   * foil tile stepped to a nonfoil-only printing then added a foil copy of cardboard that does not
+   * exist, opened `?Printing=Foil`, and hid `Edit` from the reader's own plain copy. Every reader
+   * of the seed as a fact goes through this; only the copy being edited reads the raw field,
+   * because `editCopy` writes *that copy's* finish there and a copy's move refuses a printing
+   * without it (`finishRefusal`).
+   */
+  const openedFinish = listedFinish(paneFinish, card?.finishes ?? null);
+  /**
    * The finish the reader asked to **look at**, or `null` while they have asked for nothing.
    *
    * `View as foil` is `CardModalArt`'s own state and the picture changes there; this is the host
@@ -985,7 +1000,14 @@ function Body({
    * one**, which is the same distinction stated from the other end: the press converts to
    * `"nonfoil"` above, so it beats a foil tile's `paneFinish` instead of falling through to it.
    */
-  const railFinish = viewedFinish ?? paneFinish ?? scope.deck?.finish ?? null;
+  const railFinish = viewedFinish ?? openedFinish ?? scope.deck?.finish ?? null;
+  /**
+   * The finish a press that adds a copy files — `Add to collection` and the owned stepper's first
+   * `+`, which are the same press as the art menu's `Add to → Collection` and so file the same
+   * finish: {@link railFinish}, the copy on screen, else the most ordinary finish the printing is
+   * actually sold in. Never an assumed `nonfoil` — a foil+etched printing has none (issue #1561).
+   */
+  const collectFinish: Finish = railFinish ?? recordableFinishes(card?.finishes ?? null)[0];
   const { deps } = useCardMenuDeps();
   const addToDeck = useOptionalAddCardToDeck();
 
@@ -1235,14 +1257,16 @@ function Body({
    *
    * A foil tile and a regular tile of one printing are two tiles on the wall, so a press on the
    * foil one is about the foil copies and must not offer to edit the regular ones. A card opened
-   * from the table names no finish (`paneFinish` is `null`), and then every row of the printing
-   * is a candidate. More than one is common rather than rare — the folder is part of the grain,
-   * so the same printing in two drawers is two rows — which is why `Edit` becomes a picker then
-   * rather than choosing for the reader.
+   * from the table names no finish ({@link openedFinish} is `null`), and then every row of the
+   * printing is a candidate — as is a tile's finish this printing was never made in, which is a
+   * seed carried over from another printing rather than a statement about this one (issue
+   * #1561). More than one is common rather than rare — the folder is part of the grain, so the
+   * same printing in two drawers is two rows — which is why `Edit` becomes a picker then rather
+   * than choosing for the reader.
    */
   const editableRows = useMemo(
-    () => ownedRows.filter((row) => paneFinish === null || row.finish === paneFinish),
-    [ownedRows, paneFinish],
+    () => ownedRows.filter((row) => openedFinish === null || row.finish === openedFinish),
+    [ownedRows, openedFinish],
   );
   /**
    * The row being edited, or `null` — looked up by id alone and not among {@link ownedRows}, so a
@@ -1505,8 +1529,7 @@ function Body({
         : { onSuccess: () => leaveRemovedCard(departure.leaving, departure.to) };
     const press = { cardId, oracleId, quantity: next };
     if (scope.quantity === "owned") {
-      const finish = soleFinish(card?.finishes ?? null) ?? "nonfoil";
-      setOwned.mutate({ ...press, finish }, moveOn);
+      setOwned.mutate({ ...press, finish: collectFinish }, moveOn);
     } else setWished.mutate(press, moveOn);
   };
 
@@ -2001,7 +2024,9 @@ function Body({
                 // The other half of that seed, and the half a deck row cannot supply: a
                 // collection tile that *is* a foil, or the deck editor's search panel, writes
                 // `paneFinish` when it opens the card. Without it a foil tile opened plain.
-                openedAs={paneFinish}
+                // Through `openedFinish`, so a seed the open printing was never made in seeds
+                // nothing rather than the toggle (issue #1561).
+                openedAs={openedFinish}
                 // **The press is a view change everywhere and a write only where there is a row**,
                 // which is exactly what the column's own `onToggleFoil` doc says it hands over —
                 // and this handler used to act on the second half alone. So on the collection and
@@ -2371,10 +2396,10 @@ function Body({
                   target !== null &&
                   deps.addToCollection(
                     target,
-                    // What the cardboard *is* where the printing has one answer, and the plain copy
-                    // otherwise. `soleFinish` speaks only for a printing with a single finish, which
-                    // is the one case a single press can be sure about.
-                    soleFinish(card?.finishes ?? null) ?? "nonfoil",
+                    // The copy on screen, else the most ordinary finish this printing is sold in —
+                    // the same finish the art menu's `Add to → Collection` files. See
+                    // `collectFinish`.
+                    collectFinish,
                     null,
                   )
                 }

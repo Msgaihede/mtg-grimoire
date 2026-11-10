@@ -2200,6 +2200,7 @@ it("asks which copy to edit when the printing is held in more than one row", asy
 
 it("offers to edit only the rows at the finish the tile named", async () => {
   // A foil tile and a regular tile are two tiles; the foil one must not offer the regular copy.
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
   collectionList.mockResolvedValue({
     items: [copyRow(42), copyRow(43, { finish: "foil" })],
     total: 2,
@@ -2244,4 +2245,69 @@ it("draws no Edit off the collection's own surface", async () => {
   renderModal("c1");
   await screen.findByRole("button", { name: "Add to collection" });
   expect(screen.queryByRole("button", { name: /^edit/i })).toBeNull();
+});
+
+/**
+ * Issue #1561 — **`paneFinish` is a view seed, and `viewPrinting` keeps it across a step on
+ * purpose**, so a foil tile browsed to a printing never made in foil must not act as a foil copy
+ * of it: not in the link, not in the menu's add, and not in which rows `Edit` offers.
+ */
+it("drops a foil tile's finish on a step to a printing never made in foil", async () => {
+  const foiled = { ...detail, finishes: '["nonfoil","foil"]' };
+  const plainOnly = { ...detail, id: "c2", setCode: "leb", finishes: '["nonfoil"]' };
+  cardDetail.mockImplementation((id: string) => Promise.resolve(id === "c2" ? plainOnly : foiled));
+  collectionList.mockResolvedValue({
+    items: [copyRow(43, { finish: "foil" }), copyRow(44, { cardId: "c2" })],
+    total: 2,
+  });
+  renderFromCollection("foil");
+  await screen.findByRole("button", { name: "View as nonfoil" });
+
+  act(() => useAppStore.getState().viewPrinting("c2"));
+  await screen.findByRole("button", { name: "No foil" });
+  // The seed is kept in the store — it is the readers that must not take it as a fact.
+  expect(useAppStore.getState().paneFinish).toBe("foil");
+
+  // The reader's plain copy of the printing on screen is editable…
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  await waitFor(() => expect(useAppStore.getState().paneCopy).toEqual({ entryId: 44 }));
+  await userEvent.click(screen.getByRole("button", { name: "Done editing" }));
+
+  // …and the link shops for the copy that exists.
+  await userEvent.click(await screen.findByRole("button", { name: "Open on TCGplayer" }));
+  await waitFor(() =>
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.tcgplayer.com/product/1174?Printing=Normal",
+    ),
+  );
+});
+
+it("files a foil+etched printing's added copy as foil, never an assumed nonfoil", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["foil","etched"]' });
+  renderModal("c1");
+
+  await userEvent.click(await screen.findByRole("button", { name: "Add to collection" }));
+
+  await waitFor(() =>
+    expect(collectionAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", finish: "foil" }),
+    ),
+  );
+  expect(collectionAdd).not.toHaveBeenCalledWith(expect.objectContaining({ finish: "nonfoil" }));
+});
+
+it("steps a foil+etched printing's first copy in as foil from the owned stepper", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["foil","etched"]' });
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+
+  await userEvent.click(
+    await screen.findByRole("button", { name: /increase copies of lightning bolt you own/i }),
+  );
+
+  await waitFor(() =>
+    expect(collectionAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", finish: "foil", quantity: 1 }),
+    ),
+  );
 });

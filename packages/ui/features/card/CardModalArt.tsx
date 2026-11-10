@@ -73,10 +73,17 @@ const TURNED_CARD_ASPECT = CARD_ASPECT.split("/")
  * is `DeckFinish` rather than `Finish | null` because the two arms answer `foil` and `etched` and
  * nothing else, which is exactly `deck_cards.finish`'s vocabulary, so the toggle can ask for what
  * it shows without a cast.
+ *
+ * **`own` is the copy's own shiny finish, and it wins wherever the printing lists it** (issue
+ * #1561). A printing sold nonfoil, foil *and* etched has two shiny answers, and "foil if listed"
+ * drew an etched deck row as Foil and turned it into foil on a `Set as regular` → `Set as foil`
+ * round trip. The row (or the tile that opened the card) says which one this copy is, so the
+ * toggle is about that one; with nothing said, foil is still the default.
  */
-function foilViewFinish(finishesJson: string | null): DeckFinish {
+function foilViewFinish(finishesJson: string | null, own: Finish | null = null): DeckFinish {
   const finishes = parseFinishes(finishesJson);
   if (!finishes.includes("nonfoil")) return null;
+  if ((own === "foil" || own === "etched") && finishes.includes(own)) return own;
   if (finishes.includes("foil")) return "foil";
   if (finishes.includes("etched")) return "etched";
   return null;
@@ -219,7 +226,15 @@ export function CardModalArt({
   const tip = useTooltip();
   const sides = faceCount(card.layout, card.faces.length);
   const finishes = parseFinishes(card.finishes);
-  const foilable = foilViewFinish(card.finishes);
+  /**
+   * The shiny finish this copy was opened as — the deck row's, else the one the opening surface
+   * named — **held from mount** rather than re-read, because the toggle's own write changes it:
+   * `Set as regular` re-reads the row as `null`, and a toggle re-derived from that would offer
+   * `Set as foil` to an etched copy the reader had only just set regular. The column is keyed on
+   * the card, so a step to another printing seeds afresh.
+   */
+  const [ownShiny] = useState<Finish | null>(() => deckRow?.finish ?? openedAs);
+  const foilable = foilViewFinish(card.finishes, ownShiny);
 
   /**
    * This printing is sold **only** as a regular card — what the greyed control states, and
