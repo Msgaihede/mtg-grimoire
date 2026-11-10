@@ -17,7 +17,7 @@ import { useContextMenu, useMenuOpener } from "@/components/menu/useContextMenu"
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useDndDragging } from "@/lib/dndTarget";
 import { DOCKED_BAR_CLEARANCE_PX } from "@/lib/dockedBar";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, blurLeftTheWindow } from "@/lib/focus";
 import type { CardSummary, DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
@@ -374,7 +374,7 @@ export function DeckHeaderBar({
                 // reader to a caret on `<body>`. A blur with no `relatedTarget` in a document
                 // that no longer has focus is that case and only that case — a press anywhere
                 // inside the window keeps the document focused.
-                if (e.relatedTarget === null && !document.hasFocus()) return;
+                if (blurLeftTheWindow(e)) return;
                 setCaretHolds(false);
               }}
               className="flex h-full items-center gap-2"
