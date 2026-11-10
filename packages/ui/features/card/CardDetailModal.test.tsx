@@ -1071,6 +1071,48 @@ it("keeps the wishlist rows on the wishlist surface, where its own stepper write
 });
 
 /**
+ * **Issue #1560: an any-printing wish is the row behind the printing its tile is drawn as.**
+ *
+ * The wall opens such a wish as its `artCardId`, and its own `cardId` is `null` — matched on
+ * `cardId` alone, the stepper read 0 and `+` added a second, pinned wish beside it.
+ */
+it("steps an any-printing wish opened as the printing it is drawn as", async () => {
+  wishlistList.mockResolvedValue({
+    items: [{ id: 7, cardId: null, oracleId: "o1", artCardId: "c1", quantity: 3, tags: "" }],
+    total: 1,
+  });
+  useAppStore.setState({ activeView: "wishlist" });
+  renderModal("c1");
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt on your wishlist/i,
+  });
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(3));
+
+  await userEvent.click(up);
+  await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 4));
+  expect(wishlistAdd).not.toHaveBeenCalled();
+});
+
+it("leaves an any-printing wish out of another printing's stepper", async () => {
+  wishlistList.mockResolvedValue({
+    items: [
+      { id: 7, cardId: null, oracleId: "o1", artCardId: "c2", quantity: 3, tags: "" },
+      { id: 8, cardId: "c1", oracleId: "o1", artCardId: "c1", quantity: 1, tags: "" },
+    ],
+    total: 2,
+  });
+  useAppStore.setState({ activeView: "wishlist" });
+  renderModal("c1");
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt on your wishlist/i,
+  });
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(1));
+
+  await userEvent.click(up);
+  await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(8, 2));
+});
+
+/**
  * **Issue #1167: quick presses on the owned stepper must not lose increments or add twice.**
  *
  * Both commands take an *absolute* quantity computed from the number the stepper draws. Drawn off
