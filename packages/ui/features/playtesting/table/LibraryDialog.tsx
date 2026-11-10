@@ -29,6 +29,11 @@ import type { Pointed, ZoneLook } from "./types";
  * go and the search's Shuffle is gone. The board never opens the library this way: with the
  * sandbox off a library is not looked through at all.
  *
+ * **`disabled` holds the buttons while a move is with the engine** (issue #1590): the board
+ * keeps the dialog mounted across the wait, so `moved` and the search's text survive it, and
+ * greys every card's places, Cast and Shuffle — the cards drawn are the view before the move,
+ * and their ids may no longer be where the buttons say. Done still closes it.
+ *
  * **`opponent` is a look at another player's zone** — an opponent's graveyard or exile, named as
  * theirs (`owner`). It offers what the reader's own does (issue #1521): with the sandbox's moves
  * working each card carries the same places, and the engine puts it in its owner's zones (their
@@ -52,6 +57,7 @@ export function LibraryDialog({
   onAct,
   onClose,
   readOnly = false,
+  disabled = false,
   opponent = false,
   owner = "The opponent's",
   onPoint,
@@ -62,6 +68,8 @@ export function LibraryDialog({
   onAct: (a: PlaytestAction) => void;
   onClose: () => void;
   readOnly?: boolean;
+  /** A move is with the engine: the buttons are drawn but take nothing until it answers. */
+  disabled?: boolean;
   opponent?: boolean;
   /** Whose zone an `opponent` look is, as its title starts: "Opponent 2's" at a four-player
    *  table. */
@@ -175,6 +183,7 @@ export function LibraryDialog({
                     {card.castable && (
                       <button
                         type="button"
+                        disabled={disabled}
                         onClick={() => {
                           onAct({ type: "play", id: card.id });
                           onClose();
@@ -184,6 +193,7 @@ export function LibraryDialog({
                           "transition-colors motion-reduce:transition-none hover:bg-accent hover:text-accent-fg",
                           PRESS,
                           FOCUS,
+                          HELD,
                         )}
                       >
                         Cast
@@ -193,12 +203,14 @@ export function LibraryDialog({
                       <button
                         key={to}
                         type="button"
+                        disabled={disabled}
                         onClick={() => send(card, to)}
                         className={cn(
                           "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
                           "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
                           PRESS,
                           FOCUS,
+                          HELD,
                         )}
                       >
                         {label}
@@ -216,10 +228,11 @@ export function LibraryDialog({
         {searching && !readOnly && !opponent && (
           <button
             type="button"
+            disabled={disabled}
             // Every search that finds a card says "then shuffle". The dialog stays open, so a
             // card can still go on top after it (Vampiric Tutor's order).
             onClick={() => onAct({ type: "shuffle" })}
-            className={cn(FOOTER_BUTTON, "border-border text-text hover:border-accent")}
+            className={cn(FOOTER_BUTTON, "border-border text-text hover:border-accent", HELD)}
           >
             Shuffle
           </button>
@@ -238,6 +251,9 @@ export function LibraryDialog({
     </Dialog>
   );
 }
+
+/** A button held while a move is with the engine (`disabled`): greyed, and no hover or press. */
+const HELD = "disabled:pointer-events-none disabled:opacity-50";
 
 const FOOTER_BUTTON = cn(
   "inline-flex h-9 items-center rounded-full border bg-surface px-4 text-[13px]",
