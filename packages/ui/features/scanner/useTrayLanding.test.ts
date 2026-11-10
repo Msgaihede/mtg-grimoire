@@ -202,6 +202,7 @@ describe("useTrayLanding", () => {
           name: "Lightning Bolt",
           setCode: "2x2",
           collectorNumber: "117",
+          finishes: ["nonfoil", "foil"],
         },
         "foil",
       ),
