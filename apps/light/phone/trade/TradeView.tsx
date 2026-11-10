@@ -41,7 +41,7 @@ import type { Currency } from "@grimoire/ui/lib/marketplace";
 import { PRESS } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
 import { DimNote, ReadError } from "../pages/parts";
-import { linkTo, navigate } from "../router";
+import { navigate, up, upLinkTo } from "../router";
 import { AddCardsSheet } from "./AddCardsSheet";
 import { EditLineSheet } from "./EditLineSheet";
 import { FinishSheet } from "./FinishSheet";
@@ -100,7 +100,7 @@ function HeaderRow({
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-1 py-1">
       <a
-        {...linkTo(TRADES_PLACE)}
+        {...upLinkTo(TRADES_PLACE)}
         aria-label="All trades"
         className={cn("flex size-11 shrink-0 items-center justify-center rounded-md text-dim", FOCUS)}
       >
@@ -488,8 +488,9 @@ function TradeBody({ trade }: { trade: Trade }) {
         onConfirm={() =>
           once(
             () => writes.remove(trade.id),
-            // A replace: the trade's own entry would be a page that says it is gone.
-            () => navigate(TRADES_PLACE, { replace: true }),
+            // Up, never a push: the trade's own entry would be a page that says it is gone. A Back
+            // where the list is beneath, or a dead step would land on the list again.
+            () => up(TRADES_PLACE),
           )
         }
         onDismiss={dismiss}

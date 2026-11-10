@@ -10,6 +10,8 @@ import {
   navigate,
   switchTo,
   tabLinkTo,
+  up,
+  upLinkTo,
   usePlace,
 } from "./router";
 
@@ -213,7 +215,7 @@ describe("adoptOverlay", () => {
 
     // The address bar has not moved, and the entry is now one this router pushed...
     expect(url()).toBe("/collection?card=abc");
-    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1, over: "/collection" });
     expect(pushState).toHaveBeenCalledTimes(1);
 
     // ...so the ✕ is a Back, and lands on the page — which is also where Android's back gesture,
@@ -430,7 +432,7 @@ describe("a history write the browser refuses", () => {
       "/decks/7",
       "/decks/7?card=abc",
     ]);
-    expect(window.history.state).toEqual({ ...PUSHED, depth: 2 });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 2, over: "/decks/7" });
 
     const closed = popped();
     act(() => back(deck));
@@ -605,14 +607,14 @@ describe("a tab, as an Android app's bottom navigation", () => {
     window.history.replaceState(null, "", "/search");
     switchTo(tab("decks"));
     expect(url()).toBe("/decks");
-    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1, over: "/search" });
 
     // From one tab to another: the walk back to the start view, then the push over it.
     const walked = popped();
     switchTo(tab("collection"));
     await walked;
     expect(url()).toBe("/collection");
-    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1, over: "/search" });
 
     // Back from any tab is the start view.
     const left = popped();
@@ -625,13 +627,13 @@ describe("a tab, as an Android app's bottom navigation", () => {
     window.history.replaceState(null, "", "/search");
     switchTo(tab("decks"));
     navigate({ view: "decks", deckId: 5, cardId: null });
-    expect(window.history.state).toEqual({ ...PUSHED, depth: 2 });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 2, over: "/decks" });
 
     const walked = popped();
     switchTo(tab("decks"));
     await walked;
     expect(url()).toBe("/decks");
-    expect(window.history.state).toEqual({ ...PUSHED, depth: 1 });
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1, over: "/search" });
   });
 
   it("renames an entry that is not the start view's, so a link's first page invents no start", () => {
@@ -650,5 +652,125 @@ describe("a tab, as an Android app's bottom navigation", () => {
     fireEvent.click(screen.getByRole("link", { name: "Decks" }));
     expect(onReselect).toHaveBeenCalledOnce();
     expect(url()).toBe("/decks");
+  });
+});
+
+/**
+ * A header's `‹` — a deck's way back to its gallery, a folder's to the one above it, a trade's to
+ * the list. Pushed, the place just left stayed one Back beneath, so Android's back gesture reopened
+ * it (issue #1597).
+ */
+describe("up", () => {
+  const tab = (view: Place["view"]): Place => ({ view, deckId: null, cardId: null });
+  const gallery = (folderId: number | null = null): Place => ({ ...tab("decks"), folderId });
+  const deck: Place = { ...tab("decks"), deckId: 5 };
+
+  it("goes back off a deck opened from the gallery, so Back from there is the start view", async () => {
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("decks"));
+    navigate(deck);
+    const length = window.history.length;
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    const landed = popped();
+    up(gallery());
+    await landed;
+
+    expect(url()).toBe("/decks");
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(window.history.length).toBe(length);
+
+    const left = popped();
+    window.history.back();
+    await left;
+    // Not `/decks/5`: the deck the reader went up from is not beneath the gallery.
+    expect(url()).toBe("/search");
+  });
+
+  it("renames a deck opened from elsewhere, so Back still walks where the reader walked", async () => {
+    // The collection's deck link: the entry beneath the deck is the collection, not the gallery
+    // the arrow names, and a Back would land there.
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("collection"));
+    navigate(deck);
+    const length = window.history.length;
+    const goBack = vi.spyOn(window.history, "back");
+
+    up(gallery());
+
+    expect(goBack).not.toHaveBeenCalled();
+    expect(url()).toBe("/decks");
+    expect(window.history.length).toBe(length);
+
+    const left = popped();
+    window.history.back();
+    await left;
+    expect(url()).toBe("/collection");
+  });
+
+  it("renames, and makes no Back, on an entry this router did not push", () => {
+    // A link straight to the deck: a Back would leave the app.
+    window.history.replaceState(null, "", "/decks/5");
+    const goBack = vi.spyOn(window.history, "back");
+
+    up(gallery());
+
+    expect(goBack).not.toHaveBeenCalled();
+    expect(url()).toBe("/decks");
+    expect(window.history.state).toBeNull();
+  });
+
+  it("walks out of nested folders one Back at a time", async () => {
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("decks"));
+    navigate(gallery(1));
+    navigate(gallery(2));
+
+    let landed = popped();
+    up(gallery(1));
+    await landed;
+    expect(url()).toBe("/decks?folder=1");
+
+    landed = popped();
+    up(gallery());
+    await landed;
+    expect(url()).toBe("/decks");
+
+    landed = popped();
+    window.history.back();
+    await landed;
+    expect(url()).toBe("/search");
+  });
+
+  it("goes back once when pressed twice before the first has landed", async () => {
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("decks"));
+    navigate(deck);
+    const goBack = vi.spyOn(window.history, "back");
+
+    const landed = popped();
+    up(gallery());
+    up(gallery());
+    await landed;
+
+    expect(goBack).toHaveBeenCalledTimes(1);
+    expect(url()).toBe("/decks");
+  });
+
+  it("is a link to the place above, whose plain press goes up", async () => {
+    window.history.replaceState(null, "", "/search");
+    switchTo(tab("trade"));
+    navigate({ ...tab("trade"), tradeId: 1 });
+    render(createElement("a", { ...upLinkTo(tab("trade")) }, "All trades"));
+    const link = screen.getByRole("link", { name: "All trades" });
+    expect(link.getAttribute("href")).toBe("/trade");
+
+    const landed = popped();
+    fireEvent.click(link);
+    await landed;
+    expect(url()).toBe("/trade");
+    expect(window.history.state).toEqual({ ...PUSHED, depth: 1, over: "/search" });
   });
 });

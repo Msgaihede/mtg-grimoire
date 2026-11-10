@@ -31,7 +31,7 @@ import { AddCards } from "../deck/AddCards";
 import { CardActions, slotOf, type Acting } from "../deck/CardActions";
 import { shownList } from "../deck/list";
 import { ReceiptBar, useReceipt } from "../deck/receipt";
-import { linkTo } from "../router";
+import { upLinkTo } from "../router";
 import { phoneDeckDestination } from "../transfer/destinations";
 import { ExportSheet } from "../transfer/ExportSheet";
 import { ImportSheet } from "../transfer/ImportSheet";
@@ -107,9 +107,10 @@ export function DeckPage({
     <>
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2 py-1">
         {/* A link, like the tabs: it changes the URL. It lands in the folder the deck is filed
-            in, which is where a reader who walked here came from. */}
+            in, which is where a reader who walked here came from — by a Back when they did, so
+            the system's Back does not reopen the deck (`router.ts`'s `up`). */}
         <a
-          {...linkTo(back)}
+          {...upLinkTo(back)}
           aria-label="Back to decks"
           className={cn(
             "flex size-11 shrink-0 items-center justify-center rounded-md text-dim",
