@@ -2823,7 +2823,7 @@ finishes and the menu opened a submenu — which was the honest thing to say abo
 two objects, not a wrong answer. **The design doc's claim that a reader owning two foils and no
 nonfoil "currently gets a silent nonfoil entry" does not hold against the code it was written
 about**: `ownedFinishes` answered `["foil"]` for that reader and the menu recorded foil. The one
-path that does land on a silent `nonfoil` is `finishChoices`' empty-list fallback, and it is reached
+path that does land on a silent `nonfoil` is `finishChoices`' (now `lib/finish.ts`' `recordableFinishes`) empty-list fallback, and it is reached
 only by a finish word this build cannot name — **0 live rows**, before the split and after it. What
 the split actually removes is the *question*, and the reach described two paragraphs down.
 
