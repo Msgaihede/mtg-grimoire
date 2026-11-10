@@ -48,13 +48,13 @@ describe("useCollectionEntryWrites — the stepper (issue #1535)", () => {
       [1, 3],
       [2, 1],
     ]);
-    let holdPage2: (() => void) | null = null;
+    const held: { page2?: () => void } = {};
     const listPage = vi.fn(async (page: number): Promise<Page> => {
       const items = [row(page, database.get(page) ?? 0)];
       // Calls 1–2 are the first load, 3–4 the re-read; only the re-read's page 2 is held.
       if (page === 2 && listPage.mock.calls.length === 4) {
         await new Promise<void>((resolve) => {
-          holdPage2 = resolve;
+          held.page2 = resolve;
         });
       }
       return { items, total: 2 };
@@ -85,12 +85,12 @@ describe("useCollectionEntryWrites — the stepper (issue #1535)", () => {
 
     // Something else settles the list; page 1 answers 3 and page 2 is held.
     void client.invalidateQueries({ queryKey: ["collection"] });
-    await waitFor(() => expect(holdPage2).not.toBeNull());
+    await waitFor(() => expect(held.page2).toBeDefined());
 
     await result.current.writes.setQuantity.mutateAsync({ row: { id: 1 }, quantity: 4 });
     expect(shown()).toBe(4);
 
-    holdPage2?.();
+    held.page2?.();
     await new Promise((settled) => setTimeout(settled, 0));
     expect(shown()).toBe(4);
     // And the read the press cancelled is asked again once the run settles, so the list is the
