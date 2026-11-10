@@ -11,7 +11,7 @@ import {
   spec,
   tinyCommander,
 } from "./fixtures";
-import { copyLimitFor, manaValueOf, validateDeck, validateForMarks } from "./engine";
+import { copyLimitFor, deckSizeIssue, manaValueOf, validateDeck, validateForMarks } from "./engine";
 
 /**
  * The card builders and the `format_specs` mirror these tests run on live in `./fixtures`, so
@@ -21,6 +21,31 @@ import { copyLimitFor, manaValueOf, validateDeck, validateForMarks } from "./eng
 beforeEach(resetRowIds);
 
 describe("deck size", () => {
+  /** The rule over a count already taken — the gallery's door (issue #1524), which has only
+   *  `DeckRow.cardCount`. It must say exactly what `validateDeck` says about the same size. */
+  it("answers a bare count with validateDeck's own sentence", () => {
+    for (const [key, size] of [
+      ["modern", 59],
+      ["modern", 60],
+      ["modern", 247],
+      ["commander", 73],
+      ["commander", 100],
+      ["commander", 101],
+    ] as const) {
+      const fromCards = validateDeck([islands(size)], spec(key)).filter(
+        (issue) => issue.code === "deck-size",
+      );
+      expect(deckSizeIssue(size, spec(key))).toEqual(fromCards[0] ?? null);
+    }
+    expect(deckSizeIssue(73, spec("commander"))?.message).toBe(
+      "Commander decks are exactly 100 cards including the commander; you have 73.",
+    );
+  });
+
+  it("judges no count in a format that validates nothing", () => {
+    expect(deckSizeIssue(3, { ...spec("commander"), validates: false })).toBeNull();
+  });
+
   it("counts main and commander, and says how short a 60-card deck is", () => {
     expect(validateDeck([islands(59)], spec("modern"))).toEqual([
       {

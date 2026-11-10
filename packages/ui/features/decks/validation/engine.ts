@@ -327,30 +327,41 @@ function quantityIn(deck: CardFacts[], kinds: readonly CategoryKind[]): number {
 }
 
 function deckSizeIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
-  const size = quantityIn(deck, SIZE_KINDS);
+  const issue = deckSizeIssue(quantityIn(deck, SIZE_KINDS), spec);
+  return issue === null ? [] : [issue];
+}
+
+/**
+ * The deck-size rule on its own, over a count already taken — the one finding `validateDeck`
+ * makes about the deck's size, and the same sentence.
+ *
+ * Exported for the deck gallery (issue #1524), which has no cards to hand the engine, only
+ * `DeckRow.cardCount` — and that column counts exactly the cards {@link SIZE_KINDS} names, in
+ * active categories, so a tile and the editor's panel cannot come to disagree about one deck.
+ * `null` both when the size fits and when the format judges nothing (`validates` false), so a
+ * caller never colours an `unspecified` deck: read from the cell, as {@link validateDeck} does.
+ */
+export function deckSizeIssue(size: number, spec: FormatSpec): ValidationIssue | null {
+  if (!spec.validates) return null;
   const { deckMin: min, deckMax: max, displayName } = spec;
 
   // An exactly-sized format is wrong in both directions, and says so in one sentence.
   if (max !== null && min === max) {
-    if (size === max) return [];
+    if (size === max) return null;
     const including = spec.requiresCommander ? " including the commander" : "";
-    return [
-      error(
-        "deck-size",
-        `${displayName} decks are exactly ${max} cards${including}; you have ${size}.`,
-      ),
-    ];
+    return error(
+      "deck-size",
+      `${displayName} decks are exactly ${max} cards${including}; you have ${size}.`,
+    );
   }
   if (size < min) {
-    return [
-      error("deck-size", `${displayName} decks need at least ${min} cards; you have ${size}.`),
-    ];
+    return error("deck-size", `${displayName} decks need at least ${min} cards; you have ${size}.`);
   }
   // CR 100.5: most formats have no maximum at all, which is what `deckMax` NULL means.
   if (max !== null && size > max) {
-    return [error("deck-size", `${displayName} decks are at most ${max} cards; you have ${size}.`)];
+    return error("deck-size", `${displayName} decks are at most ${max} cards; you have ${size}.`);
   }
-  return [];
+  return null;
 }
 
 function sideboardIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
