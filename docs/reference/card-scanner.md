@@ -347,8 +347,12 @@ rung and `unknown` are the whole rule.
   behind any frame still on the wire, and every decision of the stream is news — **except the card
   that was standing when the last stream stopped**: the identity (oracle, else printing) of the last
   decision a taken verdict carried, kept in window-lifetime module memory (`viewMemory`) and dropped
-  by any taken frame with no quad. The stream's first decision naming it is that card still lying
-  on the mat, already in the tray, and is not passed on. A start whose reset is refused says so and
+  by `STANDING_FORGET_AFTER` (5) taken frames running with no quad — the session's own
+  `forget_after`, which `useScanLoop.test.ts` reads out of `session.rs` — and never by one (#1558,
+  2026-11-10): a detector that misses a frame around a pause had the card filed again. The run is
+  counted across a stop, so an empty stretch the stop cut in two is one. The stream's first
+  decision naming it is that card still lying on the mat, already in the tray, and is not passed
+  on. A start whose reset is refused says so and
   falls back to the baseline.
 - **A decision that moves again within `DECISION_GAP_FRAMES` (3) frames of the last is dropped**
   (#735, 2026-10-01): a card really swapped in needs the old one lifted, the new one laid and frames
