@@ -119,6 +119,20 @@ export function SetupScreen({
   const [error, setError] = useState<string | null>(null);
   /** A cube whose list named cards this corpus lacks: those names, and the cards it did find. */
   const [missing, setMissing] = useState<{ names: string[]; cardIds: string[] } | null>(null);
+  /**
+   * The tab the two answers above were given on, reset during render when it changes.
+   *
+   * Both are about the press on the tab the reader was on: a cube's unknown names and its
+   * "Draft without them" deal a cube draft, so carried onto the Sealed tab they would be an alert
+   * about a list that is not on screen and a button that deals something the tab does not offer.
+   * During render rather than in an effect, so the next tab never paints one frame of them.
+   */
+  const [answeredMode, setAnsweredMode] = useState(mode);
+  if (answeredMode !== mode) {
+    setAnsweredMode(mode);
+    setError(null);
+    setMissing(null);
+  }
   const { dealSets, dealCubeDraft } = useDealDraft();
 
   const packsFor = mode === "sealed" ? SEALED_PACKS : DRAFT_PACKS;

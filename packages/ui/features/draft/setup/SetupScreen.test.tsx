@@ -145,6 +145,31 @@ describe("SetupScreen", () => {
     expect(draftStart).not.toHaveBeenCalled();
   });
 
+  /**
+   * A cube's unknown names and its "Draft without them" are about the cube tab's list: carried to
+   * the Sealed tab they were an alert about a list not on screen and a button that dealt a cube
+   * draft from Sealed (issue #1543).
+   */
+  it("drops the cube's unknown names when the reader switches tab", async () => {
+    importResolve.mockImplementation((lines: ImportResolveLine[]) =>
+      Promise.resolve(lines.map((_, index) => ({ index, matched: null, hintMissed: false }))),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screenFor = (mode: SetupMode) => (
+      <QueryClientProvider client={client}>
+        <SetupScreen mode={mode} onMode={vi.fn()} onBack={vi.fn()} onStarted={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(screenFor("cube"));
+    await userEvent.type(screen.getByRole("textbox", { name: "Cube list" }), "1 Not A Card");
+    await userEvent.click(start());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not A Card");
+
+    rerender(screenFor("sealed"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Draft without them" })).not.toBeInTheDocument();
+  });
+
   it("deals a Commander draft to you and three bots, for a 60-card deck", async () => {
     packsBoosterSets.mockResolvedValue([TEST_SET, CMR]);
     setup("commander");

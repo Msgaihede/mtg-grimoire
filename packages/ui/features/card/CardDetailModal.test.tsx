@@ -1126,6 +1126,35 @@ it("steps a printing whose rows fall past the first page of the oracle's (issue 
   expect(collectionAdd).not.toHaveBeenCalled();
 });
 
+/**
+ * Issue #1543: the body is not keyed on the card, so a refusal written on one card stood over the
+ * next one the walk stepped to. It is reset with the face, the meld view and the foil view.
+ */
+it("drops a refusal when the reader steps to another card", async () => {
+  walkOfThree();
+  collectionList.mockResolvedValue({
+    items: [
+      { id: 41, cardId: "c1", quantity: 1 },
+      { id: 42, cardId: "c1", quantity: 1 },
+    ],
+    total: 2,
+  });
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt you own/i,
+  });
+  await waitFor(() => expect(collectionList).toHaveBeenCalled());
+  await userEvent.click(up);
+  expect(await screen.findByText(/You have this printing in 2 rows/)).toBeInTheDocument();
+
+  await userEvent.keyboard("{ArrowRight}");
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+  expect(screen.queryByText(/You have this printing in 2 rows/)).not.toBeInTheDocument();
+});
+
 it("re-reads the figures after a write it has no callback to hang off", async () => {
   // **The cost of one read replacing three, paid back.** The old block was three queries, one
   // under each of `["collection"]`, `["wishlist"]` and `["decks"]`, so every writer in the app

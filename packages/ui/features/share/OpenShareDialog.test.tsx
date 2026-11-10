@@ -134,6 +134,29 @@ describe("the link a reader pastes", () => {
   });
 
   /**
+   * Cancel and "Open another" is a fresh question: the last attempt's link and its refusal are
+   * about a paste the reader has already given up on (issue #1543).
+   */
+  it("opens again on an empty box, with no refusal from the last time", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const dialog = (open: boolean) => (
+      <QueryClientProvider client={client}>
+        <OpenShareDialog open={open} onClose={vi.fn()} onOpened={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(dialog(true));
+    await userEvent.type(field(), "not a link");
+    await userEvent.click(openButton());
+    expect(await screen.findByText(NOT_A_SHARE_LINK)).toBeInTheDocument();
+
+    rerender(dialog(false));
+    await waitFor(() => expect(screen.queryByText(NOT_A_SHARE_LINK)).not.toBeInTheDocument());
+    rerender(dialog(true));
+    expect(field()).toHaveValue("");
+    expect(screen.queryByText(NOT_A_SHARE_LINK)).not.toBeInTheDocument();
+  });
+
+  /**
    * **The one user-visible sentence this feature spells twice, fenced.**
    *
    * The same paste can be refused on either side of the boundary — this dialog checks the shape
@@ -148,7 +171,10 @@ describe("the link a reader pastes", () => {
    */
   it("says exactly what the crate says, word for word", () => {
     const declared = /pub const NOT_A_LINK: &str = "([^"]*)";/.exec(publishRs);
-    expect(declared, "share::publish::NOT_A_LINK is no longer a plain string literal").not.toBeNull();
+    expect(
+      declared,
+      "share::publish::NOT_A_LINK is no longer a plain string literal",
+    ).not.toBeNull();
     expect(declared?.[1]).toBe(NOT_A_SHARE_LINK);
   });
 });
