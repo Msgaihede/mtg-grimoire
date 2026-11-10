@@ -20,7 +20,7 @@ import {
   RARITY_EXAMPLE,
   SETTINGS_EXAMPLE,
 } from "./examples";
-import { executeAction, registry } from "./registry";
+import { DATE_FORMAT, DAY_FORMAT, executeAction, registry } from "./registry";
 import { settingsFace } from "./widgetState";
 
 let qc: QueryClient;
@@ -64,7 +64,13 @@ describe("the catalogue and the registry", () => {
     for (const name of [...catalog.componentNames, ...catalog.actionNames]) {
       expect(prompt).toContain(name);
     }
-    for (const name of ["formatPrice", "formatNumber", "formatPercent", "formatDate"]) {
+    for (const name of [
+      "formatPrice",
+      "formatNumber",
+      "formatPercent",
+      "formatDate",
+      "formatDay",
+    ]) {
       expect(prompt).toContain(name);
     }
   });
@@ -236,6 +242,43 @@ describe("drawing a spec", () => {
   it("formats money through a $computed function", () => {
     draw(RARITY_EXAMPLE);
     expect(screen.getByText(money(1534.2))).toBeInTheDocument();
+  });
+
+  /**
+   * A day field is that day's UTC midnight (issue #1584): read in the reader's zone it is the day
+   * before anywhere west of Greenwich. The zone is held by the formatter's options, which the
+   * suite's own `TZ` cannot hide; the drawn line is the last second of the UTC day, which a zone
+   * east of Greenwich would move a day late.
+   */
+  it("writes a day field in UTC and an instant in the reader's zone", () => {
+    expect(DAY_FORMAT.resolvedOptions().timeZone).toBe("UTC");
+    expect(DATE_FORMAT.resolvedOptions().timeZone).toBe(
+      new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    const day = (seconds: number) => ({
+      type: "Text",
+      children: [],
+      props: {
+        text: { $computed: "formatDay", args: { seconds } },
+        tone: null,
+        size: null,
+        mono: null,
+        truncate: null,
+      },
+    });
+    draw({
+      root: "s",
+      elements: {
+        s: {
+          type: "Stack",
+          props: { direction: null, gap: null, align: null, justify: null, wrap: null },
+          children: ["a", "b"],
+        },
+        a: day(Date.UTC(2026, 6, 4) / 1000),
+        b: day(Date.UTC(2026, 6, 5) / 1000 - 1),
+      },
+    });
+    expect(screen.getAllByText("4 Jul 2026")).toHaveLength(2);
   });
 
   it("draws a missing price as an em dash, not zero", () => {

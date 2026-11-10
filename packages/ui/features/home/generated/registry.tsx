@@ -796,8 +796,25 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
   },
 });
 
-/** A day in words — `4 Jul 2026` — the way the home page writes one. */
-const DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
+/**
+ * **A day field in words** — `4 Jul 2026`, the way the home page writes one — read in UTC. A day
+ * field (a price- or value-history point's `day`, a `today`) is that day's UTC midnight, so the
+ * reader's own zone would draw it a day early anywhere west of Greenwich (issue #1584). The
+ * `timeZone` is load-bearing, as in `priceHistory`.
+ */
+export const DAY_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** **An instant's day in words**, in the reader's own zone: the day their calendar says it happened. */
+export const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
 
 /**
  * The catalogue's `$computed` functions, at the reader's marketplace. A hook because money is
@@ -814,7 +831,9 @@ export function useCatalogFunctions(): Record<string, (args: Record<string, unkn
       formatPercent: (args) =>
         typeof args.value === "number" ? `${Math.round(args.value * 100)}%` : "—",
       formatDate: (args) =>
-        typeof args.seconds === "number" ? DATE.format(new Date(args.seconds * 1000)) : "—",
+        typeof args.seconds === "number" ? DATE_FORMAT.format(new Date(args.seconds * 1000)) : "—",
+      formatDay: (args) =>
+        typeof args.seconds === "number" ? DAY_FORMAT.format(new Date(args.seconds * 1000)) : "—",
     }),
     [currency],
   );

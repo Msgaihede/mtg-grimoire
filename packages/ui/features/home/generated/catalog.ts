@@ -572,7 +572,12 @@ export const catalog = defineCatalog(schema, {
         "A ratio as a whole percentage: `{ value: number }` where 0.25 → `25%`; null → em dash.",
     },
     formatDate: {
-      description: "A day in words: `{ seconds: number }` (Unix seconds) → `4 Jul 2026`.",
+      description:
+        "An instant's day in words, in the reader's time zone: `{ seconds: number }` (Unix seconds) → `4 Jul 2026`. For when something happened; a day field takes `formatDay`.",
+    },
+    formatDay: {
+      description:
+        "A day field in words, read in UTC: `{ seconds: number }` (a day's UTC midnight, in Unix seconds) → `4 Jul 2026`. For a field its description calls a UTC midnight, such as a price- or value-history point's `day`.",
     },
   },
 });
@@ -594,7 +599,7 @@ export const CATALOG_RULES: readonly string[] = [
   'Inside a repeat, `{ "$item": "id" }` in an action\'s params passes the item\'s state path; the navigation actions read it back as the value.',
   "Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.",
   'Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.',
-  "Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.",
+  "Timestamps are Unix seconds unless a field's description says milliseconds. Write a day field — one whose description calls it a UTC midnight, such as a price- or value-history point's `day` or a `today` — with the `formatDay` function, and any other timestamp (when something happened) with `formatDate`; `formatDate` draws a UTC midnight a day early west of Greenwich.",
   "Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.",
   "Optional props take null when not used — never omit them.",
 ];
