@@ -210,7 +210,7 @@ describe("PlaytestingPage as a lobby's host", () => {
     expect(screen.queryByRole("region", { name: "Playtest" })).toBeNull();
     expect(startButton().closest("section")).not.toHaveAttribute("inert");
     expect(ipcMock.lobbyLeave).not.toHaveBeenCalled();
-    expect(keptGame()).toBeNull();
+    expect(keptGame()?.state().view ?? null).toBeNull();
 
     // Fixed, and started again: the board comes up for that deal.
     ipcMock.lobbyGameStart.mockResolvedValue(dealt());

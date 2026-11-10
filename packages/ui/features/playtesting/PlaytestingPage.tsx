@@ -4,7 +4,7 @@ import { useDeckWallMarks } from "@/features/decks/deckWall";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
 import { useDeckSort } from "@/features/decks/useDeckSort";
-import { isLive, lobbyFor, useLobbyState } from "@/features/draft/lobby/useLobby";
+import { isLive, LOBBY_KEY, lobbyFor, useLobbyState } from "@/features/draft/lobby/useLobby";
 import { ipc, ipcError, type LobbyState, type PlaytestPlayer } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import {
@@ -71,8 +71,6 @@ export function PlaytestingPage(): JSX.Element {
     playing?.subscribe ?? noSubscribe,
     playing?.state ?? noHeldState,
   );
-  /** The engine's refusal of the host's last lobby deal, said in the lobby panel. */
-  const [dealError, setDealError] = useState<string | null>(null);
 
   // A guest's game: held while the lobby is live, and kept for its code once it has closed, so
   // the board stays up to say so.
@@ -90,22 +88,30 @@ export function PlaytestingPage(): JSX.Element {
     guest?.state ?? noGuestState,
   );
 
-  const start = useCallback((picks: PlaytestPicks) => {
-    // A lobby deal still with the engine is the one the lobby is moving to: never a second.
-    const kept = keptGame();
-    if (kept !== null && kept.picks.lobby !== undefined && kept.state().view === null) {
-      if (!refusedLobbyDeal(kept)) return;
-      kept.end();
-    }
-    setDealError(null);
-    const game = holdGame(picks);
-    game.start();
-    keepGame(game);
-    setPlaying(game);
-  }, []);
+  const start = useCallback(
+    (picks: PlaytestPicks) => {
+      // A lobby deal still with the engine is the one the lobby is moving to: never a second.
+      const kept = keptGame();
+      if (kept !== null && kept.picks.lobby !== undefined && kept.state().view === null) {
+        if (!refusedLobbyDeal(kept)) return;
+        kept.end();
+      }
+      const game = holdGame(picks);
+      if (picks.lobby !== undefined) {
+        const code = lobbyFor(
+          client.getQueryData<LobbyState | null>(LOBBY_KEY) ?? null,
+          "game",
+        )?.code;
+        if (code !== undefined) DEALT_IN.set(game, code);
+      }
+      game.start();
+      keepGame(game);
+      setPlaying(game);
+    },
+    [client],
+  );
   /** Leave the lobby a game was played in — the host's closes it — and forget it here. */
   const leaveLobby = useCallback(() => {
-    setDealError(null);
     leaveGameLobby(client).catch((e: unknown) => notify.error(ipcError(e)));
   }, [client]);
   const back = useCallback(() => {
@@ -117,17 +123,16 @@ export function PlaytestingPage(): JSX.Element {
     if (closing) leaveLobby();
   }, [playing, leaveLobby]);
 
-  // **A refused lobby deal is the lobby panel's to say**, not a board's (issue #1592): the game
-  // that was never dealt is put away, and the lobby is left open for the host to fix and start
-  // again — the engine's sentence says how ("Update the card data in Settings, then start again").
+  // **A refused lobby deal is the lobby panel's to say**, not a board's (issue #1592): no board
+  // comes up for it, and the lobby is left open for the host to fix and start again — the engine's
+  // sentence says how ("Update the card data in Settings, then start again"). The never-dealt game
+  // holds nothing on the host; the next Start puts it away. Its sentence is said only while the
+  // lobby it was refused in is still held, never in the next one's panel.
   const refused = playing !== null && refusedLobbyDeal(playing) ? playingState.error : null;
-  useEffect(() => {
-    if (refused === null || playing === null) return;
-    playing.end();
-    keepGame(null);
-    setPlaying(null);
-    setDealError(refused);
-  }, [refused, playing]);
+  const dealError =
+    refused !== null && playing !== null && DEALT_IN.get(playing) === gameLobby?.code
+      ? refused
+      : null;
   /** The host's lobby deal is with the engine: no board yet, the lobby panel says so. */
   const dealing =
     playing !== null &&
@@ -216,6 +221,9 @@ function lobbyNotice(lobby: LobbyState | null): string | null {
     return `${lobby.hostName} has dropped — the game goes on when they are back.`;
   return null;
 }
+
+/** The lobby each host's deal was asked of, by its code: a refusal is said in that lobby alone. */
+const DEALT_IN = new WeakMap<HeldGame, string>();
 
 const noSubscribe = () => () => {};
 const NO_GUEST_STATE: GuestHeldState = {
