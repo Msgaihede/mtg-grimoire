@@ -15,7 +15,9 @@ import type {
   SupporterStatus,
 } from "@/lib/ipc";
 import type { ConfettiBurst, TierConfettiProps } from "./reader/TierConfetti";
+import { DEFAULT_ZOOM } from "@/lib/cardZoom";
 import { useNotifications } from "@/lib/notifications";
+import { useAppStore } from "@/lib/store";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import { DEFAULT_SCANNER_PREFS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
@@ -3191,6 +3193,41 @@ describe("ScannerPage's pack opener", () => {
     expect(screen.queryByRole("region", { name: PACK_OPENER })).toBeNull();
     expect(screen.queryByRole("button", { name: "Scanned cards" })).toBeNull();
     expect(screen.getByRole("button", { name: PACK_OPENER })).toHaveFocus();
+  });
+
+  /**
+   * Issue #1525: the drawer is the page's own tray, so ctrl+wheel over it steps the same
+   * `cardZoom.scanner` the page's column does — and a size set on one is the other's.
+   */
+  it("zooms the drawer's cards on a ctrl+wheel, the same number the page's column draws at", async () => {
+    useAppStore.setState(useAppStore.getInitialState());
+    refused();
+    vi.mocked(ipc.scannerTray).mockResolvedValue([...TRAY_ROWS]);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText(TRAY_ROWS[0].name);
+
+    // The page's column first.
+    fireEvent.wheel(tray(), { deltaY: -100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.1);
+
+    await openPack();
+    await user.click(screen.getByRole("button", { name: "Scanned cards" }));
+    const drawer = document.getElementById(
+      screen.getByRole("button", { name: "Scanned cards" }).getAttribute("aria-controls") ?? "",
+    )!;
+    expect(drawer).toContainElement(tray());
+    fireEvent.wheel(tray(), { deltaY: -100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.2);
+    expect(useAppStore.getState().zoomSection).toBe("scanner");
+
+    // Back on the page, the column draws at the size the drawer was left at.
+    await user.keyboard("{Escape}");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: PACK_OPENER })).toBeNull();
+    fireEvent.wheel(tray(), { deltaY: 100, ctrlKey: true });
+    fireEvent.wheel(tray(), { deltaY: 100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(DEFAULT_ZOOM);
   });
 
   it("is the Scanner view's alone — not offered over a trade", async () => {

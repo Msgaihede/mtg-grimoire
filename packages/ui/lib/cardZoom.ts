@@ -148,6 +148,12 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  * scales on a desk the reader is moving cards across. `packs` is Open Packs' wall of what a press
  * opened — its own key because it is another job on another screen of the same page: checking
  * what a booster held, not deciding which card to take from it.
+ *
+ * `scanner` is the Scanner's tray of scanned cards (issue #1525) — the page's column and the pack
+ * opener's drawer, which are one tray drawn in two places, so **one key for both**: a size settled
+ * in the drawer is the size the page's column opens at, as it is one pile. Its own key rather than
+ * `collection`'s, which is what it files into, because the tray is a pile still being checked
+ * beside a camera and the binder is a pile already put away.
  */
 export const ZOOM_SECTIONS = [
   "search",
@@ -163,6 +169,7 @@ export const ZOOM_SECTIONS = [
   "printings",
   "draft",
   "packs",
+  "scanner",
 ] as const;
 
 export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
@@ -221,6 +228,9 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   draft: DEFAULT_ZOOM,
   // Open Packs' wall of opened cards — 152px tiles at life size, the width it always drew.
   packs: DEFAULT_ZOOM,
+  // The Scanner's tray, in the page's column and the pack opener's drawer alike. Life size is the
+  // 10.5rem tile floor the grid drew before it had a zoom, and the list's 36px thumbnails.
+  scanner: DEFAULT_ZOOM,
 };
 
 /**
