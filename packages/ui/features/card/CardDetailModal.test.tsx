@@ -563,6 +563,60 @@ it("ignores a modified arrow, and both ends of the walk", async () => {
   expect(pastTheEnd, "the end of the walk swallows nothing").toBe(true);
 });
 
+/**
+ * **A step unmounts whatever held the caret** (issue #1559), and the arrows live on the panel.
+ *
+ * The whole grid is gated on `card !== null` — null for the length of the next `card_detail` —
+ * so a reader who had pressed anything in the body walked one card and then nothing: the
+ * control under the caret went with the old card, the caret went to `<body>`, and the second
+ * ArrowRight reached no handler while the Next chevron was still drawn and enabled. The
+ * modal's `caretPulse` moves with the card on screen now, so `Dialog`'s settle takes it back.
+ */
+it("keeps walking on the arrows after a press inside the body", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  useAppStore.setState({
+    cardWalk: {
+      label: "Search results",
+      stops: [
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Black Lotus", deck: null },
+        { cardId: "c3", oracleId: "o3", name: "Mox Pearl", deck: null },
+      ],
+    },
+  });
+  renderModal("c1");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  await userEvent.click(await screen.findByRole("button", { name: "View as foil" }));
+  await userEvent.keyboard("{ArrowRight}");
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+
+  // The settle runs on an animation frame, so the caret is back on the panel a frame after the
+  // step rather than at it — the same wait the removal cases below make, for the same reason.
+  await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+  await userEvent.keyboard("{ArrowRight}");
+  expect(useAppStore.getState().selectedCardId).toBe("c3");
+});
+
+/**
+ * The same drop from the Printings list, where it costs the very first press: the row the reader
+ * pressed is the open printing afterwards, and the open printing's row is a `<span>` rather
+ * than a `<button>` — so the press that picked it removed the element holding the caret.
+ */
+it("keeps walking on the arrows after a printing is picked from the list", async () => {
+  cardPrintings.mockResolvedValue(printings);
+  walkOfThree();
+  renderModal("c1");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  await pickBeta();
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+
+  await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(useAppStore.getState().selectedCardId).toBe("c1");
+});
+
 it("draws the grimoire counts twice, so exactly one is visible at every rung", async () => {
   // **All four artboards show the counts.** `CardModalRail` draws them `hidden` below
   // `@min-[1200px]/card`, so at the three narrower rungs they *move* rather than vanish — and the
