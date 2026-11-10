@@ -36,6 +36,7 @@ import { LobbyScreen } from "./lobby/LobbyScreen";
 import { isLive, lobbyFor, useLobbyState } from "./lobby/useLobby";
 import { currentDraft, type CurrentDraft } from "./pick/current";
 import { DraftSession, MODE_TITLE } from "./pick/DraftSession";
+import { resetSideboard } from "./pick/split";
 import { freshDraftName } from "./setup/deal";
 import { InlineError, LABEL, PANEL, QUIET_BUTTON } from "./setup/parts";
 import { SetupScreen, type SetupMode } from "./setup/SetupScreen";
@@ -55,14 +56,21 @@ type Flow =
   | { kind: "packs" }
   | { kind: "draft"; draft: number | null; role: DraftRole; view: DraftView | null };
 
-/** The screen the reader left, for the window's life — a draft is `./pick/current.ts`'s. */
+/** The screen the reader left, for the window's life. A draft's is only its kind: which draft and
+ *  the last view seen are `./pick/current.ts`'s, which `DraftSession` keeps as the view moves. */
 const flowMemory = viewMemory<Flow>("draft.flow");
 
+/**
+ * The screen to open on: the one the reader left (issue #1588). A draft under way is reopened only
+ * when its pick screen was what was left — a reader who went back to the hub, or on to Open Packs,
+ * with a draft still under way comes back there, and the draft waits under *Draft in progress*.
+ * Nothing left yet is the hub, unless this window already holds a draft.
+ */
 function firstFlow(): Flow {
-  const current = currentDraft.recall();
-  if (current) return { kind: "draft", ...current };
   const left = flowMemory.recall();
-  return left !== undefined && left.kind !== "draft" ? left : { kind: "hub" };
+  if (left !== undefined && left.kind !== "draft") return left;
+  const current = currentDraft.recall();
+  return current ? { kind: "draft", ...current } : { kind: "hub" };
 }
 
 /**
@@ -73,7 +81,8 @@ function firstFlow(): Flow {
  *
  * **The page holds which screen is up** (`Flow`), as Playtesting holds its setup and its board:
  * a state here, kept in window memory so going to another view and back lands on the same screen.
- * A draft under way is `./pick/current.ts`'s, so coming back mid-draft opens on the pick.
+ * A draft under way is `./pick/current.ts`'s, so coming back to its pick screen opens on the pick
+ * as it stands now; coming back to the hub or Open Packs opens there ({@link firstFlow}).
  *
  * `App.tsx` loads it lazily; desktop only, like Playtesting (phase.rs's draft module is linked by
  * the desktop alone).
@@ -118,7 +127,13 @@ export function DraftPage(): JSX.Element {
           mode={flow.mode}
           onMode={(mode) => setFlow({ kind: "setup", mode })}
           onBack={toHub}
-          onStarted={(draft, view) => toDraft(draft, view, "solo")}
+          onStarted={(draft, view) => {
+            // A new deal is a new split (issue #1588): a Sealed pool's first view already holds
+            // the whole pool, and its instance ids — seat 0, rounds 0–5 — are the last pool's
+            // again, so a sideboard left behind would claim cards of this one.
+            resetSideboard();
+            toDraft(draft, view, "solo");
+          }}
         />
       );
     case "lobby":
@@ -373,7 +388,7 @@ const MODE_ICON: Record<DraftMode, LucideIcon> = {
  * while a pod this app hosts is drafting (issue #1586): the app holds one draft, and the pod's
  * guests are answered from it. **Abandon** asks twice and drops the saved copy — this window's
  * draft through `draft_end`, else `draft_discard`, which never takes the table, so abandoning
- * this row never touches a pod's draft.
+ * this row never touches a pod's draft — and forgets its Deck/Sideboard split with it.
  */
 function SavedDraftRow({
   saved,
@@ -433,6 +448,7 @@ function SavedDraftRow({
       if (mine !== null) await ipc.draftEnd(mine.draft);
       else await ipc.draftDiscard();
       currentDraft.keep(null);
+      resetSideboard();
       setArmed(false);
       await queryClient.invalidateQueries({ queryKey: DRAFT_SAVED_KEY });
     });

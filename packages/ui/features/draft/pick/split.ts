@@ -13,8 +13,9 @@ import { autoCategoryFor } from "@/features/decks/autoCategory";
  * **Kept per device in `localStorage`** (`packs/marketplaces.ts`' arrangement): a solo draft is
  * resumed after a restart from the host's saved copy, and the split it was being sorted into comes
  * back with it. One draft is in hand at a time, so one row; it is emptied when a draft starts with
- * an empty pool and when a draft is put away. A host that refuses the store keeps it for the
- * session.
+ * an empty pool, on every new deal (a Sealed pool's first view holds the whole pool, and its
+ * instance ids — seat 0, rounds 0–5 — repeat across drafts, issue #1588) and when a draft is put
+ * away, the hub's Abandon included. A host that refuses the store keeps it for the session.
  *
  * **No IPC here, deliberately**: `test-setup.ts` loads this module for `resetSideboard` before any
  * suite mocks `@/lib/ipc`, so a call made from here would reach the real one. The Build step's tag
