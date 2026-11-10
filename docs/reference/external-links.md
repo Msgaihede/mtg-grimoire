@@ -263,6 +263,18 @@ so nothing else in the panel moved. The tests are `CardDetailModal.test.tsx`'s t
 marketplace cases (both confirmed red against the old fold, one per direction) and
 `CardModalArt.test.tsx`'s report-with-no-deck-row pin.
 
+**The tile's finish is read through the printing now open** (issue #1561). `viewPrinting` keeps
+`paneFinish` across a step to another printing on purpose — it is a view seed — so a foil tile
+browsed to a nonfoil-only printing went on opening `?Printing=Foil`, filing a foil copy through the
+art menu's `Add to → Collection`, and hiding `Edit` from the reader's plain copy. The modal now
+folds `openedFinish` — `listedFinish(paneFinish, card.finishes)`, the seed where the printing lists
+that finish and `null` where it does not — in place of the raw field, for the rail, the art menu,
+`Edit`'s rows and the art column's seed. Only the copy being edited still reads `paneFinish` raw,
+because `editCopy` writes that copy's own finish there and a copy's move refuses a printing without
+it. A press that adds a copy and names no finish (`Add to collection`, the owned stepper's first
+`+`) files `railFinish ?? recordableFinishes(finishes)[0]` — the same answer the art menu gives —
+rather than `soleFinish(…) ?? "nonfoil"`, which assumed a nonfoil for every foil+etched printing.
+
 ## Nothing is resolved until the press
 
 **`externalLinks.ts`'s first doctrine survives this change intact: nothing is fetched, resolved or

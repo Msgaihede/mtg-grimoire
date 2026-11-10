@@ -1873,7 +1873,10 @@ export function DeckEditor({
         }
         const choice = chooseWish(wishes);
         if (choice.kind === "ask") {
-          openLayer({ kind: "quickUnwish", card, copies, wishes: choice.wishes }, handBack);
+          openLayer(
+            { kind: "quickUnwish", card, copies, wishes: choice.wishes, openedAt: Date.now() },
+            handBack,
+          );
           return;
         }
         quickAddOne(card, copies);

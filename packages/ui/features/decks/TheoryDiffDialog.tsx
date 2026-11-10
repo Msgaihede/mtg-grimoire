@@ -331,9 +331,8 @@ function useTheoryDiff(
    *
    * **An argument to the hook rather than a member of either mutation's variables**, and that is
    * the shape the two presses force rather than a preference. `wishRow`'s variables are the
-   * *row* — the pending check compares them and `onSuccess` marks them — and `wishAll`'s are the
-   * key list the footer built; widening either into a pair would make one of those comparisons
-   * a deep one for a fact neither press varies. The destination is a property of the dialog,
+   * *row* — the press's own `.then` names and marks it — and `wishAll`'s are the key list the
+   * footer built; widening either into a pair would carry a fact neither press varies. The destination is a property of the dialog,
    * not of a press made in it, so it arrives the way `deckId` and the marketplace do.
    *
    * It is closed over rather than read at the press, which is safe for one reason worth stating:
@@ -418,9 +417,11 @@ function useTheoryDiff(
    * keep them the same is gone with the code that needed it — and so is a round trip on a button
    * pressed a handful of times.
    *
-   * **The variables stay the row rather than the key**, because the row is what the pending
-   * check below compares and what `onSuccess` marks; the key is one call away from either — and
-   * so is the destination, which is the hook's argument and not this press's.
+   * **The variables stay the row rather than the key**, because the row is what the press's own
+   * `.then` names and marks (`wishOne`, below — per press, never off this observer's
+   * `variables`, which name only the newest of several presses in flight: issue #1539); the key
+   * is one call away — and so is the destination, which is the hook's argument and not this
+   * press's.
    *
    * **`row.quantity` is not passed and never was.** The backend re-reads the difference and
    * writes what that row is short of, which is the one number that cannot have gone stale behind
@@ -728,6 +729,49 @@ function TheoryDiffBody({
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
 
   /**
+   * The rows whose own press is in flight, by {@link rowKey} — **one entry per press, rather than
+   * `wishRow.variables`** (issue #1539). A mutation remembers only its last call, so with two row
+   * presses in flight the first row's spinner, and its mark when it landed, used to follow the
+   * second's; this set is what lets two rows be "Sending…" at once and both land "Wishlisted".
+   */
+  const [inFlight, setInFlight] = useState<ReadonlySet<string>>(new Set());
+
+  /**
+   * One row's press. **`mutateAsync(...).then` rather than `mutate(..., { onSuccess, onError })`**
+   * (issue #1539, the pattern issue #1162 fixed in `DeckSearchPanel` and `CollectionSearchTab`):
+   * a `mutate` call's own callbacks belong to the observer, and the next press replaces them — so
+   * row A's write landed with row B's callbacks, A got no mark and no toast, and a second press on
+   * A's re-enabled button doubled its wish. Each `mutateAsync` is a promise of its own, so its
+   * `.then` is that press's and nobody else's; the rejection arm is the handler, and the observer
+   * still carries the refusal to the footer's live region.
+   *
+   * It also outlives the dialog, which is right for this press: the toast is the owner's rule for
+   * every wishlist add, and a write that lands after the reader closed the panel still happened.
+   * (The state setters are no-ops once unmounted.)
+   */
+  const wishOne = (row: TheoryDiffRow) => {
+    const key = rowKey(row);
+    setInFlight((was) => new Set(was).add(key));
+    const settled = () =>
+      setInFlight((was) => {
+        const next = new Set(was);
+        next.delete(key);
+        return next;
+      });
+    wishRow.mutateAsync(row).then(
+      (wishes) => {
+        settled();
+        setSent((was) => new Set(was).add(key));
+        notifyWishesSent({ wishes, destination }, `“${row.name}”`);
+      },
+      (error: unknown) => {
+        settled();
+        notify.error(`Couldn't send “${row.name}” to the wishlist`, { body: ipcError(error) });
+      },
+    );
+  };
+
+  /**
    * Choosing a destination — **and throwing away every answer this dialog is still standing on**,
    * because all of them are about a folder that is no longer the one a press would file into.
    *
@@ -781,7 +825,29 @@ function TheoryDiffBody({
     [rows],
   );
 
-  const isPicked = useCallback((row: TheoryDiffRow) => !excluded.has(rowKey(row)), [excluded]);
+  /**
+   * **A row its own button has sent, or is sending, is out of the footer's reach** (issue #1539).
+   * `deck_theory_missing_to_wishlist` folds onto the grain by *raising* the wish already there, so
+   * a footer press that carried such a row again wrote its shortfall a second time — a 3-copy
+   * shortfall became a 6-copy wish, which is the doubling issue #553 closed the dialog to prevent
+   * and row-then-footer walked round. Such a row draws its checkbox unticked and disabled, and
+   * the select-all and its readout count only the rows a footer press could still carry.
+   *
+   * A change of destination clears `sent` (see {@link chooseDestination}), and the row is
+   * selectable again — a wish in another folder is a new wish, not a fold.
+   */
+  const spokenFor = useCallback(
+    (row: TheoryDiffRow) => sent.has(rowKey(row)) || inFlight.has(rowKey(row)),
+    [sent, inFlight],
+  );
+
+  const isPicked = useCallback(
+    (row: TheoryDiffRow) => !spokenFor(row) && !excluded.has(rowKey(row)),
+    [excluded, spokenFor],
+  );
+
+  /** The shown rows a footer press could carry — the select-all's scope and its denominator. */
+  const selectable = useMemo(() => shown.filter((row) => !spokenFor(row)), [shown, spokenFor]);
 
   /**
    * **Selected ∧ visible** — what the footer writes, and the whole reason the two counts below
@@ -797,7 +863,7 @@ function TheoryDiffBody({
   const pickedEverywhere = useMemo(() => rows.filter(isPicked).length, [rows, isPicked]);
   const hiddenPicked = pickedEverywhere - picked.length;
 
-  const allShownPicked = shown.length > 0 && picked.length === shown.length;
+  const allShownPicked = selectable.length > 0 && picked.length === selectable.length;
 
   /** One press over the shown rows: all of them, or none of them. Scoped to the view for the
    *  reason above — and to the same set its own readout counts, so the control cannot say one
@@ -805,13 +871,13 @@ function TheoryDiffBody({
   const toggleAll = useCallback(() => {
     setExcluded((was) => {
       const next = new Set(was);
-      for (const row of shown) {
+      for (const row of selectable) {
         if (allShownPicked) next.add(rowKey(row));
         else next.delete(rowKey(row));
       }
       return next;
     });
-  }, [shown, allShownPicked]);
+  }, [selectable, allShownPicked]);
 
   const toggleRow = useCallback((key: string) => {
     setExcluded((was) => {
@@ -864,7 +930,7 @@ function TheoryDiffBody({
             view={view}
             counts={counts}
             onView={setView}
-            shown={shown.length}
+            shown={selectable.length}
             picked={picked.length}
             allPicked={allShownPicked}
             onToggleAll={toggleAll}
@@ -894,28 +960,15 @@ function TheoryDiffBody({
                 destination={destination}
                 sent={sent.has(rowKey(row))}
                 picked={isPicked(row)}
+                pickable={!spokenFor(row)}
                 onPick={() => toggleRow(rowKey(row))}
                 // The **whole** identity, for the reason the key is: comparing `cardId` alone
                 // would put the spinner on the regular line while the foil one was in flight.
-                pending={
-                  wishRow.isPending &&
-                  wishRow.variables !== undefined &&
-                  rowKey(wishRow.variables) === rowKey(row)
-                }
+                // Per key rather than off `wishRow.variables`, which names only the last press.
+                pending={inFlight.has(rowKey(row))}
                 // The row's own mark says it went, but the owner's rule is that every wishlist
                 // add is said — and a refusal was drawn nowhere at all until this toast.
-                onWishlist={() =>
-                  wishRow.mutate(row, {
-                    onSuccess: (wishes) => {
-                      setSent((was) => new Set(was).add(rowKey(row)));
-                      notifyWishesSent({ wishes, destination }, `“${row.name}”`);
-                    },
-                    onError: (error) =>
-                      notify.error(`Couldn't send “${row.name}” to the wishlist`, {
-                        body: ipcError(error),
-                      }),
-                  })
-                }
+                onWishlist={() => wishOne(row)}
               />
             ))}
           </ul>
@@ -1001,7 +1054,9 @@ function TheoryDiffBody({
             // Not while a press is in flight. Changing the destination clears what the answer in
             // flight is about, and a write that lands after the control has moved would be
             // announced under a folder it did not write to.
-            disabled={wishAll.isPending || wishRow.isPending}
+            // Any row press counts, not only the last one: `wishRow.isPending` follows the newest
+            // call alone, so with two in flight it went false when the second landed first.
+            disabled={wishAll.isPending || inFlight.size > 0}
           />
         </div>
 
@@ -1030,7 +1085,9 @@ function TheoryDiffBody({
           // about the data, not only about the reader being told twice.** `add_wish` folds on
           // the grain by *raising* the wish already there, so a second press doubles every wish
           // the first one wrote (issue #553). The reader chose to keep that fold, which is why a
-          // success closes the dialog: there is no second press to make from the same open.
+          // success closes the dialog: there is no second press to make from the same open. A
+          // row its own button sent (or is sending) is not in `picked` either, for the same fold
+          // reached the other way round (issue #1539) — see `spokenFor`.
           disabled={picked.length === 0 || wishAll.isPending}
           className={cn(
             "h-8 shrink-0 rounded-md border border-accent px-3 text-xs text-accent",
@@ -1226,6 +1283,7 @@ function Row({
   destination,
   sent,
   picked,
+  pickable,
   pending,
   onPick,
   onWishlist,
@@ -1245,6 +1303,12 @@ function Row({
   sent: boolean;
   /** Whether the footer's press would carry this row. */
   picked: boolean;
+  /**
+   * Whether the reader can tick it at all — `false` while the row's own press is in flight and
+   * once it has landed, because a footer press that carried it again would double its wish
+   * (issue #1539).
+   */
+  pickable: boolean;
   pending: boolean;
   onPick: () => void;
   onWishlist: () => void;
@@ -1267,6 +1331,7 @@ function Row({
       <input
         type="checkbox"
         checked={picked}
+        disabled={!pickable}
         onChange={onPick}
         aria-label={pickLabel}
         className={cn("size-4 shrink-0 accent-accent", FOCUS)}

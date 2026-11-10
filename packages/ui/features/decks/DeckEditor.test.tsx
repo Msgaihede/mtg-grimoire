@@ -1973,6 +1973,48 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
   });
 
+  /**
+   * **The label chips are fenced as the ledger's presses are** (issue #1532): a pressed id reads
+   * only while its chip is drawn. Taking the label off its last card (or removing that card,
+   * deleting the label, or switching to a list nobody labelled with it) takes the chip away, and
+   * a stored id left standing narrowed the desk to nothing with nothing on screen to un-press.
+   * The fence is on the read, so the label coming back finds its chip still pressed.
+   */
+  it("keeps the deck on screen when a pressed label's chip goes, and remembers the press", async () => {
+    const WINCON = { id: 7, name: "Wincon", color: "gold", cardCount: 4 };
+    const labelled = () =>
+      detail(
+        {},
+        [bolt({ labelId: 7, labelName: "Wincon", labelColor: "gold" }), card({ name: "Bear" })],
+        CATEGORIES,
+        [WINCON],
+      );
+    deckGet.mockResolvedValue(labelled());
+
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: "Wincon" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Bear/ })).toBeNull());
+
+    // The label leaves its last card. Every write re-reads the deck, which brings the rows in.
+    deckGet.mockResolvedValue(detail({}, [bolt(), card({ name: "Bear" })], CATEGORIES, []));
+    await writeToDeck("Burn unlabelled");
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: CHIP_ROW })).not.toBeInTheDocument(),
+    );
+    // The chip went, and the filter it was driving went with it.
+    expect(await screen.findByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+
+    // …and comes back pressed: nothing cleared the id, so this is the state the reader left.
+    deckGet.mockResolvedValue(labelled());
+    await writeToDeck("Burn labelled again");
+    expect(await screen.findByRole("button", { name: "Wincon" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Bear/ })).toBeNull());
+  });
+
   /** Each chip wears its label's colour (issue #995), the same square the card modal's label
    *  dropdown draws — and only as decoration: the chip's name is still the label's alone. */
   it("draws each label chip with its colour swatch", async () => {
@@ -7650,6 +7692,38 @@ describe("DeckEditor — the Collection submenu", () => {
     // And the earlier refusal is nowhere on screen but its toast's inbox entry.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(useNotifications.getState().notices).toHaveLength(1);
+  });
+
+  /**
+   * **Nor is the last opening's refusal, on the same row of the same card** (issue #1543): a
+   * refused Record, Cancel, and the same question asked again sends the same `wishId` and card, so
+   * only the opening's own clock (`openedAt`) tells this question from the last one.
+   */
+  it("does not reopen the wish question on the last opening's refusal", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    deckQuickAddToCollection.mockRejectedValue(new Error("that wishlist line is not there"));
+    await open();
+    await collectionMenu();
+
+    const row = "Quick add 4 and remove from wishlist";
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    let dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Couldn't record those copies",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Which wishlist item?" }),
+      ).not.toBeInTheDocument(),
+    );
+
+    await collectionMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   /**

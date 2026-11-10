@@ -170,7 +170,8 @@ export function colorTally(pool: readonly DraftCard[]): Record<ManaKey, number> 
 /**
  * How far a view is into the draft, as one number that only grows — so a pushed `draft:view`
  * that arrives after a newer one (a guest's pick answered before the event) never moves the
- * screen back. Waiting on the table is a half step past the pick it waits on.
+ * screen back. Waiting on the table is a half step past the pick it waits on — the host's word
+ * only: a page that marks its own view waiting outscores the host's re-send of that pick (#1585).
  */
 export function progressOf(view: DraftView): number {
   if (view.status === "deckbuilding") return Number.POSITIVE_INFINITY;

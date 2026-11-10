@@ -191,6 +191,29 @@ describe("FolderNameField", () => {
   });
 
   /**
+   * **A host's `onClose` is the blur's, and the ✕ stays `onCancel`'s** (issue #1545). The gallery's
+   * cancel hands the caret back to an opener, which on a blur would pull it off whatever the reader
+   * just clicked — so a host that passes `onClose` gets it for looking away and nothing else.
+   */
+  it("answers a blur with onClose when the host gives one, and the ✕ with onCancel", async () => {
+    const user = userEvent.setup();
+    const props = { ...stubs(), onClose: vi.fn() };
+    render(
+      <>
+        {creating(props)}
+        <button type="button">Elsewhere</button>
+      </>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    expect(props.onCancel).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * **`data-no-drag` is what stops a rename gesture picking the folder up**, and on the rename
    * shape it is load-bearing: the `<li>` under this form is a folder drag source, so without the
    * mark, pressing into the field and moving five pixels files the folder somewhere instead of

@@ -88,6 +88,35 @@ export function OpenShareDialog({
   /** A link answered and has been remembered. The host navigates. */
   onOpened: (url: string) => void;
 }) {
+  return (
+    <Dialog
+      open={open}
+      title="Open a shared collection"
+      subtitle="Paste a shared collection link."
+      closeLabel="Close"
+      size="w-[32rem]"
+      onDismiss={onClose}
+      onClose={onClose}
+    >
+      <OpenShareForm onClose={onClose} onOpened={onOpened} />
+    </Dialog>
+  );
+}
+
+/**
+ * The box, its refusal and the press in flight.
+ *
+ * **Rendered inside `<Dialog>` so that each opening starts clean**: `Dialog` mounts `children`
+ * only while open, so a refusal read, a Cancel and "Open another" bring back an empty box rather
+ * than the last attempt's link and the red line about it.
+ */
+function OpenShareForm({
+  onClose,
+  onOpened,
+}: {
+  onClose: () => void;
+  onOpened: (url: string) => void;
+}) {
   const [text, setText] = useState("");
   const [refusal, setRefusal] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -117,92 +146,82 @@ export function OpenShareDialog({
   };
 
   return (
-    <Dialog
-      open={open}
-      title="Open a shared collection"
-      subtitle="Paste a shared collection link."
-      closeLabel="Close"
-      size="w-[32rem]"
-      onDismiss={onClose}
-      onClose={onClose}
+    <form
+      className="flex flex-col gap-4 p-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
     >
-      <form
-        className="flex flex-col gap-4 p-5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-      >
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="share-link" className="text-sm text-dim">
-            Link to a shared collection
-          </label>
-          <input
-            id="share-link"
-            // ⚠️ **`text` with an `inputMode`, and `type="url"` is the trap it avoids.** A
-            // `type="url"` field takes part in the browser's own constraint validation, so a
-            // form containing one with anything unparseable in it **never fires `submit`** — the
-            // browser shows its own bubble instead and {@link NOT_A_SHARE_LINK} is never reached.
-            // The refusal is a spec requirement (§10) and this app's own voice; a native bubble
-            // is neither, and it is the one refusal a reader cannot copy or act on. Caught by
-            // this component's test, which went green on the fetch cases and red on both refusal
-            // cases at once. `inputMode` is what still gets a phone the right keyboard, and
-            // deliberately not `type="search"`, whose native Escape-clear would fight the
-            // dialog's own dismiss rung.
-            type="text"
-            inputMode="url"
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              // The refusal is about what *was* in the box. Left standing over an edited link it
-              // reads as a refusal the app will not take back.
-              setRefusal(null);
-            }}
-            placeholder="https://…/s/…"
-            autoComplete="off"
-            spellCheck={false}
-            className={cn(
-              "h-9 rounded-md border border-border bg-surface px-3 font-mono text-sm text-text",
-              "placeholder:font-sans placeholder:text-dim",
-              FOCUS,
-            )}
-          />
-        </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="share-link" className="text-sm text-dim">
+          Link to a shared collection
+        </label>
+        <input
+          id="share-link"
+          // ⚠️ **`text` with an `inputMode`, and `type="url"` is the trap it avoids.** A
+          // `type="url"` field takes part in the browser's own constraint validation, so a
+          // form containing one with anything unparseable in it **never fires `submit`** — the
+          // browser shows its own bubble instead and {@link NOT_A_SHARE_LINK} is never reached.
+          // The refusal is a spec requirement (§10) and this app's own voice; a native bubble
+          // is neither, and it is the one refusal a reader cannot copy or act on. Caught by
+          // this component's test, which went green on the fetch cases and red on both refusal
+          // cases at once. `inputMode` is what still gets a phone the right keyboard, and
+          // deliberately not `type="search"`, whose native Escape-clear would fight the
+          // dialog's own dismiss rung.
+          type="text"
+          inputMode="url"
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            // The refusal is about what *was* in the box. Left standing over an edited link it
+            // reads as a refusal the app will not take back.
+            setRefusal(null);
+          }}
+          placeholder="https://…/s/…"
+          autoComplete="off"
+          spellCheck={false}
+          className={cn(
+            "h-9 rounded-md border border-border bg-surface px-3 font-mono text-sm text-text",
+            "placeholder:font-sans placeholder:text-dim",
+            FOCUS,
+          )}
+        />
+      </div>
 
-        {refusal !== null && (
-          // `alert`, not `status`: this region is mounted only when there is something to say,
-          // and announcing on insertion is what the role is for.
-          <p role="alert" className="text-sm text-destructive">
-            {refusal}
-          </p>
-        )}
-
-        <p className="text-sm text-dim">
-          See which of these cards you already own or want. Nothing in either collection changes.
+      {refusal !== null && (
+        // `alert`, not `status`: this region is mounted only when there is something to say,
+        // and announcing on insertion is what the role is for.
+        <p role="alert" className="text-sm text-destructive">
+          {refusal}
         </p>
+      )}
 
-        <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className={cn(BUTTON, "border-border")}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            // `aria-disabled`, never the attribute: a `disabled` button leaves the tab order, and
-            // this one greys as the reader types.
-            aria-disabled={text.trim() === "" || opening}
-            onClick={(e) => {
-              if (text.trim() === "" || opening) e.preventDefault();
-            }}
-            className={cn(
-              BUTTON,
-              "border-accent/50 text-accent",
-              (text.trim() === "" || opening) && "opacity-50",
-            )}
-          >
-            {opening ? "Opening…" : "Open collection"}
-          </button>
-        </div>
-      </form>
-    </Dialog>
+      <p className="text-sm text-dim">
+        See which of these cards you already own or want. Nothing in either collection changes.
+      </p>
+
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className={cn(BUTTON, "border-border")}>
+          Cancel
+        </button>
+        <button
+          type="submit"
+          // `aria-disabled`, never the attribute: a `disabled` button leaves the tab order, and
+          // this one greys as the reader types.
+          aria-disabled={text.trim() === "" || opening}
+          onClick={(e) => {
+            if (text.trim() === "" || opening) e.preventDefault();
+          }}
+          className={cn(
+            BUTTON,
+            "border-accent/50 text-accent",
+            (text.trim() === "" || opening) && "opacity-50",
+          )}
+        >
+          {opening ? "Opening…" : "Open collection"}
+        </button>
+      </div>
+    </form>
   );
 }

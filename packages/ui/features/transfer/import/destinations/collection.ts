@@ -27,7 +27,7 @@ import { normalizeCondition, type Condition } from "@/lib/conditions";
 import type { CollectionImportItem, DeckFinish, ImportResolveRow } from "@/lib/ipc";
 import { languageCode } from "@/lib/languages";
 import { parsePurchasePrice } from "@/lib/prices";
-import type { ParsedList } from "../parse";
+import { finishFor, type ParsedList } from "../parse";
 import type { HintMiss, UnmatchedLine } from "./deck";
 
 export interface CollectionOptions {
@@ -265,7 +265,9 @@ export function planCollectionImport(
     }
     const condition =
       normalized !== null && normalized.matched ? normalized.condition : options.condition;
-    const finish = line.finish ?? options.finish;
+    // The file's own finish when it has a finish column, `normal` and blank included — the
+    // default fills only a line with no finish channel at all (issue #1550).
+    const finish = finishFor(line, options.finish);
     // The six columns that are part of what *identifies* a collection row rather than
     // decoration on one. A CSV this app wrote carries all six (`SURFACE_FIELDS.collection`),
     // and until 2026-08-23 none of them was read back — see the fold key below.

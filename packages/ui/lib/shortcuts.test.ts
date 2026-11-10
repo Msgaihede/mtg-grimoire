@@ -191,6 +191,78 @@ describe("matchesChord — a digit is its physical key (issue #558)", () => {
   });
 });
 
+describe("matchesChord — a letter on a non-Latin layout is its physical key (issue #1568)", () => {
+  // On Russian, Greek and Hebrew layouts `e.key` is the layout's own character; `e.code` still
+  // names the Latin key under it, which is what native Windows apps honour Ctrl+Z by.
+  it("matches Ctrl+Z on a Russian layout, where the key prints я", () => {
+    expect(matchesChord({ key: "z", ctrl: true }, press("я", { ctrl: true, code: "KeyZ" }))).toBe(
+      true,
+    );
+  });
+
+  it("matches Ctrl+Shift+Z on a Russian layout, where Shift prints Я", () => {
+    expect(
+      matchesChord(
+        { key: "z", ctrl: true, shift: true },
+        press("Я", { ctrl: true, shift: true, code: "KeyZ" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches Ctrl+K on a Greek layout, where the key prints κ", () => {
+    expect(matchesChord({ key: "k", ctrl: true }, press("κ", { ctrl: true, code: "KeyK" }))).toBe(
+      true,
+    );
+  });
+
+  it("matches Ctrl+A on a Hebrew layout, where the key prints ש", () => {
+    expect(matchesChord({ key: "a", ctrl: true }, press("ש", { ctrl: true, code: "KeyA" }))).toBe(
+      true,
+    );
+  });
+
+  it("does not match a different letter's key", () => {
+    expect(matchesChord({ key: "z", ctrl: true }, press("н", { ctrl: true, code: "KeyY" }))).toBe(
+      false,
+    );
+  });
+
+  it("still requires the modifiers exactly", () => {
+    expect(
+      matchesChord({ key: "z", ctrl: true }, press("Я", { ctrl: true, shift: true, code: "KeyZ" })),
+    ).toBe(false);
+  });
+
+  it("does not match a Latin layout's other letter on the key", () => {
+    // QWERTZ's `KeyZ` prints `y`: that press is Ctrl+Y (redo), never also undo.
+    expect(matchesChord({ key: "z", ctrl: true }, press("y", { ctrl: true, code: "KeyZ" }))).toBe(
+      false,
+    );
+  });
+
+  it("does not match ASCII punctuation on the key", () => {
+    // Dvorak's `KeyZ` prints `;` — an ASCII layout keeps the printed-letter rule.
+    expect(matchesChord({ key: "z", ctrl: true }, press(";", { ctrl: true, code: "KeyZ" }))).toBe(
+      false,
+    );
+  });
+
+  it("does not match a named key on the letter's position", () => {
+    expect(
+      matchesChord({ key: "z", ctrl: true }, press("Unidentified", { ctrl: true, code: "KeyZ" })),
+    ).toBe(false);
+  });
+
+  it("binds the catalogue's letter shortcuts on a Russian layout", () => {
+    expect(
+      matchesShortcut(shortcut("deckEditor", "undo"), press("я", { ctrl: true, code: "KeyZ" })),
+    ).toBe(true);
+    expect(
+      matchesShortcut(shortcut("deckEditor", "redo"), press("н", { ctrl: true, code: "KeyY" })),
+    ).toBe(true);
+  });
+});
+
 describe("matchesChord — a pointer chord never matches", () => {
   it("refuses Ctrl+wheel against a keypress holding Ctrl", () => {
     expect(matchesChord({ pointer: "wheel", ctrl: true }, press("z", { ctrl: true }))).toBe(false);

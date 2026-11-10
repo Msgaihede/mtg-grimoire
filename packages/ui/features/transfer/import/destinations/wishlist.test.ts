@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ImportResolveRow } from "@/lib/ipc";
-import type { ParsedLine, ParsedList } from "../parse";
+import { parseDecklist, type ParsedLine, type ParsedList } from "../parse";
 import { planWishlistImport } from "./wishlist";
 
 const OPTIONS = { finish: null };
@@ -110,5 +110,22 @@ describe("planWishlistImport", () => {
     );
     expect(plan.items).toHaveLength(2);
     expect(plan.items.map((i) => i.cardId).sort()).toEqual(["c1", "c2"]);
+  });
+});
+
+/** Issue #1550: the step's "Default finish" fills only a line with no finish channel — a CSV row
+ *  that says `normal` is a wish with no foil preference, never a wish for the foil. */
+describe("the default finish against a file's own finish column", () => {
+  const FOIL = { finish: "foil" as const };
+
+  it("leaves a row the file marks regular without the default's foil", () => {
+    const list = parseDecklist("Name,Quantity,Foil\nSol Ring,1,normal\nShock,1,foil\nOpt,1,etched\n");
+    const plan = planWishlistImport(list, [0, 1, 2].map((i) => hit(i, `c${i}`, `o${i}`)), FOIL);
+    expect(plan.items.map((i) => i.preferredFinish)).toEqual([null, "foil", "etched"]);
+  });
+
+  it("still fills a plain decklist line from the default", () => {
+    const plan = planWishlistImport(parseDecklist("1 Sol Ring\n"), [hit(0, "c1")], FOIL);
+    expect(plan.items[0].preferredFinish).toBe("foil");
   });
 });

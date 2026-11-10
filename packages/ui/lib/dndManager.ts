@@ -1,4 +1,11 @@
-import { Accessibility, DragDropManager, Draggable, Droppable, PointerSensor } from "@dnd-kit/dom";
+import {
+  Accessibility,
+  DragDropManager,
+  Draggable,
+  Droppable,
+  PointerActivationConstraints,
+  PointerSensor,
+} from "@dnd-kit/dom";
 import { NOT_A_DRAG } from "@/features/decks/dnd";
 import { installCardCountPreview } from "@/lib/dragPreview";
 
@@ -44,6 +51,36 @@ import { installCardCountPreview } from "@/lib/dragPreview";
  * that keeps the copy in step with the library, and
  * [frontend-design.md](../../../docs/reference/frontend-design.md) has both live passes.
  */
+/**
+ * **What a press costs before it is a drag: 5px of travel under a mouse or a pen, a 250ms hold
+ * under a finger — and never a still mouse press, however long** (issue #1566).
+ *
+ * `PointerSensor`'s own default for a mouse is `Delay(200ms, tolerance 10)` **or**
+ * `Distance(5)`, and either one alone activates. So a mouse button held still for a fifth of a
+ * second *was* a drag — and `beforedragstart` runs a card wall's record, whose
+ * `useCardSelection.dragsAll` throws the picked set away when the drag starts outside it. A
+ * Ctrl-click or Shift-click held a moment too long on an unpicked tile cleared the reader's
+ * selection while the button was still down, and the Shift-click took its anchor with it. Moving
+ * the read from `pointerdown` to `beforedragstart` (below, at {@link carryAtDragStart}) only fixed
+ * the presses shorter than the delay.
+ *
+ * **Distance alone for a mouse is the gesture every drag here already meant.** A drag carries
+ * something somewhere, which a pointer that has not moved has not begun to do; and every source
+ * that brings sensors of its own (the category grip, a note, a tag, the token rail, the table)
+ * already says exactly `Distance(5)`. **A finger keeps the library's hold**, because on a touch
+ * screen travel without a hold is a scroll — that branch is copied rather than changed.
+ *
+ * **A declared handle gets the same 5px**, where the library's default would start the drag on
+ * `pointerdown`; every handle-bearing source here puts that threshold back by hand, so this only
+ * makes the next one right by default. The library's text-input branch is not copied:
+ * {@link NOT_A_DRAG} already refuses a press on any field.
+ */
+export function pressCost(event: Pick<PointerEvent, "pointerType">) {
+  return event.pointerType === "touch"
+    ? [new PointerActivationConstraints.Delay({ value: 250, tolerance: 5 })]
+    : [new PointerActivationConstraints.Distance({ value: 5 })];
+}
+
 export const dndManager = new DragDropManager({
   /**
    * **`Accessibility` is dropped, and it is a removal that improves accessibility.**
@@ -111,6 +148,7 @@ export const dndManager = new DragDropManager({
         const { target } = event;
         return target instanceof Element && target.closest(NOT_A_DRAG) !== null;
       },
+      activationConstraints: pressCost,
     }),
   ],
 });
@@ -260,10 +298,7 @@ dndManager.monitor.addEventListener("dragend", () => {
  */
 const payloads = new WeakMap<object, () => Record<string, unknown>>();
 
-export function carryAtDragStart(
-  source: object,
-  read: () => Record<string, unknown>,
-): () => void {
+export function carryAtDragStart(source: object, read: () => Record<string, unknown>): () => void {
   payloads.set(source, read);
   return () => {
     payloads.delete(source);
