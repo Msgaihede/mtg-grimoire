@@ -8149,6 +8149,33 @@ describe("the docked card search", () => {
   });
 
   /**
+   * **A deck's group and `Recently removed` are not the reader's to file into** (issue #1576).
+   * `collection_add` refuses every non-`user` folder, so a `+` that named the level on screen
+   * failed every press there. Standing in either, the column files at the root — Import's rule
+   * in the same spot — and its name says so before the press.
+   */
+  it.each([
+    ["a deck's group", DECK_GROUP],
+    ["Recently removed", REMOVED],
+  ])("adds at the root while standing in %s", async (_, folder) => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await openShelf(user, folder.name);
+    await waitFor(() => expect(standingIn()).toBe(folder.id));
+    await waitFor(() =>
+      expect(quickAdd()).toHaveAccessibleName("Add Black Lotus (LEA 232) to Collection"),
+    );
+
+    await addFromPanel(user);
+
+    await waitFor(() => expect(collectionAdd).toHaveBeenCalled());
+    const sent = collectionAdd.mock.calls[0][0] as Record<string, unknown>;
+    expect(sent).toHaveProperty("folderId", null);
+  });
+
+  /**
    * **A tile dropped on a folder's heading is an add, not a refile** — `collection_add` with the
    * folder, never `collection_set_folder`, because there is no row to move.
    *
