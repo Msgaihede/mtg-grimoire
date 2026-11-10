@@ -892,6 +892,28 @@ describe("a note act asked for from the card menu", () => {
     expect(view.onRequestHandled).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * **A focus is honoured once** (issue #1546). The band keeps `focus` after acting on it and
+   * unmounts its cards when collapsed, so an effect that ran on every mount pulled the caret back
+   * onto the note each time the reader re-opened the band — for the life of the editor.
+   */
+  it("does not pull the caret back to the note when the band is shut and re-opened", async () => {
+    deckNotes.mockResolvedValue([note({ id: 5, title: "Mana base" })]);
+    const view = renderBand({ request: { kind: "open", noteId: 5 } });
+
+    const row = await within(await band()).findByRole("listitem");
+    await waitFor(() => expect(document.activeElement).toBe(row));
+
+    view.update({ open: false, request: null });
+    await waitFor(() => expect(screen.queryByRole("listitem")).toBeNull());
+    const toggle = screen.getByRole("button", { expanded: false });
+    toggle.focus();
+    view.update({ open: true, request: null });
+
+    await within(await band()).findByRole("listitem");
+    expect(document.activeElement).toBe(toggle);
+  });
+
   /** Nothing is asked for and nothing happens — the resting state, and the one every existing
    *  caller of this band is in. */
   it("does nothing at all without a request", async () => {

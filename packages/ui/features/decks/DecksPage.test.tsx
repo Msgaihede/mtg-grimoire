@@ -2451,6 +2451,25 @@ describe("DecksPage folders", () => {
   });
 
   /**
+   * **Archived decks are decks the delete moves**, so the question counts them (issue #1546).
+   * `node.count` is what the wall draws and skips them, so a folder holding only an archived deck
+   * said "It's empty." and then the receipt said one had moved.
+   */
+  it("counts archived decks in the folder-delete question", async () => {
+    deckFolderList.mockResolvedValue([EDH]);
+    deckList.mockResolvedValue([BURN, { ...FILED, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 0 decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Delete Commander" });
+    expect(confirm).toHaveTextContent("Its 1 deck will move to the top level.");
+    expect(confirm).not.toHaveTextContent("It's empty.");
+  });
+
+  /**
    * A folder cannot go inside itself or inside anything it holds — the backend refuses it,
    * because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk forever.
    * The offer is greyed rather than left to be refused: the refusal is a fence, not the
@@ -3640,6 +3659,27 @@ describe("the folder row's menu", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(document.activeElement).toBe(row);
+    expect(deckFolderCreate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The wall's folder card writes the same ref**, from its `⋯` (issue #1546). It never did, so
+   * a layer its menu raised handed the caret to whatever opened the *previous* menu — or, on a
+   * fresh page, to `<body>`.
+   */
+  it("hands the caret back to a folder card's ⋯ when a menu-raised field is dropped", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    const more = screen.getByRole("button", { name: "Manage Commander" });
+    await userEvent.click(more);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New subfolder…" }));
+    await screen.findByLabelText("New folder name");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(more);
     expect(deckFolderCreate).not.toHaveBeenCalled();
   });
 
