@@ -45,6 +45,7 @@ import {
   TOOLTIP_PANEL_ID,
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
+import { COLLECTION_ENTRY_HOME_PREFIXES } from "@/features/home/keys";
 import { readDragData } from "@/features/decks/dnd";
 import { EMPTY_SHELF_ATTR } from "@/features/shelves/EmptyShelf";
 import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
@@ -1052,14 +1053,12 @@ beforeEach(() => {
   shareRefresh.mockReset().mockResolvedValue(undefined);
   shareRevoke.mockReset().mockResolvedValue(undefined);
   shareOpen.mockReset().mockResolvedValue(undefined);
-  syncSupporterStatus
-    .mockReset()
-    .mockResolvedValue({
-      entitled: true,
-      status: "active",
-      since: 1_750_000_000,
-      groupBound: true,
-    });
+  syncSupporterStatus.mockReset().mockResolvedValue({
+    entitled: true,
+    status: "active",
+    since: 1_750_000_000,
+    groupBound: true,
+  });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -4378,6 +4377,13 @@ describe("the collection's shelves", () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "folderSummary"] }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "shelfCounts"] });
+    // And the folder rules' verdicts and the home page's entry-counted reads (issue #1570): a
+    // badge's "breaks rules" count and the dashboard's bars, sets, graph and movers are counted
+    // from the same entries, and their readers sit inside the 30 s `staleTime` otherwise.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "ruleConflicts"] });
+    for (const queryKey of COLLECTION_ENTRY_HOME_PREFIXES) {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey });
+    }
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
   });
 

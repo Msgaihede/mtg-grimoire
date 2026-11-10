@@ -15,6 +15,7 @@
  */
 import { useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { COLLECTION_ENTRY_HOME_PREFIXES } from "@/features/home/keys";
 import { offerUndo } from "@/lib/bulkUndo";
 import { plural } from "@/lib/counts";
 import { ipc, type CollectionRow } from "@/lib/ipc";
@@ -70,6 +71,21 @@ export function useCollectionEntryWrites() {
     // heading over it by exactly what it moved the header — and the counts query is mounted for the
     // life of the page, so a stale mark alone would change nothing.
     void queryClient.invalidateQueries({ queryKey: ["collection", "shelfCounts"] });
+    // And the folder rules' verdicts (issue #1570): `["collection", "ruleConflicts", marketplace]`
+    // counts, per folder, the copies that break a rule of the folder they are filed in — so a
+    // stepper press on a filed row moves a folder badge's count by the copies it added or took
+    // away, and a removal can empty it. Left out, the badge went on saying `2` over a folder that
+    // now broke nothing, and pressing it opened an empty "breaks rules" wall. Its reader is
+    // mounted for the life of the page, for the same reason as the two above.
+    void queryClient.invalidateQueries({ queryKey: ["collection", "ruleConflicts"] });
+    // And the home page's reads counted from the same entries (issue #1570) — the value
+    // breakdown's bars, Set completion, the value graph's live point and Price movers. The header's
+    // summary above already reaches the home total, so a quick return to Home within the app's 30 s
+    // `staleTime` drew a fresh total over all four of these stale. Named by the prefixes
+    // `features/home/keys.ts` spells for exactly this, for the list's reason above.
+    for (const queryKey of COLLECTION_ENTRY_HOME_PREFIXES) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
     // The wishlist counts this list: a wish's `ownedQuantity` is computed from
     // `collection_entries`, so a stepper press has just made every cached wish for that card
     // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
