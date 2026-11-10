@@ -1968,3 +1968,95 @@ fn twenty_one_commander_damage_puts_a_player_out_with_life_left() {
         assert!(!seat.out && seat.commander_damage.is_empty());
     }
 }
+
+/// Issue #1523: Syphon Flesh — each other player sacrifices a creature, and the caster makes a
+/// Zombie for each one sacrificed. Before phase `935f404a` the sacrifices happened and the count
+/// read 0, so no Zombie was made.
+#[test]
+fn each_other_player_sacrifices_and_the_caster_makes_a_zombie_for_each() {
+    let step = engine(|| {
+        let deck = vec![
+            card(
+                "Swamp",
+                None,
+                "Basic Land — Swamp",
+                "({T}: Add {B}.)",
+                None,
+                "B",
+                30,
+            ),
+            card(
+                "Syphon Flesh",
+                Some("{4}{B}"),
+                "Sorcery",
+                "Each other player sacrifices a creature of their choice. You create a 2/2 black \
+                 Zombie creature token for each creature sacrificed this way.",
+                None,
+                "B",
+                4,
+            ),
+            card(
+                "Grizzly Bears",
+                Some("{1}{G}"),
+                "Creature — Bear",
+                "",
+                Some(("2", "2")),
+                "G",
+                4,
+            ),
+        ];
+        let opponents = vec![
+            OpponentDeck {
+                cards: red(),
+                tokens: Vec::new(),
+                person: false,
+            };
+            3
+        ];
+        let (mut game, _) =
+            Playtest::new(&deck, &[], &opponents, 2, Difficulty::VeryEasy).expect("a game");
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        for _ in 0..5 {
+            put_down(&mut game, "Swamp");
+        }
+        for seat in [
+            PlaytestPlayer::Opponent,
+            PlaytestPlayer::Opponent2,
+            PlaytestPlayer::Opponent3,
+        ] {
+            game.put_for_test(seat, "Raging Goblin");
+        }
+        let syphon = in_hand(&mut game, "Syphon Flesh");
+        game.act(A::Play { id: syphon }).unwrap()
+    });
+    assert_eq!(step.view.stage, Stage::Main, "{:?}", step.view.prompt);
+    for seat in [
+        PlaytestPlayer::Opponent,
+        PlaytestPlayer::Opponent2,
+        PlaytestPlayer::Opponent3,
+    ] {
+        assert!(
+            step.happened.contains(&H::Moved {
+                seat,
+                name: Some("Raging Goblin".into()),
+                from: Place::Battlefield,
+                to: Place::Graveyard,
+            }),
+            "{seat:?} sacrificed: {:?}",
+            step.happened
+        );
+    }
+    assert!(
+        find(&step.view.you.battlefield, "Grizzly Bears").is_some(),
+        "the caster sacrifices nothing"
+    );
+    let zombies = step
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.name == "Zombie" && c.is_token)
+        .count();
+    assert_eq!(zombies, 3, "{:?}", step.happened);
+}
