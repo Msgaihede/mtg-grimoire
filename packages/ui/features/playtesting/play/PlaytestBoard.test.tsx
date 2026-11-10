@@ -212,6 +212,55 @@ describe("PlaytestBoard's attack step", () => {
   });
 });
 
+describe("PlaytestBoard's picks across a new view of the same declaration (issue #1591)", () => {
+  const pickTwo = () => {
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Delver/ }));
+    expect(screen.getByRole("button", { name: /Attack with 2/ })).toBeInTheDocument();
+  };
+
+  it.each<[string, (view: PlaytestView) => PlaytestView]>([
+    ["a Stop toggled", (v) => ({ ...v, stops: [{ seat: "opponent", step: "end" }] })],
+    ["the Sandbox pill", (v) => ({ ...v, sandbox: true })],
+    ["a lobby push", (v) => ({ ...v })],
+  ])("keeps the attackers picked across %s", (_, next) => {
+    const { view, elves, delver } = attackStep();
+    const { onAct, rerender } = setup(view);
+    pickTwo();
+    rerender(next(view));
+    fireEvent.keyDown(window, { key: " " });
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "attack",
+      attacks: [
+        { attacker: elves.id, target: null, player: "opponent" },
+        { attacker: delver.id, target: null, player: "opponent" },
+      ],
+    });
+  });
+
+  it("keeps the blocks picked across a new view of the block step", () => {
+    const { view, goyf, ragavan } = blockStep();
+    const { onAct, rerender } = setup(view);
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
+    fireEvent.click(within(theirs()).getByRole("button", { name: /^Ragavan/ }));
+    rerender({ ...view, stops: [{ seat: "you", step: "upkeep" }] });
+    fireEvent.click(screen.getByRole("button", { name: /Confirm blocks/ }));
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "block",
+      blocks: [{ blocker: goyf.id, attacker: ragavan.id }],
+    });
+  });
+
+  it("drops the picks once the declaration moves on", () => {
+    const { view } = attackStep();
+    const { rerender } = setup(view);
+    pickTwo();
+    rerender({ ...view, stage: "main", phase: "main2", attack: null });
+    rerender({ ...view, turn: view.turn + 2 });
+    expect(screen.getByRole("button", { name: /No attack/ })).toBeInTheDocument();
+  });
+});
+
 describe("PlaytestBoard's block step", () => {
   it("assigns a blocker to the attacker clicked after it, and numbers both", () => {
     const { view, goyf, ragavan } = blockStep();
