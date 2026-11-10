@@ -318,6 +318,45 @@ describe("PlaytestBoard's opponent", () => {
     expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [ragavan.id], tapped: true });
   });
 
+  // Issue #1521: the opponent's graveyard offers what the reader's own does, sandbox permitting.
+  it.each([
+    ["a click", fireEvent.click],
+    ["a right-click", fireEvent.contextMenu],
+  ])("opens the opponent's graveyard with %s, to move a card with the sandbox on", (_how, open) => {
+    const view = turnFive().view;
+    const bolt = gameCard("Lightning Bolt");
+    const { onAct } = setup(
+      sandboxed({ ...view, opponents: [{ ...view.opponents[0], graveyard: [bolt] }] }),
+    );
+    open(screen.getByRole("button", { name: /^The opponent's graveyard, / }));
+    const dialog = screen.getByRole("dialog", { name: "The opponent's graveyard" });
+    const card = within(within(dialog).getByRole("group", { name: "Lightning Bolt" }));
+    expect(card.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Hand",
+      "Battlefield",
+      "Exile",
+      "Top",
+      "Bottom",
+    ]);
+    fireEvent.click(card.getByRole("button", { name: "Exile" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "move", id: bolt.id, to: "exile" });
+  });
+
+  it("opens the opponent's graveyard read-only with the sandbox off", () => {
+    const view = turnFive().view;
+    setup({
+      ...view,
+      opponents: [{ ...view.opponents[0], graveyard: [gameCard("Lightning Bolt")] }],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^The opponent's graveyard, / }));
+    const dialog = screen.getByRole("dialog", { name: "The opponent's graveyard" });
+    expect(
+      within(within(dialog).getByRole("group", { name: "Lightning Bolt" })).queryAllByRole(
+        "button",
+      ),
+    ).toEqual([]);
+  });
+
   it("gives the opponent's plate a life stepper only with the sandbox on", () => {
     setup(turnFive().view);
     expect(screen.queryByRole("spinbutton", { name: "Opponent's life" })).toBeNull();

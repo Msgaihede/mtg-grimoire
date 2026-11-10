@@ -31,9 +31,10 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * arrows and the pops find each opponent apart.
  *
  * **Looked at, and handled only through the sandbox**, as a duel's opponent is: the cards point
- * for the preview, the graveyard and exile open read-only, and a click picks only when the rules
- * ask for one (`pick`). With the sandbox's moves working (`sandbox`) a permanent has the
- * sandbox's card menu — tap, counters, a token copy, a move to its owner's zones — and with the
+ * for the preview, the graveyard and exile open to look through, and a click picks only when the
+ * rules ask for one (`pick`). With the sandbox's moves working (`sandbox`) a permanent has the
+ * sandbox's card menu — tap, counters, a token copy, a move to its owner's zones — the graveyard's
+ * and exile's cards the reader's own places (issue #1521), and with the
  * sandbox on (`steppers`) the plate has a life stepper; nothing of theirs is ever dragged — but
  * the reader's cards are carried onto theirs, and onto the plate, to attack or aim (`aim`).
  * **A player who is out** (`seat.out`) stays drawn, dimmed, with "Out" across their table: the

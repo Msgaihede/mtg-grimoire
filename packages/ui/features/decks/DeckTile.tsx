@@ -38,6 +38,7 @@ import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import type { Panel } from "./panels";
 import { useTagOverflow, type TagOverflow } from "./tagRow";
 import { receipt, type Decks } from "./useDecks";
+import { DeckCardCount } from "./deckSizeMark";
 import { ANY_GAME, gameLabel } from "./useFormatSpecs";
 
 // The badge moved to `deckCover.ts` with the cover rules, so the phone gallery can draw both
@@ -213,6 +214,7 @@ export function DeckTile({
   pips,
   bracketLabel,
   bracketExpected,
+  sizeProblem,
   decks,
   nodes,
   folderId,
@@ -280,6 +282,12 @@ export function DeckTile({
    * print a label; this is that answer handed down rather than a second opinion formed here.
    */
   bracketExpected: boolean;
+  /**
+   * Why the deck's card count does not fit its format — the editor's own deck-size sentence —
+   * or `null` when it fits or the format judges nothing. The page answers it from the engine
+   * (`useDeckWallMarks`' `sizeProblemFor`); the tile only draws the count red (issue #1524).
+   */
+  sizeProblem: string | null;
   decks: Decks;
   nodes: readonly FolderNode[];
   /** The folder it is in now, normalised through the folder list this screen actually has. */
@@ -423,7 +431,7 @@ export function DeckTile({
 
   /** The caption's words, drawn in the button at rest and again under the field — see
    *  {@link CAPTION_LINE}. One node, so the two drawings cannot come to say different things. */
-  const caption = <DeckCaption deck={deck} />;
+  const caption = <DeckCaption deck={deck} sizeProblem={sizeProblem} />;
 
   return (
     // The two scale variables are set here, on the tile's own root, so everything drawn inside it
@@ -1296,15 +1304,15 @@ function TagHover({ tags, edgeTaken }: { tags: readonly string[]; edgeTaken: boo
 /**
  * `Modern · Arena · 60 cards` — what rules the list is built to, where it is played and how big
  * it is. One definition for every tile that captions a deck; {@link DeckTile}'s note on the line
- * says why `Any` is never printed and why the bracket is not a fourth segment.
+ * says why `Any` is never printed and why the bracket is not a fourth segment. The count goes red
+ * when it does not fit the format ({@link DeckCardCount}, issue #1524).
  */
-function DeckCaption({ deck }: { deck: DeckRow }) {
+function DeckCaption({ deck, sizeProblem }: { deck: DeckRow; sizeProblem: string | null }) {
   return (
     <>
       {deck.formatName ?? deck.formatKey}
       {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-      <span className="font-mono tabular-nums">{deck.cardCount}</span>{" "}
-      {deck.cardCount === 1 ? "card" : "cards"}
+      <DeckCardCount count={deck.cardCount} problem={sizeProblem} />
     </>
   );
 }
@@ -1329,6 +1337,7 @@ export function DeckPickTile({
   pips,
   bracketLabel,
   bracketExpected,
+  sizeProblem,
   zoom,
   picked,
   onPick,
@@ -1341,6 +1350,8 @@ export function DeckPickTile({
   bracketLabel: string | null;
   /** As {@link DeckTile}'s: whether a pill is coming, which places the tag row. */
   bracketExpected: boolean;
+  /** As {@link DeckTile}'s: why the count does not fit the format, or `null`. */
+  sizeProblem: string | null;
   /** How large the reader draws the deck gallery — the lobby's wall follows the same zoom. */
   zoom: number;
   picked: boolean;
@@ -1368,7 +1379,7 @@ export function DeckPickTile({
         <span className={NAME_LINE}>{deck.name}</span>
         {colorsLabel !== null && <span className="sr-only">{colorsLabel}</span>}
         <span className={CAPTION_LINE}>
-          <DeckCaption deck={deck} />
+          <DeckCaption deck={deck} sizeProblem={sizeProblem} />
         </span>
         {tagsHidden && <TagHover tags={deck.tags} edgeTaken={edgeTaken} />}
       </button>

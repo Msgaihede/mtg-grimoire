@@ -1,6 +1,5 @@
 /**
- * A wall of deck tiles: its tracks, and the two facts every tile on it reads once for the whole
- * wall.
+ * A wall of deck tiles: its tracks, and the facts every tile on it reads once for the whole wall.
  *
  * Lifted out of `DecksPage.tsx` when the Playtesting lobby came to draw the same wall to pick
  * decks from: two walls of one tile at two track widths, or with a bracket worked out two ways,
@@ -10,6 +9,7 @@ import { useCallback, useMemo, type CSSProperties } from "react";
 import { atLeast, scaled } from "@/lib/cardZoom";
 import type { DeckRow } from "@/lib/ipc";
 import type { PipCounts } from "@/lib/mana";
+import { deckSizeProblem } from "./deckSizeMark";
 import { bracketLabel, useDeckBrackets } from "./useDeckBrackets";
 import { useDeckPips } from "./useDeckPips";
 import { useFormatSpecs } from "./useFormatSpecs";
@@ -58,6 +58,9 @@ export interface DeckWallMarks {
   bracketFor: (deck: DeckRow) => string | null;
   /** Whether a bracket pill is *coming* — see `DeckTile`'s `bracketExpected`. */
   bracketExpectedFor: (deck: DeckRow) => boolean;
+  /** Why the deck's card count does not fit its format, or `null` when it does or the format
+   *  judges nothing — see `deckSizeMark.tsx` (issue #1524). */
+  sizeProblemFor: (deck: DeckRow) => string | null;
 }
 
 /** A wall whose reads have not answered, or a surface with none to make: no bands, no pills. */
@@ -66,6 +69,7 @@ export const NO_WALL_MARKS: DeckWallMarks = {
   floorByDeck: new Map(),
   bracketFor: () => null,
   bracketExpectedFor: () => false,
+  sizeProblemFor: () => null,
 };
 
 /**
@@ -114,8 +118,12 @@ export function useDeckWallMarks(decks: readonly DeckRow[]): DeckWallMarks {
     (deck: DeckRow) => formatSpecFor(deck.formatKey)?.commanderRule != null,
     [formatSpecFor],
   );
+  const sizeProblemFor = useCallback(
+    (deck: DeckRow) => deckSizeProblem(deck, formatSpecFor(deck.formatKey)),
+    [formatSpecFor],
+  );
   return useMemo(
-    () => ({ pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor }),
-    [pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor],
+    () => ({ pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor, sizeProblemFor }),
+    [pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor, sizeProblemFor],
   );
 }

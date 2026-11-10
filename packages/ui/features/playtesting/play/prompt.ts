@@ -51,6 +51,7 @@ const TITLES: Record<string, string> = {
   ReplacementChoice: "Choose a replacement effect",
   OrderTriggers: "Put your triggers in order",
   AssignCombatDamage: "Assign combat damage",
+  RetargetChoice: "Choose a new target",
 };
 
 /** What the reader is choosing, for the questions whose title alone does not say it. */
@@ -167,6 +168,9 @@ const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
  * An alternative cost's answers are the keyword's cost by its name ("Overload") and the printed
  * "Mana cost" (issue #1072).
  *
+ * A retarget's answers name the new target (issue #1520); the one that names none leaves the
+ * spell's targets as they are ("Keep the targets").
+ *
  * A player is "You" or "Opponent", and at a four-player table (`opponents` of 3) the opponent's
  * number too: "Opponent 2".
  */
@@ -199,7 +203,11 @@ export function optionLabel(
     (option.yes === null ? null : option.yes ? "Yes" : "No") ??
     numberText(option.number, prompt.kind) ??
     (cards.length > 0 || players.length > 0 ? [...cards, ...players].join(", ") : null) ??
-    (option.kind === "ChooseTarget" ? "No more targets" : (hint ?? words(option.kind)));
+    (option.kind === "ChooseTarget"
+      ? "No more targets"
+      : option.kind === "RetargetSpell"
+        ? "Keep the targets"
+        : (hint ?? words(option.kind)));
   // The hint repeats nothing: when the line is already the kind's words, it goes.
   return { text, hint: hint === text ? null : hint };
 }

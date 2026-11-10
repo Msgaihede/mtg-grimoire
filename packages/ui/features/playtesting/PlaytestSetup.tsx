@@ -829,6 +829,7 @@ function DeckWall({
                 pips={marks.pipsByDeck.get(deck.id) ?? null}
                 bracketLabel={marks.bracketFor(deck)}
                 bracketExpected={marks.bracketExpectedFor(deck)}
+                sizeProblem={marks.sizeProblemFor(deck)}
                 zoom={zoom}
                 picked={isSeated(deck)}
                 onPick={onPick}

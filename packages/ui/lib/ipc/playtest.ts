@@ -439,7 +439,8 @@ export type PlaytestAction =
   | { type: "auto" }
   | { type: "cancel" }
   /*
-   * The sandbox, refused while it is off, in the reader's main phase only: any card the reader
+   * The sandbox, refused while it is off, taken wherever the reader plays or declares (`main`,
+   * `respond`, `attack`, `block`; issue #1522), never in a question: any card the reader
    * owns or controls, and any card on the table (an opponent's battlefield, graveyard, exile or
    * command zone) — never an opponent's hand or library.
    */

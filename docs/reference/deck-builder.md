@@ -23,6 +23,11 @@ Validation is executed entirely in TypeScript:
 - Both entry points return `[]` when `!spec.validates`, read from the cell and never the key. `casual` is not the same thing: it is still judged (commander zone, companion condition).
 - Every surface that would otherwise read an empty list as a pass says **Not checked** instead: `ValidationPanel`'s chip (grey `CircleDashed`, `Not checked · Unspecified`) and its findings sentence, and the phone rail's Check section. `companionRefusal` refuses nothing in such a format, so `Set as companion` never refuses what the panel accepts.
 
+### The gallery's card count (issue #1524)
+- A deck tile's caption count (`Commander · Paper · 73 cards`) is drawn `text-destructive` when it does not fit the deck's format, so a wall of decks says at a glance which are playable. Desktop gallery, Playtesting lobby and the phone gallery alike (`deckSizeMark.tsx`'s `DeckCardCount`).
+- The rule is the engine's own: `deckSizeIssue(size, spec)` is what `validateDeck` sizes a deck with, exported so the wall can judge `DeckRow.cardCount` — which counts the same `SIZE_KINDS` in active categories of the live list. The tile's hover and its accessible name carry the panel's sentence; colour is never the only signal.
+- No mark where nothing can judge: an `unspecified` format (`validates` false) or a key the seed no longer carries draws a plain count, never a verdict.
+
 ### Commander Bracket Estimation
 - `estimateBracket` calculates a **floor**, never an absolute bracket.
 - Commander bracket rules are formulated as negative prohibitions (e.g., Bracket 2 may not run mass land denial; Bracket 3 may run at most three Game Changers).

@@ -144,8 +144,9 @@ import { sandboxEditsAt } from "./sandbox";
  * game waits on the reader to play or to declare — the main phase, a response or a step they
  * stopped at, the declare steps (`sandbox.ts`, issue #1522) — never in the middle of a question,
  * so the board offers them only then and only while nothing is with the engine (`edits`); off,
- * none of them is drawn, and what is left is the rules'. With it on they
- * reach **every card the table shows**: an opponent's permanents get the sandbox's card menu and
+ * none of them is drawn, and what is left is the rules'. With it on they reach **every card the
+ * table shows**: an opponent's permanents get the sandbox's card menu, their graveyard and exile
+ * the same places to move a card to as the reader's own (issue #1521), and
  * their plates a stepper — but an opponent's cards are never dragged, and their hand and library
  * are counts the reader never touches.
  *

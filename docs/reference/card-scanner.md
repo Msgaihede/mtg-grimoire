@@ -915,6 +915,17 @@ picture is the whole card, never the `art` crop**: a crop has no printed frame a
 apart is the frame. A waiting row spans the grid (`col-span-full`) with its candidates on the grid's
 own column template (issue #1004).
 
+**Ctrl+wheel zooms the tray** (issue #1525): `cardZoom.scanner`, one section for the page's column and
+the pack opener's drawer — they are one `TrayPanel` drawn in two places, so a size set in one is the
+other's. The gesture is caught on the tray's `<section>`, which is mounted from the first frame, rather
+than on its scroller, which an empty tray and a layout switch replace. The grid's 10.5rem floor is
+multiplied by the zoom (`tileColumns`); above life size its 50% cap becomes the whole width, so a
+zoomed tray can go to one card a line, and past life size a tile asks for the walls' `display`
+picture. Below it the chin folds the stepper under the finish (`chinFolds`): neither control scales,
+and a tile under 10.5rem cannot hold `Unknown` and the 24px stepper on one line. The column probe is
+keyed on the template, since a new template can change the count without resizing the probe. The
+list's thumbnails (36px) and candidates (64px) follow the same number.
+
 **Every resolved row carries one copy's price at the reader's marketplace** (issue #736): one
 `printing_prices(cardIds, marketplace)` read for the whole tray under `["cards", "prices"]`, the row's
 own finish (`reader/trayPrice.ts`; for `unknown` the chain `nonfoil → foil → etched`). A row waiting on

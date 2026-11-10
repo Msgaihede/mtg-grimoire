@@ -30,13 +30,15 @@ import type { Pointed, ZoneLook } from "./types";
  * sandbox off a library is not looked through at all.
  *
  * **`opponent` is a look at another player's zone** — an opponent's graveyard or exile, named as
- * theirs (`owner`), and read-only like `readOnly`: their cards are moved through their own
- * battlefield's menu with the sandbox on, never from here.
+ * theirs (`owner`). It offers what the reader's own does (issue #1521): with the sandbox's moves
+ * working each card carries the same places, and the engine puts it in its owner's zones (their
+ * hand, their library — `session.rs`' `put`), as their battlefield's menu does; without them it
+ * is read-only like the reader's own.
  *
  * **A card the rules let the reader cast from here carries a Cast** ({@link GameCard.castable}: a
- * foretold card in exile, a flashback card in the graveyard), whatever `readOnly` says — it is the
- * rules' play, not a hand move. It closes the dialog, since the cast may ask a question of its own.
- * A foretold card says so under it.
+ * foretold card in exile, a flashback card in the graveyard — or an opponent's card an effect lets
+ * the reader cast), whatever `readOnly` says — it is the rules' play, not a hand move. It closes
+ * the dialog, since the cast may ask a question of its own. A foretold card says so under it.
  *
  * **A card rested on opens the board's inspect preview** (issue #1373): at 120 px a card's text
  * cannot be read, and the look is for reading it. Each card points itself at the board through
@@ -88,7 +90,7 @@ export function LibraryDialog({
     searching && needle !== "" ? shown.filter((c) => c.name.toLowerCase().includes(needle)) : shown;
 
   const title = opponent ? opponentTitle(look, owner) : titleFor(look);
-  const places = opponent || readOnly ? [] : placesFor(look);
+  const places = readOnly ? [] : placesFor(look);
 
   const send = (card: GameCard, to: GamePlace) => {
     // Out of the window unless it went back on top of it.
@@ -168,9 +170,9 @@ export function LibraryDialog({
                     {i === 0 ? "On top" : `${i + 1} from the top`}
                   </span>
                 )}
-                {((card.castable && !opponent) || places.length > 0) && (
+                {(card.castable || places.length > 0) && (
                   <div className="flex flex-wrap gap-1">
-                    {card.castable && !opponent && (
+                    {card.castable && (
                       <button
                         type="button"
                         onClick={() => {

@@ -183,7 +183,11 @@ generically, never matched variant by variant.
   `DiscardChoice`. The page puts the common ones in words and splits any other at its capitals.
 - Each option is one `GameAction`, described by the facts in its JSON data (`option_of`):
   - the cards and players it names, read from a handful of field names: `object_id`, `targets`,
-    `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`;
+    `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`.
+    A retarget's `new_targets` (`RetargetSpell`, Deflecting Swat's "choose new targets") is one
+    entry per target of the spell, `null` for each left as it is, so each answer names its new
+    target — a card the board lights up and takes a click on (`pickableCards`), or a player — and
+    the answer that names none is "Keep the targets" (issue #1520);
   - a number (`value`, `index`, `ability_index`, the first of `indices`), which is 0-based;
   - a yes or no (`accept`, `pay`, `top`);
   - a named choice's word (`choice`);
@@ -848,8 +852,10 @@ facts are found as a run of `step.happened`, and the end takes the rest.
     is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
   - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,
     the keys and every drag ([goldfish.md](goldfish.md#the-table)). **The opponents' battlefield
-    cards get a card menu** too (tap, counters, token copy, move), and their plates steppers. An
-    opponent's card is never dragged, and their hand and library stay counts.
+    cards get a card menu** too (tap, counters, token copy, move), their graveyard and exile the
+    same places to move a card to as the reader's own (issue #1521) — the engine puts it in its
+    owner's zones — and their plates steppers. An opponent's card is never dragged, and their hand
+    and library stay counts.
 - **Your cards:** a double-click or a drop on the table plays a card from the hand or the command
   zone, and "Activate ability" heads a battlefield card's menu. **A click on a permanent the rules
   let tap for mana (`canTapForMana`) taps it for mana**, sandbox or not, and "Tap for mana" is on
@@ -857,7 +863,8 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   `canTapForMana` (`pileKey`), so a click never lands on a summoning-sick twin. In `respond`, the hand, the
   abilities and the sandbox are all as in the main phase.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
-  read-only. They are never dragged, and their table takes no zone drops (`refuse`) — only the
+  (a click or a right-click) as the reader's own do: read-only with the sandbox's moves not
+  working, with every card's places and a castable card's Cast with them (issue #1521). They are never dragged, and their table takes no zone drops (`refuse`) — only the
   rules' aims below.
 - **Drag beside every click** (issue #1335, `play/aim.ts`). A card carried onto a card or a plate
   makes the same picks and sends the same actions as the clicks; nothing new reaches the engine.
