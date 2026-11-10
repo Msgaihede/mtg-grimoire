@@ -194,7 +194,7 @@ export function UpdatePanel({
  * the restart; a hint and not a dialog, because the press is already the second, deliberate one.
  */
 function PrimaryAction({ update, windows }: { update: Update; windows: number }) {
-  const { status, action, busy } = update;
+  const { status, action, busy, progress } = update;
   const hintId = useId();
   const gold =
     "border-accent/60 text-accent hover:bg-accent/10 disabled:hover:bg-transparent";
@@ -248,7 +248,11 @@ function PrimaryAction({ update, windows }: { update: Update; windows: number })
       className={cn(PANEL_BUTTON, gold)}
     >
       <Download className="size-4" aria-hidden="true" />
-      {busy
+      {/* **Keyed on bytes arriving, not on `busy`** (issue #1596): `busy` is true for a check too
+          — Check now, or the startup check over a cached release — and a check is not a
+          download. `progress` is `null` at every moment but a download's, which is the same
+          test `updateActivity` puts the header's line on. */}
+      {progress !== null
         ? "Downloading…"
         : `Download ${status?.asset ? formatBytes(status.asset.size) : "the update"}`}
     </button>

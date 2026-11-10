@@ -33,7 +33,7 @@ describe("HiddenTagsPanel", () => {
     render(<HiddenTagsPanel hidden={state({ tags: [] })} />);
 
     expect(panel()).toHaveTextContent("You haven't hidden any tags.");
-    expect(panel()).toHaveTextContent("Right-click a tag on the Tags page");
+    expect(panel()).toHaveTextContent("Right-click a tag in the Search page's tag sidebar");
     expect(within(panel()).queryByRole("button")).not.toBeInTheDocument();
   });
 
