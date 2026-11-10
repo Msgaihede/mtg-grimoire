@@ -124,6 +124,34 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # The emulator and its system image, installed here, with retries, before the action installs
+      # them. Twice a download arrived corrupt (`Error on ZipFile unknown archive`): the system image
+      # on 2026-10-20 (run 39468104072) and the emulator on 2026-10-29 (run 40887587846). sdkmanager
+      # only warned, the action went on, and no emulator ever answered on port 5554. Once both are
+      # installed and current, the action's own `sdkmanager --install` of the same packages has
+      # nothing to download. The packages and channel are the action's: `emulator` and the image
+      # below, on channel 0 (stable).
+      - name: Install the emulator and its system image
+        run: |
+          set -euo pipefail
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          image="system-images;android-34;google_apis;x86_64"
+          { yes || true; } | "$sdk" --licenses > /dev/null
+          # Installed means in sdkmanager's own list: a package whose archive was corrupt is not.
+          for attempt in 1 2 3; do
+            "$sdk" --install emulator "$image" --channel=0 > /dev/null || true
+            installed=$("$sdk" --list_installed 2> /dev/null || true)
+            rows=$(grep -E "^[[:space:]]*(emulator|$image)[[:space:]]*\|" <<< "$installed" || true)
+            if [ "$(wc -l <<< "$rows")" -eq 2 ] && [ -x "$ANDROID_HOME/emulator/emulator" ]; then
+              echo "$rows"
+              exit 0
+            fi
+            echo "attempt $attempt: the emulator or its system image did not install" >&2
+            sleep $((attempt * 15))
+          done
+          echo "the emulator or its system image did not install in three attempts" >&2
+          exit 1
+
       # API 34, `google_apis`: an image whose adbd can run as root, so the script can read the
       # databases' sizes out of a release build's private folder, which `run-as` cannot (it
       # needs a debuggable app). Four cores is the runner's all; the 6 GB data partition holds

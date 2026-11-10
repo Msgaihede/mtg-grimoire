@@ -137,6 +137,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
   - Non-gating performance diagnostic workflow. Builds and boots the Android APK on an x86_64 emulator under KVM.
   - Times cold launch, measures first-run corpus sync, checks for process crashes (`destroyed mutex`, `Fatal signal`), and captures screenshots.
   - Before the launch, `scripts/android-first-run.sh` switches the emulator's cellular link off, waits for a *validated* unmetered default network, and restarts a Wi-Fi that has not validated, up to twice. A metered default makes the app hold its downloads, and the run then fails *held* with nothing wrong in the app (2026-11-10, run 42792532314).
+  - Before the emulator action, a step installs `emulator` and the system image itself, up to three attempts, and checks both are in `sdkmanager --list_installed`. A corrupt download only makes sdkmanager warn, and the emulator then never starts (2026-10-20, 2026-10-29).
   - Triggered via `workflow_dispatch` or changes to Android host files, `crates/grimoire-core/**`, or `scripts/android-first-run.sh`.
 
 ## `neural-train.yml` & `neural-deliver.yml` — the Neural scanner's training
