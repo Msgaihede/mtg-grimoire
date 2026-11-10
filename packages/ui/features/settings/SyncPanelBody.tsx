@@ -31,6 +31,7 @@ import { ago } from "@/lib/relativeTime";
 import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { viewMemory } from "@/lib/viewMemory";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PANEL_BUTTON, TOUCH_CODE_ROOM, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
@@ -173,6 +174,43 @@ type Flow =
    * nothing here for the poll to fill in — only the move to `"complete"` still matters to it.
    */
   | { kind: "join"; sas: string };
+
+/**
+ * The pairing in flight, kept for the panel's next mount (issue #1594).
+ *
+ * **The ceremony outlives the panel and the panel's state did not.** The backend's pending
+ * attempt sits in the host process until it completes, is cancelled or runs out of time, and
+ * {@link ipc.syncPairingPoll} is the only thing that advances it — `respond` on the offering
+ * side, `complete` on the joining side. Its only caller is this panel's query, enabled by
+ * {@link Flow}. `SettingsPage` unmounts the panel on every group or search change, and the shell
+ * on every change of view, so a reader who stepped away mid-pairing came back to the idle buttons
+ * over a backend still holding the attempt: no *Codes match* to press on the offering side, and on
+ * the joining side no poll ever again — so it never fetched the sealed key, while the other
+ * device toasted *Device paired* and listed it.
+ *
+ * **Held here rather than rebuilt from a poll on mount**, which was the other candidate: the poll
+ * answers a stage and the digits, never which half this device is playing, and never the code
+ * and QR an offer still has to show until the other device answers. Only this side ever had
+ * those, so this side keeps them.
+ *
+ * **Only `"offer"` and `"join"` are kept.** They are the two flows with something on the backend
+ * to resume; `"reading"` and `"scanning"` have sent nothing, and coming back to a live camera
+ * because the reader once opened it would be a surprise rather than a resumption. Window-lifetime
+ * module memory (`@/lib/viewMemory`), the backend's own lifetime: a restart forgets both.
+ *
+ * Whatever is kept is checked by the poll the moment it is drawn, so a kept flow cannot outlive
+ * its attempt: an attempt that ran out of time while the reader was away answers `"expired"` on
+ * the first poll and says so; one the other side finished answers `"complete"` and toasts.
+ */
+const pairingMemory = viewMemory<Flow>("settings.sync.pairing");
+
+/** What a mount resumes: a kept {@link Flow} with a backend attempt behind it, or `"idle"`. */
+function resumedFlow(): Flow {
+  const kept = pairingMemory.recall();
+  return kept !== undefined && (kept.kind === "offer" || kept.kind === "join")
+    ? kept
+    : { kind: "idle" };
+}
 
 /**
  * A box the reader pastes or types a blob into, and the one press that reads it.
@@ -1159,7 +1197,27 @@ function SupporterSection({
 export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element {
   const client = useQueryClient();
   const live = useDeviceSyncLive();
-  const [flow, setFlow] = useState<Flow>({ kind: "idle" });
+  const [flow, setFlow] = useState<Flow>(resumedFlow);
+  /**
+   * Every flow this panel draws is kept for its next mount — see {@link pairingMemory}. An effect
+   * and not the setter, because three of the writes are made during render (the guarded `if`s
+   * further down), where a write to another store must not happen. It writes no React state, so
+   * `react-hooks/set-state-in-effect` has nothing to flag.
+   */
+  useEffect(() => {
+    pairingMemory.keep(flow);
+  }, [flow]);
+  /**
+   * Enter a flow from a mutation's answer. **Kept as well as set**, because the answer can land
+   * after the reader has left the panel — a `begin` or `accept` still in flight as they pressed
+   * another group — and a setter on an unmounted panel goes nowhere, while the attempt it
+   * started is now live on the backend. Writing the memory here is what lets the next mount pick
+   * that attempt up instead of drawing the idle buttons over it.
+   */
+  const enter = (next: Flow) => {
+    pairingMemory.keep(next);
+    setFlow(next);
+  };
   const [removing, setRemoving] = useState<PairedDevice | null>(null);
   /** The Leave dialog is open. A bare boolean where {@link removing} carries a device, because
    *  the device leaving is always this one — there is nothing to name. */
@@ -1229,12 +1287,12 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
   const begin = useMutation({
     mutationFn: () => ipc.syncPairingBegin(),
     onMutate: startNewAttempt,
-    onSuccess: (offer) => setFlow({ kind: "offer", offer, sas: null }),
+    onSuccess: (offer) => enter({ kind: "offer", offer, sas: null }),
   });
   const accept = useMutation({
     mutationFn: (code: string) => ipc.syncPairingAccept(code),
     onMutate: startNewAttempt,
-    onSuccess: (shake) => setFlow({ kind: "join", sas: shake.sas }),
+    onSuccess: (shake) => enter({ kind: "join", sas: shake.sas }),
     /**
      * **A refused `accept` from the camera has to leave the reader something to press.**
      * `QrScanner` stops its tracks the moment it decodes, and its effect has `[]` deps, so a
@@ -1264,7 +1322,9 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
     // The offer is gone whether or not the backend answered — a cancel that failed still means
     // the reader is done with this screen, and the code on it stops working when the process
     // does. Settling the flow in `onSettled` is what stops a refusal stranding the panel mid-step.
-    onSettled: () => setFlow({ kind: "idle" }),
+    // `enter` rather than the bare setter for its reason: a cancel that lands after the reader
+    // left must not leave the next mount resuming the attempt it threw away.
+    onSettled: () => enter({ kind: "idle" }),
   });
   const rename = useMutation({
     mutationFn: ({ deviceId, name }: { deviceId: string; name: string }) =>
