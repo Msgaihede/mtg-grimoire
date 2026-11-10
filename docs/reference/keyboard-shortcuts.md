@@ -60,9 +60,17 @@ Four rules, each with a failure behind it:
   the layout prints, and AZERTY's unshifted digit row prints `&`, `é`, `"`… — the digits are
   behind Shift, which the exactness rule refuses on `Ctrl+1`. So `Ctrl+1…9` was unreachable there
   by either spelling. `Digit1` is the same key on every layout; `e.key` still matches as well,
-  which keeps the numeric keypad working. Only digits: a letter chord follows the letter printed
-  on the cap, so AZERTY's undo is the key that says `Z`. **Written to the spec and not tried on an
-  AZERTY keyboard** — `shortcuts.test.ts` pins it with synthetic `code`s.
+  which keeps the numeric keypad working. **Written to the spec and not tried on an AZERTY
+  keyboard** — `shortcuts.test.ts` pins it with synthetic `code`s.
+- **A Latin letter matches on its physical key only when the layout's letter is not Latin**
+  (issue #1568, 2026-11-10). On a Russian, Greek or Hebrew layout `e.key` is the layout's own
+  character — Russian `Ctrl+Z` is `key: "я"`, `code: "KeyZ"` — so every letter chord (`Ctrl+Z`,
+  `Ctrl+Y`, `Ctrl+Shift+Z`, `Ctrl+K`, `Ctrl+A`, `Ctrl+Shift+N`) was dead after switching layout to
+  type a card name, and `Ctrl+A` fell through to the webview's select-all. `KeyZ` now matches `z`
+  when `e.key` is one non-ASCII character. A Latin layout keeps the printed-letter rule, so
+  AZERTY's undo is still the key that says `Z` and QWERTZ's `KeyZ` (printing `y`) is redo only;
+  an ASCII layout printing punctuation on a letter key (Dvorak's `KeyZ` is `;`) gains no second
+  binding. **Pinned with synthetic events, not tried in a live WebView2 on such a layout.**
 
 ### The two chords that narrowed away
 
