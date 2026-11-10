@@ -1,20 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, type JSX } from "react";
+import type { JSX } from "react";
 import { ReducedBreakdown } from "@/components/ReducedPrice";
 import { collectionTotalKey } from "@/features/home/keys";
-import {
-  DEFAULT_COLLECTION_VALUE,
-  parseBulkPrice,
-  parseMinimumValue,
-  parseSellPercent,
-  reducedValue,
-  reducesValue,
-} from "@/lib/collectionValue";
+import { DEFAULT_COLLECTION_VALUE, reducedValue, reducesValue } from "@/lib/collectionValue";
 import { FOCUS } from "@/lib/focus";
 import { ipc, type CollectionValue } from "@/lib/ipc";
 import { formatPrice } from "@/lib/prices";
 import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { useReductionDrafts } from "@/lib/useReductionDrafts";
 import { cn } from "@/lib/utils";
 import { PANEL_BUTTON, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
@@ -23,9 +17,11 @@ import { PanelAlert, SettingsSection } from "./panelChrome";
 const ID = "collection-value";
 
 /** The crate's bounds, in the page's own words for each box. */
-const SELL_REFUSED = "Sell percentage has to be above 0 and at most 100.";
-const MINIMUM_REFUSED = "Minimum card value has to be a price of zero or more.";
-const BULK_REFUSED = "Bulk price has to be a price of zero or more.";
+const REFUSED = {
+  sellPercent: "Sell percentage has to be above 0 and at most 100.",
+  minimumValue: "Minimum card value has to be a price of zero or more.",
+  bulkPrice: "Bulk price has to be a price of zero or more.",
+};
 
 const BOX = cn(
   "w-24 rounded-md border border-border bg-bg px-2 py-1 text-right font-mono text-sm text-text",
@@ -41,9 +37,10 @@ function Row({
   detail,
   prefix,
   suffix,
-  initial,
+  value,
   placeholder,
   disabled = false,
+  onDraft,
   onCommit,
 }: {
   id: string;
@@ -51,12 +48,13 @@ function Row({
   detail: string;
   prefix?: string;
   suffix?: string;
-  /** What the box starts from. It is re-seeded whenever the stored figure moves. */
-  initial: string;
+  /** The box's draft — what is stored until the reader types (`useReductionDrafts`). */
+  value: string;
   placeholder: string;
   /** Greyed, its figure kept: a setting with nothing to act on yet. `detail` says why. */
   disabled?: boolean;
-  onCommit: (text: string) => void;
+  onDraft: (text: string) => void;
+  onCommit: () => void;
 }): JSX.Element {
   return (
     <div
@@ -73,17 +71,22 @@ function Row({
         {prefix !== undefined && <span>{prefix}</span>}
         <input
           id={id}
-          // Re-seeded whenever the stored figure moves — another window's change, or a refusal
-          // putting it back — and otherwise the reader's draft.
-          key={initial}
+          // One node for the box's whole life (issue #1589): a stored figure re-seeds the draft, so
+          // Enter keeps the caret here. Greyed with `aria-disabled` and read-only, never
+          // `disabled`, so it stays in the tab order — a Tab out of Minimum lands on it even as
+          // that commit is what wakes it.
           type="text"
           inputMode="decimal"
-          defaultValue={initial}
+          value={value}
           placeholder={placeholder}
-          disabled={disabled}
-          onBlur={(e) => onCommit(e.currentTarget.value)}
+          aria-disabled={disabled || undefined}
+          readOnly={disabled}
+          onChange={(e) => onDraft(e.target.value)}
+          onBlur={() => {
+            if (!disabled) onCommit();
+          }}
           onKeyDown={(e) => {
-            if (e.key === "Enter") onCommit(e.currentTarget.value);
+            if (e.key === "Enter" && !disabled) onCommit();
           }}
           className={cn(BOX, disabled && "cursor-not-allowed")}
         />
@@ -101,7 +104,8 @@ function Row({
  * **A box is a draft until it loses focus or Enter is pressed**, `ScanSoundsPanel`'s rule: a
  * minimum is a new read of the collection, and a reader typing `0.50` is not asking for `0`, `0.` and
  * `0.5` on the way. Then the box is checked and stored, or its sentence is shown and nothing is
- * written. An empty box is that setting's default, which is how one is turned off.
+ * written. An empty box is that setting's default, which is how one is turned off. Each box's
+ * refusal is its own and stays while its draft does (`useReductionDrafts`, issue #1589).
  *
  * **The figures below the boxes are the tooltip's**: `ReducedBreakdown`, over the same total the
  * home page reads, so a reader sees what a setting does to their own collection before they leave
@@ -119,7 +123,11 @@ function Row({
 export function CollectionValuePanel(): JSX.Element {
   const { settings, minimum, setSettings } = useCollectionValue();
   const { marketplace } = useMarketplace();
-  const [refusal, setRefusal] = useState<string | null>(null);
+  const { drafts, setDraft, commit, refusal, reset } = useReductionDrafts(
+    settings,
+    setSettings,
+    REFUSED,
+  );
   const currency = marketplace.currency;
   const sign = formatPrice(0, currency).replace(/[\d.,\s]/g, "");
   const noMinimum = settings.minimumValue === 0;
@@ -134,16 +142,6 @@ export function CollectionValuePanel(): JSX.Element {
         minimumValue: minimum,
       }),
   });
-
-  /** A box committed: checked, and stored if it says something new. */
-  const commit = (field: keyof CollectionValue, value: number | null, sentence: string) => {
-    if (value === null) {
-      setRefusal(sentence);
-      return;
-    }
-    setRefusal(null);
-    if (value !== settings[field]) setSettings({ ...settings, [field]: value });
-  };
 
   const summary = total.data;
   const reduced =
@@ -165,18 +163,20 @@ export function CollectionValuePanel(): JSX.Element {
         title="Sell percentage"
         detail="The share of market price you expect to get. Sellers often get 70–85%."
         suffix="%"
-        initial={settings.sellPercent === 100 ? "" : String(settings.sellPercent)}
+        value={drafts.sellPercent}
         placeholder="100"
-        onCommit={(text) => commit("sellPercent", parseSellPercent(text), SELL_REFUSED)}
+        onDraft={(text) => setDraft("sellPercent", text)}
+        onCommit={() => commit("sellPercent")}
       />
       <Row
         id={`${ID}-minimum`}
         title="Minimum card value"
         detail="Cards priced below this aren't counted at their price, because they aren't worth selling one by one."
         prefix={sign}
-        initial={noMinimum ? "" : settings.minimumValue.toFixed(2)}
+        value={drafts.minimumValue}
         placeholder="0.00"
-        onCommit={(text) => commit("minimumValue", parseMinimumValue(text), MINIMUM_REFUSED)}
+        onDraft={(text) => setDraft("minimumValue", text)}
+        onCommit={() => commit("minimumValue")}
       />
       <Row
         id={`${ID}-bulk`}
@@ -187,10 +187,11 @@ export function CollectionValuePanel(): JSX.Element {
             : "What each card under the minimum is worth instead, such as a store's bulk rate. Empty counts them as nothing."
         }
         prefix={sign}
-        initial={settings.bulkPrice === 0 ? "" : settings.bulkPrice.toFixed(2)}
+        value={drafts.bulkPrice}
         placeholder="0.00"
         disabled={noMinimum}
-        onCommit={(text) => commit("bulkPrice", parseBulkPrice(text), BULK_REFUSED)}
+        onDraft={(text) => setDraft("bulkPrice", text)}
+        onCommit={() => commit("bulkPrice")}
       />
 
       <PanelAlert tone="problem">{refusal}</PanelAlert>
@@ -225,7 +226,7 @@ export function CollectionValuePanel(): JSX.Element {
             <button
               type="button"
               onClick={() => {
-                setRefusal(null);
+                reset();
                 setSettings(DEFAULT_COLLECTION_VALUE);
               }}
               className={cn(PANEL_BUTTON, "border-border text-text")}

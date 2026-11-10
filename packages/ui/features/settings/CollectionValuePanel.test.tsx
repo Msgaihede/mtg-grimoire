@@ -75,7 +75,9 @@ describe("CollectionValuePanel", () => {
     expect(screen.queryByText(/^Bulk at/)).toBeNull();
     await waitFor(() => expect(sell()).toHaveValue("70"));
     expect(minimum()).toHaveValue("0.50");
-    expect(collectionSummary).toHaveBeenLastCalledWith(expect.objectContaining({ minimumValue: 0.5 }));
+    expect(collectionSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ minimumValue: 0.5 }),
+    );
   });
 
   it("stores a box when it is left, keeping the other figure", async () => {
@@ -98,9 +100,9 @@ describe("CollectionValuePanel", () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
     await screen.findByText(/only full values are shown/);
-    expect(bulk()).toBeDisabled();
+    expect(bulk()).toHaveAttribute("aria-disabled", "true");
     await user.type(minimum(), "1{Enter}");
-    await waitFor(() => expect(bulk()).toBeEnabled());
+    await waitFor(() => expect(bulk()).not.toHaveAttribute("aria-disabled"));
     await user.type(bulk(), "0.01{Enter}");
     await waitFor(() =>
       expect(setCollectionValue).toHaveBeenLastCalledWith({
@@ -130,14 +132,14 @@ describe("CollectionValuePanel", () => {
     render(wrap(<CollectionValuePanel />));
     await waitFor(() => expect(minimum()).toHaveValue("0.50"));
     expect(bulk()).toHaveValue("");
-    expect(bulk()).toBeEnabled();
+    expect(bulk()).not.toHaveAttribute("aria-disabled");
   });
 
   it("refuses a bulk price it cannot read and stores nothing", async () => {
     const user = userEvent.setup();
     collectionValue.mockResolvedValue({ sellPercent: 100, minimumValue: 1, bulkPrice: 0 });
     render(wrap(<CollectionValuePanel />));
-    await waitFor(() => expect(bulk()).toBeEnabled());
+    await waitFor(() => expect(bulk()).not.toHaveAttribute("aria-disabled"));
     await user.type(bulk(), "cheap{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent("Bulk price has to be a price");
     expect(setCollectionValue).not.toHaveBeenCalled();
@@ -152,13 +154,56 @@ describe("CollectionValuePanel", () => {
     expect(setCollectionValue).not.toHaveBeenCalled();
   });
 
+  /** Issue #1589: a refusal is the refused box's, and stays while its draft does. */
+  it("keeps a refused box's sentence and draft when another box is stored", async () => {
+    const user = userEvent.setup();
+    render(wrap(<CollectionValuePanel />));
+    await screen.findByText(/only full values are shown/);
+    await user.type(sell(), "150");
+    await user.tab();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/above 0 and at most 100/);
+    await user.type(minimum(), "1");
+    await user.tab();
+    await waitFor(() =>
+      expect(setCollectionValue).toHaveBeenCalledWith({
+        sellPercent: 100,
+        minimumValue: 1,
+        bulkPrice: 0,
+      }),
+    );
+    expect(sell()).toHaveValue("150");
+    expect(screen.getByRole("alert")).toHaveTextContent(/above 0 and at most 100/);
+  });
+
+  /** Issue #1589: the box is one node for its whole life, so Enter keeps the caret in it. */
+  it("keeps focus in the box after Enter stores it", async () => {
+    const user = userEvent.setup();
+    render(wrap(<CollectionValuePanel />));
+    await screen.findByText(/only full values are shown/);
+    const before = sell();
+    await user.type(before, "70{Enter}");
+    await waitFor(() => expect(setCollectionValue).toHaveBeenCalled());
+    expect(sell()).toBe(before);
+    expect(before).toHaveFocus();
+  });
+
+  /** Issue #1589: greyed with `aria-disabled`, Bulk stays in the tab order. */
+  it("tabs from the minimum to the bulk price as the minimum wakes it", async () => {
+    const user = userEvent.setup();
+    render(wrap(<CollectionValuePanel />));
+    await screen.findByText(/only full values are shown/);
+    await user.type(minimum(), "0.50");
+    await user.tab();
+    expect(bulk()).toHaveFocus();
+    await waitFor(() => expect(bulk()).not.toHaveAttribute("aria-disabled"));
+    expect(minimum()).toHaveValue("0.50");
+  });
+
   it("puts every figure back on Reset", async () => {
     const user = userEvent.setup();
     collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 1, bulkPrice: 0.01 });
     render(wrap(<CollectionValuePanel />));
     await user.click(await screen.findByRole("button", { name: "Reset" }));
-    await waitFor(() =>
-      expect(setCollectionValue).toHaveBeenCalledWith(DEFAULT_COLLECTION_VALUE),
-    );
+    await waitFor(() => expect(setCollectionValue).toHaveBeenCalledWith(DEFAULT_COLLECTION_VALUE));
   });
 });
