@@ -1898,6 +1898,7 @@ export function DecksPage() {
                 pending={folders.create.isPending}
                 onSubmit={nameFolder}
                 onCancel={dismiss}
+                onClose={close}
               />
             </div>
           )}
