@@ -1882,7 +1882,7 @@ only while that pragma happens to be on.
 | The folder is gone | `That folder is not there any more.` (`deck_meta::FOLDER_GONE`) | Every write that names a folder id |
 | The move writes a loop | `A folder cannot be moved inside itself.` (`deck_meta::FOLDER_CYCLE`) | `move_folder` |
 | The folder is the app's | `That folder is the app's own and is not yours to change.` (`FOLDER_NOT_YOURS`) | Every write, both ends |
-| The card is in a deck | `Those copies are in a deck. Cut the card from the deck to get them back.` (`ENTRY_IN_A_DECK`) | `set_entry_folder`, on the row it was given |
+| The card is in a deck | `Those copies are in a deck. Cut the card from the deck to get them back.` (`ENTRY_IN_A_DECK`) | `set_entry_folder`, on the row it was given; and since issue #1537 `collection::set_quantity`, `update_entry` (a changed `finish` or `quantity`), `set_entry_printing`, `remove_entry` and `remove_entries` (the whole press), through `collection::refuse_in_a_deck` |
 | The folder is set aside | `That folder is locked. Unlock it before deleting it.` (`FOLDER_IS_LOCKED`) | `delete_folder` only, on the **effective** lock |
 | A folder inside it is set aside | `A folder inside that one is locked. Unlock it before deleting this one.` (`FOLDER_HOLDS_LOCKED`) | `delete_folder` only, on any folder in the sub-tree it re-files |
 
@@ -1937,6 +1937,17 @@ end:
   command was one careless caller away from being the last one.
   **`removed` is deliberately not fenced as a source**: taking a cut card out of the holding area
   and filing it in a binder is what that folder is for.
+- **Nor may a deck's copies be counted, removed, re-finished or re-printed by the reader's own
+  writes** (issue #1537). The card modal drew no fence where the Collection page did
+  (`entryFences.ts`), so its stepper left a second copy in a group the list did not claim, its `−`
+  deleted the deck's copy, and its `Edit` moved the copy off the `(card_id, finish)` the deck reads.
+  `collection::refuse_in_a_deck` is now asked by the five commands a reader reaches —
+  `collection_set_quantity`, `collection_update` (only a *changed* finish or count: a grade, a
+  price or a note is the reader's to correct on any copy), `collection_set_printing`,
+  `collection_remove` and `collection_remove_many` — and answers `ENTRY_IN_A_DECK`, so the modal,
+  the light app and any later surface are fenced at once. Never by `delete_entry` or `fold_entry`,
+  the primitives the deck's own writes are built from. The modal also says the page's sentence
+  before the press (`entryFences.deckCustodyRefusal`), fail-open, because the backend is the fence.
 - **`refile_entry` carries no such fence**, and the absence is deliberate: it is what lets the
   three writes that *move* a row across the deck boundary — `collection_alloc.rs`'s pair and
   `deck_pull_from_collection`, all three through `take_copies` — and `deck::delete_deck` file into

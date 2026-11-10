@@ -76,6 +76,8 @@ import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./cardReturn";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
+import { deckCustodyRefusal } from "@/features/collection/entryFences";
+import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { useCopyFinish, useCopyPrinting } from "@/features/collection/useCopyWrites";
 import { withTag } from "@/features/decks/deckTags";
 import { EntryTagsEditor } from "@/features/entryTags/EntryTagsField";
@@ -1188,6 +1190,16 @@ function Body({
     () => (owned.data ?? []).filter((row) => row.cardId === cardId),
     [owned.data, cardId],
   );
+  /**
+   * The collection's folders, for the one question the modal asks of them: **is this copy in a
+   * deck's group** (issue #1537). Those copies are the deck's arithmetic, so the stepper and `Edit`
+   * say the Collection page's sentence instead of writing — and the backend refuses the write
+   * anyway (`ENTRY_IN_A_DECK`). Read only where either control is drawn; the card menu already
+   * shares this cache line on every surface.
+   */
+  const { folders: collectionFolders } = useCollectionFolderList({
+    enabled: scope.quantity === "owned" || scope.surface === "collection",
+  });
   const wishedRows = useMemo(
     () => (wished.data ?? []).filter((row) => row.cardId === cardId),
     [wished.data, cardId],
@@ -1433,6 +1445,14 @@ function Body({
       setRefusal(
         manyRowsRefusal(rows.length, scope.quantity === "owned" ? "collection" : "wishlist"),
       );
+      return;
+    }
+    // A deck's copy is the deck's to count (issue #1537): the Collection page's sentence, said at
+    // the press rather than after a write the backend would refuse.
+    const held =
+      scope.quantity === "owned" && rows[0] ? deckCustodyRefusal(collectionFolders, rows[0]) : null;
+    if (held !== null) {
+      setRefusal(held);
       return;
     }
     // No oracle id is no rows read (`owned`'s `skipToken`), so nothing a press could address.
@@ -1803,6 +1823,13 @@ function Body({
    * on a finish the copy does not have.
    */
   const startEdit = (row: CollectionRow) => {
+    // A deck's copy cannot change its finish or its printing here (issue #1537) — the deck reads
+    // it at both, so it is said rather than entered into an edit whose every press is refused.
+    const held = deckCustodyRefusal(collectionFolders, row, "change this copy");
+    if (held !== null) {
+      setRefusal(held);
+      return;
+    }
     setRefusal(null);
     setViewedFinish(null);
     editCopy(cardId, copyFinish(row), row.id);
@@ -1814,8 +1841,17 @@ function Body({
       sortOptions(editableRows, (row) => {
         const { label, hint } = copyOption(row);
         return `${hint} ${label}`;
-      }).map((row) => ({ value: String(row.id), ...copyOption(row) })),
-    [editableRows],
+      }).map((row) => {
+        // A copy in a deck's group is listed — it is one of the reader's — and out of reach, with
+        // the reason as its tooltip (issue #1537).
+        const held = deckCustodyRefusal(collectionFolders, row, "change this copy");
+        return {
+          value: String(row.id),
+          ...copyOption(row),
+          ...(held === null ? {} : { disabled: true, title: held }),
+        };
+      }),
+    [editableRows, collectionFolders],
   );
   /**
    * **The caret goes back to the edit slot whenever the slot's control is replaced under it.**
