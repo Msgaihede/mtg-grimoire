@@ -82,6 +82,7 @@ import {
   boardGeometry,
   EMPTY_BLURB,
   EMPTY_TITLE,
+  notePage,
   railChips,
   StickyNotesWidget,
   tileColumns,
@@ -267,6 +268,21 @@ describe("railChips", () => {
   });
 });
 
+describe("notePage", () => {
+  it("answers the page holding the note, and the first page for no note", () => {
+    expect(notePage(8, 0, 6)).toEqual({ page: 0, pages: 2, start: 0 });
+    expect(notePage(8, 5, 6)).toEqual({ page: 0, pages: 2, start: 0 });
+    expect(notePage(8, 6, 6)).toEqual({ page: 1, pages: 2, start: 6 });
+    expect(notePage(8, -1, 6)).toEqual({ page: 0, pages: 2, start: 0 });
+  });
+
+  it("is one page when everything fits, and when there is room for none", () => {
+    expect(notePage(6, 5, 6)).toEqual({ page: 0, pages: 1, start: 0 });
+    expect(notePage(8, 7, 0)).toEqual({ page: 0, pages: 1, start: 0 });
+    expect(notePage(0, -1, 6)).toEqual({ page: 0, pages: 1, start: 0 });
+  });
+});
+
 /* ------------------------------------------------------------------ the read ----------- */
 
 describe("StickyNotesWidget", () => {
@@ -324,6 +340,37 @@ describe("StickyNotesWidget", () => {
   it("draws exactly the tiles the footprint holds", () => {
     draw({ w: 6, h: 3 });
     expect(screen.getAllByRole("listitem")).toHaveLength(8);
+    // Everything fits, so there is nothing to page to.
+    expect(screen.queryByRole("button", { name: "Next page" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ Issue #1583: the notes past the tiles used to be counted in the footer and drawn nowhere,
+   * with no press that reached them. Six tiles at the default footprint and eight notes is two
+   * pages.
+   */
+  it("pages the notes the footprint cannot hold", async () => {
+    draw();
+    expect(names()).toHaveLength(6);
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous page" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(names()).toEqual(["Draft archetypes", "Deck ideas — Atraxa"]);
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    // The count is still every note, not the page's.
+    expect(screen.getByText("8 notes")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    expect(names()[0]).toBe("Trade night — Friday, pinned");
+  });
+
+  it("draws no pager in a still, which turns nothing", () => {
+    draw({ still: true });
+    expect(screen.queryByRole("button", { name: "Next page" })).not.toBeInTheDocument();
   });
 
   /* ---------------------------------------------------------------- one tile ---------- */
@@ -463,6 +510,10 @@ describe("StickyNotesWidget", () => {
     // that goes stale the moment the reader types a first line.
     await waitFor(() => expect(stickyNoteCreate).toHaveBeenCalledWith("", "", "amber"));
     expect(await screen.findByTestId("dialog")).toHaveAttribute("data-note-id", "9");
+    // ⚠️ Issue #1583: it landed ninth on a six-tile board, so the board turns to its page — a
+    // note made on a full board must not vanish when its dialog closes.
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(names()).toEqual(["Draft archetypes", "Deck ideas — Atraxa", "Untitled note"]);
   });
 
   it("opens nothing when the create is refused, and says so", async () => {
@@ -569,6 +620,22 @@ describe("StickyNotesWidget", () => {
 
     /** Plain arrows are left alone and not consumed, so a caret walk over the board can take
      *  them later without this having to move. */
+    /** Issue #1583: on a later page the chord is capped to that page's own slice, and the notes on
+     *  the pages around it travel unchanged. */
+    it("keeps a step inside the page the note is drawn on", async () => {
+      draw({ config: { pinned: false } });
+      await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+      await userEvent.tab({ shift: true });
+      await userEvent.tab({ shift: true });
+      expect(document.activeElement).toHaveAccessibleName("Deck ideas — Atraxa");
+
+      await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+      expect(stickyNoteReorder).not.toHaveBeenCalled();
+
+      await userEvent.keyboard("{Control>}{ArrowLeft}{/Control}");
+      expect(stickyNoteReorder).toHaveBeenCalledWith([1, 2, 3, 4, 5, 6, 8, 7]);
+    });
+
     it("leaves a plain arrow alone", async () => {
       board();
       await userEvent.tab();
@@ -696,22 +763,33 @@ describe("StickyNotesWidget", () => {
     ).toBeInTheDocument();
   });
 
-  it("carries the other notes on a rail of names at tier 2", async () => {
+  it("carries the other notes on a rail of names at tier 2, a page at a time", async () => {
     draw({ config: { layout: "pad" }, w: 4, h: 3 });
-    // Four names fit at a four-cell card; the rest are counted rather than drawn.
-    expect(screen.getByRole("button", { name: "Sealed box math" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Sleeve stock" })).not.toBeInTheDocument();
-    expect(screen.getByText("+4")).toBeInTheDocument();
+    // Three names fit beside the page steps at a four-cell card; the rest are a page away.
+    expect(screen.getByRole("button", { name: "Cards to proxy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sealed box math" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Cards to proxy" }));
     expect(screen.getByRole("article", { name: "Cards to proxy" })).toBeInTheDocument();
+
+    // ⚠️ Issue #1583: the rest used to be an unpressable `+N`. A page step shows the next
+    // page's first note, and the rail draws that page's names.
+    await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(screen.getByRole("article", { name: "Sealed box math" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sleeve stock" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cards to proxy" })).not.toBeInTheDocument();
   });
 
-  it("turns the rail into an index at tier 3", () => {
+  it("turns the rail into an index at tier 3, and pages it past its rows", async () => {
     draw({ config: { layout: "pad" }, w: 6, h: 3 });
     const index = screen.getByRole("list", { name: "Your notes" });
     expect(within(index).getAllByRole("listitem")).toHaveLength(7);
     expect(screen.queryByText(/\d \/ \d/)).not.toBeInTheDocument();
+
+    // ⚠️ Issue #1583: the eighth name used to be cut with nothing to say so.
+    await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(within(index).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("article", { name: "Deck ideas — Atraxa" })).toBeInTheDocument();
   });
 
   /**

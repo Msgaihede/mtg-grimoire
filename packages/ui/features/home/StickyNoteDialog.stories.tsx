@@ -240,6 +240,29 @@ export const AColourThisBuildDoesNotKnow: Story = {
   },
 };
 
+/**
+ * Pinning a note (issue #1583). The pin is what lifts a note to the front of the board under the
+ * widget's *Pinned note first* switch and what the Pad opens on — and until this toggle no surface
+ * sent it at all. It is a toggle with one name and its state in `aria-pressed`, and it travels in
+ * the same debounced partial patch as the name and the colour: pressed on an unpinned note, the
+ * write is `{ pinned: true }` and nothing else.
+ */
+export const Pinning: Story = {
+  args: { note: note({ id: 4, pinned: false }) },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    const pin = await canvas.findByRole("button", { name: "Pin note" });
+    await expect(pin).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(pin);
+    await expect(pin).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(args.onSave).toHaveBeenCalledWith({ pinned: true }), {
+      timeout: 3000,
+    });
+  },
+};
+
 /** A write on the wire. The footer is one sentence for a draft not yet sent and a command not yet
  *  answered, because the difference between those two is the dialog's business. */
 export const Saving: Story = {
