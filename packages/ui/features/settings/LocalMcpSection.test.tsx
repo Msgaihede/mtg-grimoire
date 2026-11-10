@@ -288,6 +288,20 @@ describe("LocalMcpSection", () => {
     expect(portBox()).toHaveValue("40000");
   });
 
+  /** Issue #1589: the box is re-seeded, not replaced, so Enter leaves the caret in it. */
+  it("keeps focus in the port box after Enter moves the port", async () => {
+    mcpStatus.mockResolvedValue(ON);
+    mcpSetPort.mockResolvedValue(status({ enabled: true, running: true, port: 40000 }));
+    setup();
+    await theSwitch();
+    const before = portBox();
+    await userEvent.clear(before);
+    await userEvent.type(before, "40000{Enter}");
+    await waitFor(() => expect(screen.getByText(/Listening at .*:40000/)).toBeInTheDocument());
+    expect(portBox()).toBe(before);
+    expect(before).toHaveFocus();
+  });
+
   /** The desktop's refusal is the sentence drawn, and the reader's draft stays to be fixed. */
   it("shows a refused port in the desktop's words, keeping the draft", async () => {
     mcpStatus.mockResolvedValue(ON);
