@@ -76,6 +76,8 @@ import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./cardReturn";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
+import { deckCustodyRefusal } from "@/features/collection/entryFences";
+import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { useCopyFinish, useCopyPrinting } from "@/features/collection/useCopyWrites";
 import { withTag } from "@/features/decks/deckTags";
 import { EntryTagsEditor } from "@/features/entryTags/EntryTagsField";
@@ -383,10 +385,41 @@ function stepperRows(
   list: StepperList,
   { cardId, oracleId }: StepPress,
 ): { id: number }[] {
-  const rows = queryClient.getQueryData<{ id: number; cardId: string }[]>(
-    stepperRowsKey(list, oracleId),
+  const rows = queryClient.getQueryData<PrintingRow[]>(stepperRowsKey(list, oracleId));
+  return rowsOfPrinting(rows, cardId);
+}
+
+/** What {@link rowsOfPrinting} reads off a collection or wishlist row. `artCardId` is the
+ *  wishlist's alone, so a collection row matches on `cardId` and nothing else. */
+interface PrintingRow {
+  id: number;
+  cardId: string | null;
+  artCardId?: string | null;
+}
+
+/**
+ * The rows the modal's stepper and stack tags address for the printing it is open on — **a row
+ * of that printing, or an any-printing wish drawn as it** (issue #1560).
+ *
+ * An any-printing wish has no `cardId` of its own: the wall opens it as its `artCardId`, the
+ * newest printing of its oracle card (`WishlistGrid`'s `toTile`). Matched on `cardId` alone, the
+ * modal found no row behind that tile — the stepper read 0 beside a rail saying `Wished 3`, and
+ * `+` added a second, pinned wish at the root next to the untouched one.
+ *
+ * **On `artCardId` rather than on the oracle**, because a wish of another printing of the same
+ * card is a tile of its own: matching every `cardId === null` row of the oracle would put the
+ * any-printing wish behind that printing's stepper too, and a pinned wish opened there would
+ * meet the many-rows refusal for a wish it is not. A pinned wish and an any-printing one both
+ * drawn as this printing are two rows, and the modal says so rather than choosing — the same
+ * answer as one printing wished in two folders.
+ */
+function rowsOfPrinting<Row extends PrintingRow>(
+  rows: readonly Row[] | undefined,
+  cardId: string,
+): Row[] {
+  return (rows ?? []).filter(
+    (row) => row.cardId === cardId || (row.cardId === null && row.artCardId === cardId),
   );
-  return (rows ?? []).filter((row) => row.cardId === cardId);
 }
 
 /**
@@ -1247,8 +1280,18 @@ function Body({
     () => (owned.data ?? []).filter((row) => row.cardId === cardId),
     [owned.data, cardId],
   );
+  /**
+   * The collection's folders, for the one question the modal asks of them: **is this copy in a
+   * deck's group** (issue #1537). Those copies are the deck's arithmetic, so the stepper and `Edit`
+   * say the Collection page's sentence instead of writing — and the backend refuses the write
+   * anyway (`ENTRY_IN_A_DECK`). Read only where either control is drawn; the card menu already
+   * shares this cache line on every surface.
+   */
+  const { folders: collectionFolders } = useCollectionFolderList({
+    enabled: scope.quantity === "owned" || scope.surface === "collection",
+  });
   const wishedRows = useMemo(
-    () => (wished.data ?? []).filter((row) => row.cardId === cardId),
+    () => rowsOfPrinting(wished.data, cardId),
     [wished.data, cardId],
   );
 
@@ -1494,6 +1537,16 @@ function Body({
       setRefusal(
         manyRowsRefusal(rows.length, scope.quantity === "owned" ? "collection" : "wishlist"),
       );
+      return;
+    }
+    // A deck's copy is the deck's to count (issue #1537): the Collection page's sentence, said at
+    // the press rather than after a write the backend would refuse.
+    const held =
+      scope.quantity === "owned" && ownedRows[0]
+        ? deckCustodyRefusal(collectionFolders, ownedRows[0])
+        : null;
+    if (held !== null) {
+      setRefusal(held);
       return;
     }
     // No oracle id is no rows read (`owned`'s `skipToken`), so nothing a press could address.
@@ -1863,6 +1916,13 @@ function Body({
    * on a finish the copy does not have.
    */
   const startEdit = (row: CollectionRow) => {
+    // A deck's copy cannot change its finish or its printing here (issue #1537) — the deck reads
+    // it at both, so it is said rather than entered into an edit whose every press is refused.
+    const held = deckCustodyRefusal(collectionFolders, row, "change this copy");
+    if (held !== null) {
+      setRefusal(held);
+      return;
+    }
     setRefusal(null);
     setViewedFinish(null);
     editCopy(cardId, copyFinish(row), row.id);
@@ -1874,8 +1934,17 @@ function Body({
       sortOptions(editableRows, (row) => {
         const { label, hint } = copyOption(row);
         return `${hint} ${label}`;
-      }).map((row) => ({ value: String(row.id), ...copyOption(row) })),
-    [editableRows],
+      }).map((row) => {
+        // A copy in a deck's group is listed — it is one of the reader's — and out of reach, with
+        // the reason as its tooltip (issue #1537).
+        const held = deckCustodyRefusal(collectionFolders, row, "change this copy");
+        return {
+          value: String(row.id),
+          ...copyOption(row),
+          ...(held === null ? {} : { disabled: true, title: held }),
+        };
+      }),
+    [editableRows, collectionFolders],
   );
   /**
    * **The caret goes back to the edit slot whenever the slot's control is replaced under it.**

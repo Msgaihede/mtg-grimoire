@@ -54,6 +54,8 @@
 //!   same reason and at a cost already paid once**: [`deck_to_collection`] spelled its own copy
 //!   of that query and that loop, and both copies matched the exact printing — so the fix for a
 //!   swapped printing's stranded copies had to be made twice or it would have been made once.
+//!   A cut reaches it through [`crate::deck::release_displaced_copies`], the stepper's own
+//!   release, so it never takes a copy the list still claims after the cut (issue #1536).
 //! * **Taking a copy out of another deck's group decrements that deck's *live* list too, and
 //!   records it in that deck's history.** The copies are custody, not a reservation, so a deck
 //!   that loses them loses the card. It is reported in [`MoveOutcome::from_deck`] because the
@@ -737,6 +739,13 @@ pub fn collection_to_deck(
 /// the reader never owned it, so nothing lands on their desk when it is cut. The group **is**
 /// the record of which is which.
 ///
+/// **Only the copies the cut displaced leave** ([issue
+/// #1536](https://github.com/Msgaihede/mtg-grimoire/issues/1536)): never more than the group holds
+/// beyond what the list still claims of the printing and finish once the cut is written. A line of
+/// four the folder backs with two gives up nothing on its first step down — the copy that went is
+/// one the reader never had — and a Main row cut while the Sideboard names the one copy leaves
+/// that copy where it is. [`crate::deck::set_card_quantity`]'s rule, through its helper.
+///
 /// [`MoveOutcome::quantity`] is what actually moved, which is less than what was asked whenever
 /// the list wanted more than the group held. [`MoveOutcome::from_deck`] stays `None`: the deck
 /// these came out of is the one the reader is looking at.
@@ -860,24 +869,6 @@ pub fn deck_to_collection(
         return Err(NOT_THAT_MANY.to_owned());
     }
 
-    // **The move is [`crate::deck::release_group_copies`]' and is not written a second time
-    // here.** Finding this deck's group, reading the rows behind the card, taking them oldest
-    // first and filing them into `Recently removed` is one rule about the reader's cards, and
-    // this function spelled its own copy of it beside the bulk one until fan-in — including the
-    // exact-printing match that turned out to be *wrong*, which is what a second copy costs: a
-    // fix has to be made twice or it is made once. What is left here is the half that is
-    // genuinely this command's — the `deck_cards` write, the history row, and the
-    // [`MoveOutcome`] a caller draws a sentence from.
-    //
-    // Everything that walk decides is argued there: the exact `(card_id, finish)` match — an
-    // oracle-card fallback until 2026-09-07, and a bug once `deck::release_unclaimed_copies`
-    // cured the stranding it was written for — the missing group that holds nothing rather than
-    // refusing, the clamp at what the group actually has, and the holding area resolved only
-    // when there is something to file, so a database missing that folder still lets a card
-    // nobody owned be cut.
-    let crate::deck::Released { moved, landed } =
-        crate::deck::release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
-
     let whole_row = quantity == held;
     if whole_row {
         tx.execute(
@@ -892,6 +883,37 @@ pub fn deck_to_collection(
         )
     }
     .map_err(|e| e.to_string())?;
+
+    // **The release is [`crate::deck::release_displaced_copies`]', after the write**, and is not
+    // written a second time here. Finding this deck's group, reading the rows behind the card,
+    // taking them oldest first and filing them into `Recently removed` is one rule about the
+    // reader's cards — [`crate::deck::release_group_copies`]' walk, which this function spelled
+    // inline until fan-in, exact-printing match and all. What is left here is the half that is
+    // genuinely this command's: the `deck_cards` write, the history row, and the [`MoveOutcome`]
+    // a caller draws a sentence from.
+    //
+    // **Displaced, not up to the cut** ([issue #1536](https://github.com/Msgaihede/mtg-grimoire/issues/1536)).
+    // This called `release_group_copies` with the cut quantity until 2026-11-10, which clamps only
+    // at what the group holds — so on a line the folder backs in part (4 listed, 2 held) a step
+    // down filed one of the two owned copies although the copy cut was one the reader never had,
+    // and cutting a Main row took the one copy the Sideboard still names. The stepper's write,
+    // the swap, the split and the finish change already clamp at what the finished list still
+    // claims (issue #1494); reading that claim *after* the write is what makes the cut agree.
+    //
+    // Everything the walk decides is argued there: the exact `(card_id, finish)` match — an
+    // oracle-card fallback until 2026-09-07, and a bug once `deck::release_unclaimed_copies`
+    // cured the stranding it was written for — the missing group that holds nothing rather than
+    // refusing, the clamp at what the group actually has, and the holding area resolved only
+    // when there is something to file, so a database missing that folder still lets a card
+    // nobody owned be cut. The row is `live` here — a theory row was refused above.
+    let crate::deck::Released { moved, landed } = crate::deck::release_displaced_copies(
+        &tx,
+        deck_id,
+        &variant,
+        &card_id,
+        finish.as_deref(),
+        quantity,
+    )?;
 
     // The two shapes [`crate::deck::set_card_quantity`] writes for the two branches above,
     // copied rather than approximated — see this function's doc. `reason` stays `null`: that
@@ -1361,6 +1383,61 @@ mod tests {
         deck_to_collection(&conn, dc, 1).unwrap();
         assert_eq!(removed_copies(&conn, "bolt"), 1);
         assert_eq!(deck_copies(&conn, deck, "bolt"), 0);
+    }
+
+    /// **A step down on a line the folder backs in part gives back nothing until the list stops
+    /// claiming a held copy** (issue #1536). Four listed, two held: the first copy cut is one the
+    /// reader never had, so the owned count stays at two and nothing lands in `Recently removed`.
+    /// The cut released up to the cut quantity until 2026-11-10 and filed an owned copy away.
+    #[test]
+    fn stepping_down_a_partly_backed_line_keeps_the_copies_the_list_still_claims() {
+        let (conn, deck, cat) = fixture();
+        let group = crate::deck::deck_group(&conn, deck).unwrap();
+        seed_entry(&conn, "bolt", 2, group);
+        let dc = add_deck_card(&conn, deck, cat, "bolt", 4);
+
+        let out = deck_to_collection(&conn, dc, 1).unwrap();
+        assert_eq!(out.quantity, 0, "the copy cut was one the reader never had");
+        assert_eq!(out.entry_id, None);
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 3);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 2);
+        assert_eq!(removed_copies(&conn, "bolt"), 0);
+
+        deck_to_collection(&conn, dc, 1).unwrap();
+        assert_eq!(group_copies(&conn, deck, "bolt"), 2, "2 listed, 2 held");
+
+        let out = deck_to_collection(&conn, dc, 1).unwrap();
+        assert_eq!(
+            out.quantity, 1,
+            "the list now claims one fewer than the folder holds"
+        );
+        assert!(out.entry_id.is_some());
+        assert_eq!(group_copies(&conn, deck, "bolt"), 1);
+        assert_eq!(removed_copies(&conn, "bolt"), 1);
+    }
+
+    /// **A cut never takes a copy another pile still names** (issue #1536). Bolt in Main and in
+    /// the Sideboard, one copy in the folder: cutting the Main row leaves that copy for the
+    /// Sideboard — `deck::set_card_quantity`'s rule, `stepping_down_leaves_what_the_list_still_claims`.
+    #[test]
+    fn cutting_a_row_leaves_the_copy_another_pile_still_claims() {
+        let (conn, deck, main) = fixture();
+        let side = crate::schema::fixtures::category(&conn, deck, "side", "Sideboard");
+        let group = crate::deck::deck_group(&conn, deck).unwrap();
+        seed_entry(&conn, "bolt", 1, group);
+        let dc = add_deck_card(&conn, deck, main, "bolt", 1);
+        add_deck_card(&conn, deck, side, "bolt", 1);
+
+        let out = deck_to_collection(&conn, dc, 1).unwrap();
+
+        assert_eq!(out.quantity, 0);
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 1);
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            1,
+            "the sideboard still names the one copy the folder holds"
+        );
+        assert_eq!(removed_copies(&conn, "bolt"), 0);
     }
 
     /// A second printing of the **same** oracle card — [`seed_card`] with the oracle id copied

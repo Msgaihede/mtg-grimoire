@@ -6,8 +6,11 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
+import type { DialogHost } from "@grimoire/ui/lib/dialogHost";
 import { DownloadsPrompt, megabytes, type DownloadsStatus } from "./DownloadsPrompt";
 import { useHeldDownloads } from "./heldDownloads";
+import { useLendDialogs } from "./lentDialogs";
+import { claimBack, isSheetEntry, resetSheetHistory, sheetHistoryIdle } from "./phone/sheetHistory";
 
 /** What a face sees of the hold: the offer the phone's Search and Settings draw. */
 function Offer() {
@@ -167,6 +170,69 @@ describe("the mobile-data prompt", () => {
     render(<DownloadsPrompt />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("light_downloads"));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("the mobile-data prompt under the phone face", () => {
+  /** The phone face's own host, lent up the way `PhoneFace` lends it. */
+  const PHONE: DialogHost = { claimBack, swipeToClose: true };
+  function PhoneFace() {
+    useLendDialogs(PHONE);
+    return <Offer />;
+  }
+
+  beforeEach(() => {
+    resetSheetHistory();
+    window.history.replaceState(null, "", "/");
+    window.history.pushState(null, "", "/settings");
+  });
+  afterEach(() => sheetHistoryIdle());
+
+  const popped = (): Promise<void> =>
+    new Promise((resolve) => window.addEventListener("popstate", () => resolve(), { once: true }));
+
+  it("is a Back step: Back answers Not now and leaves the reader on the page", async () => {
+    answer(HELD);
+    render(
+      <DownloadsPrompt>
+        <PhoneFace />
+      </DownloadsPrompt>,
+    );
+    await screen.findByRole("dialog", { name: "Download on mobile data?" });
+    await waitFor(() => expect(isSheetEntry(window.history.state)).toBe(true));
+
+    const back = popped();
+    window.history.back();
+    await back;
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(window.location.pathname).toBe("/settings");
+    expect(invoke).not.toHaveBeenCalledWith("light_downloads_start", expect.anything());
+    // Still held, so the offer stays.
+    expect(screen.getByRole("button", { name: "Download card data…" })).toBeInTheDocument();
+  });
+
+  it("is a sheet a finger drags down by its header", async () => {
+    answer(HELD);
+    render(
+      <DownloadsPrompt>
+        <PhoneFace />
+      </DownloadsPrompt>,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Download on mobile data?" });
+    // The grabber's `touch-none` header is drawn only where a host grants the drag.
+    expect(dialog.querySelector("header")).toHaveClass("touch-none");
+  });
+
+  it("claims no Back step under a face that lends nothing — the desktop face", async () => {
+    answer(HELD);
+    render(
+      <DownloadsPrompt>
+        <Offer />
+      </DownloadsPrompt>,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Download on mobile data?" });
+    expect(isSheetEntry(window.history.state)).toBe(false);
+    expect(dialog.querySelector("header")).not.toHaveClass("touch-none");
   });
 });
 

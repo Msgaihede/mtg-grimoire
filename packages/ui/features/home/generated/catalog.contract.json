@@ -2146,7 +2146,10 @@
       "description": "A ratio as a whole percentage: `{ value: number }` where 0.25 → `25%`; null → em dash."
     },
     "formatDate": {
-      "description": "A day in words: `{ seconds: number }` (Unix seconds) → `4 Jul 2026`."
+      "description": "An instant's day in words, in the reader's time zone: `{ seconds: number }` (Unix seconds) → `4 Jul 2026`. For when something happened; a day field takes `formatDay`."
+    },
+    "formatDay": {
+      "description": "A day field in words, read in UTC: `{ seconds: number }` (a day's UTC midnight, in Unix seconds) → `4 Jul 2026`. For a field its description calls a UTC midnight, such as a price- or value-history point's `day`."
     }
   }
 }

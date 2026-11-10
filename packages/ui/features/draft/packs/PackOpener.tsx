@@ -1,7 +1,7 @@
 import { useRef, useState, type JSX } from "react";
 import { RefreshCw } from "lucide-react";
 import { PageBar, type PageCrumb } from "@/components/PageBar";
-import type { BoosterSetSummary } from "@/lib/ipc";
+import { ipcError, type BoosterSetSummary } from "@/lib/ipc";
 import { ago } from "@/lib/relativeTime";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useBoosterSet, useBoosterSets } from "../sets";
@@ -96,6 +96,13 @@ function SetStage({
 }): JSX.Element {
   const booster = useBoosterSet(summary.code);
   const set = booster.set;
+  // A Refresh MTGJSON refuses keeps the cached file and what was opened from it (issue #1588):
+  // its sentence is said beside the button, never in place of the stage.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const refresh = () => {
+    setRefreshError(null);
+    booster.refresh().catch((e: unknown) => setRefreshError(ipcError(e)));
+  };
   // Ctrl+wheel over the stage steps the opened wall's cards (`cardZoom.packs`, issue #1433) — the
   // whole scroll box, so a gesture over the figures beside the wall is not WebView2's page zoom.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -109,10 +116,15 @@ function SetStage({
         actions={
           <>
             <SetSwitcher sets={sets} value={summary.code} onPick={onPick} />
+            {set !== undefined && refreshError !== null && !booster.refreshing && (
+              <span role="alert" className="text-xs text-destructive">
+                Refresh failed: {refreshError}
+              </span>
+            )}
             {set !== undefined && (
               <button
                 type="button"
-                onClick={() => void booster.refresh()}
+                onClick={refresh}
                 disabled={booster.refreshing}
                 className={SECONDARY}
               >
@@ -133,6 +145,12 @@ function SetStage({
           <p role="status" className="m-0 text-sm text-dim">
             Fetching booster data from MTGJSON…
           </p>
+        ) : set !== undefined ? (
+          // The data before the error: a refused Refresh leaves the entry in error with the
+          // cached file still in it (issue #1588). Keyed on the set's file, so a Refresh that
+          // brings new sheets starts the stage over rather than keeping a pack opened from the
+          // old ones.
+          <ProductStage key={`${set.code}:${set.fetchedAt}`} set={set} />
         ) : booster.error !== null ? (
           <div className="flex flex-col items-start gap-3">
             <p role="alert" className="m-0 text-sm text-destructive">
@@ -142,10 +160,6 @@ function SetStage({
               Retry
             </button>
           </div>
-        ) : set !== undefined ? (
-          // Keyed on the set's file, so a Refresh that brings new sheets starts the stage over
-          // rather than keeping a pack opened from the old ones.
-          <ProductStage key={`${set.code}:${set.fetchedAt}`} set={set} />
         ) : null}
       </div>
     </section>

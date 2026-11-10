@@ -50,8 +50,9 @@ export const MODE_TITLE: Record<DraftMode, string> = {
  * **Which picks are on the sideboard is this component's** (issue #1471, `./split.ts`): a pick's
  * list is applied once the pick is taken — the host's answer, or a guest's send — so a refused
  * pick leaves nothing behind; a press on a picked card moves it, through the Build step too. It is
- * kept per device as it changes, started over by a draft that opens with an empty pool, and
- * forgotten when the draft is put away.
+ * kept per device as it changes, started over by a draft that opens with an empty pool (and by
+ * every new deal and the hub's Abandon, which are `DraftPage`'s — issue #1588), and forgotten
+ * when the draft is put away.
  */
 export function DraftSession({
   draft,

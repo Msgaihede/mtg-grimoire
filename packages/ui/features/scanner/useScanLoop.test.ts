@@ -3,7 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERDICTS } from "./fixtures";
 import { RUN_MAX_AGE_MS, RUN_MAX_BYTES, RUN_MAX_FRAMES, runClock } from "./submit/run";
 import type { ScannerDecision, ScannerVerdict } from "./types";
-import { SEND_PX, useScanLoop, type GrabbedKept, type RunFrame } from "./useScanLoop";
+import sessionRs from "../../../../crates/card-neural/src/session.rs?raw";
+import {
+  SEND_PX,
+  STANDING_FORGET_AFTER,
+  useScanLoop,
+  type GrabbedKept,
+  type RunFrame,
+} from "./useScanLoop";
 
 const scannerFrame =
   vi.fn<(jpeg: Uint8Array, full?: Uint8Array | null) => Promise<ScannerVerdict>>();
@@ -176,6 +183,29 @@ describe("useScanLoop", () => {
     const sent = scannerFrame.mock.calls.length;
     for (let i = 0; i < 5; i++) await tick(60);
     expect(scannerFrame).toHaveBeenCalledTimes(sent);
+  });
+
+  /**
+   * Issue #1555: a start resets the session, so the last stream's verdict — its corners, and the
+   * HUD's `Matched … Added` — is about a card the new stream has not seen. It goes in the render
+   * the start makes; a Stop alone leaves it, for whatever a stopped page still reads.
+   */
+  it("forgets the last stream's verdict as a pump starts, and not at the Stop", async () => {
+    scannerFrame.mockImplementationOnce(() => answersIn(10, VERDICTS.decided));
+    scannerFrame.mockImplementation(() => deferred<ScannerVerdict>().promise);
+    const videoRef = { current: readyVideo() };
+    const grabFrame = vi.fn(async () => BYTES);
+    const { result, rerender } = renderHook(
+      ({ live }: { live: boolean }) => useScanLoop({ videoRef, live, grabFrame }),
+      { initialProps: { live: true } },
+    );
+    await tick(30);
+    expect(result.current.verdict).toEqual(VERDICTS.decided);
+
+    rerender({ live: false });
+    expect(result.current.verdict).toEqual(VERDICTS.decided);
+    rerender({ live: true });
+    expect(result.current.verdict).toBeNull();
   });
 
   it("sends nothing when the camera stops during a pending grab", async () => {
@@ -707,21 +737,152 @@ describe("useScanLoop", () => {
       ]);
     });
 
-    it("files it again once a frame showed the lens empty before the stop", async () => {
+    /**
+     * Plays `answers`, one each 10 ms, then parks the next frame until `release` — so a stream
+     * sees exactly these answers and no repeat of the last. Release it after the stop: the
+     * stopped pump's answer is dropped, and the next stream's start can drain it.
+     */
+    function playsThenParks(answers: ScannerVerdict[]) {
+      const queue = [...answers];
+      const parked: Array<() => void> = [];
+      scannerFrame.mockImplementation(() => {
+        const next = queue.shift();
+        if (next !== undefined) return answersIn(10, next);
+        return new Promise<ScannerVerdict>((resolve) => {
+          parked.push(() => resolve(VERDICTS.voting));
+        });
+      });
+      return () => act(async () => parked.splice(0).forEach((release) => release()));
+    }
+    /** `count` taken frames with no card in them. */
+    const empties = (count: number, seq = 1) =>
+      Array.from({ length: count }, () => ({ ...VERDICTS.noCard, decision_seq: seq }));
+
+    it("files it again once the lens showed empty long enough before the stop", async () => {
       const onDecision = vi.fn();
       plays([
         { ...VERDICTS.voting, decision_seq: 0 },
         VERDICTS.decided,
-        { ...VERDICTS.noCard, decision_seq: 1 },
+        ...empties(STANDING_FORGET_AFTER),
       ]);
       const { rerender } = restartable(onDecision);
-      await tick(60);
+      await tick(200);
       rerender({ live: false });
       await tick(60);
       plays([{ ...VERDICTS.decided, decision_seq: 2 }]);
       rerender({ live: true });
       await tick(60);
       expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 2]);
+    });
+
+    /**
+     * **Issue #1558: one missed detection is not a card lifted.** The session waits
+     * `forget_after` empty frames before it calls a card gone; the page dropping the standing card
+     * at one would file it again at every pause of a detector that misses now and then.
+     */
+    it("does not file it again after fewer empty frames than the session forgets on", async () => {
+      const onDecision = vi.fn();
+      const release = playsThenParks([
+        { ...VERDICTS.voting, decision_seq: 0 },
+        VERDICTS.decided,
+        ...empties(STANDING_FORGET_AFTER - 1),
+      ]);
+      const { rerender } = restartable(onDecision);
+      await tick(200);
+      expect(scannerFrame).toHaveBeenCalledTimes(STANDING_FORGET_AFTER + 2);
+      rerender({ live: false });
+      await release();
+      await tick(60);
+      plays([{ ...VERDICTS.decided, decision_seq: 2 }]);
+      rerender({ live: true });
+      await tick(60);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1]);
+    });
+
+    it("does not file it again after a missed frame just before the stop", async () => {
+      const onDecision = vi.fn();
+      const release = playsThenParks([
+        { ...VERDICTS.voting, decision_seq: 0 },
+        VERDICTS.decided,
+        ...empties(1),
+      ]);
+      const { rerender } = restartable(onDecision);
+      await tick(100);
+      expect(scannerFrame).toHaveBeenCalledTimes(4);
+      rerender({ live: false });
+      await release();
+      await tick(60);
+      plays([{ ...VERDICTS.decided, decision_seq: 2 }]);
+      rerender({ live: true });
+      await tick(60);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1]);
+    });
+
+    it("does not file it again after a missed frame as the camera comes back", async () => {
+      const onDecision = vi.fn();
+      plays([{ ...VERDICTS.voting, decision_seq: 0 }, VERDICTS.decided]);
+      const { rerender } = restartable(onDecision);
+      await tick(60);
+      rerender({ live: false });
+      await tick(60);
+      plays([
+        ...empties(STANDING_FORGET_AFTER - 1, 0),
+        { ...VERDICTS.voting, decision_seq: 0 },
+        { ...VERDICTS.decided, decision_seq: 2 },
+      ]);
+      rerender({ live: true });
+      await tick(200);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1]);
+    });
+
+    it("counts an empty run the stop cut in two as one", async () => {
+      const onDecision = vi.fn();
+      const before = 2;
+      const release = playsThenParks([
+        { ...VERDICTS.voting, decision_seq: 0 },
+        VERDICTS.decided,
+        ...empties(before),
+      ]);
+      const { rerender } = restartable(onDecision);
+      await tick(200);
+      rerender({ live: false });
+      await release();
+      await tick(60);
+      plays([
+        ...empties(STANDING_FORGET_AFTER - before, 0),
+        { ...VERDICTS.decided, decision_seq: 2 },
+      ]);
+      rerender({ live: true });
+      await tick(200);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 2]);
+    });
+
+    it("starts the empty run over at any frame with a card in it", async () => {
+      const onDecision = vi.fn();
+      const release = playsThenParks([
+        { ...VERDICTS.voting, decision_seq: 0 },
+        VERDICTS.decided,
+        ...empties(STANDING_FORGET_AFTER - 1),
+        { ...VERDICTS.voting, decision_seq: 1 },
+        ...empties(STANDING_FORGET_AFTER - 1),
+      ]);
+      const { rerender } = restartable(onDecision);
+      await tick(300);
+      rerender({ live: false });
+      await release();
+      await tick(60);
+      plays([{ ...VERDICTS.decided, decision_seq: 2 }]);
+      rerender({ live: true });
+      await tick(60);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1]);
+    });
+
+    /** The page forgets the card on the session's own count, and the crate is where it is said. */
+    it("forgets it on the session's own count of empty frames", () => {
+      expect(sessionRs.length, "session.rs was not read").toBeGreaterThan(1_000);
+      const defaults = /fn default\(\) -> Self \{([\s\S]*?)\n {4}\}/.exec(sessionRs)?.[1];
+      expect(defaults, "Rules::default() was not found").toBeDefined();
+      expect(defaults).toContain(`forget_after: ${STANDING_FORGET_AFTER},`);
     });
 
     it("files it again after a Reset press, which asked for the next decision to be news", async () => {

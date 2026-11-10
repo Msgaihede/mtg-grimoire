@@ -12,7 +12,7 @@
  * the sentence saying so belongs beside the box they typed it into rather than on a page they
  * would first have to be navigated to.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog } from "@/components/Dialog";
 import { BUTTON } from "@/features/settings/controls";
@@ -122,6 +122,23 @@ function OpenShareForm({
   const [opening, setOpening] = useState(false);
   const openShare = useAppStore((s) => s.openShare);
   const client = useQueryClient();
+  /**
+   * Which press of *Open collection* is the live one, bumped by every press and by the unmount.
+   *
+   * ⚠️ **A fetch outlives the form it was started from** (issue #1578). Unmounting on close throws
+   * the box's state away, but not the `submit` still awaiting its link: a slow link answered after
+   * the reader pressed Cancel or Escape on *Opening…*, and the continuation opened it anyway. The
+   * view switched to a binder the reader had just said no to, and — `Binder` being keyed by its
+   * link — the ticks on the binder they were looking at went with it. So an answer is acted on
+   * only while its press is still the current one.
+   */
+  const attempt = useRef(0);
+  useEffect(
+    () => () => {
+      attempt.current += 1;
+    },
+    [],
+  );
 
   const submit = async () => {
     const link = shareLinkFrom(text);
@@ -129,19 +146,23 @@ function OpenShareForm({
       setRefusal(NOT_A_SHARE_LINK);
       return;
     }
+    const mine = (attempt.current += 1);
     setRefusal(null);
     setOpening(true);
     try {
       // `fetchQuery` rather than a bare call: the answer lands in the cache under the key the
       // view reads, so the binder is already there when the reader arrives at it.
       await client.fetchQuery(sharedSnapshotQuery(link));
+      // Cached all the same — a reader who pastes the link again is answered at once — but
+      // neither remembered nor navigated to.
+      if (attempt.current !== mine) return;
       openShare(link);
       onOpened(link);
       onClose();
     } catch (e) {
-      setRefusal(ipcError(e));
+      if (attempt.current === mine) setRefusal(ipcError(e));
     } finally {
-      setOpening(false);
+      if (attempt.current === mine) setOpening(false);
     }
   };
 

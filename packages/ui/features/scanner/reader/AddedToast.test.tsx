@@ -84,28 +84,28 @@ describe("landedFrom", () => {
 
 describe("AddedToast", () => {
   it("says a new card was added, and names its printing", () => {
-    render(<AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />);
+    render(<AddedToast card={landedFrom(row, false, false)} />);
     expect(screen.getByText("Added to scanned cards")).toBeInTheDocument();
     expect(screen.getByText("Oliphaunt")).toBeInTheDocument();
     expect(screen.getByText("LTR · 426 · Nonfoil")).toBeInTheDocument();
   });
 
   it("says a second copy was added, with the row's count", () => {
-    render(<AddedToast card={landedFrom({ ...row, quantity: 3 }, true, false)} onDone={vi.fn()} />);
+    render(<AddedToast card={landedFrom({ ...row, quantity: 3 }, true, false)} />);
     expect(screen.getByText("Added again")).toBeInTheDocument();
     expect(screen.getByText("×3")).toBeInTheDocument();
     expect(screen.queryByText("Added to scanned cards")).toBeNull();
   });
 
   it("says a re-read changed the printing", () => {
-    render(<AddedToast card={landedFrom({ ...row, finish: "foil" }, false, true)} onDone={vi.fn()} />);
+    render(<AddedToast card={landedFrom({ ...row, finish: "foil" }, false, true)} />);
     expect(screen.getByText("Printing updated")).toBeInTheDocument();
     expect(screen.getByText("LTR · 426 · Foil")).toBeInTheDocument();
   });
 
   it("asks for a pick, fans the first two candidates and names no printing", () => {
     const { container } = render(
-      <AddedToast card={landedFrom(waiting, false, false)} onDone={vi.fn()} />,
+      <AddedToast card={landedFrom(waiting, false, false)} />,
     );
     expect(screen.getByText("Pick a printing")).toBeInTheDocument();
     expect(screen.getByText("Minas Tirith")).toBeInTheDocument();
@@ -121,12 +121,12 @@ describe("AddedToast", () => {
 
   it("closes the line with the price it is handed — one figure, or a pick's span", () => {
     const { rerender } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" />,
+      <AddedToast card={landedFrom(row, false, false)} price="$4.00" />,
     );
     expect(screen.getByText("$4.00")).toHaveAttribute("data-landed-price");
     expect(screen.getByText("LTR · 426 · Nonfoil")).toBeInTheDocument();
 
-    rerender(<AddedToast card={landedFrom(waiting, false, false)} onDone={vi.fn()} price="$0.25 – $1.50" />);
+    rerender(<AddedToast card={landedFrom(waiting, false, false)} price="$0.25 – $1.50" />);
     expect(screen.getByText("$0.25 – $1.50")).toBeInTheDocument();
     expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
   });
@@ -134,13 +134,13 @@ describe("AddedToast", () => {
   /** Bold gold from the sound ladder's first tier up; below it, or unpriced, plain. */
   it("draws the price in gold once it reaches a price tier", () => {
     const { rerender } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" tier="tier1" />,
+      <AddedToast card={landedFrom(row, false, false)} price="$4.00" tier="tier1" />,
     );
     const price = () => screen.getByText("$4.00");
     expect(price().classList.contains("text-accent")).toBe(true);
     expect(price().classList.contains("font-semibold")).toBe(true);
 
-    rerender(<AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" tier={null} />);
+    rerender(<AddedToast card={landedFrom(row, false, false)} price="$4.00" tier={null} />);
     expect(price().classList.contains("text-accent")).toBe(false);
     expect(price().classList.contains("text-text")).toBe(true);
   });
@@ -151,7 +151,7 @@ describe("AddedToast", () => {
    */
   it("lays a compact landing out on one line, with no label line", () => {
     const { container } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" compact />,
+      <AddedToast card={landedFrom(row, false, false)} price="$4.00" compact />,
     );
     expect(screen.queryByText("Added to scanned cards")).toBeNull();
     const name = screen.getByText("Oliphaunt");
@@ -168,7 +168,7 @@ describe("AddedToast", () => {
 
   /** A compact pick still names no printing it has not got: the line says where the question is. */
   it("asks for a pick in a compact landing too", () => {
-    render(<AddedToast card={landedFrom(waiting, false, false)} onDone={vi.fn()} compact />);
+    render(<AddedToast card={landedFrom(waiting, false, false)} compact />);
     expect(screen.queryByText("Pick a printing")).toBeNull();
     expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
     expect(screen.queryByText(/LTR · 256/)).toBeNull();
@@ -176,13 +176,13 @@ describe("AddedToast", () => {
 
   /** Absent is "not answered yet" (`useLandedPrice`): no dash, no figure, no empty slot. */
   it("draws no price slot while the price has not been answered", () => {
-    const { container } = render(<AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />);
+    const { container } = render(<AddedToast card={landedFrom(row, false, false)} />);
     expect(container.querySelector("[data-landed-price]")).toBeNull();
   });
 
   it("draws one whole card for a settled landing", () => {
     const { container } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />,
+      <AddedToast card={landedFrom(row, false, false)} />,
     );
     const pictures = container.querySelectorAll("img");
     expect(pictures).toHaveLength(1);
@@ -195,7 +195,7 @@ describe("AddedToast", () => {
    */
   it("keeps the whole overlay out of the accessibility tree", () => {
     const { container } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />,
+      <AddedToast card={landedFrom(row, false, false)} />,
     );
     expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText("Oliphaunt").closest('[aria-hidden="true"]')).toBe(
@@ -207,7 +207,7 @@ describe("AddedToast", () => {
   });
 
   it("draws nothing at all without a landing", () => {
-    const { container } = render(<AddedToast card={null} onDone={vi.fn()} />);
+    const { container } = render(<AddedToast card={null} />);
     expect(container.textContent).toBe("");
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("[data-landed-flash]")).toBeNull();
@@ -219,20 +219,20 @@ describe("AddedToast", () => {
    */
   it("flashes the camera's edge once per landing, in gold whatever the kind", () => {
     const { container, rerender } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />,
+      <AddedToast card={landedFrom(row, false, false)} />,
     );
     const first = container.querySelector("[data-landed-flash]");
     expect(first?.classList.contains("ring-accent")).toBe(true);
     expect(first?.classList.contains("ring-ok")).toBe(false);
 
     rerender(
-      <AddedToast card={landedFrom({ ...row, quantity: 2, addedAt: 2_000 }, true, false)} onDone={vi.fn()} />,
+      <AddedToast card={landedFrom({ ...row, quantity: 2, addedAt: 2_000 }, true, false)} />,
     );
     const second = container.querySelector("[data-landed-flash]");
     expect(second).not.toBeNull();
     expect(second).not.toBe(first);
 
-    rerender(<AddedToast card={landedFrom(waiting, false, false)} onDone={vi.fn()} />);
+    rerender(<AddedToast card={landedFrom(waiting, false, false)} />);
     const pick = container.querySelector("[data-landed-flash]");
     expect(pick?.classList.contains("ring-accent")).toBe(true);
     expect(pick?.classList.contains("ring-ok")).toBe(false);
@@ -241,18 +241,20 @@ describe("AddedToast", () => {
   /** Real timers here: the exit settles on motion's own promise, which `waitFor` polls for. */
   it("lets the card leave when the landing is put away", async () => {
     const { container, rerender } = render(
-      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />,
+      <AddedToast card={landedFrom(row, false, false)} />,
     );
-    rerender(<AddedToast card={null} onDone={vi.fn()} />);
+    rerender(<AddedToast card={null} />);
     expect(container.querySelector("[data-landed-flash]")).toBeNull();
     await waitFor(() => expect(screen.queryByText("Oliphaunt")).toBeNull());
   });
 });
 
 /**
- * The hold. Only `setTimeout` is faked — `requestAnimationFrame` is left real so `motion` is never
- * mid-anything, `CardStack.test.tsx`'s arrangement — and nothing here drives `userEvent`, which
- * hangs under Vitest's fake timers.
+ * **The overlay keeps no clock** (issue #1555): the hold is `useTrayLanding`'s, which puts the card
+ * away by passing `null`. A clock in here ran only while the card was drawn, so a Stop that hid it
+ * left the landing set for the next Start to raise. Only `setTimeout` is faked —
+ * `requestAnimationFrame` is left real so `motion` is never mid-anything, `CardStack.test.tsx`'s
+ * arrangement.
  */
 describe("AddedToast's hold", () => {
   beforeEach(() => {
@@ -262,59 +264,12 @@ describe("AddedToast's hold", () => {
     vi.useRealTimers();
   });
 
-  const tick = (ms: number) => {
+  it("stays up for as long as it is handed a card, the hold's length and after", () => {
+    render(<AddedToast card={landedFrom(row, false, false)} />);
     act(() => {
-      vi.advanceTimersByTime(ms);
+      vi.advanceTimersByTime(LANDED_HOLD_MS * 2);
     });
-  };
-
-  it("asks to be put away once the hold is over, and not before", () => {
-    const onDone = vi.fn();
-    render(<AddedToast card={landedFrom(row, false, false)} onDone={onDone} />);
-    tick(LANDED_HOLD_MS - 1);
-    expect(onDone).not.toHaveBeenCalled();
-    tick(1);
-    expect(onDone).toHaveBeenCalledTimes(1);
-  });
-
-  it("starts the hold over for a new landing", () => {
-    const onDone = vi.fn();
-    const { rerender } = render(<AddedToast card={landedFrom(row, false, false)} onDone={onDone} />);
-    tick(LANDED_HOLD_MS - 500);
-    rerender(
-      <AddedToast card={landedFrom({ ...row, quantity: 2, addedAt: 2_000 }, true, false)} onDone={onDone} />,
-    );
-    tick(LANDED_HOLD_MS - 1);
-    expect(onDone).not.toHaveBeenCalled();
-    tick(1);
-    expect(onDone).toHaveBeenCalledTimes(1);
-  });
-
-  /** A caller passing a fresh arrow each render gets the newest one called, on the first clock. */
-  it("does not restart the hold for a new callback on the same landing", () => {
-    const landing = landedFrom(row, false, false);
-    const before = vi.fn();
-    const after = vi.fn();
-    const { rerender } = render(<AddedToast card={landing} onDone={before} />);
-    tick(LANDED_HOLD_MS - 500);
-    rerender(<AddedToast card={landing} onDone={after} />);
-    tick(500);
-    expect(after).toHaveBeenCalledTimes(1);
-    expect(before).not.toHaveBeenCalled();
-  });
-
-  it("stops the clock when it unmounts", () => {
-    const onDone = vi.fn();
-    const { unmount } = render(<AddedToast card={landedFrom(row, false, false)} onDone={onDone} />);
-    unmount();
-    tick(LANDED_HOLD_MS * 2);
-    expect(onDone).not.toHaveBeenCalled();
-  });
-
-  it("runs no clock without a landing", () => {
-    const onDone = vi.fn();
-    render(<AddedToast card={null} onDone={onDone} />);
-    tick(LANDED_HOLD_MS * 2);
-    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByText("Oliphaunt")).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

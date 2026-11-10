@@ -37,7 +37,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactElement, ReactNode, RefObject } from "react";
 import { Check, Folder, FolderPlus, X } from "lucide-react";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, blurLeftTheWindow } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
 /**
@@ -240,9 +240,10 @@ export function FolderNameField({
         onSubmit(trimmed);
       }}
       // Clicking or tabbing away discards a half-typed name, exactly as every other layer in this
-      // app discards its half-made decision.
+      // app discards its half-made decision. Switching windows is neither: Alt+Tab away to copy
+      // the name and the caret comes back to the field with the window.
       onBlur={(e) => {
-        if (pending) return;
+        if (pending || blurLeftTheWindow(e)) return;
         if (!rootRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >

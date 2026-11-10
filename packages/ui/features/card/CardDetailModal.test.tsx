@@ -1071,6 +1071,48 @@ it("keeps the wishlist rows on the wishlist surface, where its own stepper write
 });
 
 /**
+ * **Issue #1560: an any-printing wish is the row behind the printing its tile is drawn as.**
+ *
+ * The wall opens such a wish as its `artCardId`, and its own `cardId` is `null` — matched on
+ * `cardId` alone, the stepper read 0 and `+` added a second, pinned wish beside it.
+ */
+it("steps an any-printing wish opened as the printing it is drawn as", async () => {
+  wishlistList.mockResolvedValue({
+    items: [{ id: 7, cardId: null, oracleId: "o1", artCardId: "c1", quantity: 3, tags: "" }],
+    total: 1,
+  });
+  useAppStore.setState({ activeView: "wishlist" });
+  renderModal("c1");
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt on your wishlist/i,
+  });
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(3));
+
+  await userEvent.click(up);
+  await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 4));
+  expect(wishlistAdd).not.toHaveBeenCalled();
+});
+
+it("leaves an any-printing wish out of another printing's stepper", async () => {
+  wishlistList.mockResolvedValue({
+    items: [
+      { id: 7, cardId: null, oracleId: "o1", artCardId: "c2", quantity: 3, tags: "" },
+      { id: 8, cardId: "c1", oracleId: "o1", artCardId: "c1", quantity: 1, tags: "" },
+    ],
+    total: 2,
+  });
+  useAppStore.setState({ activeView: "wishlist" });
+  renderModal("c1");
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt on your wishlist/i,
+  });
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(1));
+
+  await userEvent.click(up);
+  await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(8, 2));
+});
+
+/**
  * **Issue #1167: quick presses on the owned stepper must not lose increments or add twice.**
  *
  * Both commands take an *absolute* quantity computed from the number the stepper draws. Drawn off
@@ -2139,6 +2181,63 @@ function renderFromCollection(finish: "nonfoil" | "foil" | null = null) {
     </QueryClientProvider>,
   );
 }
+
+/** The collection's folder census with one deck's group in it — issue #1537's copies. */
+const DECK_GROUP = {
+  id: 9,
+  parentId: null,
+  name: "Burn",
+  kind: "deck",
+  deckId: 3,
+  sortOrder: 0,
+  locked: false,
+};
+
+it("says the deck's sentence rather than stepping a copy held in a deck's group", async () => {
+  // Issue #1537 A and B: the only copy of the printing sits in a deck's folder, so a press here
+  // would change what the deck owns behind its back. The Collection page refuses it; so does this.
+  collectionFolderList.mockResolvedValue([DECK_GROUP]);
+  collectionList.mockResolvedValue({
+    items: [copyRow(42, { quantity: 1, folderId: 9, folderName: "Burn" })],
+    total: 1,
+  });
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt you own/i,
+  });
+  await waitFor(() => expect(collectionFolderList).toHaveBeenCalled());
+  await userEvent.click(up);
+
+  expect(
+    await screen.findByText("In Burn. Remove it from the deck to change the quantity."),
+  ).toBeInTheDocument();
+  expect(collectionSetQuantity).not.toHaveBeenCalled();
+  expect(collectionAdd).not.toHaveBeenCalled();
+});
+
+it("does not enter Edit on a copy held in a deck's group, and says why", async () => {
+  // Issue #1537 C: the deck reads its copy at its printing and finish, so neither may move here.
+  collectionFolderList.mockResolvedValue([DECK_GROUP]);
+  cardPrintings.mockResolvedValue(printings);
+  collectionList.mockResolvedValue({
+    items: [copyRow(42, { folderId: 9, folderName: "Burn" })],
+    total: 1,
+  });
+  renderFromCollection("nonfoil");
+
+  const edit = await screen.findByRole("button", { name: "Edit this copy" });
+  await waitFor(() => expect(collectionFolderList).toHaveBeenCalled());
+  await userEvent.click(edit);
+
+  expect(
+    await screen.findByText("In Burn. Remove it from the deck to change this copy."),
+  ).toBeInTheDocument();
+  expect(useAppStore.getState().paneCopy).toBeNull();
+  expect(screen.queryByRole("button", { name: "Done editing" })).toBeNull();
+});
 
 it("keeps a collection card read-only until Edit is pressed", async () => {
   cardPrintings.mockResolvedValue(printings);

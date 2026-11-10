@@ -10,6 +10,10 @@ export type { RunFrame };
 
 /** What the loop has to say: the last verdict, its cost, the running rate, the last failure. */
 export interface ScanLoop {
+  /**
+   * The last verdict taken — `null` from a start until that stream's first answer, since the
+   * start forgets the card the last one ended on (issue #1555).
+   */
   verdict: ScannerVerdict | null;
   roundTripMs: number | null;
   /** Frames per second over the last twenty round trips. `null` until the first answers. */
@@ -137,6 +141,18 @@ const WINDOW = 20;
  * row already in the tray is the one the reader has seen land.
  */
 export const DECISION_GAP_FRAMES = 3;
+/**
+ * Taken frames running with no card in front of the lens (`quad === null`) that let the standing
+ * card go ({@link standingCard}) — the session's own rule for a card gone, `Rules::forget_after`
+ * in `crates/card-neural/src/session.rs`, which `useScanLoop.test.ts` holds this to (issue #1558).
+ *
+ * **Never one frame.** A detector that misses a frame now and then — a camera's auto-exposure
+ * settling after it reopens, a hand still over the card — would otherwise drop the card on the
+ * mat at every miss, and the next stream would file it a second time. The session itself waits
+ * this long before it calls a card gone; the page holding on for less would be the page alone
+ * double-counting.
+ */
+export const STANDING_FORGET_AFTER = 5;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -152,14 +168,21 @@ function identityOf(decision: ScannerDecision): string {
 
 /**
  * **The card standing in front of the lens when this window's last pump stopped** — the identity
- * of the last decision a taken verdict carried, until a taken verdict had no card in it (issue
- * #1318). `null` for none.
+ * of the last decision a taken verdict carried, until {@link STANDING_FORGET_AFTER} taken verdicts
+ * running had no card in them (issues #1318, #1558). `null` for none.
  *
  * Module memory (`viewMemory`, window-lifetime) rather than a ref, because the pump that reads it
  * is often not the pump that wrote it: a view switch unmounts the page, and the Scanner the reader
  * comes back to is a new hook over the same session. See `useScanLoop`'s note on a start.
  */
 const standingCard = viewMemory<string | null>("scanner.standing-card");
+/**
+ * Taken verdicts running with no card in them, counted toward {@link STANDING_FORGET_AFTER} —
+ * `0` again at any frame with a card. **Kept beside {@link standingCard} and across a stop**, for
+ * its reason: an empty run the stop cut in two is one run of the lens, and a card lifted just
+ * before a Stop is gone once the frames either side of it add up.
+ */
+const emptyRun = viewMemory<number>("scanner.standing-empty-run");
 
 /**
  * The frame pump — one request in flight, every frame that arrives under it dropped.
@@ -183,8 +206,10 @@ const standingCard = viewMemory<string | null>("scanner.standing-card");
  * **Except the card that was standing when the last pump stopped** ({@link standingCard}). That
  * one is in the tray already, and resuming over it — closing a dialog, restoring the window,
  * coming back to the view — must not file it a second time. So the first decision of a stream
- * that names it is taken quietly, unless a frame with no card in it came first: then it was
- * lifted and laid down again, which is a card of its own. A second copy of one card, swapped in
+ * that names it is taken quietly, unless {@link STANDING_FORGET_AFTER} frames running with no card
+ * in them came first: then it was lifted and laid down again, which is a card of its own. One
+ * empty frame is not enough (issue #1558) — a detector misses one now and then, and the card has
+ * not moved. A second copy of one card, swapped in
  * while the pump was stopped, cannot be told from the first; Reset makes it news.
  *
  * **And the pump keeps the last couple of seconds of what it sent** — `recent()`, for *Send
@@ -241,8 +266,8 @@ export function useScanLoop({
    *
    * **A start resets the session, and the card it was standing on is not news** (issue #1318):
    * every decision of a new stream is passed on — its very first frame's too — but one naming the
-   * card the last stream stopped on, before any frame without a card, which is that card still
-   * lying there. Should the reset be refused, the first number is a baseline instead, as it was
+   * card the last stream stopped on, before {@link STANDING_FORGET_AFTER} frames running without a
+   * card, which is that card still lying there. Should the reset be refused, the first number is a baseline instead, as it was
    * before: a card frozen across the gap rides every committed frame of the new stream. Read
    * through a ref, so a page passing a fresh closure each render does not restart the pump.
    *
@@ -255,6 +280,15 @@ export function useScanLoop({
   const [roundTripMs, setRoundTripMs] = useState<number | null>(null);
   const [rate, setRate] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // **A pump that starts says nothing yet** (issue #1555): the start resets the session, so the
+  // verdict the last stream ended on — its corners, and the HUD's `Matched … Added` — is about a
+  // card this stream has not seen. Cleared in the render `live` turns on ("adjusting state when a
+  // prop changes"), so not one frame of the new stream draws it.
+  const [wasLive, setWasLive] = useState(live);
+  if (wasLive !== live) {
+    setWasLive(live);
+    if (live) setVerdict(null);
+  }
   // Latched in a layout effect for `QrScanner`'s reason: the ref has to be current before the
   // next tick of a loop that mounted once and must not restart, and `useEffect` alone is not
   // guaranteed to run before that.
@@ -287,8 +321,8 @@ export function useScanLoop({
   const lastSeqRef = useRef<number | null>(null);
   /**
    * The card this stream must not file again — {@link standingCard} as the pump found it when it
-   * started — until a frame has no card in it or the stream's first decision has been seen. A ref
-   * for `lastSeqRef`'s reason.
+   * started — until {@link STANDING_FORGET_AFTER} frames running have had no card in them, or the
+   * stream's first decision has been seen. A ref for `lastSeqRef`'s reason.
    */
   const heldRef = useRef<string | null>(null);
   /**
@@ -357,6 +391,7 @@ export function useScanLoop({
     // the lens included.
     heldRef.current = null;
     standingCard.keep(null);
+    emptyRun.keep(0);
     // The frames are evidence too: a run sent after a reset must not open on the card the
     // reader has just asked the scanner to forget.
     runRef.current = [];
@@ -540,12 +575,19 @@ export function useScanLoop({
           }
           setError(null);
           // A card that has left is not the one the last stream stopped on any more, for this
-          // stream or the next — see `standingCard`.
+          // stream or the next — see `standingCard`. **Left** is the session's word for it, a run
+          // of empty frames and never one (issue #1558): a single miss is the detector's, and the
+          // card is still lying there.
           if (answer.quad === null) {
-            heldRef.current = null;
-            standingCard.keep(null);
-          } else if (answer.decision !== null) {
-            standingCard.keep(identityOf(answer.decision));
+            const empty = (emptyRun.recall() ?? 0) + 1;
+            emptyRun.keep(empty);
+            if (empty >= STANDING_FORGET_AFTER) {
+              heldRef.current = null;
+              standingCard.keep(null);
+            }
+          } else {
+            emptyRun.keep(0);
+            if (answer.decision !== null) standingCard.keep(identityOf(answer.decision));
           }
           // The decision edge. The ref moves on every verdict — a frame that repeats the number
           // is the frozen card still in front of the lens, and one with no decision is a card

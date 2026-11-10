@@ -216,6 +216,9 @@ export function PlaytestSetup({
   sort = DEFAULT_DECK_SORT,
   loading = false,
   lobby,
+  dealing = false,
+  dealError = null,
+  covered = false,
   onStart,
 }: {
   decks: readonly DeckRow[];
@@ -230,6 +233,15 @@ export function PlaytestSetup({
    * no lobbies to offer (a story or test of the solo table alone), which draws no way into one.
    */
   lobby?: LobbyState | null;
+  /** The host's lobby deal is with the engine (issue #1592): Start waits, and the panel says so. */
+  dealing?: boolean;
+  /** The engine's refusal of the host's last lobby deal, said under Start with the lobby open. */
+  dealError?: string | null;
+  /**
+   * A game's board covers the page (issue #1592): the setup is `inert` under it, so neither Enter
+   * on the Start game just pressed nor Tab reaches a control the reader cannot see.
+   */
+  covered?: boolean;
   onStart: (picks: PlaytestPicks) => void;
 }): JSX.Element {
   const [held, setHeld] = useState<SetupPicks>(() => memory.recall() ?? NOTHING_PICKED);
@@ -358,15 +370,15 @@ export function PlaytestSetup({
       : null;
   const startLobby = () => {
     const yours = seated[0];
-    if (readiness === null || !readiness.ready || yours === undefined) return;
-    const dealing = lobbyGameSeats(tableSeats, aiDeck);
-    if (dealing === null) return;
+    if (dealing || readiness === null || !readiness.ready || yours === undefined) return;
+    const sitting = lobbyGameSeats(tableSeats, aiDeck);
+    if (sitting === null) return;
     onStart({
       deckId: yours.id,
       variant: dealt(yours, held.seats[0].variant),
       opponents: [],
       difficulty: held.difficulty,
-      lobby: dealing,
+      lobby: sitting,
     });
   };
   const kick = (peer: LobbyPeer) => {
@@ -406,7 +418,7 @@ export function PlaytestSetup({
 
   if (loading || playable.length === 0) {
     return (
-      <section className="flex h-full min-h-0 flex-col">
+      <section inert={covered} className="flex h-full min-h-0 flex-col">
         <PageBar title="Playtesting" />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6">
           <p className="m-0 text-sm text-dim">
@@ -526,9 +538,11 @@ export function PlaytestSetup({
       )}
 
       <div className="mt-auto flex flex-col gap-2 pt-2">
-        <StartButton ready={readiness?.ready ?? false} onPress={startLobby} />
-        <InlineError message={lobbyError} />
-        <p className="m-0 min-h-4 text-center text-xs text-dim">{readiness?.hint ?? null}</p>
+        <StartButton ready={!dealing && (readiness?.ready ?? false)} onPress={startLobby} />
+        <InlineError message={lobbyError ?? dealError} />
+        <p role="status" className="m-0 min-h-4 text-center text-xs text-dim">
+          {dealing ? "Dealing the game…" : (readiness?.hint ?? null)}
+        </p>
         <LeaveLobby host className="items-center" />
       </div>
     </>
@@ -562,7 +576,7 @@ export function PlaytestSetup({
   );
 
   return (
-    <section className="flex h-full min-h-0 flex-col">
+    <section inert={covered} className="flex h-full min-h-0 flex-col">
       <h2 className="sr-only">Playtesting</h2>
       <DeckWall
         decks={playable}

@@ -19,11 +19,16 @@ import { useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ipc, type WishRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { useLatestPress } from "@/lib/useLatestPress";
 import { useOptimisticEntries } from "@/lib/useOptimisticEntries";
+import { useStepSettle } from "@/lib/useStepSettle";
 
 /** Every cached copy of the list sits under this — a module constant, because
  *  `useOptimisticEntries` keys its callbacks on it. */
 const WISHLIST_LIST_KEY = ["wishlist", "list"] as const;
+
+/** The stepper's write, named so {@link useStepSettle} can ask whether a press is still in flight. */
+const SET_QUANTITY_KEY = ["wishlist", "setQuantity"] as const;
 
 export function useWishEntryWrites() {
   const queryClient = useQueryClient();
@@ -97,7 +102,19 @@ export function useWishEntryWrites() {
     void refreshCardSearches(queryClient);
   }, [queryClient]);
 
+  /**
+   * The stepper's {@link settleWhole}, **once per run of presses** (issue #1535), and for a reason
+   * beyond the collection's issue #1402 cost: `settleWhole` re-reads `["wishlist"]` whole, *the
+   * list included*, so fired per press it started a read of the list behind every answer — and a
+   * read asked between press 1's answer and press 2's write answers press 1's number, landing on
+   * press 2's guess. {@link useStepSettle} fires only once no press is in flight.
+   */
+  const steps = useStepSettle(SET_QUANTITY_KEY);
+  /** Which press of a wish is the newest — only it writes its answer back (issue #1535). */
+  const presses = useLatestPress();
+
   const setQuantity = useMutation({
+    mutationKey: SET_QUANTITY_KEY,
     // The wish by its id alone (`Pick`), so a caller holding only an `EntryChange` — the phone's
     // undo of an add — can step it back through this same write.
     mutationFn: ({ row, quantity }: { row: Pick<WishRow, "id">; quantity: number }) =>
@@ -114,16 +131,27 @@ export function useWishEntryWrites() {
     // its own write. What a reader sees in the meantime is the number they pressed to, on a row
     // that leaves a few milliseconds later — a stepper that reported a different number from the
     // one under their finger would be worse than a row that lingers.
-    onMutate: ({ row, quantity }) => {
+    //
+    // **And ordered, per wish (issue #1535)** — the collection's twin carries the argument: a
+    // press cancels the list reads in flight (the run's `settleWhole` re-reads the list anyway),
+    // and only a wish's newest press writes its answer or rolls back its refusal.
+    onMutate: async ({ row, quantity }) => {
+      steps.hold();
+      const slot = String(row.id);
+      const ticket = presses.press(slot);
+      await queryClient.cancelQueries({ queryKey: WISHLIST_LIST_KEY });
       const saved = snapshot();
       patchWish(row.id, (r) => ({ ...r, quantity }));
-      return saved;
+      return { saved, slot, ticket };
     },
-    onError: (_error, _variables, saved) => {
-      if (saved) restore(saved);
-      settleWhole();
+    onError: (_error, _variables, context) => {
+      if (context && presses.isLatest(context.slot, context.ticket)) restore(context.saved);
+      steps.now(settleWhole);
     },
-    onSuccess: (change) => {
+    onSettled: (_data, _error, _variables, context) => {
+      if (context) presses.release(context.slot, context.ticket);
+    },
+    onSuccess: (change, _variables, context) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored — **or says the row is not there any more**. Then the
       // re-read, for what the new number is counted into — the folder subtotal a copy count
@@ -150,8 +178,12 @@ export function useWishEntryWrites() {
       // sighting — but not its reason: `settle()` there re-reads the summaries and pointedly
       // **not** the list, so the same misreading leaves a row that outlives every round trip.
       // Do not port that sentence back here.
-      patchWish(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
-      settleWhole();
+      //
+      // An answer a newer press of the same wish has superseded writes nothing (issue #1535).
+      if (presses.isLatest(context.slot, context.ticket)) {
+        patchWish(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
+      }
+      steps.schedule(settleWhole);
     },
   });
 

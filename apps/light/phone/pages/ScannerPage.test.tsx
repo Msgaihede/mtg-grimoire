@@ -1968,16 +1968,9 @@ describe("sending a scan from the Scanner page", () => {
     await waitFor(() => expect(asked).toBe(9), SETTLE);
     await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
 
-    // The premise: as things stand there is a run to send, all eight frames of it. (On the
-    // describe's clock, so it is here however long the machine took to get to this line.)
-    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
-    const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
-    expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "8");
-    await userEvent.keyboard("{Escape}");
-    await waitFor(
-      () => expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull(),
-      SETTLE,
-    );
+    // As things stand the run is those eight frames. Not opened here to show it: the dialog
+    // pauses the pump, and the start after it lets the run go and forgets the verdict by itself
+    // (issue #1555), which would say nothing about the filters.
 
     // The reader narrows the scan, and the session takes it — which is when it is stored.
     const resets = seen.resets;

@@ -1221,6 +1221,36 @@ describe("a CSV, read as a file", () => {
     ]);
   });
 
+  /** Issue #1553's file: a stray inch mark in a note used to put every row below it into it. */
+  it("reads every row past a quote in the middle of a cell", () => {
+    const list = parseDecklist(
+      'Quantity,Name,Notes\n1,Sol Ring,7" playmat promo\n4,Lightning Bolt,\n2,Shock,\n3,Opt,\n',
+    );
+    expect(list.issues).toEqual([]);
+    expect(list.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [1, "Sol Ring"],
+      [4, "Lightning Bolt"],
+      [2, "Shock"],
+      [3, "Opt"],
+    ]);
+    expect(list.lines[0].extra.notes).toBe('7" playmat promo');
+    expect(list.totalCards).toBe(10);
+  });
+
+  it("names a row whose quote is never closed, and still reads the rows after it", () => {
+    const list = parseDecklist(
+      'Quantity,Name,Notes\n1,Sol Ring,"promo\n4,Lightning Bolt,\n2,Shock,\n',
+    );
+    expect(list.lines.map((l) => l.name)).toEqual(["Lightning Bolt", "Shock"]);
+    expect(list.issues).toEqual([
+      {
+        lineNumber: 2,
+        raw: '1,Sol Ring,"promo',
+        reason: "a quote in this row is never closed — close it or remove it",
+      },
+    ]);
+  });
+
   /** Excel in a comma-decimal locale writes `;` between cells — and `4,50` inside one. */
   it("reads a semicolon file, a comma inside a cell and all", () => {
     const list = parseDecklist(

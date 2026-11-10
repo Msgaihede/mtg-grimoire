@@ -7,6 +7,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const shareOpen = vi.hoisted(() => vi.fn());
@@ -28,6 +29,41 @@ function mount(onOpened = vi.fn()) {
   render(
     <QueryClientProvider client={client}>
       <OpenShareDialog open onClose={onClose} onOpened={onOpened} />
+    </QueryClientProvider>,
+  );
+  return { onClose, onOpened };
+}
+
+/**
+ * The dialog under a host that closes it, as `SharedPage` does: `onClose` sets `open` to false,
+ * which unmounts the form. `mount` keeps it open whatever is pressed, so a press that outlives the
+ * form is reachable only from here.
+ */
+function mountHosted() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const onClose = vi.fn();
+  const onOpened = vi.fn();
+  function Host() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open another
+        </button>
+        <OpenShareDialog
+          open={open}
+          onClose={() => {
+            onClose();
+            setOpen(false);
+          }}
+          onOpened={onOpened}
+        />
+      </>
+    );
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <Host />
     </QueryClientProvider>,
   );
   return { onClose, onOpened };
@@ -106,6 +142,37 @@ describe("the link a reader pastes", () => {
     ).toBeInTheDocument();
     expect(onOpened).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+    expect(useAppStore.getState().openedShares).toEqual([]);
+  });
+
+  /**
+   * ⚠️ **A cancelled open stays cancelled** (issue #1578). The fetch outlives the press of Cancel
+   * on *Opening…*, and when a slow link answered it used to be remembered and navigated to anyway —
+   * switching the reader off the binder they were looking at, and dropping its ticks with it.
+   */
+  it("does not open a link whose dialog was cancelled while it was still answering", async () => {
+    let answer!: (value: unknown) => void;
+    shareOpen.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { onClose, onOpened } = mountHosted();
+    await userEvent.type(field(), LINK);
+    await userEvent.click(openButton());
+    expect(await screen.findByRole("button", { name: "Opening…" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    answer(JSON.parse(golden));
+    // The answer is in (it is cached: the reader's next paste of it is answered at once), and
+    // nothing acted on it.
+    await waitFor(() => expect(shareOpen).toHaveBeenCalledTimes(1));
+    await new Promise((settle) => setTimeout(settle, 0));
+    expect(onOpened).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().openedShares).toEqual([]);
   });
 

@@ -1,6 +1,13 @@
-"""Train the card detector (qd_detector.py) on synthetic scenes (qd_detect_data.py).
+"""Train the card detector (qd_detector.py) on synthetic scenes (qd_detect_data.py), with readers'
+own frames among them when there are any.
 
     python qd_detect_train.py <dataset dir> <run dir> [--steps 30000] [--batch 64] [--workers N] [--prefetch 2]
+        [--real <real scenes dir>] [--real-share 0.25] [--init <weights.pt>]
+
+`--real` is a folder real_scenes.py built: one scene in `1 / --real-share` is then a reader's
+frame, and every evaluation scores the scans that folder holds out as well (`real_found`,
+`real_corner_err`, `real_container`, `real_empty_hit`, ...). `--init` starts from a detector's
+weights instead of the backbone's ImageNet ones: a fine-tune, for the lab.
 
 CenterNet's losses: a focal loss on the centre heat map (cells round a card too covered to judge
 weighted out), L1 on the corners at the peak and its neighbours (weighted by the heat there), BCE
@@ -8,9 +15,11 @@ on upside-down at the same cells. AdamW, warm-up then cosine, bf16.
 
 Every `--eval-every` steps, on a fixed set of scenes: the share of cards found (a detection over
 0.5 whose centre is within a quarter of the card's height of the card's), their mean corner error
-as a share of the card's height, which way up they came back, and the false detections per
-scene. Logs one JSON line per evaluation to <run dir>/log.jsonl; checkpoints last.pt and best.pt
-(by found share, then corner error).
+as a share of the card's height, which way up they came back, the false detections, of the found
+cards the share whose quad is far larger than the card (`container`: the box it lies in, which
+shares its middle), and of the scenes with nothing to find the share a card was found in all the
+same (`empty_hit`). Logs one JSON line per evaluation to <run dir>/log.jsonl; checkpoints last.pt
+and best.pt (by found share, then corner error).
 
 Resumable (runs.py): every evaluation ends with `checkpoint.pt`; started again with the same
 arguments the run goes on from the last evaluated step, and a finished run only prints its final
@@ -28,13 +37,23 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from qd_data import Looks, normalize
-from qd_detect_data import Batches, Scenes, decode
+from qd_detect_data import Batches, Mixed, RealScenes, Scenes, decode
 from qd_detector import Detector
 from runs import (CHECKPOINT, atomic_save, check_recipe, clear_partials, default_workers, load_checkpoint,
                   reconcile_log, rng_state, set_rng_state)
 
 # The arguments a checkpoint must have been made with to be resumed.
-RECIPE = ("steps", "batch", "lr", "warmup", "eval_every", "eval_batches", "corner_weight", "flip_weight")
+RECIPE = ("steps", "batch", "lr", "warmup", "eval_every", "eval_batches", "corner_weight", "flip_weight", "real_share")
+
+
+# A found card whose quad is over this many times the card's area is what holds the card, taken
+# for it (`real_scenes.score` draws the same line).
+CONTAINER = 1.3
+
+
+def _area(q: np.ndarray) -> float:
+    x, y = q[:, 0], q[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
 
 
 def focal(logits: torch.Tensor, heat: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
@@ -60,7 +79,7 @@ def evaluate(model, scenes, device) -> dict:
     """Found share, corner error and orientation on fixed scenes, from the labelled cards
     re-derived from the targets (peak cells) — the same cards the loss saw."""
     model.eval()
-    found = cards = wrong_way = fp = 0
+    found = cards = wrong_way = fp = empty = empty_hit = container = 0
     errors = []
     for image, heat, corners, flip, cw, hw in scenes:
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -89,21 +108,32 @@ def evaluate(model, scenes, device) -> dict:
                 turned = float(np.linalg.norm(q[[2, 3, 0, 1]] - truth, axis=1).mean())
                 wrong_way += turned < err
                 errors.append(min(err, turned) / h)
+                # A box round a card shares its middle, so it is "found" — by a quad far larger
+                # than the card. Counted apart: the mean corner error can hide a few.
+                container += _area(q) > CONTAINER * _area(truth)
             # A detection near no labelled card and no ignored one is a false one.
             hwb = hw[b].numpy()
+            false = 0
             for k, (s, q, f) in enumerate(dets):
                 if k in used:
                     continue
                 cx, cy = (q.mean(0) / 8).astype(int)
                 if 0 <= cy < hwb.shape[0] and 0 <= cx < hwb.shape[1] and hwb[cy, cx] == 0:
                     continue
-                fp += 1
+                false += 1
+            fp += false
+            # A scene with nothing to find, judged everywhere: an empty desk, box or lens.
+            if len(ys) == 0 and hwb.min() > 0:
+                empty += 1
+                empty_hit += false > 0
     model.train()
     return {
         "found": found / max(1, cards), "cards": cards,
         "corner_err": float(np.mean(errors)) if errors else None,
         "corner_err_p90": float(np.percentile(errors, 90)) if errors else None,
         "wrong_way": wrong_way / max(1, found), "fp": fp,
+        "empty": empty, "empty_hit": empty_hit / empty if empty else None,
+        "container": container / max(1, found),
     }
 
 
@@ -131,7 +161,12 @@ def main():
     ap.add_argument("--eval-batches", type=int, default=24)
     ap.add_argument("--corner-weight", type=float, default=1.0)
     ap.add_argument("--flip-weight", type=float, default=0.5)
+    ap.add_argument("--real", help="readers' frames with their corners: a folder real_scenes.py built")
+    ap.add_argument("--real-share", type=float, default=0.25, help="the share of training scenes that are readers' frames")
+    ap.add_argument("--init", help="a detector's weights to start from, instead of the backbone's ImageNet ones")
     args = ap.parse_args()
+    if not args.real:
+        args.real_share = 0.0  # the recipe a checkpoint is held to: no readers' frames
     run = Path(args.run)
     run.mkdir(parents=True, exist_ok=True)
     clear_partials(run)
@@ -150,7 +185,9 @@ def main():
     if ckpt is None:
         (run / "run.json").write_text(json.dumps({"args": vars(args), "torch": torch.__version__}, indent=1), encoding="utf-8")
 
-    model = Detector(pretrained=ckpt is None).to(device)
+    model = Detector(pretrained=ckpt is None and not args.init).to(device)
+    if ckpt is None and args.init:
+        model.load_state_dict(torch.load(args.init, map_location="cpu", weights_only=True))
     body = list(model.body.parameters())
     rest = [p for n, p in model.named_parameters() if not n.startswith("body.")]
     opt = torch.optim.AdamW([{"params": body, "lr": args.lr * 0.5}, {"params": rest, "lr": args.lr}], weight_decay=1e-4)
@@ -170,7 +207,15 @@ def main():
 
     val = DataLoader(Scenes(looks, fixed=True), batch_sampler=Batches(args.eval_batches, 32, seed=7),
                      num_workers=min(args.workers, 8), persistent_workers=True, prefetch_factor=args.prefetch)
-    train = DataLoader(Scenes(looks), batch_sampler=Batches(args.steps - first, args.batch), num_workers=args.workers,
+    scenes = Scenes(looks)
+    real_val = None
+    if args.real:
+        # The scans held out of training, every frame once, in views drawn once and for all.
+        held = RealScenes(Path(args.real), split="val", fixed=True)
+        real_val = DataLoader(held, batch_sampler=Batches(math.ceil(len(held) / 32), 32, seed=11),
+                              num_workers=min(args.workers, 4), persistent_workers=True, prefetch_factor=args.prefetch)
+        scenes = Mixed(scenes, RealScenes(Path(args.real), scenes, split="train"), args.real_share)
+    train = DataLoader(scenes, batch_sampler=Batches(args.steps - first, args.batch), num_workers=args.workers,
                        pin_memory=True, prefetch_factor=args.prefetch)
     if ckpt is not None:
         set_rng_state(ckpt["rng"])
@@ -195,6 +240,8 @@ def main():
             row = {"step": step, "heat": s[0], "corner": s[1], "flip": s[2],
                    "scenes_per_s": round(seen * args.batch / (time.time() - started))}
             row.update(evaluate(model, val, device))
+            if real_val is not None:
+                row.update({f"real_{k}": v for k, v in evaluate(model, real_val, device).items()})
             state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
             atomic_save(state, run / "last.pt")
             key = (row["found"], -(row["corner_err"] or 1.0))

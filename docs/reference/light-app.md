@@ -2314,8 +2314,10 @@ import reads `Imported 4 cards into your collection.` with `Undo`. Export sweeps
 the host hands it through `useExportScope` (the wall it draws, the desktop's rule), gated on the
 sheet being open; with none it sweeps the whole collection, says `N cards in your collection` and
 draws no box to widen what is already everything. A host that already draws the collection's undo
-notice passes `undoNotice={false}`. **It is mounted nowhere yet**: the collection header takes it
-at merge.
+notice passes `undoNotice={false}`. The Collection page mounts it on every state: in the wall's
+header beside the figures, and over the sentence when there is no wall — an empty collection, a
+filter that matched nothing, a folder that is gone — because a new install has no other way to
+fill the page (issue #1598).
 
 **The file seam is a browser stand-in, and every install draws it the same way.** The spec puts
 file open and save below `Core` (§3.5); phase 3 adds no command and no host seam, so

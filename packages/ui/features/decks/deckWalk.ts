@@ -57,6 +57,9 @@ export interface WalkTokenPile {
  *  views, spelled locally so this file needs nothing from their drawing module. */
 const TOKEN_PILE = Symbol("token pile");
 
+/** No stack hidden — {@link deckSlotOrder}'s default, one frozen set for every caller. */
+const NO_HIDDEN_STACKS: ReadonlySet<number> = new Set();
+
 /**
  * One stop on the walk — re-exported here because this is where a **deck's** stops are made, and
  * every caller but the store reaches for the type beside {@link deckWalkStops}. The three card
@@ -68,7 +71,6 @@ const TOKEN_PILE = Symbol("token pile");
  * and a `lib` module importing a type out of a feature is an edge nothing else in this app has.
  */
 export type { CardWalkStop };
-
 
 /**
  * The deck's rows in the order the desk draws them.
@@ -202,11 +204,27 @@ export function deckWalkStops(
  * true of neither now. It was always bounded — inside a pile, and between piles all in the flow,
  * the two orders were identical, which is every range a reader is likely to draw — and what has
  * changed is that the unbounded case no longer exists.
+ *
+ * ## A hidden stack is off the list (issue #1533)
+ *
+ * `hidden` is the Stacks view's hidden stacks (issue #618), and the desk passes it **only when
+ * Stacks is the view drawn** — the other three draw every card of a hidden stack. A hidden stack
+ * draws its heading and none of its cards, so a range must not run through it: a Shift-click from
+ * a card above it to one below it used to pick every card of that pile, and Delete, a drag or the
+ * menu's `Remove N cards` then acted on cards that were not on screen. Leaving them off the order
+ * is also what makes the selection's prune drop a pick whose stack the reader hides afterwards —
+ * the same rule, reached by the prune `useCardSelection` already runs against this list.
+ * `StackView`'s arrow walk empties the same piles for the same reason, and the editor's Ctrl+A
+ * skips them.
  */
-export function deckSlotOrder(groups: readonly CardGroup[]): string[] {
+export function deckSlotOrder(
+  groups: readonly CardGroup[],
+  hidden: ReadonlySet<number> = NO_HIDDEN_STACKS,
+): string[] {
   const { command, flow, rail } = splitRail(groups);
   const slots: string[] = [];
   for (const group of [...command, ...flow, ...rail]) {
+    if (group.categoryId !== null && hidden.has(group.categoryId)) continue;
     for (const card of group.cards) {
       slots.push(deckCardSlot(card.categoryId, card.cardId, card.finish));
     }

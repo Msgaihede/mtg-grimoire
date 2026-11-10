@@ -2215,3 +2215,115 @@ describe("the two sentences that name a membership, on a host that offers none",
     expect(outcomeText(OUTCOME, true)).toBe(outcomeText(OUTCOME));
   });
 });
+
+/**
+ * Issue #1595 — three ways the panel went on saying something that had stopped being true, each
+ * the panel's own state out of step with longer-lived mutation and query state.
+ */
+describe("the panel says only what is still true", () => {
+  /** The problem line belongs to the newest press. A fixed precedence over mutation errors —
+   *  which persist until the *same* mutation runs again — left a refused code red under the
+   *  fresh QR of a later, successful *Pair a device*. */
+  it("clears a refused code once a new pairing starts", async () => {
+    syncPairingAccept.mockRejectedValue("That pairing code isn't valid.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
+    await user.type(await screen.findByLabelText(/code shown on the other device/i), "WRONG");
+    await user.click(screen.getByRole("button", { name: /read the code/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/isn't valid/i);
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+
+    expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/isn't valid/i)).not.toBeInTheDocument());
+  });
+
+  /** …and an older refusal never outranks a newer one, whichever mutation each came from. */
+  it("draws a typed code's refusal over an earlier Pair a device's", async () => {
+    syncPairingBegin.mockRejectedValue("The relay could not be reached.");
+    syncPairingAccept.mockRejectedValue("That pairing code isn't valid.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/relay could not be reached/i);
+
+    await user.click(screen.getByRole("button", { name: /enter a code from another/i }));
+    await user.type(await screen.findByLabelText(/code shown on the other device/i), "WRONG");
+    await user.click(screen.getByRole("button", { name: /read the code/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/isn't valid/i));
+    expect(screen.queryByText(/relay could not be reached/i)).not.toBeInTheDocument();
+  });
+
+  /** The membership half's line, by the same rule: a failed Connect Patreon used to mask every
+   *  later claim refusal. */
+  it("draws a refused claim over an earlier failed Connect Patreon", async () => {
+    syncPatreonBegin.mockRejectedValue("The browser could not be opened.");
+    syncPatreonClaim.mockRejectedValue("That claim code has expired.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /connect patreon/i }));
+    expect(await screen.findByText(/browser could not be opened/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/claim code/i), "ABCD-EFGH-JKMN");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    expect(await screen.findByText(/claim code has expired/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(/browser could not be opened/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  /** The disabled poll's `{stage: "complete"}` outlived the component in the query cache while
+   *  the once-only guard did not, so a return to Settings › Sync replayed the completion: a
+   *  second *Device paired* and a second `syncNow`. */
+  it("does not raise Device paired again when the panel is reopened after a pairing", async () => {
+    syncPairingPoll.mockResolvedValueOnce({ stage: "waiting", sas: null });
+    syncPairingPoll.mockResolvedValue({ stage: "complete", sas: null });
+    const user = userEvent.setup();
+    // `rerender` keeps the wrapper — and so the one `QueryClient` — mounted across the panel's
+    // own unmount, which is what leaving and returning to the view does in the app.
+    const view = render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1), {
+      timeout: 3000,
+    });
+    await waitFor(() => expect(syncNow).toHaveBeenCalledTimes(1));
+
+    view.rerender(<></>);
+    view.rerender(<SyncPanel />);
+    expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    // Long enough for the remounted effect to have run, had it anything to replay.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(syncNow).toHaveBeenCalledTimes(1);
+  });
+
+  /** A refused trip is not the previous trip: its figures go when the press starts. */
+  it("drops the last trip's report when the next trip is refused", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    syncNow.mockResolvedValueOnce(OUTCOME);
+    syncNow.mockRejectedValue("The relay could not be reached.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+    expect(await screen.findByText(/sent 4 changes and received 9 changes/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /sync now/i }));
+
+    expect(await screen.findByText(/sync didn't finish/i)).toBeInTheDocument();
+    expect(screen.getByText(/relay could not be reached/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(/sent 4 changes and received 9 changes/i)).not.toBeInTheDocument(),
+    );
+  });
+});

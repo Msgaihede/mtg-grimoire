@@ -62,6 +62,9 @@ describe("noteTitle", () => {
       "Add a fetch",
     ));
 
+  it("skips the editor's blank lines rather than naming the note after their marker", () =>
+    expect(noteTitle(note({ title: "", body: "\n\n&nbsp;\n\nMana base" }))).toBe("Mana base"));
+
   it("treats a title of nothing but spaces as no title", () =>
     expect(noteTitle(note({ title: "   ", body: "Fourteen sources." }))).toBe(
       "Fourteen sources.",

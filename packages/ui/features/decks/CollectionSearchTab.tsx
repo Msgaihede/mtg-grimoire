@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { ADD_BUTTON } from "./addButton";
 import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
+import { TOKENS_HEADING } from "./deckTokens";
 import type { DragPayload } from "./dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 import { useCollectionSearch, type PlayState } from "./useCollectionSearch";
@@ -268,6 +269,10 @@ export function landingCategory(
  * the search losing rows. {@link PlayState} carries the shape of the fence and why it is a second
  * axis rather than a fourth `CopySource`; `collection_alloc::NOT_IN_DECK` is the fence itself, and
  * the greying is that refusal said early.
+ *
+ * **A token or an emblem is the exemption, as it is in Rust** (issue #1540): `collection_to_deck`
+ * files one as a token entry before the fence is asked, so its tile is pressable and names
+ * {@link TOKENS_HEADING} as where it lands — `PlayState`'s `token` arm.
  */
 export function CollectionSearchTab({
   categories,
@@ -388,6 +393,14 @@ export function CollectionSearchTab({
     if (tile.add) {
       move.mutateAsync({ row: tile.add, pile, quantity: 1 }).then(
         (outcome) => {
+          // **The token arm's answer** (issue #1540): `collection_to_deck` filed a token entry
+          // and moved no copy — `quantity: 0`, and no `deck_cards` row for a landed glow to find.
+          // The press still did something the reader asked for, so it still owes its receipt,
+          // in the card-search tab's words for the same add.
+          if (outcome.quantity === 0 && outcome.deckCardId === null) {
+            notify.success(`Added “${tile.name}” to “${TOKENS_HEADING}”`);
+            return;
+          }
           if (outcome.quantity === 0) return;
           notify.success(
             `Moved ${plural(outcome.quantity, "copy", "copies")} of “${tile.name}” into the deck`,
@@ -713,6 +726,8 @@ function AddButton({
    * rather than exclusive, and the order is the one that stays true if the group and the list ever
    * disagree.
    */
+  const token = play === "token";
+
   const refusal =
     play === "unread"
       ? `${tile.name} — checking deck…`
@@ -741,8 +756,11 @@ function AddButton({
    * empty — and the root is where most copies sit, so naming it would add four words to nearly
    * every control on the wall to say "filed nowhere in particular".
    */
+  // **A token press takes no copy from anywhere** (issue #1540) — the backend files a token entry
+  // and leaves the cardboard where it sits — so naming a place, above all a *taking*, would
+  // describe a move that never happens.
   const place =
-    tile.from === null || tile.add === null
+    token || tile.from === null || tile.add === null
       ? null
       : tile.from.kind === "otherDeck"
         ? { taking: true, name: tile.from.deckName ?? "another deck" }
@@ -752,8 +770,15 @@ function AddButton({
 
   const where = place ? (place.taking ? `taking it from ${place.name}` : `in ${place.name}`) : null;
 
-  /** ` to Ramp`, or nothing for a pile the rule has not named yet — see {@link Landing}. */
-  const into = lands.name === null ? "" : ` to ${lands.name}`;
+  /**
+   * ` to Ramp`, or nothing for a pile the rule has not named yet — see {@link Landing}.
+   *
+   * **A token lands in Tokens & Emblems whatever pile is picked** — the card-search tab's rule
+   * (`DeckSearchPanel`'s `landsIn`), and for its reason: the backend reroutes it into a token
+   * entry, so a button naming the deck's pile would promise a place the press never goes.
+   */
+  const landsIn = token ? TOKENS_HEADING : lands.name;
+  const into = landsIn === null ? "" : ` to ${landsIn}`;
 
   return (
     <button
@@ -773,7 +798,7 @@ function AddButton({
                 ? `Take from ${place.name}`
                 : `Take from ${place.name} → ${lands.name}`
               : `Add${into} — your copy in ${place.name}`
-            : lands.name === null
+            : landsIn === null
               ? UNNAMED_PILE_TIP
               : `Add${into}`),
         { describes: false },
@@ -787,7 +812,9 @@ function AddButton({
         // first, because confirming takes it out of that deck's *list* as well as its group — and
         // that deck is not on screen. `pickCopy` has already preferred a desk copy where the
         // reader has one, so this is reached only when every copy is spoken for.
-        if (tile.from?.kind === "otherDeck") onAsk(tile);
+        // A token is never asked about: the press files a token entry and takes nothing from
+        // the deck holding the copy (issue #1540).
+        if (!token && tile.from?.kind === "otherDeck") onAsk(tile);
         else onCommit(tile, lands.pile);
       }}
       className={cn(
@@ -851,7 +878,9 @@ function Confirm({
       {/* Said only where it can be promised: a pile the rule has not named yet is not guessed at
           in the one sentence a reader is being asked to agree to. */}
       {lands.name !== null && (
-        <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It will go in {lands.name}.</p>
+        <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
+          It will go in {lands.name}.
+        </p>
       )}
 
       <div className="mt-2 flex flex-wrap gap-2">

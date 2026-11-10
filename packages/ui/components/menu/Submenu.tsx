@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import { ChevronRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { LAYER } from "@/lib/layers";
 import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
@@ -10,17 +9,26 @@ import {
   MENU_MIN_HEIGHT,
   MENU_MIN_WIDTH,
   PANEL_CLASS,
+  PANEL_SCROLL_CLASS,
   ROW_CLASS,
+  menuMaxHeight,
+  panelOf,
   placeSubmenu,
-  type SubmenuPlacement,
 } from "./panel";
 
+/** A placement as this component draws it: `top` in the parent panel's own px, not the window's. */
+interface Placed {
+  side: "left-full" | "right-full";
+  top: number;
+  origin: string;
+}
+
 /**
- * Where a submenu is drawn before anything has been measured — down and to the right, which is
- * where all but the last column of them end up. The layout effect below corrects it before the
- * browser paints, so this is a first guess and never a flash.
+ * Where a submenu is drawn before anything has been measured — to the right, level with the top
+ * of its parent panel. The layout effect below corrects it before the browser paints, so this is a
+ * first guess and never a flash.
  */
-const UNMEASURED: SubmenuPlacement = { position: "left-full top-0", origin: "origin-top-left" };
+const UNMEASURED: Placed = { side: "left-full", top: 0, origin: "origin-top-left" };
 
 /**
  * One row that opens a panel beside itself, and that panel.
@@ -40,13 +48,17 @@ const UNMEASURED: SubmenuPlacement = { position: "left-full top-0", origin: "ori
  *
  * **It is not portalled and not `fixed`.** The root panel animates a `scale`, and a transformed
  * ancestor is the containing block for every `fixed` descendant — so a `fixed` submenu would be
- * positioned against the very panel it is opening out of. It is `absolute` inside its own row's
- * box instead, which needs no pixel arithmetic and no popper (the shipped CSP is `style-src
- * 'self'`, which every one of those silently fails under).
+ * positioned against the very panel it is opening out of. It is `absolute` against its **parent
+ * panel** instead — the row box between them is static on purpose, so that the parent's scroller
+ * (`PANEL_SCROLL_CLASS`) does not clip it — with no popper (the shipped CSP is `style-src 'self'`,
+ * which every one of those silently fails under; React's `style` prop writes through the CSSOM,
+ * which it allows, and the root panel has always been placed that way).
  *
- * **It takes `LAYER.raisedWhenPopupOpen` rather than a layer of its own.** Inside the root panel's
- * stacking context a later sibling row paints over an earlier one's submenu, and that variant —
- * `has-[[aria-expanded=true]]` — is exactly the rule the tables already use for the same reason.
+ * **It takes no layer.** It used to take `LAYER.raisedWhenPopupOpen`, because a submenu inside a
+ * `relative` row box was out-painted by later sibling rows. Now that the row box is static, the
+ * panel is the one positioned box among non-positioned rows, and a positioned descendant paints
+ * after every in-flow one in the parent panel's stacking context — so it is above them by the
+ * paint order alone, and a z-index on a static box would be ignored anyway.
  */
 export function Submenu({
   id,
@@ -71,7 +83,7 @@ export function Submenu({
 }) {
   const rowRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [placement, setPlacement] = useState<SubmenuPlacement>(UNMEASURED);
+  const [placement, setPlacement] = useState<Placed>(UNMEASURED);
 
   /**
    * Measured after the commit, applied before the paint — **and measured again whenever the panel
@@ -83,9 +95,10 @@ export function Submenu({
    * panel five times that size. `Submenu` does not re-render when the query resolves — React
    * re-renders the body, which is this component's child — and `[open]` would not re-run the
    * effect if it did. A panel opened at `top: 560` in an 800px window on 42px of note then spans
-   * 560–860 on 300px of decks, and the 60px past the edge holds real rows: there is no `max-h`, no
-   * `overflow-y` and no scroller anywhere in this module, and the ancestor is `fixed`, so nothing
-   * clips it and nothing can be scrolled to it.
+   * 560–860 on 300px of decks, and the 60px past the edge held real rows: until issue #1572 there
+   * was no `max-h`, no `overflow-y` and no scroller anywhere in this module, and the ancestor is
+   * `fixed`, so nothing clipped it and nothing could be scrolled to it. (A panel scrolls now, but
+   * one placed from the note would still hang its lower rows off the window rather than scroll.)
    *
    * **A `ResizeObserver`, which the deck's stack view refuses on the grounds that "this view has
    * no business observing its own box" — and that argument does not reach here.** It is about a
@@ -93,9 +106,17 @@ export function Submenu({
    * answers and a second reading lands a frame behind the layout it is reacting to. This is a
    * floating popup measuring **itself**, to decide which side of a row it hangs off; nothing in
    * CSS can express "flip if you would leave the window", and being a frame late is exactly the
-   * failure mode being fixed rather than one being introduced. It also cannot feed back: a flip
-   * writes `top-0`/`bottom-0` and `left-full`/`right-full`, which move the panel and change no
+   * failure mode being fixed rather than one being introduced. It also cannot feed back: a
+   * placement writes `top` and `left-full`/`right-full`, which move the panel and change no
    * dimension of it, so the observer has nothing to fire about.
+   *
+   * **Viewport px in, parent px out.** `placeSubmenu` answers in the window's coordinates, where
+   * the caption and the gutters are; `top` is written in the parent panel's, whose padding box is
+   * the containing block. The two differ by the parent's position and its border — and, while the
+   * root panel is still scaling in, by its `scale`, which every rect measured inside it carries.
+   * Dividing by the ratio of the parent's drawn height to its layout height takes that out, so a
+   * submenu opened inside the root's first 180ms lands where it would have at rest, give or take
+   * the few px the clamp's viewport reading is out by until the scale reaches 1.
    *
    * The first reading stays synchronous and stays here, ahead of the observer: `ResizeObserver`
    * delivers its initial notification after the layout rather than during this effect, so leaning
@@ -110,17 +131,24 @@ export function Submenu({
   useLayoutEffect(() => {
     const row = rowRef.current;
     const panel = panelRef.current;
-    if (!open || !row || !panel) return;
+    const parent = panelOf(row);
+    if (!open || !row || !panel || !parent) return;
     const place = () => {
+      const parentBox = parent.getBoundingClientRect();
       // Both axes measured, and both clamped to the floor rather than *replaced* by it: a panel is
       // measured after it mounts, and under jsdom every box reads a hard `0`.
       const next = placeSubmenu(
         row.getBoundingClientRect(),
+        parentBox,
         Math.max(panel.offsetWidth, MENU_MIN_WIDTH),
         Math.max(panel.offsetHeight, MENU_MIN_HEIGHT),
       );
+      const scale = parent.offsetHeight > 0 ? parentBox.height / parent.offsetHeight : 1;
+      const top = Math.round((next.top - parentBox.top) / (scale || 1) - parent.clientTop);
       setPlacement((prev) =>
-        prev.position === next.position && prev.origin === next.origin ? prev : next,
+        prev.side === next.side && prev.top === top && prev.origin === next.origin
+          ? prev
+          : { side: next.side, top, origin: next.origin },
       );
     };
     place();
@@ -148,10 +176,15 @@ export function Submenu({
     // `role="none"`, because a `menu` may only own `menuitem`, `menuitemradio`, `group` and
     // `separator` — and this box is none of those. It is the APG's own shape for a submenu (the
     // `li role="none"` holding a `menuitem` and the `menu` it opens), and it exists here for a
-    // layout reason rather than a semantic one: the panel is positioned in the cascade against
-    // this box, so the box cannot be dissolved, only made transparent. Presentational-role
-    // conflict does not apply — the box is not focusable and carries no ARIA of its own.
-    <div role="none" data-menu-row={id} className={cn("relative", LAYER.raisedWhenPopupOpen)}>
+    // structural reason rather than a semantic one: it is what puts the panel *inside* its row in
+    // the DOM, which is how ArrowLeft, `handBack` and the in-menu scroll find the row a panel
+    // hangs off (`closest(ROW_SELECTOR)`), so the box cannot be dissolved, only made transparent.
+    // Presentational-role conflict does not apply — it is not focusable and carries no ARIA.
+    //
+    // **Static, and that is the point of it since issue #1572** — see the note on layers above and
+    // `PANEL_CLASS`: positioned, this box would be the panel's containing block, inside the parent
+    // panel's scroller, and the scroller would clip it.
+    <div role="none" data-menu-row={id}>
       <button
         ref={rowRef}
         type="button"
@@ -160,7 +193,13 @@ export function Submenu({
         data-menu-row-button=""
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => (open ? onClose() : onOpen(true))}
+        // **A press opens, and never closes** (issue #1572). It used to toggle, and hover is what
+        // made that bite: the pointer rests on the row, the panel opens after 120ms, and the click
+        // the reader was already making shut it again — on touch, a tap held past 120ms could do
+        // the same in one gesture. A press on an open row now does what a press on a closed one
+        // does, the deliberate half: the caret goes into the panel. ArrowLeft, Escape and a hover
+        // onto another row are the ways out, and none of them is a second press on the same row.
+        onClick={() => onOpen(true)}
         className={cn(ROW_CLASS, "text-text hover:bg-bg focus:bg-bg")}
       >
         {Icon && <Icon className="size-4 flex-none" aria-hidden="true" />}
@@ -178,9 +217,12 @@ export function Submenu({
           tabIndex={-1}
           data-menu-panel=""
           data-menu-depth={panelDepth}
-          className={cn("absolute", placement.position, placement.origin, PANEL_CLASS)}
+          // Pixels, for `placeMenu`'s reason: a measurement, which no class can carry. `maxHeight`
+          // is read at render — a resize closes the whole menu, so it cannot go stale.
+          style={{ top: placement.top, maxHeight: menuMaxHeight() }}
+          className={cn("absolute", placement.side, placement.origin, PANEL_CLASS)}
         >
-          {children}
+          <div className={PANEL_SCROLL_CLASS}>{children}</div>
         </motion.div>
       )}
     </div>

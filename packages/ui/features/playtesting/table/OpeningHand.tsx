@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import { LoaderCircle } from "lucide-react";
 import type { GameCard, MulliganView, PlaytestAction, PlaytestSeat } from "@/lib/ipc";
 import { CardImage } from "@/components/CardImage";
 import { Figure } from "@/components/Figure";
@@ -34,6 +35,12 @@ import type { Pointed } from "./types";
  * each card points itself at the board through `onPoint` / `onUnpoint` and carries `data-point`,
  * so the board's own guard lets go of it when the pointer leaves. The board's keys stay off — the
  * card is only being read, not acted on, before the first turn.
+ *
+ * **While the engine is working (`busy`) neither decision is offered** (issue #1593): a mulligan
+ * or a keep can take seconds — against the AI it plays its own keep and often its first turn
+ * before answering — and a second press would be queued and taken, a double mulligan. Both
+ * buttons go `aria-disabled` and the instruction line says what is being done, as the board's
+ * stage button does on every other stage.
  */
 export interface OpeningHandView extends Pick<PlaytestSeat, "hand" | "library"> {
   mulligan: MulliganView | null;
@@ -44,18 +51,35 @@ export interface OpeningHandView extends Pick<PlaytestSeat, "hand" | "library"> 
 export interface OpeningHandProps {
   view: OpeningHandView;
   onAct: (a: PlaytestAction) => void;
+  /** An action is with the engine: Keep and Mulligan are not offered, and the line says so. */
+  busy?: boolean;
   /** The pointer has come onto a card: the board's inspect preview shows it once it rests. */
   onPoint?: (pointed: Pointed) => void;
   /** The pointer has left the card. Takes no argument — it is handed to `onMouseLeave` as is. */
   onUnpoint?: () => void;
 }
 
-export function OpeningHand({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.Element {
+export function OpeningHand({
+  view,
+  onAct,
+  busy = false,
+  onPoint,
+  onUnpoint,
+}: OpeningHandProps): JSX.Element {
   // Keyed on the hand's ids so a mulligan's new seven start with nothing picked: the ids are new
   // whenever a card changes zone (CR 400.7), so a pick held across the redraw would name a card
   // that is no longer in the hand — and `keep` would be refused for it.
   const key = view.hand.map((c) => c.id).join(",");
-  return <Deciding key={key} view={view} onAct={onAct} onPoint={onPoint} onUnpoint={onUnpoint} />;
+  return (
+    <Deciding
+      key={key}
+      view={view}
+      onAct={onAct}
+      busy={busy}
+      onPoint={onPoint}
+      onUnpoint={onUnpoint}
+    />
+  );
 }
 
 /** The size of every London mulligan's draw: always seven, whatever is then put back. */
@@ -72,7 +96,13 @@ const DRAW = 7;
  */
 const CARD_WIDTH = "w-[min(calc((100cqw_-_84px)/7),calc((100cqh_-_28px)*5/7),672px)]";
 
-function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.Element {
+function Deciding({
+  view,
+  onAct,
+  busy = false,
+  onPoint,
+  onUnpoint,
+}: OpeningHandProps): JSX.Element {
   const mulligans = view.mulligan?.mulligans ?? 0;
   const need = view.mulligan?.bottom ?? 0;
   const freeFirst = view.mulligan?.freeFirst ?? false;
@@ -80,6 +110,13 @@ function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.El
 
   /** Ids picked for the bottom, oldest pick first. */
   const [picked, setPicked] = useState<number[]>([]);
+  /** The decision last sent, for the line that says what the engine is doing with it. */
+  const [sent, setSent] = useState<"keep" | "mulligan" | null>(null);
+  const decide = (action: Extract<PlaytestAction, { type: "keep" | "mulligan" }>) => {
+    if (busy) return;
+    setSent(action.type);
+    onAct(action);
+  };
 
   const pick = (id: number) =>
     setPicked((now) => {
@@ -103,6 +140,7 @@ function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.El
       : (spells.reduce((n, c) => n + c.manaValue, 0) / spells.length).toFixed(1);
 
   const ready = picked.length === need;
+  const canKeep = ready && !busy;
   const keepSize = hand.length - need;
   // What the *next* mulligan would leave: it draws seven again and puts one more on the bottom
   // than this one does — except that the first is free in Commander, so the count the next hand
@@ -125,7 +163,21 @@ function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.El
     <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-5">
       <div className="flex flex-col items-center gap-1.5">
         <h2 className="m-0 font-heading text-2xl font-semibold">Opening hand</h2>
-        <p className="m-0 text-sm text-dim">{instruction}</p>
+        {busy ? (
+          <p role="status" className="m-0 inline-flex items-center gap-2 text-sm text-dim">
+            <LoaderCircle
+              className="size-4 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+            {sent === "mulligan"
+              ? "Shuffling for a new seven…"
+              : sent === "keep"
+                ? "Keeping — the game is starting…"
+                : "Working…"}
+          </p>
+        ) : (
+          <p className="m-0 text-sm text-dim">{instruction}</p>
+        )}
       </div>
 
       {/* Every height the box has left over goes to the cards (`CARD_WIDTH`). Lands first, the
@@ -165,17 +217,17 @@ function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.El
         <button
           type="button"
           // `aria-disabled`, never the attribute: a `disabled` button leaves the tab order, and
-          // this one greys and ungreys as the reader picks.
-          aria-disabled={!ready}
+          // this one greys and ungreys as the reader picks, and while the engine works.
+          aria-disabled={!canKeep}
           onClick={() => {
-            if (ready) onAct({ type: "keep", bottom: picked });
+            if (canKeep) decide({ type: "keep", bottom: picked });
           }}
           className={cn(
             "inline-flex h-11 items-center rounded-full border border-accent bg-surface px-5",
             "text-[15px] font-semibold text-accent transition-colors motion-reduce:transition-none",
             PRESS,
             FOCUS,
-            ready
+            canKeep
               ? "hover:bg-accent hover:text-accent-fg"
               : "cursor-default opacity-45 active:scale-100",
           )}
@@ -184,13 +236,14 @@ function Deciding({ view, onAct, onPoint, onUnpoint }: OpeningHandProps): JSX.El
         </button>
         <button
           type="button"
-          onClick={() => onAct({ type: "mulligan" })}
+          aria-disabled={busy}
+          onClick={() => decide({ type: "mulligan" })}
           className={cn(
             "inline-flex h-11 items-center rounded-full border border-border bg-surface px-5",
             "text-[15px] text-text transition-colors motion-reduce:transition-none",
-            "hover:border-accent",
             PRESS,
             FOCUS,
+            busy ? "cursor-default opacity-45 active:scale-100" : "hover:border-accent",
           )}
         >
           Mulligan to {nextKeep}

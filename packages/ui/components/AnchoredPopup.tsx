@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, blurLeftTheWindow } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -183,8 +183,10 @@ export function AnchoredPopup({
       // **The `open &&` is doing a second job.** An exiting panel is still inside this root, so
       // focus leaving it during the fade fires this handler again — and the flag is already
       // false by then, which is what makes that press a no-op rather than a second close racing
-      // whatever the reader has moved on to.
+      // whatever the reader has moved on to. Alt+Tab is not leaving either — see
+      // `blurLeftTheWindow`.
       onBlur={(e) => {
+        if (blurLeftTheWindow(e)) return;
         if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
       }}
     >

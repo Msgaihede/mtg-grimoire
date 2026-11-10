@@ -133,9 +133,7 @@ export function useCollectionDrops({
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
   /** Ask the copy picker — the page's own `picking` state, which the row menu sets too. */
-  setPicking: (
-    question: { cardName: string; entryIds: readonly number[]; folderId: number | null } | null,
-  ) => void;
+  setPicking: (question: { entryIds: readonly number[]; folderId: number | null } | null) => void;
 }) {
   const queryClient = useQueryClient();
 
@@ -457,7 +455,6 @@ export function useCollectionDrops({
       // the destination refuses it, which is the menu's `Move N cards to` exactly.
       if (refiles.some((refile) => refile.copies.length > 1)) {
         setPicking({
-          cardName: plural(refiles.length, "card"),
           entryIds: refiles.flatMap((refile) => refile.copies.map((copy) => copy.entryId)),
           folderId: to,
         });
@@ -527,7 +524,7 @@ export function useCollectionDrops({
         file(copies[0].entryId, name);
         return;
       }
-      setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
+      setPicking({ entryIds: copies.map((copy) => copy.entryId), folderId: to });
     },
     [addDroppedAsync, setFolder, moveCopy, setPicking, folderNameOf, commitGroup],
   );
