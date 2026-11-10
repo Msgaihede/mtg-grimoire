@@ -191,6 +191,53 @@ describe("a trade in the URL", () => {
   });
 });
 
+/**
+ * The header's `‹` and a delete both go *up* to the list: a Back where the list is the entry
+ * beneath, so Android's back gesture goes on to the start view rather than into the trade just
+ * left (issue #1597).
+ */
+describe("the way back off a trade", () => {
+  /** From the start view: the Trade tab, then the trade, as a reader walks there. */
+  async function walkIn(name: RegExp): Promise<number> {
+    renderPhone(<PhoneFace />, { path: "/search", fake: TRADES });
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Views" })).getByRole("link", { name: "Trade" }),
+    );
+    await userEvent.click(await screen.findByRole("link", { name }, SETTLE));
+    await waitFor(() => expect(window.location.pathname).toMatch(/^\/trade\/\d+$/), SETTLE);
+    return window.history.length;
+  }
+
+  it("goes back to the list, and Back from there is the start view", async () => {
+    const length = await walkIn(/^Trade 5\./);
+    await screen.findByRole("heading", { level: 2, name: "Trade 5" }, SETTLE);
+
+    await userEvent.click(screen.getByRole("link", { name: "All trades" }));
+    expect(await screen.findByRole("region", { name: "Open · 2" }, SETTLE)).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/trade");
+    expect(window.history.length).toBe(length);
+
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/search"), SETTLE);
+  });
+
+  it("goes back to the list after a delete, leaving no dead step", async () => {
+    await walkIn(/^Trade 4\./);
+    await userEvent.click(await screen.findByRole("button", { name: "More actions" }, SETTLE));
+    const sheet = await screen.findByRole("dialog", undefined, SETTLE);
+    await userEvent.click(within(sheet).getByRole("button", { name: "Delete…" }));
+    const question = await screen.findByRole("dialog", { name: "Delete this trade" }, SETTLE);
+    await userEvent.click(within(question).getByRole("button", { name: "Delete trade" }));
+
+    expect(await screen.findByRole("region", { name: "Open · 1" }, SETTLE)).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/trade");
+
+    // One Back, not two: the list's entry is the one beneath, not a copy of it.
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/search"), SETTLE);
+  });
+});
+
 describe("an open trade", () => {
   it("draws both sides, both totals and who owes whom", async () => {
     openTrade();

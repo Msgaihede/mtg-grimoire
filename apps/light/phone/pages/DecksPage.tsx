@@ -30,7 +30,7 @@ import type { PipCounts } from "@grimoire/ui/lib/mana";
 import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
 import { useImageRetry } from "@grimoire/ui/lib/useImageRetry";
 import { cn } from "@grimoire/ui/lib/utils";
-import { linkTo, navigate } from "../router";
+import { linkTo, navigate, upLinkTo } from "../router";
 import { phoneNewDeckDestination } from "../transfer/destinations";
 import { ImportSheet } from "../transfer/ImportSheet";
 import { CREATE_DECK_FLOOR, DimNote, ReadError } from "./parts";
@@ -341,7 +341,9 @@ function NewDeckBar({
 
 /**
  * The drawer the reader is standing in, and the way out of it — one level up, to the parent
- * folder or to the top of the cabinet. A link, like every other change of place here.
+ * folder or to the top of the cabinet. A link, like every other change of place here, that goes
+ * by `router.ts`'s `up`: a Back where the reader walked in from there, so the system's Back does
+ * not reopen the folder just left.
  */
 function FolderBar({
   node,
@@ -358,7 +360,7 @@ function FolderBar({
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2 py-1">
       <a
-        {...linkTo(galleryAt(up))}
+        {...upLinkTo(galleryAt(up))}
         aria-label={up === null ? "Back to all decks" : "Up one folder"}
         className={cn("flex size-11 items-center justify-center rounded-md text-dim", FOCUS)}
       >
