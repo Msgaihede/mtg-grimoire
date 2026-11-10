@@ -178,11 +178,11 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
 
   const move = useCallback(
     (id: number, to: number) => {
-      const ids = movedTo(
-        ordered.map((c) => c.id),
-        id,
-        to,
-      );
+      const before = ordered.map((c) => c.id);
+      const ids = movedTo(before, id, to);
+      // ArrowUp on the first row, ArrowDown on the last, a drop on itself: nothing moved, and
+      // `reorder_categories` would still touch the deck and record an empty undo step (#1546).
+      if (ids.every((one, i) => one === before[i])) return;
       setLocalOrder(ids);
       reorderCategories.mutate(ids, { onError: () => setLocalOrder(null) });
     },
@@ -253,9 +253,18 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
               onMove={move}
               onMoveOnto={moveOnto}
               renaming={renaming === category.id}
-              onRename={() => setRenaming(category.id)}
+              // One question at a time across the list, as `LabelsDialog` has it: opening a rename
+              // shuts a delete question on another row and the reverse — otherwise both stand
+              // open, and cancelling the delete (the shared `onDone`) discards the rename (#1546).
+              onRename={() => {
+                setConfirming(null);
+                setRenaming(category.id);
+              }}
               confirming={confirming === category.id}
-              onConfirm={() => setConfirming(category.id)}
+              onConfirm={() => {
+                setRenaming(null);
+                setConfirming(category.id);
+              }}
               onDone={() => {
                 setRenaming(null);
                 setConfirming(null);

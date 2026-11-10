@@ -10,9 +10,10 @@
  *
  * - **The root, a drawer the reader made, and `Recently removed`** (issue #506), and nothing else.
  *   The fence exists for **deck custody**: a copy in a deck's group is the deck's arithmetic,
- *   `collection::set_quantity` has no folder fence of its own, and a stepper there would change
- *   what a deck says it owns without the deck being touched — those copies leave through
- *   `deck_to_collection` and nowhere else. The holding area's copies belong to no deck.
+ *   a stepper there would change what a deck says it owns without the deck being touched, and
+ *   those copies leave through `deck_to_collection` and nowhere else. Since issue #1537 the backend
+ *   refuses those writes too (`collection::refuse_in_a_deck`, `ENTRY_IN_A_DECK`); this is the
+ *   sentence a surface says before the press. The holding area's copies belong to no deck.
  * - **Written positively** — a fifth `collection_folders.kind` added later is fenced here until
  *   somebody decides it should not be.
  * - **Fenced until the census answers**: a filed copy whose folder is not in `folders` (the list
@@ -48,9 +49,30 @@ export function quantityRefusal(
   row: { folderId: number | null; folderName: string | null },
 ): string | null {
   if (countEditableIn(folders, row.folderId)) return null;
-  const folder = folders.find((f) => f.id === row.folderId);
-  if (folder?.kind === DECK_KIND) {
-    return `In ${row.folderName ?? "a deck"}. Remove it from the deck to change the quantity.`;
-  }
+  const inADeck = deckCustodyRefusal(folders, row);
+  if (inADeck !== null) return inADeck;
   return `In ${row.folderName ?? "a folder you did not make"}. Move it into one of your folders to change the quantity.`;
+}
+
+/**
+ * Why one row's copies are a deck's to change and not the reader's, or `null` for a row in any
+ * other folder — {@link quantityRefusal}'s deck arm alone, for a surface that asks about a copy
+ * rather than about a count: the card modal's stepper and its `Edit` (issue #1537).
+ *
+ * **Fail-open where {@link countEditableIn} fails closed, and on purpose.** The backend refuses
+ * these writes itself (`collection::refuse_in_a_deck`, `ENTRY_IN_A_DECK`), so this is the sentence
+ * said before the press rather than the fence — and a modal that refused every filed copy for the
+ * length of the census's first query would tell a reader their own binder is not theirs.
+ *
+ * `what` is the act the reader asked for, so the sentence names it rather than a count.
+ */
+export function deckCustodyRefusal(
+  folders: readonly CollectionFolder[],
+  row: { folderId: number | null; folderName: string | null },
+  what = "change the quantity",
+): string | null {
+  if (row.folderId === null) return null;
+  const folder = folders.find((f) => f.id === row.folderId);
+  if (folder?.kind !== DECK_KIND) return null;
+  return `In ${row.folderName ?? "a deck"}. Remove it from the deck to ${what}.`;
 }

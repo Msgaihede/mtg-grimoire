@@ -583,6 +583,53 @@ function commanderChoice(cards: readonly PlannedCard[], spec: FormatSpec | null)
 }
 
 /**
+ * The plan for a list going **on top of** a deck that already has its commander (issue #1551):
+ * `automatic` turns into `ask`, whose default is **No commander**.
+ *
+ * {@link commanderChoice} reads the pasted list alone, so a merge of `Captain Sisay` and
+ * `Llanowar Elves` into a deck already led by Kenrith used to read *"Captain Sisay goes in the
+ * command zone"* with no control and send him there — two commanders, outranking even a forced
+ * pile, and the only way out was to delete the line from the paste. One eligible card in the
+ * paste is not a guess about a deck that has none; it is a guess about one that does, so the
+ * reader is asked instead. The one candidate stays offered, because replacing the commander is
+ * a thing people do.
+ *
+ * Applied by the existing-deck arm and only on `merge`: a `replace` clears the list, the
+ * command zone with it, and then the paste's one candidate is the deck's commander again.
+ * Every other kind is returned as it came — `fromFile` is the file saying so under a heading,
+ * and `ask` already defaults to nobody.
+ */
+export function deferToHeldCommander(plan: ImportPlan): ImportPlan {
+  if (plan.commander.kind !== "automatic") return plan;
+  const ids = new Set(plan.commander.cardIds);
+  const candidates: ImportMatch[] = [];
+  for (const card of plan.cards) {
+    if (!ids.has(card.match.cardId)) continue;
+    ids.delete(card.match.cardId);
+    candidates.push(card.match);
+  }
+  return { ...plan, commander: { kind: "ask", candidates } };
+}
+
+/**
+ * The reader's pick, kept to the cards the plan is offering **now** (issue #1551).
+ *
+ * `picked` is state that outlives a rebuilt plan: on the new-deck step a format change rebuilds
+ * the plan, and a Commander pick that is no candidate under Oathbreaker used to ride to the
+ * commit anyway — under a step that said *"No card in this list can be the commander"* and drew
+ * no way out of it. Filtered rather than cleared, so changing the format back offers the same
+ * pick again; and the step draws this answer, not the raw state, so what is pressed on screen is
+ * what Import sends.
+ */
+export function livePicks(plan: ImportPlan, picked: readonly string[]): readonly string[] {
+  if (plan.commander.kind !== "ask") return picked;
+  const offered = new Set(plan.commander.candidates.map((candidate) => candidate.cardId));
+  return picked.every((cardId) => offered.has(cardId))
+    ? picked
+    : picked.filter((cardId) => offered.has(cardId));
+}
+
+/**
  * The plan as the one thing `deck_import_commit` takes: one item per planned card, whatever
  * the copy count — the quantity rides on the item and the backend's `ON CONFLICT` sums two
  * items that land on the same grain.

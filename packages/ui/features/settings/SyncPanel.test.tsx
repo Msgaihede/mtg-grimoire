@@ -608,6 +608,137 @@ describe("SyncPanel", () => {
   });
 
   /**
+   * **Issue #1594 — leaving the panel mid-pairing no longer abandons the attempt.** The poll is
+   * the only thing that advances the ceremony and it runs only while the panel is mounted, and
+   * `SettingsPage` unmounts the panel on every group or search change. The joining device used
+   * to come back to the idle buttons and never poll again — so it never fetched the sealed key,
+   * while the offering device had already toasted *Device paired*. Unmounted by rendering
+   * nothing in its place, under the same `QueryClient`, which is what the app does.
+   */
+  describe("leaving the panel mid-pairing", () => {
+    it("resumes a join on return and finishes it", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+      await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
+      await user.click(screen.getByRole("button", { name: /read the code/i }));
+      expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
+
+      rerender(<></>);
+      // The other device pressed Codes match while this one was looking elsewhere.
+      syncPairingPoll.mockResolvedValue({ stage: "complete", sas: null });
+      const pollsBefore = syncPairingPoll.mock.calls.length;
+      rerender(<SyncPanel />);
+
+      await waitFor(
+        () =>
+          expect(useNotifications.getState().notices[0]).toMatchObject({
+            title: "Device paired",
+          }),
+        { timeout: 3000 },
+      );
+      expect(syncPairingPoll.mock.calls.length).toBeGreaterThan(pollsBefore);
+      expect(syncPairingCancel).not.toHaveBeenCalled();
+      expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+      await waitFor(() => expect(syncNow).toHaveBeenCalledTimes(1));
+    });
+
+    it("shows the join's digits again on return while the other device has not pressed yet", async () => {
+      syncPairingPoll.mockResolvedValue({ stage: "compare", sas: "042913" });
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+      await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
+      await user.click(screen.getByRole("button", { name: /read the code/i }));
+      expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+
+      expect(screen.getByTestId("pairing-sas")).toHaveTextContent("042913");
+      expect(screen.getByText(/click codes match on the other device/i)).toBeInTheDocument();
+    });
+
+    it("keeps an offer's code on screen across a trip away, and its Codes match once answered", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+      expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+      // The invite is this side's alone — no poll could have rebuilt it.
+      expect(screen.getByTestId("pairing-qr")).toBeInTheDocument();
+      expect(screen.getByText(OFFER.code)).toBeInTheDocument();
+
+      syncPairingPoll.mockResolvedValue({ stage: "compare", sas: "042913" });
+      await waitFor(
+        () => expect(screen.getByTestId("pairing-sas")).toHaveTextContent("042913"),
+        { timeout: 3000 },
+      );
+      const confirm = screen.getByRole("button", { name: /codes match/i });
+      expect(confirm).toHaveAttribute("aria-disabled", "false");
+      await user.click(confirm);
+      expect(syncPairingConfirm).toHaveBeenCalledTimes(1);
+    });
+
+    it("says so on return when the attempt ran out of time while the reader was away", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+      expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+
+      rerender(<></>);
+      syncPairingPoll.mockResolvedValueOnce({ stage: "expired", sas: null });
+      syncPairingPoll.mockResolvedValue({ stage: "idle", sas: null });
+      rerender(<SyncPanel />);
+
+      expect(await screen.findByRole("alert", undefined, { timeout: 3000 })).toHaveTextContent(
+        /pairing code expired/i,
+      );
+      expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    });
+
+    it("does not resume an attempt the reader cancelled", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+      expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+      expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    });
+
+    /**
+     * `"reading"` has sent nothing to the backend, so there is nothing to resume — and
+     * `"scanning"`, the same, would put a live camera in front of a reader who had only once
+     * opened it.
+     */
+    it("opens on the idle buttons when nothing had reached the backend yet", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+      expect(await screen.findByLabelText(/code shown on the other device/i)).toBeInTheDocument();
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+      expect(screen.getByRole("button", { name: /enter a code/i })).toBeInTheDocument();
+      expect(screen.queryByLabelText(/code shown on the other device/i)).not.toBeInTheDocument();
+    });
+  });
+
+  /**
    * **A scan whose `accept` is refused leaves the reader the typed box.** `QrScanner` stops its
    * tracks the moment it decodes and its effect never restarts, so without this the panel sits
    * on a frozen frame under *Point the camera at the code* with an error under it and no press

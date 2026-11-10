@@ -14,7 +14,7 @@ use crate::bulk_undo::{json_list, Capture, Feed, Table};
 // from that module for the sharper version of the same reason: it owns what a folder's `kind`
 // means and how the app says no to one of its own, and a second wording here would be a second
 // answer to one mistake.
-use crate::collection_folders::{FOLDER_NOT_YOURS, USER_KIND};
+use crate::collection_folders::{ENTRY_IN_A_DECK, FOLDER_NOT_YOURS, USER_KIND};
 use crate::deck_meta::FOLDER_GONE;
 use crate::schema::{COLLECTION_GRAIN, FINISHES};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -423,6 +423,42 @@ pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 /// By index rather than by spelling, [`crate::collection_alloc`]'s rule: the word here and the
 /// word the CHECK allows cannot drift. `collection_folders`' own copy is private to that module.
 const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
+
+/// **The deck-custody fence on the reader's own writes to a row** (issue #1537) —
+/// [`ENTRY_IN_A_DECK`] when the row `id` names is filed in a deck's group, `Ok` otherwise, and
+/// `Ok` for an id that names nothing (the caller's own [`GONE`], or [`remove_entry`]'s silent
+/// success, answers that).
+///
+/// A copy in a deck's group is the deck's arithmetic: the deck reads what it owns off the rows in
+/// its group at its printing and finish. So a write that changes how many copies sit there, or
+/// which printing or finish they are, changes what the deck says it owns without the deck being
+/// told — a `+` left a copy the list did not claim, a `−` to zero deleted the deck's copy, and a
+/// finish or a printing changed left the deck reading the card missing while its copy sat in its
+/// own folder. The Collection page drew this fence (`entryFences.ts`) and the card modal did not;
+/// here it covers every surface at once.
+///
+/// **Asked by [`set_quantity`], [`update_entry`] (its `finish` and `quantity`),
+/// [`set_entry_printing`], [`remove_entry`] and [`remove_entries`]** — the commands a reader
+/// reaches — and **never by [`delete_entry`] or [`fold_entry`]**, the primitives the deck's own
+/// writes (`collection_alloc`, `deck_pull`, trades) are built from. Those are the sanctioned
+/// routes: they change the copies and the deck in one transaction. The way out of a group is to
+/// cut the card from the deck ([`crate::collection_alloc::deck_to_collection`]), which is what
+/// the sentence says.
+pub(crate) fn refuse_in_a_deck(conn: &Connection, id: i64) -> Result<(), String> {
+    let in_a_deck: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM collection_entries e
+                              JOIN collection_folders f ON f.id = e.folder_id
+                             WHERE e.id = ?1 AND f.kind = ?2)",
+            params![id, DECK_KIND],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if in_a_deck {
+        return Err(ENTRY_IN_A_DECK.to_owned());
+    }
+    Ok(())
+}
 
 /// The printing, as the entry will remember it.
 fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, String), String> {
@@ -1461,6 +1497,10 @@ fn set_quantity_inner(conn: &Connection, id: i64, quantity: i64) -> Result<Entry
     let Some(facts) = entry_facts(conn, id)? else {
         return Err(GONE.to_owned());
     };
+    // The deck-custody fence (issue #1537). **Asked even when the number is the one already
+    // there**: the stepper that sent it is a control on copies the reader may not count, and a
+    // success would tell it otherwise.
+    refuse_in_a_deck(conn, id)?;
     if quantity == 0 {
         let gone = conn
             .execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
@@ -1664,6 +1704,30 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
     // free to change the card's folder-less half of the grain, and on the folding path the row
     // this id names is about to stop existing.
     let facts = entry_facts(&tx, id)?;
+    // The deck-custody fence (issue #1537), on the two fields a deck reads — how many copies sit
+    // in its group, and which finish they are. **Only on a change**: a form that resends the
+    // values the row already holds moves nothing a deck reads. The grade, the price, the tags and
+    // the rest are the reader's to correct on a copy wherever it is filed — a fold they cause
+    // stays inside the same group, so the deck's count is unchanged.
+    if patch.finish.is_some() || patch.quantity.is_some() {
+        let held: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT e.finish, e.quantity FROM collection_entries e
+                   JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE e.id = ?1 AND f.kind = ?2",
+                params![id, DECK_KIND],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some((finish, quantity)) = held {
+            if patch.finish.as_deref().is_some_and(|f| f != finish)
+                || patch.quantity.is_some_and(|q| q != quantity)
+            {
+                return Err(ENTRY_IN_A_DECK.to_owned());
+            }
+        }
+    }
 
     let applied: Option<i64> = tx
         .query_row(
@@ -1987,6 +2051,10 @@ pub fn set_entry_printing(
             removed: false,
         });
     }
+    // The deck-custody fence (issue #1537): the deck reads its copies at its printing, so a
+    // repoint here would leave it reading the card missing while the copy sat in its own group.
+    // After the no-op above, which changes nothing a deck reads.
+    refuse_in_a_deck(&tx, id)?;
     let (set_code, collector_number, lang) = printing_of(&tx, card_id)?;
 
     if let Some(from) = facts.card_id.as_deref() {
@@ -2099,6 +2167,8 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
         // Before the delete, and `None` is not a refusal here: an id that resolves to nothing is
         // a success (see above), and there is no change to record because there was no change.
         let facts = entry_facts(conn, id)?;
+        // The deck-custody fence (issue #1537) — the deck's copy is the deck's to let go of.
+        refuse_in_a_deck(conn, id)?;
         let change = delete_entry(conn, id)?;
         if let Some(facts) = facts {
             crate::activity::record(
@@ -2180,6 +2250,10 @@ pub fn remove_entries(conn: &Connection, ids: &[i64]) -> Result<BulkRemoveOutcom
         // Read before the delete — it is what makes the facts unanswerable — and a `None` is the
         // skip, not a refusal.
         if let Some(facts) = entry_facts(&tx, id)? {
+            // The deck-custody fence (issue #1537), and **the whole press refuses** rather than
+            // skipping the row: the transaction is the rule above, and a press that removed nine
+            // of ten and said nothing of the tenth would be a half-applied press by another name.
+            refuse_in_a_deck(&tx, id)?;
             delete_entry(&tx, id)?;
             gone.push(facts);
         }
@@ -8596,6 +8670,162 @@ mod tests {
             commit_import(&conn, &[item("card-1", 2, "nonfoil")], "add", Some(group)).unwrap();
         assert_eq!(out.added, 1);
         assert_eq!(out.undo_id, None);
+    }
+
+    /// A row filed in a deck's group, and the deck's own sentence for touching it (issue #1537).
+    fn in_a_deck(conn: &Connection, card_id: &str, finish: &str, quantity: i64) -> i64 {
+        let group = folder(conn, "deck", "Mono red");
+        let id = filed_in(conn, card_id, Some(group), quantity);
+        conn.execute(
+            "UPDATE collection_entries SET finish = ?2 WHERE id = ?1",
+            params![id, finish],
+        )
+        .unwrap();
+        id
+    }
+
+    fn quantity_at(conn: &Connection, id: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT quantity FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// **The stepper cannot change a deck's copies** (issue #1537 A and B): neither a `+`, which
+    /// left a copy in the group the list did not claim, nor a `−` to zero, which deleted the
+    /// deck's copy with the deck untouched. Both refuse in the deck's words and write nothing —
+    /// no row moved and no feed line.
+    #[test]
+    fn the_stepper_cannot_change_a_copy_in_a_decks_group() {
+        let conn = seeded();
+        let id = in_a_deck(&conn, "bolt-lea", "nonfoil", 1);
+        let history = feed(&conn).len();
+
+        for asked in [2, 0, 1] {
+            assert_eq!(
+                set_quantity(&conn, id, asked).unwrap_err(),
+                crate::collection_folders::ENTRY_IN_A_DECK,
+                "set_quantity({asked})"
+            );
+        }
+        assert_eq!(quantity_at(&conn, id), Some(1));
+        assert_eq!(feed(&conn).len(), history);
+    }
+
+    /// **And the stepper's fence is the folder's kind, nothing wider**: a drawer the reader made,
+    /// and `Recently removed`, which holds copies no deck claims any more, step as they always did.
+    #[test]
+    fn the_stepper_still_changes_copies_in_a_drawer_and_in_recently_removed() {
+        let conn = seeded();
+        for kind in ["user", "removed"] {
+            let drawer = folder(&conn, kind, "Binder");
+            let id = filed_in(&conn, "bolt-lea", Some(drawer), 1);
+            assert_eq!(set_quantity(&conn, id, 3).unwrap().quantity, 3, "{kind}");
+            assert!(set_quantity(&conn, id, 0).unwrap().removed, "{kind}");
+        }
+    }
+
+    /// **An edit may not change the two things a deck reads** (issue #1537 C) — the finish and
+    /// the count — and may change everything else: a grade or a note on a deck's copy is the
+    /// reader correcting cardboard, and the deck's arithmetic never reads it. A patch that resends
+    /// the values the row already holds is no change and is let through.
+    #[test]
+    fn an_edit_cannot_change_the_finish_or_the_count_of_a_copy_in_a_decks_group() {
+        let conn = seeded();
+        let id = in_a_deck(&conn, "bolt-jp", "nonfoil", 2);
+
+        for patch in [
+            EntryPatch {
+                finish: Some("foil".to_owned()),
+                ..EntryPatch::default()
+            },
+            EntryPatch {
+                quantity: Some(3),
+                ..EntryPatch::default()
+            },
+        ] {
+            assert_eq!(
+                update_entry(&conn, id, &patch).unwrap_err(),
+                crate::collection_folders::ENTRY_IN_A_DECK
+            );
+        }
+        let finish: String = conn
+            .query_row(
+                "SELECT finish FROM collection_entries WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            (finish.as_str(), quantity_at(&conn, id)),
+            ("nonfoil", Some(2))
+        );
+
+        let kept = update_entry(
+            &conn,
+            id,
+            &EntryPatch {
+                finish: Some("nonfoil".to_owned()),
+                quantity: Some(2),
+                notes: Some("Played at the store championship".to_owned()),
+                ..EntryPatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((kept.id, kept.quantity), (id, 2));
+    }
+
+    /// **Nor may a repoint** (issue #1537 C): the deck reads its copies at its printing. The
+    /// printing the row already holds is still the silent no-op it always was.
+    #[test]
+    fn a_copy_in_a_decks_group_cannot_change_its_printing() {
+        let conn = seeded();
+        let id = in_a_deck(&conn, "bolt-lea", "nonfoil", 1);
+        let history = feed(&conn).len();
+
+        assert_eq!(
+            set_entry_printing(&conn, id, "bolt-jp").unwrap_err(),
+            crate::collection_folders::ENTRY_IN_A_DECK
+        );
+        let card: String = conn
+            .query_row(
+                "SELECT card_id FROM collection_entries WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(card, "bolt-lea");
+        assert_eq!(set_entry_printing(&conn, id, "bolt-lea").unwrap().id, id);
+        assert_eq!(feed(&conn).len(), history);
+    }
+
+    /// **Nor may the collection's Remove** — alone, or anywhere in a bulk press, which refuses
+    /// whole rather than removing the rest around the deck's copy: a press is one transaction.
+    #[test]
+    fn removing_a_copy_in_a_decks_group_is_refused_alone_and_in_a_bulk_press() {
+        let conn = seeded();
+        let held = in_a_deck(&conn, "bolt-lea", "nonfoil", 1);
+        let loose = add_entry(&conn, &input("card-1", "nonfoil", 2)).unwrap().id;
+
+        assert_eq!(
+            remove_entry(&conn, held).unwrap_err(),
+            crate::collection_folders::ENTRY_IN_A_DECK
+        );
+        assert_eq!(
+            remove_entries(&conn, &[loose, held]).unwrap_err(),
+            crate::collection_folders::ENTRY_IN_A_DECK
+        );
+        assert_eq!(quantity_at(&conn, held), Some(1));
+        assert_eq!(
+            quantity_at(&conn, loose),
+            Some(2),
+            "the press rolled back whole"
+        );
+        // And an id that names nothing is still the success it was.
+        assert!(remove_entry(&conn, 4040).unwrap().removed);
     }
 
     /// **Several removals are one transaction and one feed line about no one card**, and an id

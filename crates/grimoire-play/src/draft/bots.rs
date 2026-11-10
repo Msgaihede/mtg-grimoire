@@ -12,7 +12,9 @@
 //! `Medium` and `Hard` score each card with `phase_ai::draft_eval` (its quality, a rarity prior,
 //! its colours against the pool's and its place on the curve), and `VeryHard` does the same with
 //! stricter colour discipline. With no `CardDatabase` the evaluation falls back to the lighter
-//! colour, rarity and curve heuristic, as phase's does.
+//! colour, rarity and curve heuristic, as phase's does. phase's set-family draft guides
+//! (`PickEnhancement::DraftGuides`, `phase_ai::draft_profile`) are ported with the rest, and are
+//! off, as phase's are until a player opts in: this app offers no such setting.
 //!
 //! **The Winston bot** (`winston_decision`) decides take-or-decline at the cursor of a shared-stack
 //! turn from the seat's own projection (`draft_core::view::filter_for_player`) and nothing else,
@@ -22,11 +24,12 @@
 //! The scoring reads parsed card faces, so it runs on `on_engine_stack` like every call into the
 //! engine.
 
-use draft_core::types::{DraftCardInstance, SharedStackPileDecision};
+use draft_core::types::{DraftCardInstance, DraftSession, SharedStackPileDecision};
 use draft_core::view::{DraftPlayerView, SharedStackPileView, SharedStackView};
 use engine::database::CardDatabase;
 use phase_ai::config::AiDifficulty;
 use phase_ai::draft_eval;
+use phase_ai::draft_profile::{DraftProfile, PackPosition, ProfileCard};
 use phase_ai::winston_eval::{
     draft_progress, valuate_turn, CardContext, ColorPassTally, DraftCardFacts, OpponentRead,
     WinstonStrategy, WinstonTurn,
@@ -55,12 +58,52 @@ pub(super) fn reads_faces(difficulty: Difficulty) -> bool {
     )
 }
 
+/// Whether a bot's pick is adjusted by phase's set-family draft profiles
+/// (`phase_ai::draft_profile`). A profile changes picks only from packs whose cards all come from
+/// the sets it covers, and only for the evaluating difficulties. phase's default is `Off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum PickEnhancement {
+    #[default]
+    Off,
+    #[allow(dead_code)] // phase's opt-in; this app has no setting for it yet
+    DraftGuides,
+}
+
+/// Which booster a pick is from and how many cards it held when opened, as the session records
+/// it (`DraftSession::cards_in_pack`). Packs shrink by one card a pick, so the pick in the pack
+/// is `cards_in_pack` less the cards still in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PackShape {
+    pub pack_number: u8,
+    pub cards_in_pack: u8,
+}
+
+impl PackShape {
+    /// The shape of the booster `session` is drafting now.
+    pub(super) fn current(session: &DraftSession) -> Self {
+        Self {
+            pack_number: session.current_pack_number,
+            cards_in_pack: session.cards_in_pack(session.current_pack_number),
+        }
+    }
+
+    fn position(self, cards_remaining: usize) -> PackPosition {
+        let taken = usize::from(self.cards_in_pack).saturating_sub(cards_remaining);
+        PackPosition {
+            pack_number: usize::from(self.pack_number),
+            pick_in_pack: taken + 1,
+        }
+    }
+}
+
 /// The index into `pack` a bot picks, given what it has picked before (`prior_picks`).
 pub(super) fn bot_pick(
     pack: &[DraftCardInstance],
     difficulty: AiDifficulty,
     prior_picks: &[DraftCardInstance],
     card_db: Option<&CardDatabase>,
+    enhancement: PickEnhancement,
+    shape: PackShape,
     rng: &mut impl Rng,
 ) -> usize {
     if pack.is_empty() {
@@ -71,22 +114,25 @@ pub(super) fn bot_pick(
         AiDifficulty::VeryEasy => rng.random_range(0..pack.len()),
         AiDifficulty::Easy => pick_by_rarity(pack),
         AiDifficulty::Medium | AiDifficulty::Hard => {
-            pick_by_evaluation(pack, prior_picks, card_db, false)
+            pick_by_evaluation(pack, prior_picks, card_db, enhancement, shape, false)
         }
         AiDifficulty::VeryHard | AiDifficulty::CEDH => {
-            pick_by_evaluation(pack, prior_picks, card_db, true)
+            pick_by_evaluation(pack, prior_picks, card_db, enhancement, shape, true)
         }
     }
 }
 
 /// `count` distinct indices into `pack` for one pick step (every index when the pack holds
 /// fewer), in the order chosen: `bot_pick` applied to the shrinking remainder.
+#[allow(clippy::too_many_arguments)] // every argument is an independent pick-context input
 pub(super) fn bot_picks(
     pack: &[DraftCardInstance],
     count: usize,
     difficulty: AiDifficulty,
     prior_picks: &[DraftCardInstance],
     card_db: Option<&CardDatabase>,
+    enhancement: PickEnhancement,
+    shape: PackShape,
     rng: &mut impl Rng,
 ) -> Vec<usize> {
     let mut candidates: Vec<DraftCardInstance> = pack.to_vec();
@@ -94,7 +140,15 @@ pub(super) fn bot_picks(
     let mut picked = Vec::with_capacity(count.min(candidates.len()));
 
     for _ in 0..count.min(pack.len()) {
-        let position = bot_pick(&candidates, difficulty, prior_picks, card_db, rng);
+        let position = bot_pick(
+            &candidates,
+            difficulty,
+            prior_picks,
+            card_db,
+            enhancement,
+            shape,
+            rng,
+        );
         candidates.swap_remove(position);
         picked.push(original_indices.swap_remove(position));
     }
@@ -139,11 +193,14 @@ fn pick_by_color_and_rarity(
 }
 
 /// `Medium` to `VeryHard`: `draft_eval`'s quality, a rarity prior, colour discipline and the
-/// curve. `strict` (`VeryHard`) raises the on-colour bonus and penalises off-colour cards.
+/// curve. `strict` (`VeryHard`) raises the on-colour bonus and penalises off-colour cards. A
+/// set-family profile, when enabled and covering the whole pack, scores every card instead.
 fn pick_by_evaluation(
     pack: &[DraftCardInstance],
     prior_picks: &[DraftCardInstance],
     card_db: Option<&CardDatabase>,
+    enhancement: PickEnhancement,
+    shape: PackShape,
     strict: bool,
 ) -> usize {
     let card_db = match card_db {
@@ -155,15 +212,48 @@ fn pick_by_evaluation(
     let pick_number = prior_picks.len() as u8;
     let on_color_bonus: f64 = if strict { 6.0 } else { 4.0 };
     let off_color_penalty: f64 = if strict { -2.0 } else { 0.0 };
-    let score = |card: &DraftCardInstance| {
-        eval_score(
-            card,
-            card_db,
-            &preferred_colors,
-            pick_number,
-            on_color_bonus,
-            off_color_penalty,
-        )
+
+    // A profile is the one scoring authority for the sets it covers, chosen for the whole pack:
+    // scores from different formulas are never compared.
+    let pack_profile = match enhancement {
+        PickEnhancement::Off => None,
+        PickEnhancement::DraftGuides => pack
+            .first()
+            .and_then(|c| DraftProfile::for_set(&c.set_code))
+            .filter(|p| pack.iter().all(|c| p.covers_set(&c.set_code))),
+    };
+
+    let score: Box<dyn Fn(&DraftCardInstance) -> f64 + '_> = match pack_profile {
+        Some(profile) => {
+            // The pool is re-read on every pick, so the profile's adaptive policy tracks the
+            // draft with no stored state.
+            let pool: Vec<ProfileCard<'_>> = prior_picks
+                .iter()
+                .map(|c| profile_card(c, card_db))
+                .collect();
+            let position = shape.position(pack.len());
+            Box::new(move |card| {
+                profile
+                    .score_pick(
+                        &profile_card(card, card_db),
+                        &pool,
+                        position,
+                        card_quality(card, Some(card_db)),
+                        curve_bonus(card.cmc, pick_number) as f64,
+                    )
+                    .map_or(0.0, |s| s.total)
+            })
+        }
+        None => Box::new(move |card| {
+            eval_score(
+                card,
+                card_db,
+                &preferred_colors,
+                pick_number,
+                on_color_bonus,
+                off_color_penalty,
+            )
+        }),
     };
 
     pack.iter()
@@ -175,6 +265,18 @@ fn pick_by_evaluation(
         })
         .map(|(i, _)| i)
         .unwrap_or(0)
+}
+
+/// A published card and its face, as the profile scorer wants it. The face is looked up by its
+/// front face's name, as `card_quality` looks it up.
+fn profile_card<'a>(card: &'a DraftCardInstance, card_db: &'a CardDatabase) -> ProfileCard<'a> {
+    let front = card.name.split(" // ").next().unwrap_or(&card.name);
+    ProfileCard {
+        name: &card.name,
+        set_code: &card.set_code,
+        colors: &card.colors,
+        face: card_db.get_face_by_name(front),
+    }
 }
 
 /// A card's score in this pick's context.

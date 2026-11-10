@@ -744,6 +744,11 @@ export function draftHandlers(
       const world = worldOf(db);
       if (world.draft?.name === args.draft) world.draft = null;
     },
+    /** The kept copy dropped without taking the table: a solo draft goes, a pod never (#1586). */
+    draft_discard: (): void => {
+      const world = worldOf(db);
+      if (world.draft !== null && world.draft.setup.mode !== "pod") world.draft = null;
+    },
     /** A solo draft is kept; a pod is not resumable (spec §4). */
     draft_saved: (): DraftSaved | null => {
       const state = worldOf(db).draft;

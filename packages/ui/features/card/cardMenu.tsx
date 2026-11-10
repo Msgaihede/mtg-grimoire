@@ -68,7 +68,7 @@ import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { userWishFolders } from "@/features/wishlist/managed";
 import { copyText } from "@/lib/clipboard";
 import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
-import { parseFinishes, type Finish } from "@/lib/finish";
+import { recordableFinishes, type Finish } from "@/lib/finish";
 import { notify } from "@/lib/notifications";
 import {
   ipc,
@@ -761,8 +761,9 @@ function collectionItem(
 
   /**
    * **A group files each card in its own finish, by the same rule as one card** — the finish its
-   * surface names, else `finishChoices`' first answer (`nonfoil` for all but the 13 515 foil-only
-   * and 892 etched-only printings, which get their own only finish). Finish belongs to a
+   * surface names, else `recordableFinishes`' first answer (`nonfoil` for all but the 13 515
+   * foil-only and 892 etched-only printings, which get their own only finish; `foil` for a
+   * foil+etched one). Finish belongs to a
    * *printing*, so it is read off each row rather than off the right-clicked one: a foil deck card
    * in a picked set stays foil and a plain one beside it stays plain. The folder question is asked
    * once for the whole set, because a folder is about the reader's cabinet, not the cardboard.
@@ -770,7 +771,7 @@ function collectionItem(
   if (rows.length > 1) {
     const fileAll = (folderId: number | null) => {
       for (const row of rows) {
-        addToCollection(row, row.finish ?? finishChoices(row.finishes)[0], folderId);
+        addToCollection(row, row.finish ?? recordableFinishes(row.finishes)[0], folderId);
       }
     };
     if (folders.length === 0) return collectionRow(() => fileAll(null));
@@ -785,7 +786,7 @@ function collectionItem(
   }
 
   // The finish on screen, never a question — see the doc above.
-  const finish = target.finish ?? finishChoices(target.finishes)[0];
+  const finish = target.finish ?? recordableFinishes(target.finishes)[0];
   if (folders.length === 0) {
     return collectionRow(() => addToCollection(target, finish, null));
   }
@@ -1078,12 +1079,6 @@ function wishlistItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): Menu
     ...row,
     items: buildWishlistTargetItems(deps.wishlistFolders, wishAll),
   };
-}
-
-/** The finishes this printing can be recorded in — never empty, because an add has to name one. */
-function finishChoices(finishes: string | null): Finish[] {
-  const listed = parseFinishes(finishes);
-  return listed.length > 0 ? listed : ["nonfoil"];
 }
 
 /**

@@ -40,8 +40,19 @@
  * arrow keys move the card a cell (`onNudge`), the resize corner's grow or shrink it (`onGrow`), and
  * the settings popover's steppers do the same for a reader who never finds the corner. Only the page
  * holds the grid, so each is a delta and the page decides what it lands on.
+ *
+ * **A press that picks the card up puts the caret on the grip — or on the corner, for a resize**
+ * (issue #1582). The page's gesture calls `preventDefault()` on the `pointerdown`, so no selection
+ * is swept across the page — and that suppresses the `mousedown` default too, which is the browser
+ * moving focus. Left there, a press on a card moved the caret nowhere: an open settings or remove
+ * popover, which closes when focus leaves its root, stayed open through the press, the drag and the
+ * drop, and rode along on the card being dragged. So the press moves the caret itself, onto the
+ * control that answers the same gesture from the keyboard: the popover closes on the way, a title
+ * still being typed is committed by its own blur, and a reader who drags a card and then reaches
+ * for the arrow keys finds them working on the card they just moved. `preventScroll`, because the
+ * caret is following the hand, and the hand is already where the reader is looking.
  */
-import { useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 import { GripVertical, MoveDiagonal2, Settings2, Trash2, X } from "lucide-react";
 
 import { AnchoredPopup } from "@/components/AnchoredPopup";
@@ -119,12 +130,16 @@ export function WidgetCard({
   const pad = bodyPadPx(fit.h, fit.compact);
   const gap = bodyGapPx(fit.h, fit.compact);
   const chip = fit.tier >= 2 ? chipLabel(widget) : "";
+  const gripRef = useRef<HTMLButtonElement>(null);
 
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
     if (!movable) return;
     // A secondary press is a context menu, never a pick-up.
     if (event.button > 0) return;
     if ((event.target as Element).closest("[data-no-drag]") !== null) return;
+    // Before the page's `preventDefault()` — see the module doc: the caret goes to the grip, so an
+    // open popover closes on the press rather than travelling with the card.
+    gripRef.current?.focus({ preventScroll: true });
     onDragStart?.(event);
   };
 
@@ -136,7 +151,8 @@ export function WidgetCard({
         "relative flex h-full min-w-0 flex-col rounded-lg border border-border",
         LAYER.raisedWhenPopupOpen,
         customizing && "cursor-grab touch-none bg-surface/55 select-none",
-        dragging && "cursor-grabbing border-accent opacity-[0.92] shadow-[0_16px_36px_rgb(0_0_0/0.5)]",
+        dragging &&
+          "cursor-grabbing border-accent opacity-[0.92] shadow-[0_16px_36px_rgb(0_0_0/0.5)]",
       )}
     >
       <div
@@ -145,6 +161,7 @@ export function WidgetCard({
       >
         {movable && (
           <button
+            ref={gripRef}
             type="button"
             aria-label={`Move ${title}`}
             {...tip("Drag to move, or press the arrow keys")}
@@ -315,6 +332,8 @@ export function WidgetCard({
           {...tip("Drag to resize, or press the arrow keys")}
           onPointerDown={(event) => {
             if (event.button > 0) return;
+            // The grip's reason, for the corner's own gesture: see the module doc.
+            event.currentTarget.focus({ preventScroll: true });
             onResizeStart?.(event);
           }}
           onKeyDown={(event) => onArrow(event, onGrow)}

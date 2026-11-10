@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QuantityStepper } from "./QuantityStepper";
@@ -139,6 +139,43 @@ describe("QuantityStepper", () => {
 
     await userEvent.tab();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Chromium steps a focused number box on the wheel and swallows the scroll, and the blur that
+   * followed wrote the wheeled number — to 0, in the collection, a delete (issue #1569). The box
+   * lets go of the focus instead, so the step never happens and the list scrolls; a typed draft
+   * goes with it unsent, because a wheel is not the reader finishing what they typed.
+   */
+  it("gives up the focus to a wheel, unsent, so the list scrolls instead", async () => {
+    const onChange = vi.fn();
+    render(<Harness initial={4} onChange={onChange} />);
+
+    await userEvent.clear(box());
+    await userEvent.type(box(), "1");
+    expect(box()).toHaveFocus();
+
+    fireEvent.wheel(box(), { deltaY: 100 });
+
+    expect(box()).not.toHaveFocus();
+    expect(box()).toHaveValue(4);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  /** An unfocused box is not stepped by the browser, so a wheel over one is left alone. */
+  it("leaves the focus where it is for a wheel over an unfocused box", () => {
+    render(
+      <>
+        <button type="button">Elsewhere</button>
+        <Harness />
+      </>,
+    );
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    elsewhere.focus();
+
+    fireEvent.wheel(box(), { deltaY: 100 });
+
+    expect(elsewhere).toHaveFocus();
   });
 
   it("sends nothing for an empty box, a minus sign, or the number it already holds", async () => {

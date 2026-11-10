@@ -85,6 +85,11 @@ function openedId(stream: MediaStream): string | null {
  * indicator on the reader's machine after they have moved on — and on a switch, a webcam some
  * drivers will not hand to a second stream while the first still holds it.
  *
+ * **`attempt` reopens the same choice.** A change to it is a re-run with `deviceId` unchanged: the
+ * stream is stopped and the same request goes out again. The page needs it when the stored camera
+ * is pressed while the fallback is open (issue #1554) — the choice is already stored, so nothing
+ * else would change, and only a fresh `exact` request can find the camera plugged back in.
+ *
  * ⚠️ **`NotSupportedError` from `getUserMedia` here does not mean the API is missing.** In the
  * Tauri WebView2 it is an unhandled `PermissionRequested`, which `apps/desktop/src-tauri/src/camera.rs`
  * answers; `QrScanner.tsx` carries the full measurement.
@@ -92,14 +97,16 @@ function openedId(stream: MediaStream): string | null {
 export function useCamera(
   videoRef: RefObject<HTMLVideoElement | null>,
   deviceId: string | null | undefined,
+  attempt = 0,
 ): CameraState {
   const [state, setState] = useState<CameraState>(STARTING);
   // The camera the state above is about. A switch puts the state back to `starting` during the
   // render that asks for it — React's own answer to state that follows a prop — so no frame reports
   // the old camera as live after its tracks were stopped, and no effect has to notice the change.
-  const [asked, setAsked] = useState(deviceId);
-  if (asked !== deviceId) {
-    setAsked(deviceId);
+  // A reopen of the same camera (`attempt`) is a switch too.
+  const [asked, setAsked] = useState({ deviceId, attempt });
+  if (asked.deviceId !== deviceId || asked.attempt !== attempt) {
+    setAsked({ deviceId, attempt });
     setState(STARTING);
   }
 
@@ -187,14 +194,38 @@ export function useCamera(
       cancelled = true;
       stopAll();
     };
-    // A ref object is stable by construction, so this re-runs on `deviceId` alone — and that is
+    // A ref object is stable by construction, so this re-runs on `deviceId` (and on `attempt`, a
+    // reopen asked for by name) alone — and that is
     // deliberate: a re-run is a camera switch, whose cleanup stops every track of the old stream
     // before the new request goes out. It is also the one thing that may re-ask for permission,
     // which is why the page holds this at `undefined` until the stored choice is known rather
     // than letting it run once on a guess.
-  }, [videoRef, deviceId]);
+  }, [videoRef, deviceId, attempt]);
 
   return state;
+}
+
+/**
+ * What a press on a row of the Camera menu does (issue #1554).
+ *
+ * - `nothing` — the row pressed is the one ticked: the camera already open, or, while one is
+ *   starting or has been refused, the one asked for. Restarting the stream would be a flicker for
+ *   a choice that changes nothing.
+ * - `reopen` — the row is the stored camera but another is open: the stored one was missing when
+ *   the view opened and the default came up in its place. The choice is already stored, so the
+ *   page reopens it by {@link useCamera}'s `attempt`.
+ * - `store` — any other camera: the choice is written, and the new id reopens the stream.
+ *
+ * `open` is what the menu ticks (`camera.deviceId` while live, the stored id otherwise), so the
+ * press does nothing exactly where the reader can see the camera is already theirs.
+ */
+export function cameraPress(
+  pressed: string,
+  open: string | null,
+  stored: string | null,
+): "nothing" | "reopen" | "store" {
+  if (pressed === open) return "nothing";
+  return pressed === stored ? "reopen" : "store";
 }
 
 /**

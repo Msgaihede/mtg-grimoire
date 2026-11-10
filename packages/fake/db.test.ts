@@ -3659,6 +3659,60 @@ describe("the collection grain", () => {
 });
 
 /**
+ * The deck-custody fence on the reader's own writes (issue #1537), `collection::refuse_in_a_deck`'s
+ * tests one side over: a copy in a deck's group cannot be stepped, removed, re-finished or
+ * re-printed — and a grade or a note on it can still be corrected.
+ */
+describe("the deck-custody fence on a copy's own writes", () => {
+  const held = () =>
+    makeDb({
+      collectionEntries: [
+        entry({ id: 1, quantity: 1, folderId: 2 }),
+        entry({ id: 2, cardId: BOLT_JA.id, quantity: 2 }),
+      ],
+      collectionFolders: [
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 0,
+          locked: false,
+        },
+      ],
+    });
+  const IN_A_DECK = /Those copies are in a deck/;
+
+  it("refuses the stepper, the finish, the printing and the removes, and writes nothing", () => {
+    const db = held();
+    const w = writeHandlers(db);
+
+    expect(() => w.collection_set_quantity({ id: 1, quantity: 2 })).toThrow(IN_A_DECK);
+    expect(() => w.collection_set_quantity({ id: 1, quantity: 0 })).toThrow(IN_A_DECK);
+    expect(() => w.collection_update({ id: 1, patch: { finish: "foil" } })).toThrow(IN_A_DECK);
+    expect(() => w.collection_update({ id: 1, patch: { quantity: 3 } })).toThrow(IN_A_DECK);
+    expect(() => w.collection_set_printing({ id: 1, cardId: BOLT_2X2.id })).toThrow(IN_A_DECK);
+    expect(() => w.collection_remove({ id: 1 })).toThrow(IN_A_DECK);
+    expect(() => w.collection_remove_many({ ids: [2, 1] })).toThrow(IN_A_DECK);
+
+    expect(db.collectionEntries).toHaveLength(2);
+    expect(db.collectionEntries[0]).toMatchObject({ id: 1, quantity: 1, cardId: BOLT.id });
+  });
+
+  it("lets through an edit a deck never reads, and the copies outside the group", () => {
+    const db = held();
+    const w = writeHandlers(db);
+
+    expect(w.collection_update({ id: 1, patch: { notes: "the good one" } })).toMatchObject({
+      id: 1,
+    });
+    expect(w.collection_set_quantity({ id: 2, quantity: 3 })).toMatchObject({ quantity: 3 });
+    expect(w.collection_remove_many({ ids: [2] })).toMatchObject({ removed: 1 });
+  });
+});
+
+/**
  * `collection_set_printing` — issue #564, `collection::set_entry_printing`'s own tests one side
  * over: repoint and refresh, the two refusals, the no-op, and the fold that respects the folder.
  */
@@ -7058,6 +7112,52 @@ describe("pulling owned copies into a deck", () => {
         picks: [{ entryId: 1, quantity: 1 }],
       }),
     ).toThrow(/copies are in a deck/);
+  });
+
+  /**
+   * **A locked drawer is not the reader's desk either** (issue #1541), and neither is a shelf
+   * inside it — locked by its parent and by nothing of its own, the arm that gets missed. Both
+   * ends again: the plan offers nothing, and a stale pick hears the lock's own sentence rather
+   * than "not short of that", because the deck is still short.
+   */
+  it("never offers a copy in a locked folder, and refuses one picked anyway", () => {
+    const db = shortOfThree({
+      collectionFolders: [
+        ...groupsOf([deck({ id: 1, name: "Burn" })]),
+        {
+          id: 1,
+          parentId: null,
+          name: "Set aside",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: true,
+        },
+        {
+          id: 2,
+          parentId: 1,
+          name: "Shelf",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 1, folderId: 2 }),
+      ],
+    });
+    expect(plan(db)).toEqual([]);
+    expect(() =>
+      writeHandlers(db).deck_pull_from_collection({
+        deckId: 1,
+        picks: [{ entryId: 3, quantity: 1 }],
+      }),
+    ).toThrow(/in a locked folder/);
+    expect(copiesIn(db, 1)).toBe(2);
+    expect(copiesIn(db, 2)).toBe(1);
   });
 
   /**

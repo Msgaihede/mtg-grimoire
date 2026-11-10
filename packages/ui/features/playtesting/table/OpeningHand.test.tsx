@@ -88,6 +88,36 @@ describe("OpeningHand", () => {
     }
   });
 
+  it("offers neither decision while the engine is working, and says so (issue #1593)", async () => {
+    const view = viewWith({ mulligans: 0, bottom: 0, freeFirst: false });
+    const onAct = vi.fn();
+    const { rerender } = render(<OpeningHand view={view} onAct={onAct} />);
+    await userEvent.click(screen.getByRole("button", { name: "Mulligan to 6" }));
+    expect(onAct).toHaveBeenCalledTimes(1);
+
+    rerender(<OpeningHand view={view} onAct={onAct} busy />);
+    expect(screen.getByRole("status")).toHaveTextContent("Shuffling for a new seven…");
+    const mulligan = screen.getByRole("button", { name: "Mulligan to 6" });
+    const keep = screen.getByRole("button", { name: "Keep 7" });
+    expect(mulligan).toHaveAttribute("aria-disabled", "true");
+    expect(keep).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(mulligan);
+    await userEvent.click(keep);
+    expect(onAct).toHaveBeenCalledTimes(1);
+
+    // Refused, or answered with the same hand: both are offered again.
+    rerender(<OpeningHand view={view} onAct={onAct} />);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "Mulligan to 6" })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Keep 7" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "keep", bottom: [] });
+    rerender(<OpeningHand view={view} onAct={onAct} busy />);
+    expect(screen.getByRole("status")).toHaveTextContent("Keeping — the game is starting…");
+  });
+
   it("says whether the first mulligan is free", () => {
     const { unmount } = draw(viewWith({ mulligans: 0, bottom: 0, freeFirst: true }));
     expect(screen.getByText("Your first mulligan is free.")).toBeInTheDocument();

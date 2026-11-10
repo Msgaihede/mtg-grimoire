@@ -645,6 +645,14 @@ function DropdownShell(props: ShellProps) {
           if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
           e.preventDefault();
           if (searchable) {
+            // **Space opens, and seeds nothing** (issue #1574). It is the button's own key — the
+            // one a reader presses to open any closed picker — and a search box that opened
+            // holding " " matched nothing until they noticed and erased it. So it is a plain
+            // opening, the same as a press, query reset and all.
+            if (e.key.trim() === "") {
+              openAt();
+              return;
+            }
             // Same gesture, same place: a character that would have jumped a row instead
             // opens the panel and seeds the search box the reader is about to land in.
             updateQuery(e.key);

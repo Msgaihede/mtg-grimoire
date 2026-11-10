@@ -4358,6 +4358,107 @@ describe("the folders", () => {
   });
 
   /**
+   * **Issue #1577: two wishes drawn as one printing are two tiles to the picked set.** `TWIN` is
+   * `BOLT`'s printing at the other finish — the same picture — and a tile keyed by its printing
+   * made the pair one key: a Ctrl-click rang both, a Ctrl-click on the twin put the pair down, and
+   * a drag of the set filed the twin the reader never picked.
+   *
+   * The tiles are found among the wall's drag sources, afresh before every press.
+   */
+  describe("two wishes drawn as one printing (issue #1577)", () => {
+    const TWIN: WishRow = { ...BOLT, id: 21, preferredFinish: "nonfoil" };
+    /** The art buttons of the wall's tiles of one card — the wall's own, never a preview's. */
+    const artOf = (container: HTMLElement, name: string) =>
+      cardSources(container).flatMap((tile) => {
+        const found = tile.querySelector(`img[alt="${name}"]`)?.closest("button");
+        return found ? [found] : [];
+      });
+    const bolts = (container: HTMLElement) => artOf(container, "Lightning Bolt");
+    const recall = (container: HTMLElement) => {
+      const [found] = artOf(container, "Ancestral Recall");
+      if (!found) throw new Error("the wall drew no Ancestral Recall");
+      return found;
+    };
+    const tileOf = (container: HTMLElement, at: HTMLElement) => {
+      const tile = cardSources(container).find((each) => each.contains(at));
+      if (!tile) throw new Error("the tile is not a drag source");
+      return tile;
+    };
+    const ringed = (container: HTMLElement) =>
+      cardSources(container).filter((tile) => tile.classList.contains("ring-accent"));
+    const pickedKeys = () => [...(useAppStore.getState().cardSelection?.keys ?? [])].sort();
+    const BOLT_KEYS = [`wish:${BOLT.id}`, `wish:${TWIN.id}`].sort();
+
+    async function mount() {
+      // The picked set is the store's and outlives a test's page; start each case with none.
+      useAppStore.setState({ wishlistView: "grid", cardSelection: null });
+      wishlistList.mockResolvedValue(page([BOLT, ANY, TWIN]));
+      const user = userEvent.setup();
+      const { container } = wrap(<WishlistPage />);
+      await findHeading(ORDERED.id);
+      await waitFor(() => expect(bolts(container)).toHaveLength(2));
+      recall(container);
+      return { user, container };
+    }
+
+    it("picks, rings and files only the wish pressed", async () => {
+      const { user, container } = await mount();
+
+      await user.keyboard("{Control>}");
+      await user.click(bolts(container)[0]);
+      const [picked] = pickedKeys();
+      expect(BOLT_KEYS).toContain(picked);
+      await waitFor(() => expect(ringed(container)).toHaveLength(1));
+      await user.click(recall(container));
+      await user.keyboard("{/Control}");
+      expect(pickedKeys()).toEqual([picked, `wish:${ANY.id}`].sort());
+      await waitFor(() => expect(ringed(container)).toHaveLength(2));
+
+      await wishOnto(tileOf(container, recall(container)), heading(ORDERED.id));
+
+      await waitFor(() => expect(wishlistSetFolder).toHaveBeenCalledTimes(2));
+      expect(wishlistSetFolder).toHaveBeenCalledWith(ANY.id, ORDERED.id);
+      expect(wishlistSetFolder).toHaveBeenCalledWith(
+        Number(picked.slice("wish:".length)),
+        ORDERED.id,
+      );
+      await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Moved 2 wishes to “Ordered”",
+      });
+    });
+
+    it("adds the second of the two on a Ctrl-click, rather than putting the pair down", async () => {
+      const { user, container } = await mount();
+
+      await user.keyboard("{Control>}");
+      await user.click(bolts(container)[0]);
+      expect(BOLT_KEYS).toContain(pickedKeys()[0]);
+      await user.click(bolts(container)[1]);
+      await user.keyboard("{/Control}");
+
+      expect(pickedKeys()).toEqual(BOLT_KEYS);
+      await waitFor(() => expect(ringed(container)).toHaveLength(2));
+      expect(
+        ringed(container).every((tile) => bolts(container).some((b) => tile.contains(b))),
+      ).toBe(true);
+    });
+
+    /** What did not change: the open card is the printing, so it still rings every tile drawn
+     *  as it — the tile's `ringKey`. */
+    it("rings both when their printing is the open card", async () => {
+      const { container } = await mount();
+
+      act(() => useAppStore.setState({ selectedCardId: BOLT.artCardId }));
+
+      await waitFor(() => expect(ringed(container)).toHaveLength(2));
+      expect(
+        ringed(container).every((tile) => bolts(container).some((b) => tile.contains(b))),
+      ).toBe(true);
+    });
+  });
+
+  /**
    * And the way back **out** from inside a folder: a heading only ever takes a wish deeper, so
    * without the breadcrumb the gesture would be one-way.
    */

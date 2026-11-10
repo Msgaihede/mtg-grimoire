@@ -363,6 +363,83 @@ describe("parseNoteBody", () => {
     ]);
   });
 
+  it("reads the editor's empty-paragraph marker as a blank line, in every block", () => {
+    // Tiptap writes the second and later of a run of empty paragraphs as `&nbsp;` — Enter three
+    // times between two lines stores exactly the first body here.
+    expect(parseNoteBody("one\n\n\n\n&nbsp;\n\ntwo")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "one" }] },
+      { kind: "paragraph", inlines: [{ kind: "text", text: "two" }] },
+    ]);
+    expect(parseNoteBody("\n\n&nbsp;\n\nMana base")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "Mana base" }] },
+    ]);
+    expect(parseNoteBody("\u00a0\n\nMana base")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "Mana base" }] },
+    ]);
+    // Inside a quote it is the line break a bare `>` already is.
+    expect(parseNoteBody("> a\n>\n>\n>\n> &nbsp;\n>\n> b")).toEqual([
+      { kind: "quote", inlines: [{ kind: "text", text: "a\nb" }] },
+    ]);
+    // A reader who typed the entity is stored `&amp;nbsp;` and is shown what they typed.
+    expect(parseNoteBody("&amp;nbsp;")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "&nbsp;" }] },
+    ]);
+  });
+
+  it("reads a bare marker as an empty item, and draws no empty item", () => {
+    // The caret on a fresh bullet at save time — before the fix this `- ` continued the item
+    // above it, drawn as `Arcane Signet -`.
+    expect(parseNoteBody("- Sol Ring\n- Arcane Signet\n- ")).toEqual([
+      {
+        kind: "list",
+        ordered: false,
+        items: [[{ kind: "text", text: "Sol Ring" }], [{ kind: "text", text: "Arcane Signet" }]],
+      },
+    ]);
+    expect(parseNoteBody("1. Sol Ring\n2. Arcane Signet\n3. ")).toEqual([
+      {
+        kind: "list",
+        ordered: true,
+        items: [[{ kind: "text", text: "Sol Ring" }], [{ kind: "text", text: "Arcane Signet" }]],
+      },
+    ]);
+    expect(parseNoteBody("- a\n- \n- b")).toEqual([
+      {
+        kind: "list",
+        ordered: false,
+        items: [[{ kind: "text", text: "a" }], [{ kind: "text", text: "b" }]],
+      },
+    ]);
+    // Every marker, alone, is nothing at all.
+    for (const bare of ["- ", "* ", "+ ", "1. ", "2) ", "-", "1.", "- &nbsp;"]) {
+      expect(parseNoteBody(bare)).toEqual([]);
+    }
+  });
+
+  it("numbers a list from the first item it draws", () => {
+    // The editor draws `two` at 2, under the empty item it keeps; this reader keeps no empty item.
+    expect(parseNoteBody("1. \n2. two")).toEqual([
+      { kind: "list", ordered: true, items: [[{ kind: "text", text: "two" }]], start: 2 },
+    ]);
+  });
+
+  it("gives an empty item no lazy continuation", () => {
+    // CommonMark's rule, and the editor's reading of `-\nfoo` — which is also how it writes a hard
+    // break in an otherwise empty item.
+    expect(parseNoteBody("-\nfoo")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "foo" }] },
+    ]);
+    expect(parseNoteBody("-   \nb")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "b" }] },
+    ]);
+  });
+
+  it("still keeps a list marker with no space after it out of the list rules", () => {
+    expect(parseNoteBody("-5 life")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "-5 life" }] },
+    ]);
+  });
+
   it("answers an empty list for a body with nothing in it", () => {
     expect(parseNoteBody("")).toEqual([]);
     expect(parseNoteBody("   \n\n \t ")).toEqual([]);
@@ -395,6 +472,14 @@ describe("noteToPlainText", () => {
 
   it("says nothing for a body with nothing in it", () => {
     expect(noteToPlainText("   ")).toBe("");
+  });
+
+  it("says nothing for a body that is only blank lines and empty items", () => {
+    // What the dialog's Save guard reads, so these are the bodies it refuses.
+    expect(noteToPlainText("- ")).toBe("");
+    expect(noteToPlainText("1. ")).toBe("");
+    expect(noteToPlainText("\n\n&nbsp;\n\n&nbsp;")).toBe("");
+    expect(noteToPlainText("one\n\n\n\n&nbsp;\n\ntwo")).toBe("one\ntwo");
   });
 
   it("says the characters an entity stands for", () => {

@@ -149,7 +149,16 @@ export type FolderNameFieldProps = {
    */
   round?: number;
   onSubmit: (name: string) => void;
+  /** The ✕ — a control *in* the field, so a host that hands the caret back to an opener does it
+   *  here. Also the blur's answer when no {@link onClose} is given. */
   onCancel: () => void;
+  /**
+   * Clicked or tabbed away: the field goes and the caret stays where the reader put it. Optional,
+   * and {@link onCancel} when absent — right for every host whose cancel moves no caret. A host
+   * whose cancel *does* hand the caret back (the gallery's `dismiss`) passes its plain close here,
+   * or the blur would pull the caret off the filter box the reader just clicked (issue #1545).
+   */
+  onClose?: () => void;
 };
 
 export function FolderNameField({
@@ -163,6 +172,7 @@ export function FolderNameField({
   round = 0,
   onSubmit,
   onCancel,
+  onClose = onCancel,
 }: FolderNameFieldProps): ReactElement {
   const rootRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -234,7 +244,7 @@ export function FolderNameField({
       // the name and the caret comes back to the field with the window.
       onBlur={(e) => {
         if (pending || blurLeftTheWindow(e)) return;
-        if (!rootRef.current?.contains(e.relatedTarget)) onCancel();
+        if (!rootRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >
       {heading ? (

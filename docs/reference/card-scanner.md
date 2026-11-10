@@ -1003,7 +1003,14 @@ tray stays intact, and the decision gap is cleared.
 `LANDED_HOLD_MS`) — its picture, a tick, the name, the set, number and finish, *Added again ×N* on a
 bump, *Printing updated* on a re-read, the first two candidates fanned for a pick — and closes its
 line with a price (issue #1321, `reader/useLandedPrice.ts`: the card's figure, or the span across a
-pick's candidates). It is `aria-hidden`, since the HUD's live region says the same.
+pick's candidates). It is `aria-hidden`, since the HUD's live region says the same. **The hold is
+`useTrayLanding`'s, not the popup's** (issue #1555): the hook's `shown` is a landing made while the
+reader is *armed* (scanning, or point and shoot on) for those 2.2 s, and a Stop puts it away at once.
+A card added by hand while stopped is filed, flashed and sounded but never shown, and a Start raises
+nothing. The popup used to keep the clock itself, which ran only while it was drawn — so a card
+hidden by a Stop stayed set and came back, confetti and all, at the next Start. The pump likewise
+forgets its verdict as it starts (`useScanLoop`), since the start resets the session: the old
+corners and the HUD's `Matched … Added` are not drawn over the new stream.
 
 **A landing at a price tier throws confetti over the picture** (`reader/TierConfetti.tsx`, pieces and
 motion in `confetti.ts`, the tier from `useLandedTier`): the sound's own ladder (`priceTier` against

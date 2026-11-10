@@ -36,18 +36,18 @@ publish = false
 # `bitmaps`, `sized-chunks`) are MPL-2.0, file-level copyleft, unmodified and compatible with
 # this repository's AGPL. Move the `rev` by a commit that runs the whole gate: the engine
 # changes daily, and this crate's tests are what say a move kept the board playing.
-phase-engine = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
+phase-engine = { git = "https://github.com/phase-rs/phase", rev = "935f404a2b778f6b7983b2c67feb7109171ac620" }
 # **phase.rs's AI, from the same commit** — the playtest board's opponent. Its `choose_action`
 # takes the very `GameState` the engine plays on, so the AI seat is one call per decision. Same
 # licence and same rule for the `rev` as the engine above: it moves with the engine (and with
 # `draft-core` below), never apart.
-phase-ai = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
+phase-ai = { git = "https://github.com/phase-rs/phase", rev = "935f404a2b778f6b7983b2c67feb7109171ac620" }
 # **phase.rs's draft reducer, from the same commit** — the draft's passing, picks, rounds and
 # sealed pools (`src/draft/`). The lib is named `draft_core`; it reads the engine's own types, so
 # the three move together, never apart. Same licence and same rule for the `rev`. Its bots live
 # in `draft-wasm`, a `cdylib` no crate can link, so their pick-and-pass half is ported in
 # `src/draft/bots.rs`.
-draft-core = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
+draft-core = { git = "https://github.com/phase-rs/phase", rev = "935f404a2b778f6b7983b2c67feb7109171ac620" }
 # The AI's dice: `choose_action` takes any `rand::Rng`, seeded from the game's seed so a game
 # replays the same. 0.9 is the version phase-ai itself is built on.
 rand = "0.9"

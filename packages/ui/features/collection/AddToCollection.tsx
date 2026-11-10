@@ -17,7 +17,7 @@ import { PRESS } from "@/lib/motion";
 import { formatPrice, parsePurchasePrice, unreadablePriceNote } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { refreshCardSearches } from "@/lib/searchMarks";
+import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 
 /** The printing a quick-add is about. Every surface that shows a card can build one. */
 export interface AddTarget {
@@ -374,44 +374,31 @@ function AddForm({
         text: `Added ${quantity} × ${target.name} to your ${mode}.`,
         seq: (prev?.seq ?? 0) + 1,
       }));
-      // The list this write belongs to, and its summary — **and only that list, in either
-      // direction, which is a narrowing this popup carried the opposite of until now.**
-      //
-      // A collection add used to fire `["wishlist"]` as well, because every *wish* for the card
-      // counted what the collection already held (`WishRow.ownedQuantity`, summed from
-      // `collection_entries` and finish-aware), so a copy landing here moved a figure on rows
-      // nobody had touched. The wishlist asks that question of nothing now: it is the reader's
-      // own list, kept by hand, and no figure on a wish is derived from a collection row. So the
-      // two destinations are symmetrical — a wishlist add leaves `["collection"]` alone and a
-      // collection add leaves `["wishlist"]` alone, each because the other list cannot have moved.
-      void queryClient.invalidateQueries({
-        queryKey: [mode === "collection" ? "collection" : "wishlist"],
-      });
       if (mode === "collection") {
-        // And every deck, for the collection add only. **`collection_add` does take a folder**
-        // — `EntryInput.folderId` has been on the wire since the cabinet landed, and this popup
-        // names one whenever a page hands it one; what was only ever true is that *this call
-        // site* passed none. It still cannot land a copy in a deck's group: the picker is
-        // handed the `user` folders alone, deck groups and `Recently removed` being folder
-        // kinds the cabinet draws but nothing may be filed into by hand, and since schema v25 a
-        // live deck owns exactly what its own group holds. So what moves is the same thing it
-        // always was — the theory list's spare column: `OWNED_SPARE_SQL` counts the copies that
-        // are in no deck group, and a copy added here, root or drawer, is a copy some plan may
-        // now read as spare. A *wish* is a copy the user does not have, and changes no deck's
-        // arithmetic at all.
-        void queryClient.invalidateQueries({ queryKey: ["decks"] });
+        // **Every root a copy landing in the binder moves** — `invalidateOwnedWrite`, the same set
+        // every other collection add fires, with the searches patched in place rather than
+        // refetched (`@/lib/searchMarks`, issue #552).
+        //
+        // That set includes `["wishlist"]`, which this popup left out from 2026-09-08 on the
+        // argument that no figure on a wish is derived from a collection row. That stopped being
+        // true with #988 and #1055: every wish carries `ownedExact`, `ownedOther` and
+        // `ownedPlaces`, counted from `collection_entries`, so a copy added here is a copy a wish
+        // for that card now owns — and a Wishlist returned to within the 30 s `staleTime` went on
+        // drawing it unowned (issue #1570).
+        //
+        // `["decks"]` for the theory list's spare column: `OWNED_SPARE_SQL` counts the copies in
+        // no deck group, and this popup can file only into the root or a `user` folder — never a
+        // deck's group, which nothing may be filed into by hand — so a copy added here is one some
+        // plan may now read as spare.
+        invalidateOwnedWrite(queryClient);
+      } else {
+        // A wish moves the wishlist and the `wishlisted` badge on every search row, and nothing
+        // counted from the collection: a wish is a copy the reader does not have, so neither the
+        // binder nor any deck's arithmetic moved. The search is patched in place for the reason
+        // above.
+        void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+        void refreshCardSearches(queryClient);
       }
-      // And the search results, which now *draw* what this write changed: `ownedQuantity`
-      // and `wishlisted` are the badge on every row and every tile, so a wall the reader
-      // added a third copy from would go on saying "×2" until they searched again.
-      //
-      // **Patched in place rather than refetched, since 2026-09-27** (issue #552). An infinite
-      // search holds every page the reader scrolled through — up to 100 of them, ~53 ms each
-      // against the real database — and an invalidation refetched them in sequence, about five
-      // seconds behind every "+". `refreshCardSearches` asks `search_marks` for the two badges of
-      // the ids already on screen, in one statement, and rewrites them; a search filtered by
-      // Owned, whose rows a write can add or drop, is still refetched.
-      void refreshCardSearches(queryClient);
     },
   });
 

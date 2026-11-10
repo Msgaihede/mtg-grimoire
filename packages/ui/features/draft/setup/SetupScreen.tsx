@@ -1,16 +1,20 @@
 import { useId, useState, type JSX } from "react";
 import { Play } from "lucide-react";
+import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
   type BoosterSetSummary,
+  type DraftSaved,
+  type DraftSetup,
   type DraftView,
   type PlaytestDifficulty,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { MODE_TITLE } from "../pick/DraftSession";
+import { hostsDraftingPod, POD_HOLDS_TABLE, whereOf } from "../table";
 import {
   COMMANDER_DECK_SIZE,
   COMMANDER_SETS,
@@ -94,6 +98,10 @@ const memory = viewMemory<SetupHeld>("draft.setup");
  * three boosters each shuffled by the host into one shared stack). Start deals the boosters here
  * and hands them to the host (`draft_start`), and the page moves on to the pick screen with the
  * view it answers.
+ *
+ * **Start never puts a draft away unasked** (issue #1586): the app holds one draft, so a saved solo
+ * draft is named in a question first, and while a pod this app hosts is drafting Start is refused
+ * — its guests are answered from that one draft. Both are read at the press, not at mount.
  */
 export function SetupScreen({
   mode,
@@ -119,6 +127,20 @@ export function SetupScreen({
   const [error, setError] = useState<string | null>(null);
   /** A cube whose list named cards this corpus lacks: those names, and the cards it did find. */
   const [missing, setMissing] = useState<{ names: string[]; cardIds: string[] } | null>(null);
+  /**
+   * The tab the two answers above were given on, reset during render when it changes.
+   *
+   * Both are about the press on the tab the reader was on: a cube's unknown names and its
+   * "Draft without them" deal a cube draft, so carried onto the Sealed tab they would be an alert
+   * about a list that is not on screen and a button that deals something the tab does not offer.
+   * During render rather than in an effect, so the next tab never paints one frame of them.
+   */
+  const [answeredMode, setAnsweredMode] = useState(mode);
+  if (answeredMode !== mode) {
+    setAnsweredMode(mode);
+    setError(null);
+    setMissing(null);
+  }
   const { dealSets, dealCubeDraft } = useDealDraft();
 
   const packsFor = mode === "sealed" ? SEALED_PACKS : DRAFT_PACKS;
@@ -129,7 +151,38 @@ export function SetupScreen({
 
   const ready = mode === "cube" ? held.cube.list.trim() !== "" : chosen.length === packsFor;
 
-  const begin = async (deal: () => Promise<Parameters<typeof ipc.draftStart>[0]>) => {
+  /** The start the reader is asked about, and the saved draft it would put away. */
+  const [replacing, setReplacing] = useState<{
+    saved: DraftSaved;
+    deal: () => Promise<DraftSetup>;
+  } | null>(null);
+
+  /** Start, unless the table holds a draft in progress: then refused (a hosted pod) or asked. */
+  const begin = async (deal: () => Promise<DraftSetup>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const [lobby, saved] = await Promise.all([ipc.lobbyState(), ipc.draftSaved()]);
+      if (hostsDraftingPod(lobby)) {
+        setError(POD_HOLDS_TABLE);
+        setBusy(false);
+        return;
+      }
+      if (saved !== null) {
+        setReplacing({ saved, deal });
+        setBusy(false);
+        return;
+      }
+    } catch (e) {
+      setError(ipcError(e));
+      setBusy(false);
+      return;
+    }
+    await run(deal);
+  };
+
+  /** Deal and start — the table's answer to a start the reader has agreed to. */
+  const run = async (deal: () => Promise<DraftSetup>) => {
     setBusy(true);
     setError(null);
     try {
@@ -274,6 +327,25 @@ export function SetupScreen({
               </button>
             </div>
           )}
+          <ConfirmDialog
+            open={replacing !== null}
+            title="Replace the draft in progress?"
+            confirmLabel={mode === "sealed" ? "Open the new pool" : "Start the new draft"}
+            // Nothing typed: the question is one press away from the start it guards, and what
+            // it costs is named in the sentence.
+            typeToConfirm={false}
+            pending={busy}
+            onConfirm={() => {
+              const deal = replacing?.deal;
+              setReplacing(null);
+              if (deal) void run(deal);
+            }}
+            onDismiss={() => setReplacing(null)}
+            onClose={() => setReplacing(null)}
+          >
+            {replacing !== null &&
+              `${replacing.saved.label || MODE_TITLE[replacing.saved.mode]} (${MODE_TITLE[replacing.saved.mode]} · ${whereOf(replacing.saved)}) is waiting to be resumed. The app keeps one draft at a time: starting this one abandons it for good.`}
+          </ConfirmDialog>
           <div className="mt-auto flex flex-col gap-2 pt-2">
             <PrimaryButton ready={ready} busy={busy} onPress={() => void start()}>
               <Play className="size-4 fill-current" aria-hidden="true" />

@@ -192,6 +192,33 @@ describe("writing a note in a dialog", () => {
     expect(screen.getByRole("heading", { name: "Untitled note" })).toBeInTheDocument();
   });
 
+  /**
+   * The same refusal for the editor's other markup-only bodies: a lone empty bullet (`- `, what
+   * pressing *Bulleted list* and nothing else stores) and a run of empty paragraphs, whose second
+   * and later are written `&nbsp;`. Each used to be saved, as a note titled `-` or `&nbsp;`.
+   */
+  it.each(["- ", "1. ", "\n\n&nbsp;\n\n&nbsp;"])(
+    "refuses the markup-only body %j",
+    async (body) => {
+      expect(noteToPlainText(body).trim()).toBe("");
+      const onSave = vi.fn();
+      render(
+        <NoteEditorDialog
+          open
+          draft={{ kind: "edit", note: note({ id: 3, title: "", body }) }}
+          pending={false}
+          onSave={onSave}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const save = await screen.findByRole("button", { name: "Save" });
+      expect(save).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(save);
+      expect(onSave).not.toHaveBeenCalled();
+    },
+  );
+
   /** The other kind of no, and the one that really is the attribute: the half-second a write is
    *  in flight, where there is nothing for the caret to be kept in reach *for*. */
   it("takes the button out of reach while the write is in flight", async () => {
@@ -286,8 +313,10 @@ describe("writing a note in a dialog", () => {
     );
     await typist().type(await screen.findByRole("textbox"), "Half a thought");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // Words were typed, so Cancel asks first (issue #1549) — and Discard is the reader saying so.
+    await userEvent.click(await screen.findByRole("button", { name: "Discard" }));
     expect(onSave).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -339,5 +368,171 @@ describe("writing a note in a dialog", () => {
 
     expect(await screen.findByRole("heading", { name: "Sideboard" })).toBeInTheDocument();
     expect(await screen.findByRole("textbox")).toHaveTextContent("Two Pyroblast.");
+  });
+});
+
+/**
+ * **Nothing typed is lost without a question** (issue #1549). Three ways the dialog used to drop a
+ * note on the floor: Escape in the link row closed the whole dialog, a scrim press or the ✕
+ * closed a dirty one without asking, and a Save closed it before the write had answered.
+ */
+describe("leaving a note with words in it", () => {
+  function renderNew(over: { onClose?: () => void; onSave?: (body: string) => void } = {}) {
+    const onClose = over.onClose ?? vi.fn();
+    const onSave = over.onSave ?? vi.fn();
+    const view = render(
+      <NoteEditorDialog
+        open
+        draft={{ kind: "new" }}
+        pending={false}
+        onSave={onSave}
+        onClose={onClose}
+      />,
+    );
+    return { ...view, onClose, onSave };
+  }
+
+  /**
+   * The issue's own reproduction, inverted: it measured `{ closed: 1, linkRowStillOpen: true }`.
+   * The dialog's Escape is a capture-phase layer on `window`, so the address box's own handlers
+   * never saw the press; the row is a layer of its own now, on top of the dialog's.
+   */
+  it("puts the link row away on Escape and leaves the note open", async () => {
+    const { onClose } = renderNew();
+    const surface = await screen.findByRole("textbox", { name: "Body of New note" });
+    await typist().type(surface, "Paragraphs of thought");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a link" }));
+    const address = await screen.findByLabelText("Link address");
+    await waitFor(() => expect(address).toHaveFocus());
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Link address")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "New note" })).toBeInTheDocument();
+    expect(noteToPlainText(screen.getByRole("textbox").textContent ?? "")).toContain(
+      "Paragraphs of thought",
+    );
+    // The caret goes back to where the reader was writing, not to `<body>`.
+    // Tiptap focuses on a frame of its own, so this one is waited for.
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Body of New note" })).toHaveFocus(),
+    );
+  });
+
+  it("asks before Escape closes a note with words in it, and keeps writing on Keep writing", async () => {
+    const { onClose } = renderNew();
+    await typist().type(await screen.findByRole("textbox"), "Half a thought");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onClose).not.toHaveBeenCalled();
+    const question = await screen.findByRole("group", { name: "Discard this note?" });
+    // The caret is in the question and not on a button — a stray Enter must not decide.
+    expect(question).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Save note" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Keep writing" }));
+
+    expect(screen.queryByRole("group", { name: "Discard this note?" })).toBeNull();
+    expect(screen.getByRole("textbox")).toHaveTextContent("Half a thought");
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /** A second Escape is the reader *not* pressing Discard, so it puts the question away. */
+  it("takes a second Escape as keep writing, never as discard", async () => {
+    const { onClose } = renderNew();
+    await typist().type(await screen.findByRole("textbox"), "Half a thought");
+
+    await userEvent.keyboard("{Escape}");
+    await screen.findByRole("group", { name: "Discard this note?" });
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("group", { name: "Discard this note?" })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveTextContent("Half a thought");
+  });
+
+  it("asks before the ✕ or a press on the scrim closes it, and closes on Discard", async () => {
+    const { onClose } = renderNew();
+    await typist().type(await screen.findByRole("textbox"), "Half a thought");
+
+    const dialog = screen.getByRole("dialog", { name: "New note" });
+    const scrim = dialog.parentElement as HTMLElement;
+    await userEvent.pointer({ keys: "[MouseLeft]", target: scrim });
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole("button", { name: "Keep writing" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole("button", { name: "Discard" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  /** A press on New note and straight back out has nothing a reader would miss. */
+  it("closes at once when nothing has been written", async () => {
+    const { onClose } = renderNew();
+    await screen.findByRole("textbox");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("group", { name: /^Discard/ })).toBeNull();
+  });
+
+  it("closes an edit at once when its body is untouched, and asks once it has changed", async () => {
+    const onClose = vi.fn();
+    render(
+      <NoteEditorDialog
+        open
+        draft={{
+          kind: "edit",
+          note: note({ id: 1, title: "Mana base", body: "Fourteen sources." }),
+        }}
+        pending={false}
+        onSave={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    const surface = await screen.findByRole("textbox");
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    await typist().type(surface, " Maybe fifteen.");
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByRole("group", { name: "Discard your changes to this note?" }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The dialog does not close itself on Save — the host does, from the write's success — and a
+   * refusal is drawn beside the text it refused.
+   */
+  it("stays open on Save, and draws a refusal under the text", async () => {
+    const { onClose, onSave, rerender } = renderNew();
+    await typist().type(await screen.findByRole("textbox"), "Fourteen sources.");
+    await userEvent.click(screen.getByRole("button", { name: "Save note" }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+
+    rerender(
+      <NoteEditorDialog
+        open
+        draft={{ kind: "new" }}
+        pending={false}
+        error="database is locked"
+        onSave={onSave}
+        onClose={onClose}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("database is locked");
+    expect(screen.getByRole("textbox")).toHaveTextContent("Fourteen sources.");
   });
 });

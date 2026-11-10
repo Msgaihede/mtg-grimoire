@@ -10,9 +10,9 @@
  * `Board` is a grid of tiles — every note at once, each a press that opens the editor. `Pad` is
  * one note drawn whole, which reads better on a small card and worse on a large one, and is
  * therefore the option rather than the default. Which one a card draws is the registry's `layout`
- * pick, read through `pickOf` like every other setting; **which note the Pad is showing is
- * `useState` and is never stored**, because it is a transient and `home_layout` is a document
- * that syncs.
+ * pick, read through `pickOf` like every other setting; **which note the Pad is showing is the
+ * widget's `useState` and is never stored**, because it is a transient and `home_layout` is a
+ * document that syncs.
  *
  * ## The geometry is pixels, and zero is a real answer
  *
@@ -66,6 +66,18 @@
  * on a focused control, like the widget grip's own arrows one file over, rather than a row in
  * `lib/shortcuts.ts`: that catalogue is the app's chords, and a chord it lists is a chord the
  * keyboard map advertises everywhere.
+ *
+ * ## Every note is reachable, at every footprint (issue #1583)
+ *
+ * A board draws whole rows only and a rail draws as many names as fit, so a reader with more notes
+ * than the card holds used to have no way at all to the rest — a seventh note on a six-tile board
+ * was counted in the footer and drawn nowhere, and *New note* on a full board made exactly that
+ * note. So every surface that cuts the list **pages** it ({@link notePage}): the Board's footer, the
+ * Pad's rail at tier 2 and its index at tier 3 each grow a `‹ ›` pair once the notes outrun the
+ * room. Which page is drawn is not a number of its own: it is **the page holding the shown note**,
+ * one id held by the widget for both layouts, so a new note is revealed by naming it and a note
+ * deleted in another window falls back to the first page rather than to an index that now means
+ * another note.
  *
  * **The Pad offers neither, and that is not an omission.** It draws one note at a time with the
  * rest as a pager, a rail or an index, so there is no arrangement on screen to rearrange — and a
@@ -198,8 +210,7 @@ const PENDING = "Loading notes…";
 export const EMPTY_TITLE = "No notes yet";
 /** The one dim sentence under it — the artboard's, and it says what a note is *for* rather than
  *  what the reader should press, because the press is right underneath it. */
-export const EMPTY_BLURB =
-  "Keep notes for trades, deck ideas, or reminders.";
+export const EMPTY_BLURB = "Keep notes for trades, deck ideas, or reminders.";
 
 /* ----------------------------------------------------------------- the fixed rows ------ */
 
@@ -225,6 +236,9 @@ const RAIL_NEW_PX = 22;
 /** The index column's width at tier 3 — the artboard's, capped so it can never take more than a
  *  third of a card somebody has dragged narrow. */
 const INDEX_PX = 176;
+
+/** The room a pair of page steps takes out of the Pad's rail: two 24px steps and their gaps. */
+const RAIL_STEPS_PX = 60;
 
 /** The coloured edge across the top of every note, in both layouts. */
 const STRIP_PX = 3;
@@ -429,14 +443,34 @@ export function railChips(bodyWidthPx: number): number {
   return Math.max(1, Math.floor(bodyWidthPx / 104));
 }
 
+/** Which slice of the notes a cut surface draws. See {@link notePage}. */
+export interface NotePage {
+  /** Zero-based. */
+  page: number;
+  /** At least one, so an empty or zero-room surface still reads as a single page. */
+  pages: number;
+  /** The index of the page's first note. */
+  start: number;
+}
+
+/**
+ * The page of `size` notes that holds the note at `at` — what a Board, a rail or an index draws
+ * when there are more notes than room (issue #1583).
+ *
+ * `at` below zero is *no note named* and answers the first page. A surface with room for none
+ * (`size` 0, which a card too short for one row of tiles really is) answers one page starting at
+ * the front, because it draws nothing and has nothing to step to.
+ */
+export function notePage(count: number, at: number, size: number): NotePage {
+  if (size <= 0) return { page: 0, pages: 1, start: 0 };
+  const pages = Math.max(1, Math.ceil(count / size));
+  const page = at < 0 ? 0 : Math.min(pages - 1, Math.floor(at / size));
+  return { page, pages, start: page * size };
+}
+
 /* ----------------------------------------------------------------- the body ------------ */
 
-export function StickyNotesWidget({
-  widget,
-  fit,
-  editing,
-  still,
-}: WidgetBodyProps): ReactElement {
+export function StickyNotesWidget({ widget, fit, editing, still }: WidgetBodyProps): ReactElement {
   const layout = String(pickOf(widget, "layout") ?? "board");
   const dates = toggleOn(widget, "dates");
   const strip = toggleOn(widget, "strip");
@@ -448,6 +482,17 @@ export function StickyNotesWidget({
   /** Which note the editor is open on, by id. `null` is closed, and a note deleted in another
    *  window closes it by simply not being in the list any more. */
   const [openId, setOpenId] = useState<number | null>(null);
+  /**
+   * The note the card is showing, by id — the Pad's current note, and the note whose page a cut
+   * Board or index draws. `null` is the layout's own seed (the pinned note on the Pad, the first
+   * page on the Board).
+   *
+   * **The widget's and not each layout's**, because New note has to reach it: the note it makes
+   * lands last, and on a full board that is a page the reader is not looking at (issue #1583).
+   * Naming it here is what brings it into view in either layout. Never stored, for the reason the
+   * Pad's flip never was: it is a transient, and `home_layout` syncs.
+   */
+  const [shownId, setShownId] = useState<number | null>(null);
 
   const ordered = useMemo(() => orderedNotes(api.notes, pinnedFirst), [api.notes, pinnedFirst]);
   /** Every note in **stored** order — what a gesture on the drawn order is written back into. */
@@ -499,8 +544,18 @@ export function StickyNotesWidget({
    * press it — two presses on a widget whose entire purpose is jotting something down. The dialog
    * is drawn once the invalidated list comes back holding the new row, which is one round trip
    * against local SQLite; a refused create opens nothing and the footer says so.
+   *
+   * The same id becomes the shown note, so the Board turns to the page the new note landed on and
+   * the Pad flips to it — closing the dialog leaves the reader looking at what they just wrote.
    */
-  const onNew = useCallback(() => create("", "", NEW_NOTE_COLOR, setOpenId), [create]);
+  const onNew = useCallback(
+    () =>
+      create("", "", NEW_NOTE_COLOR, (id) => {
+        setOpenId(id);
+        setShownId(id);
+      }),
+    [create],
+  );
 
   /**
    * Is a note a press?
@@ -515,9 +570,7 @@ export function StickyNotesWidget({
   if (api.isPending) return <WidgetMessage>{PENDING}</WidgetMessage>;
   if (api.isError) {
     return (
-      <WidgetMessage tone="destructive">
-        Couldn't load notes — {ipcError(api.error)}
-      </WidgetMessage>
+      <WidgetMessage tone="destructive">Couldn't load notes — {ipcError(api.error)}</WidgetMessage>
     );
   }
   if (ordered.length === 0) {
@@ -531,6 +584,8 @@ export function StickyNotesWidget({
     strip,
     pressable,
     writeError: api.writeError,
+    shown: shownId,
+    onShow: setShownId,
     onOpen: setOpenId,
     onNew,
   };
@@ -560,6 +615,9 @@ interface LayoutProps {
   strip: boolean;
   pressable: boolean;
   writeError: unknown;
+  /** The shown note's id, or `null` for the layout's own seed — the widget's `shownId`. */
+  shown: number | null;
+  onShow: (id: number) => void;
   onOpen: (id: number) => void;
   onNew: () => void;
 }
@@ -573,6 +631,11 @@ interface LayoutProps {
  * footer's line is reserved, and what is left is exactly the rows {@link boardGeometry} cut. It
  * clips rather than scrolls for the same reason a row is never half-drawn — the tiles inside it
  * are the ones that fit.
+ *
+ * **The notes past those tiles are pages, not a loss** (issue #1583): once there are more notes
+ * than tiles the footer carries `‹ 1 / 2 ›`, and a step shows the next page by naming its first
+ * note as the shown one. Both gestures stay on the page drawn — a pointer can only aim at a drawn
+ * tile, and the arrow chord is capped to the page's own slice.
  */
 function Board({
   notes,
@@ -581,12 +644,16 @@ function Board({
   strip,
   pressable,
   writeError,
+  shown,
+  onShow,
   onOpen,
   onNew,
   onReorder,
 }: LayoutProps & { onReorder: (ids: number[]) => void }): ReactElement {
   const scale = tileScale(fit.tier);
   const geometry = boardGeometry(fit, dates);
+  const at = shown === null ? -1 : notes.findIndex((note) => note.id === shown);
+  const { page, pages, start } = notePage(notes.length, at, geometry.tiles);
 
   /**
    * Every note's id in the order the board is drawing them — **not the tiles it is drawing**.
@@ -594,8 +661,8 @@ function Board({
    * `sticky_note_reorder` writes `sort_order` from position over the whole table, so the ids a
    * board cut past its last row still have to travel or they would be renumbered to the front of
    * the list by omission. What the *gestures* may touch is capped at the tiles on screen, which
-   * is {@link steppedBy}'s `within` and, for a drop, the fact that a pointer can only aim at a
-   * tile that is drawn.
+   * is {@link steppedBy} run over the page's own slice and, for a drop, the fact that a pointer
+   * can only aim at a tile that is drawn.
    */
   const ids = useMemo(() => notes.map((note) => note.id), [notes]);
 
@@ -629,16 +696,20 @@ function Board({
       const step = NUDGE[event.key];
       if (step === undefined) return;
       event.preventDefault();
-      write(steppedBy(ids, id, step[0] + step[1] * geometry.columns, geometry.tiles));
+      // The page's own slice, stepped and put back between the notes either side of it, so a
+      // note can no more be pushed off the page it is drawn on than off the board.
+      const drawn = ids.slice(start, start + geometry.tiles);
+      const moved = steppedBy(drawn, id, step[0] + step[1] * geometry.columns, geometry.tiles);
+      write([...ids.slice(0, start), ...moved, ...ids.slice(start + geometry.tiles)]);
     },
-    [ids, write, geometry.columns, geometry.tiles],
+    [ids, write, start, geometry.columns, geometry.tiles],
   );
 
+  /** Show page `to` by naming its first note — see {@link LayoutProps.shown}. */
+  const turn = (to: number) => onShow(notes[to * geometry.tiles].id);
+
   return (
-    <div
-      className="flex shrink-0 flex-col"
-      style={{ height: fit.bodyHeightPx, gap: fit.rowGap }}
-    >
+    <div className="flex shrink-0 flex-col" style={{ height: fit.bodyHeightPx, gap: fit.rowGap }}>
       <ul
         aria-label="Your notes"
         className="m-0 grid min-h-0 list-none overflow-hidden p-0"
@@ -651,7 +722,7 @@ function Board({
           height: Math.max(0, fit.bodyHeightPx - FOOTER_PX - fit.rowGap),
         }}
       >
-        {notes.slice(0, geometry.tiles).map((note) => (
+        {notes.slice(start, start + geometry.tiles).map((note) => (
           <Tile
             key={note.id}
             note={note}
@@ -672,6 +743,11 @@ function Board({
         pressable={pressable}
         writeError={writeError}
         onNew={onNew}
+        pager={
+          pressable && pages > 1 ? (
+            <PageSteps page={page} pages={pages} size={FOOTER_PX} onTurn={turn} counted />
+          ) : null
+        }
       />
     </div>
   );
@@ -735,7 +811,10 @@ function Tile({
       {/* Under the note's own words rather than over them: a wash that dimmed the prose would
           make the tile hardest to read at the moment the reader is aiming at it. */}
       {over && (
-        <span aria-hidden="true" className={cn("pointer-events-none absolute inset-0", OVER_WASH)} />
+        <span
+          aria-hidden="true"
+          className={cn("pointer-events-none absolute inset-0", OVER_WASH)}
+        />
       )}
       {strip && (
         <span
@@ -829,6 +908,8 @@ function Tile({
  * running sync, and the only one reachable from this body is New note — so a press that did not
  * land would otherwise be a button that did nothing. The read's own failure is a different fact
  * and is drawn instead of the board, not under it.
+ *
+ * `pager` is the Board's `‹ 1 / 2 ›`, drawn only when the notes outrun the tiles.
  */
 function Foot({
   count,
@@ -836,12 +917,14 @@ function Foot({
   pressable,
   writeError,
   onNew,
+  pager,
 }: {
   count: number;
   tier: Tier;
   pressable: boolean;
   writeError: unknown;
   onNew: () => void;
+  pager: ReactElement | null;
 }): ReactElement {
   return (
     <div className="flex shrink-0 items-center gap-1.5" style={{ height: FOOTER_PX }}>
@@ -853,8 +936,52 @@ function Foot({
         </p>
       )}
       <span className="flex-1" />
+      {pager}
       {pressable && <NewNote wordless={tier === 0} onNew={onNew} />}
     </div>
+  );
+}
+
+/**
+ * `‹ 1 / 2 ›` — the steps between the pages of a cut surface (issue #1583).
+ *
+ * `counted` draws the page number between the steps; the Pad's rail and index leave it out, because
+ * their room is names and the current name's own accent already says where the reader is.
+ */
+function PageSteps({
+  page,
+  pages,
+  size,
+  onTurn,
+  counted = false,
+}: {
+  page: number;
+  pages: number;
+  size: number;
+  onTurn: (page: number) => void;
+  counted?: boolean;
+}): ReactElement {
+  const atStart = page <= 0;
+  const atEnd = page >= pages - 1;
+  return (
+    <span className="flex flex-none items-center gap-0.5">
+      <Step
+        label="Previous page"
+        spent={atStart}
+        size={size}
+        onStep={() => !atStart && onTurn(page - 1)}
+      >
+        <ChevronLeft className="size-3.5" aria-hidden="true" />
+      </Step>
+      {counted && (
+        <span className="px-0.5 font-mono text-[0.6875rem] tabular-nums text-dim">
+          {page + 1} / {pages}
+        </span>
+      )}
+      <Step label="Next page" spent={atEnd} size={size} onStep={() => !atEnd && onTurn(page + 1)}>
+        <ChevronRight className="size-3.5" aria-hidden="true" />
+      </Step>
+    </span>
   );
 }
 
@@ -915,8 +1042,13 @@ function NewNote({
  * | 2 | a horizontal rail of names, the current one in the accent |
  * | 3 | the rail turns vertical and becomes the pad's index |
  *
- * ⚠️ **Which note is shown is `useState` and is deliberately not stored.** It opens on the pinned
- * note if there is one and on the first in order otherwise, and it is held **by id**: a note
+ * The rail and the index are cut to the names that fit, so past that they page (issue #1583): the
+ * names drawn are the page holding the current note, and a `‹ ›` pair turns to the next page by
+ * showing its first note.
+ *
+ * ⚠️ **Which note is shown is the widget's `useState` and is deliberately not stored.** It opens
+ * on the pinned note if there is one and on the first in order otherwise, and it is held **by
+ * id**: a note
  * deleted in another window falls back to that seed rather than to whatever now occupies its
  * index, and `sortOrder` is monotonic and never dense, so an index would be the wrong handle
  * twice over.
@@ -928,12 +1060,13 @@ function Pad({
   strip,
   pressable,
   writeError,
+  shown,
+  onShow,
   onOpen,
   onNew,
 }: LayoutProps): ReactElement {
-  const [chosen, setChosen] = useState<number | null>(null);
   const seed = notes.find((note) => note.pinned) ?? notes[0];
-  const note = notes.find((entry) => entry.id === chosen) ?? seed;
+  const note = notes.find((entry) => entry.id === shown) ?? seed;
   const at = notes.indexOf(note);
   const scale = padScale(fit.tier);
 
@@ -951,6 +1084,7 @@ function Pad({
   if (fit.tier >= 3) {
     const width = Math.min(INDEX_PX, Math.max(0, Math.floor(fit.bodyWidthPx / 3)));
     const rows = fit.fitCount(RAIL_ROW_PX, RAIL_NEW_PX + fit.rowGap);
+    const { page, pages, start } = notePage(notes.length, at, rows);
     return (
       <div className="flex shrink-0" style={{ height: fit.bodyHeightPx, gap: 10 }}>
         <div className="flex flex-none flex-col" style={{ width, gap: fit.rowGap }}>
@@ -958,19 +1092,28 @@ function Pad({
             aria-label="Your notes"
             className="m-0 flex min-h-0 flex-1 list-none flex-col gap-0.5 overflow-hidden p-0"
           >
-            {notes.slice(0, rows).map((entry) => (
+            {notes.slice(start, start + rows).map((entry) => (
               <IndexRow
                 key={entry.id}
                 note={entry}
                 current={entry.id === note.id}
                 pressable={pressable}
-                onShow={setChosen}
+                onShow={onShow}
               />
             ))}
           </ul>
           <div className="flex flex-none items-center gap-1.5" style={{ height: RAIL_NEW_PX }}>
             {pressable && <NewNote wordless={false} height={RAIL_NEW_PX} onNew={onNew} />}
             <Refused writeError={writeError} />
+            <span className="flex-1" />
+            {pressable && pages > 1 && (
+              <PageSteps
+                page={page}
+                pages={pages}
+                size={RAIL_NEW_PX}
+                onTurn={(to) => onShow(notes[to * rows].id)}
+              />
+            )}
           </div>
         </div>
         {sheet}
@@ -979,31 +1122,44 @@ function Pad({
   }
 
   if (fit.tier === 2) {
-    const chips = railChips(fit.bodyWidthPx);
-    const rest = Math.max(0, notes.length - chips);
-    const chipMax = Math.max(48, Math.floor(fit.bodyWidthPx / chips) - 16);
+    // The steps take their room out of the names only when there are names to step to.
+    const paged = notes.length > railChips(fit.bodyWidthPx);
+    const room = paged ? Math.max(0, fit.bodyWidthPx - RAIL_STEPS_PX) : fit.bodyWidthPx;
+    const chips = railChips(room);
+    const { page, pages, start } = notePage(notes.length, at, chips);
+    const chipMax = Math.max(48, Math.floor(room / chips) - 16);
+    const steps =
+      pressable && pages > 1 ? (
+        <PageSteps
+          page={page}
+          pages={pages}
+          size={RAIL_PX - 2}
+          onTurn={(to) => onShow(notes[to * chips].id)}
+        />
+      ) : null;
     return (
-      <div
-        className="flex shrink-0 flex-col"
-        style={{ height: fit.bodyHeightPx, gap: fit.rowGap }}
-      >
+      <div className="flex shrink-0 flex-col" style={{ height: fit.bodyHeightPx, gap: fit.rowGap }}>
         <div
           className="flex flex-none items-center gap-1.5 overflow-hidden"
           style={{ height: RAIL_PX }}
         >
-          {notes.slice(0, chips).map((entry) => (
+          {notes.slice(start, start + chips).map((entry) => (
             <RailChip
               key={entry.id}
               note={entry}
               current={entry.id === note.id}
               maxWidth={chipMax}
               pressable={pressable}
-              onShow={setChosen}
+              onShow={onShow}
             />
           ))}
-          {rest > 0 && (
-            <span className="flex-none font-mono text-[0.6875rem] text-dim">+{rest}</span>
+          {/* A still has no steps, so it keeps the count of what it is not drawing. */}
+          {!pressable && notes.length > start + chips && (
+            <span className="flex-none font-mono text-[0.6875rem] text-dim">
+              +{notes.length - start - chips}
+            </span>
           )}
+          {steps}
           <span className="flex-1" />
           <Refused writeError={writeError} />
           {pressable && <NewNote wordless onNew={onNew} height={RAIL_PX - 2} />}
@@ -1048,7 +1204,7 @@ function Pad({
           <Step
             label="Previous note"
             spent={atStart}
-            onStep={() => !atStart && setChosen(notes[at - 1].id)}
+            onStep={() => !atStart && onShow(notes[at - 1].id)}
           >
             <ChevronLeft className="size-3.5" aria-hidden="true" />
           </Step>
@@ -1057,11 +1213,7 @@ function Pad({
           {at + 1} / {notes.length}
         </span>
         {pressable && (
-          <Step
-            label="Next note"
-            spent={atEnd}
-            onStep={() => !atEnd && setChosen(notes[at + 1].id)}
-          >
+          <Step label="Next note" spent={atEnd} onStep={() => !atEnd && onShow(notes[at + 1].id)}>
             <ChevronRight className="size-3.5" aria-hidden="true" />
           </Step>
         )}
@@ -1078,11 +1230,14 @@ function Pad({
 function Step({
   label,
   spent,
+  size = 24,
   onStep,
   children,
 }: {
   label: string;
   spent: boolean;
+  /** The square's side in pixels — 24 on the Pad's pager, the row's own height elsewhere. */
+  size?: number;
   onStep: () => void;
   children: ReactElement;
 }): ReactElement {
@@ -1093,11 +1248,12 @@ function Step({
       aria-disabled={spent ? true : undefined}
       onClick={onStep}
       className={cn(
-        "grid size-6 flex-none place-items-center rounded-md text-dim",
+        "grid flex-none place-items-center rounded-md text-dim",
         spent ? "opacity-40" : "hover:text-text",
         PRESS,
         FOCUS,
       )}
+      style={{ width: size, height: size }}
     >
       {children}
     </button>
@@ -1259,7 +1415,11 @@ function Sheet({
         {dates && (
           <span
             className="flex-none truncate"
-            style={{ fontSize: scale.dateSize, color: NOTE_DIM, marginTop: scale.dateBeside ? 0 : 3 }}
+            style={{
+              fontSize: scale.dateSize,
+              color: NOTE_DIM,
+              marginTop: scale.dateBeside ? 0 : 3,
+            }}
           >
             {edited(note)}
           </span>

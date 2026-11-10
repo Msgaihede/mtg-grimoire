@@ -592,8 +592,12 @@ the path row's **Add folder**, **Expand all** and **Collapse all**, the status l
 slot, the table's bands with their focus frame, reveal and Top, the grid's sticky bar and a caret
 across a zoom, the level held until the next has answered, the caret a heading is owed, the
 targets that take a drop only under the pointer, and the query cost. What follows is the
-wishlist's own. **A wishlist tile was already one wish**, so the collection's per-folder tile key
-changed nothing here.
+wishlist's own. **A wishlist tile was already one wish, but its key was not** (issue #1577): it
+was keyed by the printing it is drawn as, so two wishes drawn as one printing — one printing wished
+in two folders, a foil and a nonfoil wish of it, an any-printing wish beside a pinned wish for its
+cheapest printing — were one key to the picked set, and a drag or a menu on the set carried the
+twin the reader never picked. A tile is keyed `wish:<id>` now, with the printing as its `ringKey`,
+so the open card still rings every tile drawn as it — the collection's arrangement.
 
 **Flatten defaulted *off* on this page, and that default is what made the empty page this list's
 normal state.** The root asked for the wishes filed nowhere (`w.folder_id IS ?` bound to NULL), so

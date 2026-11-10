@@ -60,9 +60,17 @@ Four rules, each with a failure behind it:
   the layout prints, and AZERTY's unshifted digit row prints `&`, `é`, `"`… — the digits are
   behind Shift, which the exactness rule refuses on `Ctrl+1`. So `Ctrl+1…9` was unreachable there
   by either spelling. `Digit1` is the same key on every layout; `e.key` still matches as well,
-  which keeps the numeric keypad working. Only digits: a letter chord follows the letter printed
-  on the cap, so AZERTY's undo is the key that says `Z`. **Written to the spec and not tried on an
-  AZERTY keyboard** — `shortcuts.test.ts` pins it with synthetic `code`s.
+  which keeps the numeric keypad working. **Written to the spec and not tried on an AZERTY
+  keyboard** — `shortcuts.test.ts` pins it with synthetic `code`s.
+- **A Latin letter matches on its physical key only when the layout's letter is not Latin**
+  (issue #1568, 2026-11-10). On a Russian, Greek or Hebrew layout `e.key` is the layout's own
+  character — Russian `Ctrl+Z` is `key: "я"`, `code: "KeyZ"` — so every letter chord (`Ctrl+Z`,
+  `Ctrl+Y`, `Ctrl+Shift+Z`, `Ctrl+K`, `Ctrl+A`, `Ctrl+Shift+N`) was dead after switching layout to
+  type a card name, and `Ctrl+A` fell through to the webview's select-all. `KeyZ` now matches `z`
+  when `e.key` is one non-ASCII character. A Latin layout keeps the printed-letter rule, so
+  AZERTY's undo is still the key that says `Z` and QWERTZ's `KeyZ` (printing `y`) is redo only;
+  an ASCII layout printing punctuation on a letter key (Dvorak's `KeyZ` is `;`) gains no second
+  binding. **Pinned with synthetic events, not tried in a live WebView2 on such a layout.**
 
 ### The two chords that narrowed away
 
@@ -509,6 +517,15 @@ met from the other side: that hook restores on the same null-or-`<body>` test be
 it would hand back to has been replaced. Both halves are pinned and each fails on its own —
 reverting to the unconditional `focus()` reddens the `F1` case alone, reverting to the bare
 `contains()` reddens the `<body>` case alone (`KeyMap.test.tsx`, both measured 2026-09-03).
+
+**Escape closes the panel before a dialog it was opened over** (2026-11-10,
+[issue #1542](https://github.com/Msgaihede/mtg-grimoire/issues/1542)). `F1` works with a dialog up
+and the panel is drawn over it, but its rung was `"outer"` — the bubble phase — while every
+`Dialog`'s is `"inner"`, in capture, so the first Escape closed the dialog underneath (and its
+unsaved state: a pasted list, a new deck's form) and left the panel standing. The panel's rung now
+passes `overOpenLayers`: opened while a capture rung is listening, it joins the capture stack on top
+of it, so one press closes the panel and the next the dialog. Opened over nothing it is the plain
+`"outer"` rung it always was (`KeyMap.test.tsx`, `useDismissOnEscape.test.tsx`).
 
 ## The panel needs no `LAYER` rung
 

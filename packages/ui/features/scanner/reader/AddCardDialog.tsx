@@ -1,7 +1,7 @@
 import { memo, useEffect, useId, useRef, useState, type JSX } from "react";
 import { Dialog } from "@/components/Dialog";
 import { PANEL_BUTTON } from "@/features/settings/controls";
-import type { Finish } from "@/lib/finish";
+import { parseFinishes, type Finish } from "@/lib/finish";
 import type { CardSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { finishesOf, FinishRadios } from "../submit/FinishRadios";
@@ -139,6 +139,7 @@ const Body = memo(function Body({
         name: chosen.name,
         setCode: chosen.setCode,
         collectorNumber: chosen.collectorNumber,
+        finishes: parseFinishes(chosen.finishes),
       },
       finish.value,
     );

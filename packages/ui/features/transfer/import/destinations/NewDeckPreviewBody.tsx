@@ -39,7 +39,7 @@ import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
 import { ImportLabels, useLabelChoice } from "../shared/ImportLabels";
 import { planCollectionImport } from "./collection";
-import { buildImportPlan, tallyOf, toImportItems } from "./deck";
+import { buildImportPlan, livePicks, tallyOf, toImportItems } from "./deck";
 import {
   Commander,
   Headline,
@@ -146,7 +146,11 @@ export function NewDeckPreviewBody({
     () => buildImportPlan(list, resolved, spec, tags),
     [list, resolved, spec, tags],
   );
-  const commanderIds = commanderIdsOf(plan, picked);
+  /** The pick kept to what the plan offers under the format chosen **now** — a format change
+   *  rebuilds the plan and must not leave the old format's commander riding to the commit
+   *  (issue #1551). */
+  const live = useMemo(() => livePicks(plan, picked), [plan, picked]);
+  const commanderIds = commanderIdsOf(plan, live);
   /** `DeckPreview`'s, verbatim and for its reason — a label is app-wide, so bringing one across
    *  into a brand-new deck is the same act with the same consequences. */
   const { dropped, chosen, toggle } = useLabelChoice(plan.labels);
@@ -245,7 +249,7 @@ export function NewDeckPreviewBody({
         </div>
 
         <Tally categories={categories} />
-        <Commander plan={plan} picked={picked} onPick={setPicked} labelId={`${id}-commander`} />
+        <Commander plan={plan} picked={live} onPick={setPicked} labelId={`${id}-commander`} />
         <ImportLabels labels={plan.labels} dropped={dropped} onToggle={toggle} />
         <Problems plan={plan} blameSync={blameSync} />
         {/* No mode radios: `merge` into a deck made one line ago is the only sensible mode —

@@ -39,6 +39,55 @@ export interface Picks {
 export const NO_PICKS: Picks = { attacks: [], aiming: null, blocks: [], chosen: null };
 
 /**
+ * **The picks a new view keeps** (issue #1591). Every answer is a new view, but not every new
+ * view is a new declaration: a Stop toggled, the Sandbox pill, a sandbox move or — in a lobby —
+ * somebody else's stop each answer with the same declaration still being asked for. The picks
+ * survive those, each kept only while the new offer still allows it (a creature tapped or moved
+ * in the sandbox drops out, and only it). Anything else — another stage, turn or active player —
+ * is a declaration of its own, and starts with nothing picked.
+ */
+export function carryPicks(
+  picks: Picks,
+  before: PlaytestView | null,
+  after: PlaytestView | null,
+): Picks {
+  if (picks === NO_PICKS || before === null || after === null) return NO_PICKS;
+  if (
+    after.stage !== before.stage ||
+    after.turn !== before.turn ||
+    after.active !== before.active
+  ) {
+    return NO_PICKS;
+  }
+  if (after.stage === "attack") {
+    const offer = new Map((after.attack?.attackers ?? []).map((a) => [a.id, a]));
+    const attacks = picks.attacks.filter(({ attacker, target, player }) => {
+      const can = offer.get(attacker);
+      if (can === undefined) return false;
+      if (target !== null) return can.targets.includes(target);
+      return player !== null && can.players.includes(player);
+    });
+    const aim = picks.aiming === null ? undefined : offer.get(picks.aiming);
+    const aiming =
+      aim !== undefined &&
+      aim.targets.length + aim.players.length > 1 &&
+      attacks.some((a) => a.attacker === aim.id)
+        ? aim.id
+        : null;
+    if (attacks.length === picks.attacks.length && aiming === picks.aiming) return picks;
+    return attacks.length === 0 && aiming === null ? NO_PICKS : { ...NO_PICKS, attacks, aiming };
+  }
+  if (after.stage === "block") {
+    const offer = new Map((after.block?.blockers ?? []).map((b) => [b.id, b.attackers]));
+    const blocks = picks.blocks.filter((b) => offer.get(b.blocker)?.includes(b.attacker) ?? false);
+    const chosen = picks.chosen !== null && offer.has(picks.chosen) ? picks.chosen : null;
+    if (blocks.length === picks.blocks.length && chosen === picks.chosen) return picks;
+    return blocks.length === 0 && chosen === null ? NO_PICKS : { ...NO_PICKS, blocks, chosen };
+  }
+  return NO_PICKS;
+}
+
+/**
  * One of the reader's creatures clicked in the declare-attackers step.
  *
  * - **Not attacking**: it attacks — the first player it can (in a duel, the opponent), else its

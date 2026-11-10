@@ -59,6 +59,10 @@ The Notes band (`DeckNotesPanel.tsx`) renders markdown notes attached to decks a
 3. **Lazy Loading Invariant**:
    - `NoteEditor` must strictly be loaded via `React.lazy`.
    - `DeckNotesPanel.test.tsx` asserts via static analysis that no static import of `NoteEditor` exists in the feature bundle. This ensures decks without open notes do not load heavy markdown editor bundles.
+4. **Nothing typed is lost without a question (issue #1549)**:
+   - `NoteEditorDialog` routes every way out — Escape, the ✕, the scrim, Cancel — through one `requestClose`. A draft with words to lose (a create with any words; an edit whose body differs from the one it opened on) turns the footer into *Discard …?* with the caret on the question; a second Escape, ✕ or scrim press means *keep writing*, and only **Discard** throws text away.
+   - Save does not close the dialog. The host (`NotesBand`, and the phone face's `DeckRail`) closes it from the write's **success** and, on a refusal, keeps it open with the text and passes the reason as `error`. `NotesBand` guards both answers with `savingRef` so a late one never acts on a dialog opened since.
+   - The editor's link row is an `"inner"` `useDismissOnEscape` layer while it is open, so Escape in **Link address** puts the row away instead of reaching the dialog's capture-phase listener first.
 
 ---
 

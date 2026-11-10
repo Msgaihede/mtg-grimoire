@@ -210,6 +210,9 @@ export function QuickSearch() {
           setOpen(false);
           setActiveKey(null);
           heldEnter.current = null;
+          // The session `Ctrl+K` started ends here, so its origin does too (issue #1563): the
+          // next one may begin with a click, and Escape then has nowhere to hand the caret back.
+          returnRef.current = null;
         }
       }}
     >
@@ -272,8 +275,12 @@ export function QuickSearch() {
         {open && (
           // The frame centres the panel under the field and carries the translate, so the panel's
           // own motion transform (the popup preset's scale) has a box of its own to animate.
+          // A press anywhere on it keeps the caret in the field (issue #1563) — a group heading
+          // or the list's padding as much as a row — or the field blurs and the root's blur
+          // handler reads the press as leaving.
           <div
             key="panel"
+            onMouseDown={(e) => e.preventDefault()}
             className="absolute top-full left-1/2 mt-1 w-[clamp(22rem,42vw,40rem)] -translate-x-1/2"
           >
             <PopupPanel className="w-full origin-top rounded-lg border border-border bg-surface text-text shadow-lg">
@@ -349,8 +356,8 @@ function Option({
       id={id}
       role="option"
       aria-selected={active}
-      // The caret stays in the field: a press on a row must not blur it before the click lands.
-      onMouseDown={(e) => e.preventDefault()}
+      // The panel's own mousedown keeps the caret in the field, so the click lands on a row the
+      // field never left.
       onClick={onChoose}
       onMouseMove={onHover}
       className={cn(
