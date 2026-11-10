@@ -1396,3 +1396,72 @@ describe("the import dialog's toast", () => {
     );
   });
 });
+
+/**
+ * Issue #1552: a file the parser refused as a whole — or a list whose every line it refused —
+ * reads zero lines, so Preview is shut and the preview step's problem list, the one other place
+ * a `ParseIssue` is drawn, is out of reach. The source step says the parser's sentence instead.
+ */
+describe("a list with nothing to preview", () => {
+  it.each([
+    [
+      "a Cardmarket export",
+      "idProduct;groupCount;price;idLanguage;condition;isFoil;isSigned;isAltered;isPlayset\n" +
+        "743311;1;;1;2;1;;;\n",
+      "this looks like a spreadsheet, but no column names the card",
+    ],
+    [
+      "a Cockatrice .cod",
+      '<?xml version="1.0"?>\n<cockatrice_deck version="1">\n</cockatrice_deck>',
+      "this is an XML file, but not an MTGO .dek deck",
+    ],
+    ["a list of refused lines", "0 Shock", "Quantity can't be zero."],
+  ])("says why it will not preview %s", async (_, text, reason) => {
+    importPickFile.mockResolvedValue({ text, encoding: "utf-8" });
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.getByText(/0 lines · 0 cards · 1 unreadable line/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeDisabled();
+    // It describes the box, so a screen reader in the box hears why too — and it is not an
+    // alert, because it follows the text as it is typed.
+    expect(screen.getByLabelText("Card list")).toHaveAccessibleDescription(
+      expect.stringContaining(reason),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /** With any line read the preview is one press away and quotes every issue itself. */
+  it("says nothing on the source step once a line was read", async () => {
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(screen.getByLabelText("Card list"));
+    await userEvent.paste("0 Shock\n1 Sol Ring");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled());
+    expect(screen.getByText(/1 line · 1 card · 1 unreadable line/)).toBeInTheDocument();
+    expect(screen.queryByText("Quantity can't be zero.")).not.toBeInTheDocument();
+  });
+
+  it("goes as soon as the reader fixes the line", async () => {
+    wrap(<Harness />);
+    await panel();
+    const box = screen.getByLabelText("Card list");
+
+    await userEvent.click(box);
+    await userEvent.paste("0 Shock");
+    expect(await screen.findByText("Quantity can't be zero.")).toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.paste("1 Shock");
+
+    await waitFor(() =>
+      expect(screen.queryByText("Quantity can't be zero.")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled();
+  });
+});

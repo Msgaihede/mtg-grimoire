@@ -179,6 +179,36 @@ describe("a deck's import, on the phone", () => {
     await user.type(box, "!");
     expect(within(sheet).queryByText(/read as Windows-1252/)).toBeNull();
   });
+  /** Issue #1552: with nothing read Preview is shut, so the parser's sentence is said here. */
+  it("says why a refused file has nothing to preview", async () => {
+    const user = userEvent.setup();
+    renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
+    await user.click(
+      await screen.findByRole("button", { name: "Import cards into this deck" }, SETTLE),
+    );
+    const sheet = await screen.findByRole("dialog", { name: /Import cards/ }, SETTLE);
+
+    await user.upload(
+      within(sheet).getByLabelText("Card list file"),
+      // Cardmarket's stock export, which names no card at all.
+      new File(
+        ["idProduct;groupCount;price;idLanguage;condition;isFoil\n743311;1;;1;2;1\n"],
+        "stock.csv",
+        { type: "text/csv" },
+      ),
+    );
+
+    const reason = "this looks like a spreadsheet, but no column names the card";
+    expect(await within(sheet).findByText(reason, undefined, SETTLE)).toBeInTheDocument();
+    expect(within(sheet).getByText("0 lines · 0 cards · 1 unreadable line")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Preview" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      within(sheet).getByRole("textbox", { name: "Paste a decklist" }),
+    ).toHaveAccessibleDescription(expect.stringContaining(reason));
+  });
 });
 
 describe("a deck's export, on the phone", () => {

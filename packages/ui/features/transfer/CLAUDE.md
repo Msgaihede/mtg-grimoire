@@ -35,6 +35,7 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
   - Comment safety: `//` is only treated as a comment at column 0 (double-faced cards contain `//` in card names).
   - Line endings: Accepts CRLF, lone LF, and lone CR.
   - Non-dropping rule: Unparseable lines generate `ParseIssue` objects and are presented to the user; lines are never silently omitted.
+  - Nothing read, still said (issue #1552): with zero lines Preview is shut, so the preview step's problem lists are out of reach. `shared/SourceRefusal` draws the issues on the **source** step of both faces (`ImportDialog`, the phone's `ImportSheet`) — only when `lines` is empty, as the box's description, never as an alert.
 - **Heading lookahead (`namesASection`)**: The only lookahead in the parser. Distinguishes category headings from card names by requiring candidate lines to have no quantity, set hint, or brackets, followed by a counted line.
 - **Label parsing**: Caret groups (`^Label,#color^`) split colors at the last comma. Labels are deduplicated by `labelNameKey`, matched against existing user labels, and presented in the preview step.
 - **CSV format detection (`csv.ts`)**: File-level judgement made on the header row (requires ≥2 recognized headers including Name, plus matching column counts). Delimiter auto-detected (`,`, `;`, `\t`). Escaped formulas unescaped; physical line indices tracked for multiline cells.
