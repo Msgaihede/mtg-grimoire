@@ -83,6 +83,22 @@ by ending the flow and drawing `EXPIRED_NOTE`, and handles `idle` **not at all**
 because `idle` is also what the backend answers in the instant after a cancel, and reading it as
 the timeout would tell a reader who had just pressed Cancel that their code ran out.
 
+**The flow outlives the panel, because the attempt does (issue #1594).** `sync_pairing_poll` is the
+only thing that advances the ceremony and its only caller is the panel's query, which runs while
+the panel's `Flow` says `offer` or `join`. `SettingsPage` unmounts the panel on every group or
+search change and the shell on every view change, so a reader who stepped away mid-pairing used to
+come back to the idle buttons over a backend still holding the attempt: the offering side had no
+*Codes match* left to press, and the joining side never polled again — it never fetched the sealed
+key while A toasted *Device paired* and listed it. The panel now keeps an `offer`/`join` flow in
+window-lifetime module memory (`lib/viewMemory`, key `settings.sync.pairing`) and resumes it on
+mount, so the poll picks up where it stopped: an attempt the other side finished answers `complete`
+and toasts, one that ran out of time answers `expired` and says so. **It is kept rather than rebuilt
+from a poll on mount** because the poll answers neither which half this device plays nor the
+invite an offer still has to show. `reading`/`scanning` are not kept (nothing reached the backend),
+and a Cancel writes `idle` through even if it lands after the reader left. The attempt still only
+advances while the panel is open: a joiner who never comes back within the ten minutes is told
+`expired` when they do.
+
 The four layers behind it, and the boundary between them is that only the last two touch SQLite:
 
 - **`sync_pair::crypto`** — X25519, HKDF-SHA256, XChaCha20-Poly1305, the six digits, and (since

@@ -83,7 +83,7 @@ import { parseEntryTags } from "@/features/entryTags/entryTags";
 import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { sweep } from "@/features/transfer/export/scope";
 import { MENU_CONDITION } from "@/lib/conditions";
-import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import { listedFinish, parseFinishes, recordableFinishes, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
@@ -383,10 +383,41 @@ function stepperRows(
   list: StepperList,
   { cardId, oracleId }: StepPress,
 ): { id: number }[] {
-  const rows = queryClient.getQueryData<{ id: number; cardId: string }[]>(
-    stepperRowsKey(list, oracleId),
+  const rows = queryClient.getQueryData<PrintingRow[]>(stepperRowsKey(list, oracleId));
+  return rowsOfPrinting(rows, cardId);
+}
+
+/** What {@link rowsOfPrinting} reads off a collection or wishlist row. `artCardId` is the
+ *  wishlist's alone, so a collection row matches on `cardId` and nothing else. */
+interface PrintingRow {
+  id: number;
+  cardId: string | null;
+  artCardId?: string | null;
+}
+
+/**
+ * The rows the modal's stepper and stack tags address for the printing it is open on — **a row
+ * of that printing, or an any-printing wish drawn as it** (issue #1560).
+ *
+ * An any-printing wish has no `cardId` of its own: the wall opens it as its `artCardId`, the
+ * newest printing of its oracle card (`WishlistGrid`'s `toTile`). Matched on `cardId` alone, the
+ * modal found no row behind that tile — the stepper read 0 beside a rail saying `Wished 3`, and
+ * `+` added a second, pinned wish at the root next to the untouched one.
+ *
+ * **On `artCardId` rather than on the oracle**, because a wish of another printing of the same
+ * card is a tile of its own: matching every `cardId === null` row of the oracle would put the
+ * any-printing wish behind that printing's stepper too, and a pinned wish opened there would
+ * meet the many-rows refusal for a wish it is not. A pinned wish and an any-printing one both
+ * drawn as this printing are two rows, and the modal says so rather than choosing — the same
+ * answer as one printing wished in two folders.
+ */
+function rowsOfPrinting<Row extends PrintingRow>(
+  rows: readonly Row[] | undefined,
+  cardId: string,
+): Row[] {
+  return (rows ?? []).filter(
+    (row) => row.cardId === cardId || (row.cardId === null && row.artCardId === cardId),
   );
-  return (rows ?? []).filter((row) => row.cardId === cardId);
 }
 
 /**
@@ -515,6 +546,27 @@ function useRecentCardRecorder(cardId: string | null): void {
         () => undefined,
       );
   }, [cardId, queryClient]);
+}
+
+/**
+ * A counter that moves on every render whose `signal` differs from the last one — the shape
+ * `DialogProps.caretPulse` asks for, out of any number of things that can each drop the caret.
+ *
+ * **A count of changes rather than arithmetic over the inputs** (issue #1559). The pulse used to be
+ * `returnDepth * 2 + (room ? 1 : 0)`, and every input folded in by hand is another chance for
+ * two changes landing in one render to sum to nothing — a removal that steps the reader on moves
+ * the depth *and* the card, an undo moves them in opposite directions. Comparing a joined key
+ * re-arms on any change at all, so nothing has to be weighed against anything else.
+ *
+ * Written during render, as `shown` is, so the pulse moves in the same commit as whatever
+ * unmounted the control under the caret — an effect would leave the settle armed a render late.
+ */
+function useChangePulse(signal: string): number {
+  const [seen, setSeen] = useState({ signal, pulse: 0 });
+  if (seen.signal === signal) return seen.pulse;
+  const next = { signal, pulse: seen.pulse + 1 };
+  setSeen(next);
+  return next.pulse;
 }
 
 export function CardDetailModal() {
@@ -673,6 +725,9 @@ export function CardDetailModal() {
   // rather than a pair of nulls, because that is what tells the shell to leave its scrim exactly
   // as every other dialog draws it.
   const room = useFlankRoom();
+  // What `Dialog`'s settle is re-armed on — see `caretPulse` below, where each of the three is
+  // argued. JSON rather than a hand-picked separator because `shown` is a free string.
+  const caretPulse = useChangePulse(JSON.stringify([shown, returnDepth, room]));
   const flanks: DialogFlanks | undefined = room && pair !== null ? pair : undefined;
   const chevrons: ReactNode =
     !room && pair !== null ? (
@@ -765,9 +820,21 @@ export function CardDetailModal() {
       // `activeElement` on `<body>` and ArrowRight walking nothing. It was unreachable while the
       // crossing sat at 900, under the window's floor. `room` is folded into the same number
       // rather than given a prop of its own because it is the same signal — the host saying a
-      // control may have just vanished — and `2n + bit` keeps the two from cancelling when a
-      // removal and a resize land in one render.
-      caretPulse={returnDepth * 2 + (room ? 1 : 0)}
+      // control may have just vanished.
+      //
+      // **And a fifth, which is every step (issue #1559): the card on screen changing.** A step
+      // unmounts whatever held the caret — the whole grid is gated on `card !== null`, which it
+      // is while the next `card_detail` loads, and `CardModalArt` is keyed on the card id — so a
+      // reader who had clicked `View as foil`, `Flip card`, the stepper's `+` or a rail entry got
+      // one ArrowRight and then nothing, and a press on a row of the Printings list (which turns
+      // that row from a `<button>` into a `<span>`) got none. Measured in this suite as
+      // `activeElement === BODY` with the Next chevron still enabled. `shown` is the card the
+      // panel draws, so a chevron, an arrow, a printing picked from the list or from the printings
+      // modal, and a removal's step on are all one signal.
+      //
+      // All three are folded by {@link useChangePulse}, which counts changes instead of adding
+      // the inputs up, so no two of them landing in one render can cancel.
+      caretPulse={caretPulse}
       // **Two different functions, and the difference is the caret.** Escape and the ✕ are the
       // reader saying "put me back", so they go through the body's own close and whatever opened
       // the card gets the caret. A press on the **scrim** is not: they have already moved the
@@ -888,6 +955,21 @@ function Body({
    */
   const paneFinish = useAppStore((s) => s.paneFinish);
   /**
+   * {@link paneFinish} **as a fact about the printing now open** — the seed where this printing
+   * was made in that finish, and `null` where it was not (issue #1561).
+   *
+   * `viewPrinting` keeps `paneFinish` across a step to another printing on purpose: it is a view
+   * seed, and a foil tile browsed to another printing that also has a foil should still open on
+   * the foil. But three readers below treat it as *this copy's* finish — the rail's link and the
+   * art's menu ({@link railFinish}), and which rows `Edit` offers ({@link editableRows}) — and a
+   * foil tile stepped to a nonfoil-only printing then added a foil copy of cardboard that does not
+   * exist, opened `?Printing=Foil`, and hid `Edit` from the reader's own plain copy. Every reader
+   * of the seed as a fact goes through this; only the copy being edited reads the raw field,
+   * because `editCopy` writes *that copy's* finish there and a copy's move refuses a printing
+   * without it (`finishRefusal`).
+   */
+  const openedFinish = listedFinish(paneFinish, card?.finishes ?? null);
+  /**
    * The finish the reader asked to **look at**, or `null` while they have asked for nothing.
    *
    * `View as foil` is `CardModalArt`'s own state and the picture changes there; this is the host
@@ -949,7 +1031,14 @@ function Body({
    * one**, which is the same distinction stated from the other end: the press converts to
    * `"nonfoil"` above, so it beats a foil tile's `paneFinish` instead of falling through to it.
    */
-  const railFinish = viewedFinish ?? paneFinish ?? scope.deck?.finish ?? null;
+  const railFinish = viewedFinish ?? openedFinish ?? scope.deck?.finish ?? null;
+  /**
+   * The finish a press that adds a copy files — `Add to collection` and the owned stepper's first
+   * `+`, which are the same press as the art menu's `Add to → Collection` and so file the same
+   * finish: {@link railFinish}, the copy on screen, else the most ordinary finish the printing is
+   * actually sold in. Never an assumed `nonfoil` — a foil+etched printing has none (issue #1561).
+   */
+  const collectFinish: Finish = railFinish ?? recordableFinishes(card?.finishes ?? null)[0];
   const { deps } = useCardMenuDeps();
   const addToDeck = useOptionalAddCardToDeck();
 
@@ -977,6 +1066,10 @@ function Body({
    * whole walk — so per-card state is reset during render here instead.
    */
   const [melded, setMelded] = useState<MeldRelation | null>(null);
+  /** What a write this file makes was refused with, or `null`. Superseded by the next press,
+   *  which is every banner's rule on these pages — and by the next card, below: a refusal is
+   *  about the card it was pressed on, and the walk does not remount this body. */
+  const [refusal, setRefusal] = useState<string | null>(null);
   if (shownFace !== cardId) {
     setShownFace(cardId);
     setFace(0);
@@ -985,11 +1078,8 @@ function Body({
     // toggle from the printing that arrived, so a finish carried across the step would be this
     // host answering for a press made about a different piece of cardboard.
     setViewedFinish(null);
+    setRefusal(null);
   }
-
-  /** What a write this file makes was refused with, or `null`. Superseded by the next press,
-   *  which is every banner's rule on these pages. */
-  const [refusal, setRefusal] = useState<string | null>(null);
 
   const openerRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -1189,7 +1279,7 @@ function Body({
     [owned.data, cardId],
   );
   const wishedRows = useMemo(
-    () => (wished.data ?? []).filter((row) => row.cardId === cardId),
+    () => rowsOfPrinting(wished.data, cardId),
     [wished.data, cardId],
   );
 
@@ -1198,14 +1288,16 @@ function Body({
    *
    * A foil tile and a regular tile of one printing are two tiles on the wall, so a press on the
    * foil one is about the foil copies and must not offer to edit the regular ones. A card opened
-   * from the table names no finish (`paneFinish` is `null`), and then every row of the printing
-   * is a candidate. More than one is common rather than rare — the folder is part of the grain,
-   * so the same printing in two drawers is two rows — which is why `Edit` becomes a picker then
-   * rather than choosing for the reader.
+   * from the table names no finish ({@link openedFinish} is `null`), and then every row of the
+   * printing is a candidate — as is a tile's finish this printing was never made in, which is a
+   * seed carried over from another printing rather than a statement about this one (issue
+   * #1561). More than one is common rather than rare — the folder is part of the grain, so the
+   * same printing in two drawers is two rows — which is why `Edit` becomes a picker then rather
+   * than choosing for the reader.
    */
   const editableRows = useMemo(
-    () => ownedRows.filter((row) => paneFinish === null || row.finish === paneFinish),
-    [ownedRows, paneFinish],
+    () => ownedRows.filter((row) => openedFinish === null || row.finish === openedFinish),
+    [ownedRows, openedFinish],
   );
   /**
    * The row being edited, or `null` — looked up by id alone and not among {@link ownedRows}, so a
@@ -1468,8 +1560,7 @@ function Body({
         : { onSuccess: () => leaveRemovedCard(departure.leaving, departure.to) };
     const press = { cardId, oracleId, quantity: next };
     if (scope.quantity === "owned") {
-      const finish = soleFinish(card?.finishes ?? null) ?? "nonfoil";
-      setOwned.mutate({ ...press, finish }, moveOn);
+      setOwned.mutate({ ...press, finish: collectFinish }, moveOn);
     } else setWished.mutate(press, moveOn);
   };
 
@@ -1964,7 +2055,9 @@ function Body({
                 // The other half of that seed, and the half a deck row cannot supply: a
                 // collection tile that *is* a foil, or the deck editor's search panel, writes
                 // `paneFinish` when it opens the card. Without it a foil tile opened plain.
-                openedAs={paneFinish}
+                // Through `openedFinish`, so a seed the open printing was never made in seeds
+                // nothing rather than the toggle (issue #1561).
+                openedAs={openedFinish}
                 // **The press is a view change everywhere and a write only where there is a row**,
                 // which is exactly what the column's own `onToggleFoil` doc says it hands over —
                 // and this handler used to act on the second half alone. So on the collection and
@@ -2334,10 +2427,10 @@ function Body({
                   target !== null &&
                   deps.addToCollection(
                     target,
-                    // What the cardboard *is* where the printing has one answer, and the plain copy
-                    // otherwise. `soleFinish` speaks only for a printing with a single finish, which
-                    // is the one case a single press can be sure about.
-                    soleFinish(card?.finishes ?? null) ?? "nonfoil",
+                    // The copy on screen, else the most ordinary finish this printing is sold in —
+                    // the same finish the art menu's `Add to → Collection` files. See
+                    // `collectFinish`.
+                    collectFinish,
                     null,
                   )
                 }

@@ -136,6 +136,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { PRESS, PRESS_STILL } from "@/lib/motion";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
 /** The three heading levels the dialect has. Written once: the node is configured with it and
@@ -1766,6 +1767,23 @@ export default function NoteEditor({
     editor.commands.focus("end");
     onAppendHandledRef.current?.();
   }, [editor, appendRequest, checklist]);
+
+  /**
+   * **Escape puts the link row away, and nothing else** (issue #1549). Every host draws this
+   * editor inside a `Dialog`, whose Escape is an `"inner"` layer in the window's capture phase —
+   * before any field handler — so an `onKeyDown` on the address box never saw the press, and
+   * backing out of the row closed the whole dialog with the note in it. Registered as a layer of
+   * its own, opened after the dialog, it is on top of the stack and takes the first press; the
+   * dialog gets the next. The caret goes back to the surface, where the reader was writing.
+   */
+  useDismissOnEscape({
+    layer: "inner",
+    enabled: linkDraft !== null,
+    onDismiss: () => {
+      setLinkDraft(null);
+      if (!editor.isDestroyed) editor.commands.focus();
+    },
+  });
 
   function openLink() {
     setLinkDraft(marks.href);

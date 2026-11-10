@@ -3027,10 +3027,7 @@ export function CollectionPage() {
                 setImporting({
                   // The drawer on screen, when it is one of the reader's own; a deck's group and
                   // `Recently removed` are no place for a file to land.
-                  folderId:
-                    folderId !== null && userFolders.some((folder) => folder.id === folderId)
-                      ? folderId
-                      : null,
+                  folderId: readersOwnLevel(folderId) ? folderId : null,
                   fromMenu: false,
                 })
               }
@@ -3529,9 +3526,12 @@ export function CollectionPage() {
         >
           <CollectionSearchPanel
             // The level the reader is standing in — a `+` files there, which is the shelf at the
-            // top of the wall. Written out rather than left `undefined`: absent and `null` differ on
-            // the wire, and only `null` says *the root*.
-            folderId={folderId}
+            // top of the wall — **when it is one of the reader's own**. A deck's group and
+            // `Recently removed` are no place for a copy to land (`collection_add` refuses every
+            // non-`user` folder), so standing in either files at the root, Import's rule above
+            // (issue #1576). Written out rather than left `undefined`: absent and `null` differ
+            // on the wire, and only `null` says *the root*.
+            folderId={readersOwnLevel(folderId) ? folderId : null}
             // The reader's own tree, already built for the wall below. Deck groups and
             // `Recently removed` are not in it and must not be: `collection_add` files into a
             // folder the same way `set_entry_folder` moves into one, and claiming a deck's group

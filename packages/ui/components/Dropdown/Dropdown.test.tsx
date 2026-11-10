@@ -540,6 +540,21 @@ describe("Dropdown type-ahead", () => {
     // Filtered by "s", substring, case-insensitive: only Standard has one.
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Standard"]);
   });
+
+  // Issue #1574: Space is the button's own key for opening a picker, not a character to search.
+  it("opens a searchable dropdown on Space with nothing seeded in its search box", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="modern" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{Escape}");
+    await user.keyboard(" ");
+    const box = screen.getByRole("combobox");
+    expect(box).toHaveFocus();
+    expect(box).toHaveValue("");
+    expect(screen.getAllByRole("option")).toHaveLength(FORMATS.length);
+  });
 });
 
 describe("MultiDropdown", () => {

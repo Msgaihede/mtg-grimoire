@@ -403,6 +403,76 @@ describe("HomePage", () => {
     expect(boxFor(container, "a").style.gridColumn).toBe("11 / span 2");
   });
 
+  /**
+   * **A change that is not a move leaves the stored geometry alone in a narrowed window** (issue
+   * #1581). The previous case's promise — narrow, widen, the page comes back — has to survive the
+   * reader doing something in between: a settings press, a removal or an Add is a change to one
+   * widget, and writing the re-flowed arrangement with it would make the narrow grid's positions the
+   * reader's own. At twelve columns `a` sits at x: 10 and `b` at x: 6; at nine, `normalise` draws
+   * them at 7 and 0.
+   */
+  describe("in a narrowed window", () => {
+    const WIDE = () =>
+      layoutOf(
+        widget({ id: "a", kind: "future-a", x: 10, w: 2 }),
+        widget({ id: "b", kind: "future-b", x: 6, w: 4 }),
+      );
+    const geometry = () => stored()?.widgets.map(({ id, x, y, w, h }) => [id, x, y, w, h]);
+
+    it("writes a settings change onto the stored arrangement, not the one drawn", async () => {
+      const user = userEvent.setup();
+      const { container } = mount(WIDE(), 1400);
+      resizeCanvas(1032);
+      expect(boxFor(container, "a").style.gridColumn).toBe("8 / span 2");
+
+      await customize(user);
+      await user.click(screen.getByRole("button", { name: `Settings for ${titleOf("future-a")}` }));
+      await user.click(await screen.findByRole("button", { name: "Compact" }));
+
+      await waitFor(() => expect(storedWidget("a")?.config).toEqual({ density: "compact" }));
+      expect(geometry()).toEqual([
+        ["a", 10, 0, 2, 2],
+        ["b", 6, 0, 4, 2],
+      ]);
+      resizeCanvas(1400);
+      expect(boxFor(container, "a").style.gridColumn).toBe("11 / span 2");
+    });
+
+    it("writes a removal onto the stored arrangement, not the one drawn", async () => {
+      const user = userEvent.setup();
+      mount(WIDE(), 1400);
+      resizeCanvas(1032);
+
+      await customize(user);
+      await user.click(screen.getByRole("button", { name: `Remove ${titleOf("future-b")}` }));
+      const question = await screen.findByRole("dialog", { name: `Remove ${titleOf("future-b")}?` });
+      await user.click(within(question).getByRole("button", { name: "Remove" }));
+
+      await waitFor(() => expect(storedWidget("b")).toBeUndefined());
+      expect(geometry()).toEqual([["a", 10, 0, 2, 2]]);
+    });
+
+    it("adds at the first free cell on screen and leaves every other widget where it was stored", async () => {
+      const user = userEvent.setup();
+      mount(WIDE(), 1400);
+      resizeCanvas(1032);
+
+      await customize(user);
+      await user.click(screen.getByRole("button", { name: "Add widget" }));
+      const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+      await user.click(within(dialog).getByRole("button", { name: "Add Folders" }));
+
+      // Drawn, `b` takes columns 0–3 and `a` 7–8 of the top two rows, so Folders' 4×2 fits first on
+      // row 2 — of the grid on screen, not of the stored one, where it would have gone beside `b`.
+      await waitFor(() => expect(storedWidget("folders")).toBeDefined());
+      expect(geometry()).toEqual([
+        ["a", 10, 0, 2, 2],
+        ["b", 6, 0, 4, 2],
+        ["folders", 0, 2, 4, 2],
+      ]);
+    });
+  });
+
   it("reveals the hint, Add widget and Reset on Customize, and says Done while it is on", async () => {
     const user = userEvent.setup();
     mount(layoutOf(A, widget({ id: "summary", kind: "summary", x: 2, w: 4 })));

@@ -1,9 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useCamera, useCameraDevices } from "./useCamera";
+import { cameraPress, useCamera, useCameraDevices } from "./useCamera";
 
-function mediaDevices(getUserMedia: (constraints?: MediaStreamConstraints) => Promise<MediaStream>) {
+function mediaDevices(
+  getUserMedia: (constraints?: MediaStreamConstraints) => Promise<MediaStream>,
+) {
   Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
 }
 afterEach(() => {
@@ -77,7 +79,12 @@ describe("useCamera", () => {
     const ref = { current: readyVideo(1280, 720) };
     const { result } = renderHook(() => useCamera(ref, null));
     await waitFor(() =>
-      expect(result.current).toEqual({ kind: "live", width: 1280, height: 720, deviceId: "cam-brio" }),
+      expect(result.current).toEqual({
+        kind: "live",
+        width: 1280,
+        height: 720,
+        deviceId: "cam-brio",
+      }),
     );
   });
 
@@ -208,6 +215,35 @@ describe("useCamera", () => {
     expect(stopB).not.toHaveBeenCalled();
   });
 
+  /** Issue #1554: the page's reopen of a stored camera that came back after the fallback. */
+  it("reopens the same choice when the attempt moves, stopping the old stream first", async () => {
+    const stops = [vi.fn(), vi.fn()];
+    let n = 0;
+    const getUserMedia = vi.fn(() => {
+      const i = n++;
+      if (i === 1) expect(stops[0]).toHaveBeenCalledTimes(1);
+      return Promise.resolve(stream(stops[i], "cam-a"));
+    });
+    mediaDevices(getUserMedia);
+    const ref = { current: readyVideo() };
+    const { result, rerender } = renderHook(
+      ({ attempt }: { attempt: number }) => useCamera(ref, "cam-a", attempt),
+      { initialProps: { attempt: 0 } },
+    );
+    await waitFor(() => expect(result.current).toMatchObject({ kind: "live" }));
+
+    rerender({ attempt: 0 });
+    await act(async () => {});
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    rerender({ attempt: 1 });
+    expect(result.current).toEqual({ kind: "starting" });
+    await waitFor(() => expect(result.current).toMatchObject({ kind: "live" }));
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(getUserMedia.mock.calls[1]).toEqual(getUserMedia.mock.calls[0]);
+    expect(stops[1]).not.toHaveBeenCalled();
+  });
+
   it("waits for loadedmetadata when play() resolves before the dimensions do", async () => {
     mediaDevices(() => Promise.resolve(stream(vi.fn(), "cam-a")));
     const video = document.createElement("video");
@@ -245,7 +281,12 @@ describe("useCamera", () => {
     const ref = { current: video };
     const { result } = renderHook(() => useCamera(ref, null));
     await waitFor(() =>
-      expect(result.current).toEqual({ kind: "live", width: 1920, height: 1080, deviceId: "cam-a" }),
+      expect(result.current).toEqual({
+        kind: "live",
+        width: 1920,
+        height: 1080,
+        deviceId: "cam-a",
+      }),
     );
   });
 });
@@ -261,6 +302,25 @@ function enumerable(enumerateDevices: () => Promise<MediaDeviceInfo[]>): EventTa
   Object.defineProperty(navigator, "mediaDevices", { value: target, configurable: true });
   return target;
 }
+
+describe("cameraPress", () => {
+  it("does nothing on the camera that is open, stored or not", () => {
+    expect(cameraPress("brio", "brio", "brio")).toBe("nothing");
+    // A fresh install: nothing stored, the default came up as the Brio (issue #1554 (b)).
+    expect(cameraPress("brio", "brio", null)).toBe("nothing");
+  });
+
+  it("reopens the stored camera when the default is open in its place", () => {
+    // Issue #1554 (a): the stored camera was missing when the view opened, and is back.
+    expect(cameraPress("old", "brio", "old")).toBe("reopen");
+  });
+
+  it("stores any other camera", () => {
+    expect(cameraPress("c920", "brio", "brio")).toBe("store");
+    expect(cameraPress("c920", "brio", null)).toBe("store");
+    expect(cameraPress("c920", "brio", "old")).toBe("store");
+  });
+});
 
 describe("useCameraDevices", () => {
   it("lists the video inputs, numbering the ones the browser has not named yet", async () => {
@@ -283,7 +343,9 @@ describe("useCameraDevices", () => {
   });
 
   it("leaves out a camera with no id, which nothing could ask for", async () => {
-    enumerable(() => Promise.resolve([device("videoinput", "", ""), device("videoinput", "b", "BRIO")]));
+    enumerable(() =>
+      Promise.resolve([device("videoinput", "", ""), device("videoinput", "b", "BRIO")]),
+    );
     const { result } = renderHook(() => useCameraDevices(null));
     await waitFor(() => expect(result.current).toEqual([{ deviceId: "b", label: "BRIO" }]));
   });
@@ -303,7 +365,9 @@ describe("useCameraDevices", () => {
     await act(async () => {
       target.dispatchEvent(new Event("devicechange"));
     });
-    await waitFor(() => expect(result.current.map((c) => c.label)).toEqual(["Integrated Camera", "Logitech BRIO"]));
+    await waitFor(() =>
+      expect(result.current.map((c) => c.label)).toEqual(["Integrated Camera", "Logitech BRIO"]),
+    );
 
     unmount();
     target.dispatchEvent(new Event("devicechange"));
@@ -321,7 +385,9 @@ describe("useCameraDevices", () => {
     await waitFor(() => expect(result.current).toEqual([{ deviceId: "a", label: "Camera 1" }]));
 
     rerender({ key: "a" });
-    await waitFor(() => expect(result.current).toEqual([{ deviceId: "a", label: "Logitech BRIO" }]));
+    await waitFor(() =>
+      expect(result.current).toEqual([{ deviceId: "a", label: "Logitech BRIO" }]),
+    );
     expect(enumerate).toHaveBeenCalledTimes(2);
   });
 

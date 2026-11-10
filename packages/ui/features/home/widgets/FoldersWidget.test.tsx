@@ -323,6 +323,33 @@ describe("FoldersWidget", () => {
   });
 
   /**
+   * **A pin set whose every folder has been deleted is no pin set** (issue #1580): the card falls
+   * back to the top level, as it does with nothing pinned — where it used to say there were no
+   * collection folders at all over a cabinet that still had six.
+   */
+  it("falls back to the top level when every pinned folder is gone", () => {
+    draw({ cabinets: "collection", collectionFolderIds: [999, 998] });
+
+    expect(screen.queryByText(/No collection folders yet/)).toBeNull();
+    expect(rows()).toEqual([
+      "Binder, collection folder, 12 cards, $30.00",
+      "Trades, collection folder, 0 cards",
+      "Blue Tempo, deck folder, 2 cards, not priced",
+      "Recently removed, removed cards, 0 cards",
+    ]);
+  });
+
+  it("falls back to the wishlist's top level when every pinned wishlist folder is gone", () => {
+    draw({ cabinets: "wishlist", wishlistFolderIds: [999] });
+
+    expect(screen.queryByText(/No wishlist folders yet/)).toBeNull();
+    expect(rows()).toEqual([
+      "Buy soon, wishlist folder, 3 cards, $12.50, 1 unpriced",
+      "Later, wishlist folder, 0 cards",
+    ]);
+  });
+
+  /**
    * **Two decks' pinned `Tokens` folders are two rows a reader can tell apart** — each named by
    * the deck folder it sits in, on the row and in its spoken name, the settings picker's own
    * spelling. Named by itself, each would be a row reading `Tokens`, twice.
@@ -590,6 +617,61 @@ describe("FoldersWidget", () => {
       await user.click(screen.getByRole("option", { name: "Binder" }));
 
       expect(onConfig).toHaveBeenCalledWith({ collectionFolderIds: [4] });
+    });
+
+    /**
+     * A deleted folder is not among the options, so it is neither counted nor ticked (issue
+     * #1580): the trigger said `1 folder` over a list with nothing ticked, and the widget could
+     * never get back to `Automatic`.
+     */
+    it("reads a pin set whose folders are all gone as Automatic", () => {
+      settings({ collectionFolderIds: [999], wishlistFolderIds: [998, 12] });
+
+      expect(screen.getByRole("button", { name: "Collection folders" })).toHaveTextContent(
+        "Automatic",
+      );
+      expect(screen.getByRole("button", { name: "Wishlist folders" })).toHaveTextContent(
+        "1 folder",
+      );
+    });
+
+    /** The next toggle writes the dead ids away rather than carrying them forever. */
+    it("drops dead pins on the next toggle", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ collectionFolderIds: [999, 1, 998] });
+
+      await openDropdown(user, "Collection folders");
+      await user.click(screen.getByRole("option", { name: "Trades" }));
+
+      expect(onConfig).toHaveBeenCalledWith({ collectionFolderIds: [1, 4] });
+    });
+
+    /** Unticking the last live pin, with a dead one beside it, is `Automatic` — not `[999]`. */
+    it("returns to Automatic when the last live pin is unticked beside a dead one", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ collectionFolderIds: [999, 1] });
+
+      await openDropdown(user, "Collection folders");
+      await user.click(screen.getByRole("option", { name: "Binder" }));
+
+      expect(onConfig).toHaveBeenCalledWith({ collectionFolderIds: [] });
+    });
+
+    /** A list not read yet cannot tell a dead pin from a live one, so it keeps every pin. */
+    it("counts every stored pin while the folder list is still being read", () => {
+      vi.spyOn(ipc, "collectionFolderList").mockReturnValue(new Promise(() => {}));
+      vi.spyOn(ipc, "collectionFolderSummary").mockReturnValue(new Promise(() => {}));
+      renderWith(
+        { skip: "collection" },
+        <FoldersWidgetSettings
+          widget={widget({ collectionFolderIds: [1, 999] })}
+          onConfig={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("button", { name: "Collection folders" })).toHaveTextContent(
+        "2 folders",
+      );
     });
 
     it("pins a wishlist folder at the end of its set", async () => {

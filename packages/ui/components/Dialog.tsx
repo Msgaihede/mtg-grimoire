@@ -613,8 +613,12 @@ function Panel({
       // textarea's resize handle and ends out here fires a `click` on this element — the two
       // targets' common ancestor — so a click handler would close the dialog on a gesture that
       // never left it. Where the press *lands* is unambiguous.
+      //
+      // **The primary button only** (`e.button === 0`): a right-press on the scrim is a reader
+      // reaching for a context menu and a middle-press is an autoscroll, and neither is a request
+      // to throw the form away.
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.button === 0 && e.target === e.currentTarget) onClose();
       }}
     >
       <motion.div

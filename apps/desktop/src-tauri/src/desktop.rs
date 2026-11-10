@@ -665,6 +665,7 @@ pub fn run() {
             draft::draft_end,
             draft::draft_saved,
             draft::draft_resume,
+            draft::draft_discard,
             draft::deck::draft_deck_create,
             draft::deck::draft_deck_list,
             draft::deck::draft_deck_keep,

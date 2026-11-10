@@ -45,6 +45,7 @@ import {
   TOOLTIP_PANEL_ID,
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
+import { COLLECTION_ENTRY_HOME_PREFIXES } from "@/features/home/keys";
 import { readDragData } from "@/features/decks/dnd";
 import { EMPTY_SHELF_ATTR } from "@/features/shelves/EmptyShelf";
 import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
@@ -1052,14 +1053,12 @@ beforeEach(() => {
   shareRefresh.mockReset().mockResolvedValue(undefined);
   shareRevoke.mockReset().mockResolvedValue(undefined);
   shareOpen.mockReset().mockResolvedValue(undefined);
-  syncSupporterStatus
-    .mockReset()
-    .mockResolvedValue({
-      entitled: true,
-      status: "active",
-      since: 1_750_000_000,
-      groupBound: true,
-    });
+  syncSupporterStatus.mockReset().mockResolvedValue({
+    entitled: true,
+    status: "active",
+    since: 1_750_000_000,
+    groupBound: true,
+  });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -4378,6 +4377,13 @@ describe("the collection's shelves", () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "folderSummary"] }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "shelfCounts"] });
+    // And the folder rules' verdicts and the home page's entry-counted reads (issue #1570): a
+    // badge's "breaks rules" count and the dashboard's bars, sets, graph and movers are counted
+    // from the same entries, and their readers sit inside the 30 s `staleTime` otherwise.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "ruleConflicts"] });
+    for (const queryKey of COLLECTION_ENTRY_HOME_PREFIXES) {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey });
+    }
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
   });
 
@@ -6891,6 +6897,39 @@ describe("locking a folder", () => {
     });
 
     /**
+     * **Escape cancels it, like every other strip question on the page** (issue #1542). The
+     * question is not a member of the page's `Panel`, so the page's own `"inner"` rung is off while
+     * it is up — and without a rung of its own the press fell through to whatever was under it.
+     */
+    it("puts the question away on Escape and moves nothing", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+      const user = userEvent.setup();
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+      await findHeading("Trade binder");
+      const card = standHeading("Trade binder");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      const question = await screen.findByRole("group", {
+        name: "Move Lightning Bolt into Trade binder",
+      });
+      expect(question).toHaveFocus();
+      await user.keyboard("{Escape}");
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("group", { name: "Move Lightning Bolt into Trade binder" }),
+        ).toBeNull(),
+      );
+      expect(collectionSetFolder).not.toHaveBeenCalled();
+    });
+
+    /**
      * **Out of a locked drawer asks too**, and the sentence is the other one: a copy leaving goes
      * back among the ones the app offers, which is the reader's own decision being undone rather
      * than made.
@@ -8102,6 +8141,33 @@ describe("the docked card search", () => {
     await screen.findByText("Lightning Bolt");
 
     expect(quickAdd()).toHaveAccessibleName("Add Black Lotus (LEA 232) to Collection");
+    await addFromPanel(user);
+
+    await waitFor(() => expect(collectionAdd).toHaveBeenCalled());
+    const sent = collectionAdd.mock.calls[0][0] as Record<string, unknown>;
+    expect(sent).toHaveProperty("folderId", null);
+  });
+
+  /**
+   * **A deck's group and `Recently removed` are not the reader's to file into** (issue #1576).
+   * `collection_add` refuses every non-`user` folder, so a `+` that named the level on screen
+   * failed every press there. Standing in either, the column files at the root — Import's rule
+   * in the same spot — and its name says so before the press.
+   */
+  it.each([
+    ["a deck's group", DECK_GROUP],
+    ["Recently removed", REMOVED],
+  ])("adds at the root while standing in %s", async (_, folder) => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await openShelf(user, folder.name);
+    await waitFor(() => expect(standingIn()).toBe(folder.id));
+    await waitFor(() =>
+      expect(quickAdd()).toHaveAccessibleName("Add Black Lotus (LEA 232) to Collection"),
+    );
+
     await addFromPanel(user);
 
     await waitFor(() => expect(collectionAdd).toHaveBeenCalled());

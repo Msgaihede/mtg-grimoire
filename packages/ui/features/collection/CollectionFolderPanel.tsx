@@ -20,6 +20,7 @@ import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { folderDescendants, type FolderNode } from "@/lib/folderTree";
 import type { CollectionFolder, CollectionRow } from "@/lib/ipc";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import type { LockedMove } from "./useCollectionDrops";
 
@@ -225,6 +226,11 @@ export function LockedMoveConfirm({
         ? `Move ${card} out of ${out}`
         : `Move ${card} into ${into ?? ROOT_LABEL}`,
   );
+  // **Escape cancels, like every other strip question on the page** (issue #1542). This one is
+  // not a member of the page's `Panel`, so the page's `"inner"` rung is off while it is up and the
+  // press fell to the floor — walking the reader up a level with the question still open. Mounted
+  // only while asked, so the rung is on for exactly that long.
+  useDismissOnEscape({ layer: "inner", onDismiss: onCancel });
 
   return (
     <div

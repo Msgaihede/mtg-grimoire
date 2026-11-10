@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useContext, useEffect, useRef, useState, type JSX } from "react";
 import { User } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { cardImageUrl } from "@/lib/images";
 import { cn } from "@/lib/utils";
+import { LifeCommitsContext } from "./lifeCommits";
 
 /**
  * How long the plate waits after the last change before it tells the game.
@@ -26,8 +27,12 @@ const SETTLE_MS = 400;
  * stepper is drawn `disabled`, so the reader sees it is there to come back to.
  *
  * The number shown is the reader's draft while one is in flight, and the game's otherwise: it
- * lets go of the draft only when the game's own number moves (the engine's answer arriving), so
- * a committed change does not flash back to the old life for the length of the round trip.
+ * lets go of the draft when the game's own number moves (the engine's answer arriving), so a
+ * committed change does not flash back to the old life for the length of the round trip — or,
+ * on a board, when the engine has settled with the number unmoved: the change was refused, and
+ * the plate shows the game's life again (issue #1593). The board also has every plate send a
+ * waiting change before any other action goes (`lifeCommits.ts`), so a press of `+` and then
+ * Space is sent in that order.
  */
 export function LifePlate({
   seat,
@@ -72,11 +77,21 @@ export function LifePlate({
   const [draft, setDraft] = useState<number | null>(null);
   const [pending, setPending] = useState(false);
   const [seen, setSeen] = useState(life);
+  /** A change has been sent and its answer is not yet known. */
+  const [sent, setSent] = useState(false);
+  const { hold, working } = useContext(LifeCommitsContext);
   // The game answered with a new number: it is the truth now, unless the reader has already
   // started another change on top of it (`pending`), which will be sent in its turn.
   if (seen !== life) {
     setSeen(life);
     if (!pending) setDraft(null);
+  }
+  // The engine has settled since the change was sent and the number did not move (or it did and
+  // the draft is already gone): refused. `working` is already true in the render that has `sent`
+  // — the board's action is queued in the same task as the report — so this waits for the answer.
+  if (sent && working === false && !pending) {
+    setSent(false);
+    setDraft(null);
   }
 
   const timer = useRef<number | null>(null);
@@ -104,8 +119,23 @@ export function LifePlate({
     // Stepped down and back up again: nothing to tell the game, and no answer will come to
     // clear the draft, so clear it here.
     if (next === current.current) setDraft(null);
-    else report.current(next);
+    else {
+      report.current(next);
+      setSent(true);
+    }
   };
+  const commitNow = useRef(commit);
+  useEffect(() => {
+    commitNow.current = commit;
+  });
+  // The board sends a waiting change before any action of its own: only one still in its wait.
+  useEffect(
+    () =>
+      hold(() => {
+        if (timer.current !== null) commitNow.current();
+      }),
+    [hold],
+  );
 
   const change = (next: number) => {
     setDraft(next);

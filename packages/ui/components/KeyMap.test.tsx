@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Dialog } from "@/components/Dialog";
 import { Caps, KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
 import { QUERY_KEYWORDS, parseQuery } from "@/features/search/queryLanguage";
 import type { Shortcut } from "@/lib/shortcuts";
@@ -280,6 +281,39 @@ describe("KeyMap", () => {
 
     expect(screen.queryByRole("heading", { name: "Everywhere" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Somewhere else")).toHaveFocus();
+  });
+
+  /**
+   * **`F1` with a dialog up, and the panel is the thing on top** (issue #1542). The dialog's rung
+   * is a capture one and the panel's was a bubble one, so the first Escape closed the dialog —
+   * its unsaved state with it — and left the panel standing. One press a layer, top first.
+   */
+  it("closes over an open dialog before the dialog does", async () => {
+    const user = userEvent.setup();
+    const onDismiss = vi.fn();
+    render(
+      <>
+        <Harness />
+        <Dialog
+          open
+          title="Import"
+          closeLabel="Close import"
+          size="w-[30rem]"
+          onDismiss={onDismiss}
+          onClose={onDismiss}
+        >
+          <div>A pasted list</div>
+        </Dialog>
+      </>,
+    );
+    act(() => useAppStore.setState({ keyMapOpen: true }));
+
+    await user.keyboard("{Escape}");
+    expect(useAppStore.getState().keyMapOpen).toBe(false);
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   /** Closed is closed: nothing of the panel is in the tree until the flag says so. */

@@ -198,6 +198,21 @@ export function AddToWishlist({
     keys: NONE_LANDED,
   });
   const landed = ledger.selection === selection ? ledger.keys : NONE_LANDED;
+  /**
+   * The opening and the selection the refusal line was written about, reset during render when
+   * either changes.
+   *
+   * **Not the ledger's rule, and deliberately so**: the ledger outlives a close because the cards
+   * that landed are on the list either way, but "Added 1 of 3. …" is a sentence about one press.
+   * Reopened — over the same picks or different ones — it would be a refusal for something the
+   * reader did not just do. The Add button's own label still says "the remaining N" where the
+   * ledger holds. During render rather than in an effect, so no frame paints the old line.
+   */
+  const [refusalAbout, setRefusalAbout] = useState({ open, selection });
+  if (refusalAbout.open !== open || refusalAbout.selection !== selection) {
+    setRefusalAbout({ open, selection });
+    setRefusal(null);
+  }
   /** What the next press writes: every want, less those an earlier press landed. */
   const pending = wants.filter((w) => !landed.has(wantKey(w)));
 

@@ -140,6 +140,21 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // window, so naming it in a dependency list below costs nothing.
   const edition = useEdition();
   const setActiveView = useAppStore((s) => s.setActiveView);
+  const setPendingSettingsPanel = useAppStore((s) => s.setPendingSettingsPanel);
+  // The header's two ways into Settings, each naming its panel (issue #1596). A bare
+  // `setActiveView("settings")` landed a fresh page on its first group (Updates) and left an
+  // already-open one on whatever group it was showing, so the sync marker never reached Sync
+  // and neither button did anything from Settings › Storage. **The view first, then the
+  // hand-off**: the view change is what clears every hand-off (`ToReviewWidget`'s `open`).
+  const openSettingsAt = useCallback(
+    (panel: "sync" | "updates") => {
+      setActiveView("settings");
+      setPendingSettingsPanel(panel);
+    },
+    [setActiveView, setPendingSettingsPanel],
+  );
+  const openUpdates = useCallback(() => openSettingsAt("updates"), [openSettingsAt]);
+  const openSync = useCallback(() => openSettingsAt("sync"), [openSettingsAt]);
   // A press on a destination — the rail's rows and their chords. **Not `setActiveView`**, because
   // a press on the view already open walks it back to its root (issue #1507): out of a deck folder,
   // a collection or wishlist drawer, or Draft & Packs' flows, to that page's top. `selectView` is
@@ -515,9 +530,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           activityVisible={activityVisible}
           updateVersion={update.status?.available?.version ?? null}
           updateInstallable={update.action !== "unavailable"}
-          onOpenUpdate={() => setActiveView("settings")}
+          onOpenUpdate={openUpdates}
           deviceSync={deviceSync}
-          onOpenSync={() => setActiveView("settings")}
+          onOpenSync={openSync}
           drag={edition.caption}
         />
       </TitleBar>
