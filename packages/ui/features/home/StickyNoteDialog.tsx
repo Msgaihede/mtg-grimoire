@@ -48,9 +48,19 @@
  * saving it back would therefore silently repaint a `teal` note `slate` the moment the reader
  * opened it and typed a letter. So the pick is `null` until a swatch is actually pressed.
  *
- * **It does not push the stored body back into the editor.** The draft is seeded once, at mount,
- * and nothing re-seeds it — so a save landing (or another window's edit arriving through
- * `crossWindow`) cannot take words out from under a reader who is still typing them.
+ * **It does not write a field the reader did not change, and it follows the row under one they
+ * have not changed** (issue #1579). The note it was handed can be replaced under it at any time —
+ * another window's edit through `crossWindow`, a paired device's through a sync pull — and a draft
+ * seeded once at mount and diffed against that *live* row would read a newer row as the reader's
+ * edit and write the old text back over it, with no keystroke, and the revert would then sync.
+ * So each field is **adopted** when the row changes under it, provided the field still says what
+ * this dialog last agreed with the store: the row as it last saw it, or the last value it handed
+ * over (while no refusal is standing). Adopted, the field and the row agree, and nothing is
+ * written. A field the reader has changed since is theirs, and is kept and written as before —
+ * so a save landing, or another window's edit arriving, still cannot take words out from under a
+ * reader who is typing them. The adoption is React's own *adjusting state when a prop changes*,
+ * made during render, which is `TodoListDialog`'s shape and for its reason: a `setState` in an
+ * effect body is refused at lint.
  */
 import {
   Suspense,
@@ -136,15 +146,16 @@ const NAME_FIELD = cn(
 );
 
 export interface StickyNoteDialogProps {
-  /** The note being written. Seeds the drafts **once**, at mount; see this file's header for why
-   *  nothing re-seeds them. */
+  /** The note being written. Seeds the drafts at mount; a newer row handed in later is adopted by
+   *  every field the reader has not changed since — see this file's header (issue #1579). */
   note: StickyNote;
   /**
    * Write the draft.
    *
    * Called on a debounce and once more at unmount, always with a **partial** patch naming only the
-   * fields that differ from {@link note} — so a field the reader never touched is never sent, and
-   * `coalesce` at the far end leaves it alone.
+   * fields the reader changed that still differ from {@link note} — so a field the reader never
+   * touched is never sent, even when the row changes under it, and `coalesce` at the far end
+   * leaves it alone.
    *
    * ⚠️ **Worth keeping stable.** It is latched in a ref here, so an unstable one costs a render
    * rather than a lost draft — but a host that rebuilds it every render is a host whose own
@@ -249,7 +260,61 @@ function StickyNoteBody({
    * line says *Saving…* for ever over a note that saved perfectly.
    */
   const [sent, setSent] = useState<{ key: string; atMs: number } | null>(null);
+  /**
+   * The last value of each field this dialog handed over, merged across writes — so a field whose
+   * write is still on the wire when another window's row arrives is known to hold nothing newer
+   * than what was sent, and can adopt that row (issue #1579).
+   */
+  const [handed, setHanded] = useState<StickyNotePatch>({});
+  /** The row as this dialog last saw it — what each field is compared with when the row changes. */
+  const [seen, setSeen] = useState({ title: note.title, body: note.body, color: note.color });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  /**
+   * **The adoption** (issue #1579). The row changed under the dialog — this dialog's own write
+   * read back, another window's edit, a sync pull. Each field that the reader has not changed
+   * since the dialog last agreed with the store follows the row; a field they have changed keeps
+   * their words, which the debounce then writes as an edit, because it is one.
+   *
+   * "Agreed" is either the row as last seen, or the last value handed over — the second only while
+   * no refusal stands, because a refused write is owed and adopting over it would drop words the
+   * store never took. A colour follows the row by going back to `null`, the "nothing picked"
+   * state the header gives its reasons for.
+   *
+   * A foreign adoption also drops {@link sent}: the line then answers from the row's own
+   * `updatedAt` rather than claiming *Saved* for text the row no longer holds.
+   *
+   * Spelled inline rather than through a helper for `TodoListDialog`'s measured reason — handing
+   * state to a helper makes the React Compiler treat it as possibly mutated.
+   */
+  if (note.title !== seen.title || note.body !== seen.body || note.color !== seen.color) {
+    const settled = writeError === undefined;
+    let foreign = false;
+    if (
+      note.title !== seen.title &&
+      (draftTitle === seen.title || (settled && draftTitle === handed.title))
+    ) {
+      if (draftTitle !== note.title) foreign = true;
+      setDraftTitle(note.title);
+    }
+    if (
+      note.body !== seen.body &&
+      (draftBody === seen.body || (settled && draftBody === handed.body))
+    ) {
+      if (draftBody !== note.body) foreign = true;
+      setDraftBody(note.body);
+    }
+    if (
+      note.color !== seen.color &&
+      pickedColor !== null &&
+      (pickedColor === seen.color || (settled && pickedColor === handed.color))
+    ) {
+      if (pickedColor !== note.color) foreign = true;
+      setPickedColor(null);
+    }
+    if (foreign) setSent(null);
+    setSeen({ title: note.title, body: note.body, color: note.color });
+  }
 
   const shownColor = pickedColor ?? noteColor(note.color);
 
@@ -258,7 +323,8 @@ function StickyNoteBody({
    *
    * **Partial, and each field is compared against the row rather than against a snapshot taken at
    * mount.** So a save landing makes this `null` on the next render with nothing having to reset
-   * anything, and a field the reader never touched is never named in a patch at all.
+   * anything, and a field the reader never touched is never named in a patch at all — the
+   * adoption above keeps an untouched field equal to the row however often the row changes.
    *
    * The colour arm compares the picked `NoteColor` against the **stored string**, not against
    * `noteColor(note.color)`: on a note whose colour this build does not know, pressing `Slate`
@@ -305,6 +371,13 @@ function StickyNoteBody({
     writeErrorRef.current = writeError;
   }, [writeError]);
 
+  // The dedupe below is for the round trip — a patch handed over and not yet read back. Once the
+  // row has changed, that trip is over, and a reader who types the same words again after another
+  // window replaced them is making an edit the dedupe must not swallow (issue #1579).
+  useEffect(() => {
+    sentRef.current = "";
+  }, [seen]);
+
   /**
    * The one writer. Answers the key it wrote, or `null` if it wrote nothing.
    *
@@ -338,7 +411,9 @@ function StickyNoteBody({
     if (patch === null) return;
     const timer = setTimeout(() => {
       const key = write();
-      if (key !== null) setSent({ key, atMs: Date.now() });
+      if (key === null) return;
+      setSent({ key, atMs: Date.now() });
+      setHanded((last) => ({ ...last, ...patch }));
     }, SAVE_DELAY_MS);
     return () => clearTimeout(timer);
   }, [patch, write]);
