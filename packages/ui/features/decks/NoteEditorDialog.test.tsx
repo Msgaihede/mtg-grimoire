@@ -192,6 +192,33 @@ describe("writing a note in a dialog", () => {
     expect(screen.getByRole("heading", { name: "Untitled note" })).toBeInTheDocument();
   });
 
+  /**
+   * The same refusal for the editor's other markup-only bodies: a lone empty bullet (`- `, what
+   * pressing *Bulleted list* and nothing else stores) and a run of empty paragraphs, whose second
+   * and later are written `&nbsp;`. Each used to be saved, as a note titled `-` or `&nbsp;`.
+   */
+  it.each(["- ", "1. ", "\n\n&nbsp;\n\n&nbsp;"])(
+    "refuses the markup-only body %j",
+    async (body) => {
+      expect(noteToPlainText(body).trim()).toBe("");
+      const onSave = vi.fn();
+      render(
+        <NoteEditorDialog
+          open
+          draft={{ kind: "edit", note: note({ id: 3, title: "", body }) }}
+          pending={false}
+          onSave={onSave}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const save = await screen.findByRole("button", { name: "Save" });
+      expect(save).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(save);
+      expect(onSave).not.toHaveBeenCalled();
+    },
+  );
+
   /** The other kind of no, and the one that really is the attribute: the half-second a write is
    *  in flight, where there is nothing for the caret to be kept in reach *for*. */
   it("takes the button out of reach while the write is in flight", async () => {
