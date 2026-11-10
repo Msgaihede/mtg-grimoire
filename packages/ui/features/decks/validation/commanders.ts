@@ -389,6 +389,21 @@ const RULES: Record<CommanderRule, RuleDefinition> = {
 const CAN_BE_YOUR_COMMANDER = "can be your commander";
 
 /**
+ * A characteristic-defining ability that makes the card a creature **everywhere but the
+ * battlefield** — Grist, the Hunger Tide: "As long as Grist, the Hunger Tide isn't on the
+ * battlefield, it's a 1/1 Insect creature in addition to its other types." The official
+ * ruling applies it during deck construction, so in the command zone the card *is* a legendary
+ * creature and a commander under every rule that takes one (issue #1547).
+ *
+ * Read as a sentence, not a card name, so the next card printed with the same ability needs no
+ * release. It is rules text, so the test is on the unstripped oracle text, and either
+ * apostrophe is accepted. The type list stops at a sentence or line end, so "creature" from a
+ * later ability cannot complete the match.
+ */
+const CREATURE_OFF_THE_BATTLEFIELD =
+  /isn['\u2019]t on the battlefield, it['\u2019]s an? [^.\n]*\bcreature in addition to its other types/i;
+
+/**
  * Why this card cannot sit in the command zone under this rule, or `null` if it can.
  *
  * The answer is about the card **on its own**. A Background is refused here and made legal by
@@ -417,8 +432,10 @@ export function commanderIneligibility(
   // null means *unknown*, and the backend already repaired what it could, so a null pair here
   // is a card that genuinely has none.
   const hasPowerAndToughness = front.power !== null && front.toughness !== null;
+  const creature =
+    hasCardType(typeLine, "Creature") || CREATURE_OFF_THE_BATTLEFIELD.test(front.oracleText ?? "");
   const typeOk =
-    (def.creature && hasCardType(typeLine, "Creature")) ||
+    (def.creature && creature) ||
     (def.planeswalker && hasCardType(typeLine, "Planeswalker")) ||
     ((vehicle || spacecraft) && hasPowerAndToughness);
 
