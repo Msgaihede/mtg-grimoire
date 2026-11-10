@@ -568,6 +568,19 @@ does **not** share with `OWNED_SPARE_SQL` is the asking deck's own group, which 
 plan cannot count on the sleeved deck's cards, and the deck builder's own search can, because they
 are its.
 
+**And the deck's Pull from collection, since issue #1541 — the one press that moves copies on its
+own pre-pick.** `deck_pull::CANDIDATE_SQL` gains the same `LOCKED_FOLDER_IDS` arm, with an `IS NULL`
+half of its own, so a locked drawer's copies (or a subfolder's) are **not offered at all** — rather
+than offered unticked — and the dialog agrees with the Collection tab, the All-cards availability and
+the Compare dialog about what this deck can have. It is the clearest case of #365's "excluded from
+all automated actions, such as moving cards into a deck folder": before it, the dialog arrived with a
+locked drawer's copies ticked and one press moved them. The write re-plans through the same
+statement, so a stale pick naming a locked row moves nothing and hears `ENTRY_IN_A_LOCKED_FOLDER` —
+*"Those copies are in a locked folder. Unlock it to pull them into a deck."* — rather than "not short
+of that printing", because the deck still is. The reader who wants those copies drags them, which
+confirms, or unlocks the drawer. `deck_pull::elsewhere` — the missing figure's "where do I own it"
+tooltip — is an ownership statement and still names a locked drawer.
+
 **Refused — one folder write, in words.** `delete_folder` refuses a folder that is **effectively**
 locked, with `FOLDER_IS_LOCKED` — *"That folder is locked. Unlock it before deleting it."* — a
 sentence in this module's existing grammar rather than a `CHECK` or a constraint failure. The reason
