@@ -155,6 +155,73 @@ describe("LibraryDialog", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
 
+  // Issue #1521: another player's graveyard offers what the reader's own does.
+  it("offers an opponent's graveyard the places the reader's own has", async () => {
+    const onAct = vi.fn();
+    const view = tableView();
+    render(
+      <LibraryDialog
+        look={{ zone: "graveyard", mode: "browse", count: "all" }}
+        view={view}
+        opponent
+        owner="Opponent 2's"
+        onAct={onAct}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Opponent 2's graveyard" })).toBeInTheDocument();
+    const elves = within(screen.getByRole("group", { name: "Llanowar Elves" }));
+    expect(elves.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Hand",
+      "Battlefield",
+      "Exile",
+      "Top",
+      "Bottom",
+    ]);
+    await userEvent.click(elves.getByRole("button", { name: "Battlefield" }));
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "move",
+      id: view.graveyard[1].id,
+      to: "battlefield",
+    });
+  });
+
+  it("keeps an opponent's graveyard a look with the sandbox's moves not working", () => {
+    render(
+      <LibraryDialog
+        look={{ zone: "graveyard", mode: "browse", count: "all" }}
+        view={tableView()}
+        opponent
+        readOnly
+        onAct={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const elves = within(screen.getByRole("group", { name: "Llanowar Elves" }));
+    expect(elves.queryAllByRole("button")).toEqual([]);
+  });
+
+  it("casts an opponent's card the rules let the reader cast", async () => {
+    const onAct = vi.fn();
+    const bolt = gameCard("Lightning Bolt", { castable: true });
+    render(
+      <LibraryDialog
+        look={{ zone: "graveyard", mode: "browse", count: "all" }}
+        view={{ ...tableView(), graveyard: [bolt] }}
+        opponent
+        readOnly
+        onAct={onAct}
+        onClose={() => {}}
+      />,
+    );
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Lightning Bolt" })).getByRole("button", {
+        name: "Cast",
+      }),
+    );
+    expect(onAct).toHaveBeenCalledWith({ type: "play", id: bolt.id });
+  });
+
   it("casts a foretold card from exile by the rules, even as a look", async () => {
     const behold = gameCard("Behold the Multiverse", { foretold: true, castable: true });
     const view = { ...tableView(), exile: [behold, gameCard("Swords to Plowshares")] };
