@@ -2954,6 +2954,19 @@ run's step summary and artifact, not copied here. The phone figures are §8.6.
   unmetered network now says so, and is not called a hold. The emulator's
   default Wi-Fi is expected to report itself unmetered — expected, not checked here — and
   `dumpsys connectivity` goes into the artifact so a held run can be read.
+  **Since 2026-11-10 the script also switches the emulator's cellular link off first**
+  (`svc data disable`), **waits for a *validated* unmetered default** (45 s a round), and
+  **restarts a Wi-Fi that has not validated** (`svc wifi disable`, `enable`), up to twice.
+  The push that released 0.68.0 (run 42792532314) read *held* after the full 90 s: the Wi-Fi
+  had associated as in every run (`AndroidWifi`, `NOT_METERED`) but never validated
+  (`EVER_EVALUATED`, no `IS_VALIDATED`), while the cellular network validated at once and stayed
+  the default. The runs that passed that day, on the same emulator (37.2.13.0), validated their
+  Wi-Fi about a second after it connected. No run's figures had come over the cellular link, so
+  turning it off loses nothing and ends the race. If the Wi-Fi still never validates, the launch
+  goes ahead on it (it is unmetered, so nothing is held) and the outcome says whether the
+  downloads worked. The report adds four rows: whether a cellular network was still up, whether
+  the wait was reached, how many Wi-Fi restarts it took, and the default network's score
+  policies at the launch (in `first-run.json` too).
 
 **What an emulator cannot stand in for.** The emulator's CPU is the runner's, through KVM — a
 cloud x86 core, not a phone's big.LITTLE ARM cluster — so the ingest figure says how the code

@@ -557,7 +557,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   which it reports as *held — the emulator reported a metered network* (step 4.4's hold). Since
   2026-10-08 it first waits, up to 90 s, for the emulator's default network to be an unmetered
   one, and reports the wait: a fast boot had launched the app while the cellular link was still
-  the default, and a healthy tree read *held* (light-app.md §8.5). The
+  the default, and a healthy tree read *held* (light-app.md §8.5). Since 2026-11-10 it switches
+  the cellular link off first, waits for a *validated* unmetered default, and restarts a Wi-Fi
+  that has not validated, up to twice: on the push that released 0.68.0 the Wi-Fi never
+  validated in 90 s and the cellular network stayed the default (run 42792532314). Since the same
+  day a step ahead of the emulator action installs `emulator` and the system image itself, up to
+  three attempts, each checked against `sdkmanager --list_installed`: twice a download arrived
+  corrupt (`Error on ZipFile unknown archive`, runs 39468104072 and 40887587846), sdkmanager only
+  warned, and the action booted no emulator. The
   router sends a change to the workflow to `frontend`, beside `release.yml`, for the two tests
   that read every workflow; the script is `scripts/*`. **No run had happened when this was written** —
   the first is the pull request that adds it; [light-app.md](../reference/light-app.md)
