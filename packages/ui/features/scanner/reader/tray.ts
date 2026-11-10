@@ -186,6 +186,11 @@ export interface PickedPrinting {
   name: string;
   setCode: string;
   collectorNumber: string;
+  /**
+   * The finishes the printing exists in — what the row's finish control offers, as for a scanned
+   * row (issue #1557). Empty when the card database did not say, which constrains nothing.
+   */
+  finishes: string[];
 }
 
 /**
@@ -197,6 +202,10 @@ export interface PickedPrinting {
  * resolved decision — the same printing in the same known finish — so adding a card by hand and
  * then scanning another copy of it (or the other way round) reads as one row of two, never as two
  * rows the reader has to fold together.
+ *
+ * **The row carries the printing's finishes**, like a scanned one, and its finish is fitted to
+ * them ({@link fitFinish}) — so a hand-added foil-only card offers `Foil, Unknown` and is never
+ * filed as nonfoil, whatever the caller handed over (issue #1557).
  */
 export function addPicked(
   rows: readonly ScannerTrayRow[],
@@ -205,13 +214,14 @@ export function addPicked(
   now: number,
   key: string,
 ): { rows: ScannerTrayRow[]; bumped: boolean } {
+  const fitted = fitFinish(finish, picked.finishes);
   const newest = rows[0];
   if (
     newest !== undefined &&
     newest.choices.length === 0 &&
     newest.cardId === picked.cardId &&
     isKnownFinish(newest.finish) &&
-    newest.finish === finish
+    newest.finish === fitted
   ) {
     return {
       rows: [{ ...newest, quantity: newest.quantity + 1, addedAt: now }, ...rows.slice(1)],
@@ -221,7 +231,7 @@ export function addPicked(
   const row: ScannerTrayRow = {
     key,
     ...picked,
-    finish,
+    finish: fitted,
     quantity: 1,
     choices: [],
     addedAt: now,
