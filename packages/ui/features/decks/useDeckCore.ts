@@ -41,12 +41,7 @@ import { MENU_CONDITION } from "@/lib/conditions";
 import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { defaultPileFor } from "./defaultCategory";
-import {
-  DEFAULT_CATEGORY_NAME,
-  DEFAULT_VARIANT,
-  deckDetailQuery,
-  opened,
-} from "./deckQuery";
+import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, deckDetailQuery, opened } from "./deckQuery";
 // Types only, and neither is an edge: what a card surface's address *is*, and what leaving one
 // costs — both answered on the desktop side of {@link DeckAnchor}.
 import type { PaneDeparture } from "@/features/card/cardReturn";
@@ -129,7 +124,9 @@ export type WrittenRow = Slot & { deckId: number | null; variant: DeckVariant };
  * patch is spread over the context, so an explicit `undefined` would erase a field rather than
  * leave it — every site below builds the object without one.
  */
-export type PaneMove = Partial<Pick<PaneDeckContext, "categoryId" | "categoryName" | "cardId" | "finish">>;
+export type PaneMove = Partial<
+  Pick<PaneDeckContext, "categoryId" | "categoryName" | "cardId" | "finish">
+>;
 
 /**
  * What a deck write tells **the card surface that is open on one of its rows** — the desktop's
@@ -681,8 +678,7 @@ export function useDeckCore(
       // Before anything is asked about the card: a write with no deck open is refused here and
       // not one round trip later.
       const deckId = opened(id);
-      const pileId =
-        categoryId === null && deckDefault ? await defaultPileOf(deckId) : categoryId;
+      const pileId = categoryId === null && deckDefault ? await defaultPileOf(deckId) : categoryId;
       // The `await` sits inside the one arm that needs it, so the other two cost exactly what
       // they always did — a named category and a caller with nothing to say each make one IPC
       // call in total. A land still pays the read: the Land pin lives inside `autoCategoryFor`,
@@ -692,7 +688,10 @@ export function useDeckCore(
           ? null
           : typeLine === undefined
             ? DEFAULT_CATEGORY_NAME
-            : autoCategoryFor({ typeLine, oracleTags: oracleTags ?? (await oracleTagsFor(cardId)) });
+            : autoCategoryFor({
+                typeLine,
+                oracleTags: oracleTags ?? (await oracleTagsFor(cardId)),
+              });
       return ipc.deckAddCard(deckId, cardId, pileId, categoryName, variant, finish, quantity);
     },
     // **{@link invalidate} for every add, on success and on refusal alike.** This write touches
