@@ -569,6 +569,68 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * **A card added by hand while stopped is filed, not shown** (issue #1555): the view opens
+   * stopped, so *Add card…* is often pressed with nothing running. The popup is for a reader
+   * watching the camera; one raised at the next Start would announce a card that landed minutes
+   * ago — and might since have gone to the collection.
+   */
+  it("lays nothing over the camera for a card added by hand while stopped, then or at Start", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    const bolt: CardSummary = {
+      id: "bolt-2x2",
+      name: "Lightning Bolt",
+      setCode: "2x2",
+      setName: "Double Masters 2022",
+      collectorNumber: "117",
+      rarity: "uncommon",
+      typeLine: "Instant",
+      manaCost: "{R}",
+      price: null,
+      layout: "normal",
+      oracleId: "bolt",
+      finishes: '["nonfoil","foil"]',
+      promoTypes: null,
+      gameChanger: false,
+      releasedAt: null,
+      imageUpdatedAt: null,
+      ownedQuantity: 0,
+      wishlisted: false,
+      printings: 1,
+      priceLow: null,
+      priceHigh: null,
+    };
+    vi.mocked(ipc.searchCards).mockResolvedValue({ items: [bolt], total: 1, totalIsCapped: false });
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Start" });
+      await user.click(within(tray()).getByRole("button", { name: "Add card…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Add a card" });
+      await user.type(
+        within(dialog).getByRole("searchbox", { name: "Which card do you want to add?" }),
+        "bolt",
+      );
+      await user.click(await within(dialog).findByRole("radio", { name: /Lightning Bolt/ }));
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Add to tray" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Add a card" })).not.toBeInTheDocument(),
+      );
+      expect(tray()).toHaveTextContent("Lightning Bolt");
+      expect(videoBox(container)).not.toHaveTextContent("Lightning Bolt");
+
+      await start();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards");
+      expect(videoBox(container)).not.toHaveTextContent("Lightning Bolt");
+    } finally {
+      restore();
+    }
+  });
+
   it("can stop recognition while a camera request is pending without cancelling the preview", async () => {
     const restore = shimVideo();
     let opened!: (stream: MediaStream) => void;
@@ -1071,6 +1133,60 @@ describe("ScannerPage", () => {
       await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
       expect(videoBox(container)).toHaveTextContent("Storm of Saruman");
       expect(videoBox(container)).toHaveTextContent("LTR · 72 · Nonfoil");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **A Start is not a landing** (issue #1555). The hold over the camera used to be the popup's
+   * own clock, which ran only while the popup was drawn — so a Stop inside it left the card set,
+   * and the next Start raised it again as news, confetti and all, with the HUD's live region still
+   * saying `Matched … Added` from the last stream's verdict until the new one answered.
+   */
+  it("raises nothing over the camera at a Start for a card that landed before the Stop", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ finish: "nonfoil" });
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // The first stream decides and keeps saying so — one decision, the same number every frame —
+    // and the second is a card still voting, so nothing it answers lands anything. A few
+    // milliseconds apart (`paced`'s reason).
+    let restarted = false;
+    const answers = [VERDICTS.voting];
+    vi.mocked(ipc.scannerFrame).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve(restarted ? VERDICTS.voting : (answers.shift() ?? VERDICTS.decided)),
+            10,
+          ),
+        ),
+    );
+    try {
+      const { container } = mount();
+      await start();
+      await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
+      expect(statusLine()).toHaveTextContent("Added");
+      // Stopped well inside the hold: the card is put away with the Stop.
+      fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      await waitFor(() =>
+        expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards"),
+      );
+
+      restarted = true;
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      // Nothing old is said in the render the Start makes…
+      expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards");
+      expect(statusLine()).not.toHaveTextContent(/Matched|Added/);
+      // …nor once the new stream is answering.
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 1),
+      );
+      expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards");
+      expect(videoBox(container)).not.toHaveTextContent("Storm of Saruman");
+      expect(statusLine()).not.toHaveTextContent(/Matched|Added/);
     } finally {
       restore();
     }
@@ -2444,12 +2560,10 @@ describe("ScannerPage sending a scan", () => {
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
 
-      // The premise: as things stand there is a run to send, all seven frames of it.
-      await user.click(screen.getByRole("button", { name: "Send scan…" }));
-      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
-      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // As things stand the run is those seven frames ("freezes the run on the press…" opens it
+      // on this same arrangement). Not opened here: the dialog pauses the pump, and the start
+      // after it lets the run go and forgets the verdict by itself (issue #1555), which would say
+      // nothing about the filters.
 
       // The reader narrows the scan, and the session takes it — which is when it is stored.
       const resets = vi.mocked(ipc.scannerReset).mock.calls.length;

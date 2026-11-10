@@ -178,6 +178,29 @@ describe("useScanLoop", () => {
     expect(scannerFrame).toHaveBeenCalledTimes(sent);
   });
 
+  /**
+   * Issue #1555: a start resets the session, so the last stream's verdict — its corners, and the
+   * HUD's `Matched … Added` — is about a card the new stream has not seen. It goes in the render
+   * the start makes; a Stop alone leaves it, for whatever a stopped page still reads.
+   */
+  it("forgets the last stream's verdict as a pump starts, and not at the Stop", async () => {
+    scannerFrame.mockImplementationOnce(() => answersIn(10, VERDICTS.decided));
+    scannerFrame.mockImplementation(() => deferred<ScannerVerdict>().promise);
+    const videoRef = { current: readyVideo() };
+    const grabFrame = vi.fn(async () => BYTES);
+    const { result, rerender } = renderHook(
+      ({ live }: { live: boolean }) => useScanLoop({ videoRef, live, grabFrame }),
+      { initialProps: { live: true } },
+    );
+    await tick(30);
+    expect(result.current.verdict).toEqual(VERDICTS.decided);
+
+    rerender({ live: false });
+    expect(result.current.verdict).toEqual(VERDICTS.decided);
+    rerender({ live: true });
+    expect(result.current.verdict).toBeNull();
+  });
+
   it("sends nothing when the camera stops during a pending grab", async () => {
     scannerFrame.mockReturnValue(deferred<ScannerVerdict>().promise);
     const frame = deferred<Uint8Array | null>();
