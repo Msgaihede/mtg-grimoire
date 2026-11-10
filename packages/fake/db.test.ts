@@ -7061,6 +7061,52 @@ describe("pulling owned copies into a deck", () => {
   });
 
   /**
+   * **A locked drawer is not the reader's desk either** (issue #1541), and neither is a shelf
+   * inside it — locked by its parent and by nothing of its own, the arm that gets missed. Both
+   * ends again: the plan offers nothing, and a stale pick hears the lock's own sentence rather
+   * than "not short of that", because the deck is still short.
+   */
+  it("never offers a copy in a locked folder, and refuses one picked anyway", () => {
+    const db = shortOfThree({
+      collectionFolders: [
+        ...groupsOf([deck({ id: 1, name: "Burn" })]),
+        {
+          id: 1,
+          parentId: null,
+          name: "Set aside",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: true,
+        },
+        {
+          id: 2,
+          parentId: 1,
+          name: "Shelf",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 1, folderId: 2 }),
+      ],
+    });
+    expect(plan(db)).toEqual([]);
+    expect(() =>
+      writeHandlers(db).deck_pull_from_collection({
+        deckId: 1,
+        picks: [{ entryId: 3, quantity: 1 }],
+      }),
+    ).toThrow(/in a locked folder/);
+    expect(copiesIn(db, 1)).toBe(2);
+    expect(copiesIn(db, 2)).toBe(1);
+  });
+
+  /**
    * **The order is the pre-pick**: the root, then `Recently removed`, then the reader's own
    * folders in their `sortOrder`. It ranks by how little of the reader's filing a pull disturbs
    * — the root is a decision nobody has made and the holding area is the app's own transient

@@ -9191,7 +9191,10 @@ function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPul
         // `nonfoil` are compared in one spelling rather than beside each other.
         entryFinish(db, e.cardId, e.finish) === want &&
         e.quantity > 0 &&
-        !inADeckFolder(db, e.folderId),
+        !inADeckFolder(db, e.folderId) &&
+        // Issue #1541: a drawer the reader set aside — by its own flag or an ancestor's — is
+        // not on the desk either, `CANDIDATE_SQL`'s `LOCKED_FOLDER_IDS` arm.
+        !collectionFolderLocked(db, e.folderId),
     )
     .sort((a, b) => {
       const [aRank, aOrder] = pullOrder(db, a);
@@ -9227,8 +9230,9 @@ function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPul
 }
 
 /**
- * `deck_pull::why_not_offered` — which of three things to tell a caller whose pick is not in the
- * plan.
+ * `deck_pull::why_not_offered` — which of four things to tell a caller whose pick is not in the
+ * plan. The fourth, {@link ENTRY_IN_A_LOCKED_FOLDER}, is a row whose folder was locked under an
+ * open dialog (issue #1541).
  *
  * Asked only on the refusal path, so the happy path pays nothing for it, and the three arms are
  * three different things to tell a stale dialog: the row has gone, the row is spoken for, or the
@@ -9244,6 +9248,7 @@ function whyNotOffered(db: FakeDb, entryId: number): string {
   const row = db.collectionEntries.find((e) => e.id === entryId);
   if (!row) return ENTRY_GONE;
   if (inADeckFolder(db, row.folderId)) return ENTRY_IN_A_DECK;
+  if (collectionFolderLocked(db, row.folderId)) return ENTRY_IN_A_LOCKED_FOLDER;
   return NOT_SHORT_OF_THAT;
 }
 
@@ -14887,6 +14892,10 @@ const ALREADY_HERE = "Those copies are already in this deck.";
 const NOTHING_PICKED = "Pick at least one copy to pull into this deck.";
 const NOT_SHORT_OF_THAT = "This deck is not short of that printing any more.";
 const MORE_THAN_MISSING = "That is more copies than this deck is short of.";
+/** `deck_pull::ENTRY_IN_A_LOCKED_FOLDER` (issue #1541) — a stale pick naming a row in a drawer
+ *  the reader has since set aside. Not {@link NOT_SHORT_OF_THAT}: the deck is still short. */
+const ENTRY_IN_A_LOCKED_FOLDER =
+  "Those copies are in a locked folder. Unlock it to pull them into a deck.";
 /**
  * `deck_missing`'s two, and the pair reuses the two above rather than respelling them —
  * {@link NOT_SHORT_OF_THAT} and {@link MORE_THAN_MISSING} say exactly what the batch needs to
