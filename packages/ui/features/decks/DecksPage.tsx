@@ -248,7 +248,8 @@ export function DecksPage() {
    * reads, and why each is one, are {@link useDeckWallMarks}'s, which the Playtesting lobby's
    * wall shares so a deck cannot come to wear two brackets in one app.
    */
-  const { pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor } = useDeckWallMarks(decks.decks);
+  const { pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor, sizeProblemFor } =
+    useDeckWallMarks(decks.decks);
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
@@ -2059,6 +2060,7 @@ export function DecksPage() {
                   pips={pipsByDeck.get(deck.id) ?? null}
                   bracketLabel={bracketFor(deck)}
                   bracketExpected={bracketExpectedFor(deck)}
+                  sizeProblem={sizeProblemFor(deck)}
                   decks={decks}
                   nodes={nodes}
                   folderId={folderOf(deck)}
@@ -2209,6 +2211,7 @@ export function DecksPage() {
                       pips={pipsByDeck.get(deck.id) ?? null}
                       bracketLabel={bracketFor(deck)}
                       bracketExpected={bracketExpectedFor(deck)}
+                      sizeProblem={sizeProblemFor(deck)}
                       decks={decks}
                       nodes={nodes}
                       folderId={folderOf(deck)}

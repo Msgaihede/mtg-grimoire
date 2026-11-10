@@ -2089,6 +2089,77 @@ describe("DecksPage", () => {
   });
 });
 
+/**
+ * **A count that does not fit the deck's format is drawn red** (issue #1524) — so a wall of
+ * Commander decks says at a glance which are 100 cards and which are still being built.
+ *
+ * The rule is the engine's `deckSizeIssue`, so the sentence is the one the editor's panel
+ * prints; what only this page can prove is that each tile is judged by *its own* format's spec.
+ * Three fences: an exact-size format both short and long, a minimum-only format at its floor,
+ * and a deck whose format the table does not carry (`limited` is not in `PICKER`), which no
+ * spec can judge and so draws a plain count.
+ */
+describe("the card count's fit to the format", () => {
+  const SHORT: DeckRow = {
+    ...BURN,
+    id: 21,
+    name: "Short Commander",
+    formatKey: "commander",
+    formatName: "Commander",
+    cardCount: 73,
+  };
+  const FULL: DeckRow = { ...SHORT, id: 22, name: "Full Commander", cardCount: 100 };
+  const LONG: DeckRow = { ...SHORT, id: 23, name: "Long Commander", cardCount: 101 };
+  const SMALL: DeckRow = { ...BURN, id: 24, name: "Small Modern", cardCount: 59 };
+
+  const countOf = async (name: string) => {
+    const tile = (await tileFor(name)).closest("li")!;
+    return within(tile).getByText(/^\d+$/);
+  };
+
+  it("marks the counts that break the format's size, and only those", async () => {
+    deckList.mockResolvedValue([SHORT, FULL, LONG, SMALL, BURN, DRAFT]);
+    wrap(<DecksPage />);
+
+    await waitFor(async () =>
+      expect(await countOf("Short Commander")).toHaveClass("text-destructive"),
+    );
+    expect(await countOf("Long Commander")).toHaveClass("text-destructive");
+    expect(await countOf("Small Modern")).toHaveClass("text-destructive");
+    expect(await countOf("Full Commander")).not.toHaveClass("text-destructive");
+    expect(await countOf("Burn")).not.toHaveClass("text-destructive");
+    expect(await countOf("Sunday draft")).not.toHaveClass("text-destructive");
+
+    // Never by colour alone: the editor's own sentence is in the tile's name.
+    expect(await tileFor("Short Commander")).toHaveAccessibleName(
+      /Commander decks are exactly 100 cards including the commander; you have 73\./,
+    );
+    expect(await tileFor("Small Modern")).toHaveAccessibleName(
+      /Modern decks need at least 60 cards; you have 59\./,
+    );
+    expect(await tileFor("Full Commander")).not.toHaveAccessibleName(/you have/);
+  });
+
+  it("says why on hover", async () => {
+    deckList.mockResolvedValue([SHORT]);
+    wrapWithTips(<DecksPage />);
+
+    await waitFor(async () =>
+      expect(await countOf("Short Commander")).toHaveClass("text-destructive"),
+    );
+    // `describes: false` — the sentence is already in the tile's name — so the panel is drawn
+    // `aria-hidden` and has no `tooltip` role to find it by; it is found by its one id.
+    fireEvent.pointerEnter(await countOf("Short Commander"));
+    await waitFor(
+      () =>
+        expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+          "Commander decks are exactly 100 cards including the commander; you have 73.",
+        ),
+      { timeout: 2_000 },
+    );
+  });
+});
+
 describe("DecksPage folders", () => {
   /** Nested and indented, with each row counting everything under it — a row reading 0 over a
    *  sub-folder holding twelve decks is a lie the reader could only catch by clicking. */
