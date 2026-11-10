@@ -63,9 +63,18 @@ const ROW: DragPayload = {
   fromCategoryId: MAIN,
 };
 
+const NO_REST: readonly DragPayload[] = [];
+
 /** Something to pick up. `cardDraggable` rather than the library's `draggable` directly, so the
  *  payload travels exactly as a card's does from any of the app's four drag sources. */
-function Source({ payload }: { payload: DragPayload }) {
+function Source({
+  payload,
+  rest = NO_REST,
+}: {
+  payload: DragPayload;
+  /** The rest of a picked set, for a multi-select drag (issue #214). */
+  rest?: readonly DragPayload[];
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
@@ -74,18 +83,34 @@ function Source({ payload }: { payload: DragPayload }) {
     // measures every rect as zero, so a source with no box is pressed at the origin — which is
     // inside whatever else has been given a rect there.
     boxed(element, 0);
-    return cardDraggable({ element, payload: () => payload });
-  }, [payload]);
+    return cardDraggable({ element, payload: () => payload, rest: () => rest });
+  }, [payload, rest]);
   return <div ref={ref}>the card</div>;
 }
 
-const onDrop = vi.fn<(writes: DeckWrite[]) => void>();
-const onNewCategory = vi.fn<(payload: DragPayload) => void>();
+/** Two more rows of this deck, for the picked-set drags. */
+const BEAR: DragPayload = {
+  kind: "deck-card",
+  finish: null,
+  cardId: "c-bear",
+  name: "Grizzly Bears",
+  fromCategoryId: MAIN,
+};
+const PONDER: DragPayload = {
+  kind: "deck-card",
+  finish: null,
+  cardId: "c-ponder",
+  name: "Ponder",
+  fromCategoryId: MAIN,
+};
 
-function mount(payload: DragPayload) {
+const onDrop = vi.fn<(writes: DeckWrite[]) => void>();
+const onNewCategory = vi.fn<(payloads: DragPayload[]) => void>();
+
+function mount(payload: DragPayload, rest?: readonly DragPayload[]) {
   render(
     <>
-      <Source payload={payload} />
+      <Source payload={payload} rest={rest} />
       <QuickZones categories={CATEGORIES} onDrop={onDrop} onNewCategory={onNewCategory} />
     </>,
   );
@@ -248,8 +273,36 @@ describe("QuickZones", () => {
     await held.over(zone("New category"));
     await held.drop();
 
-    expect(onNewCategory).toHaveBeenCalledWith(ROW);
+    expect(onNewCategory).toHaveBeenCalledWith([ROW]);
     expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Issue #1534: a picked set lands on New category whole**, primary first — exactly what the
+   * three zones beside it hand to `dropWrites`. It used to hand up the grabbed card alone, so the
+   * other picked cards stayed where they were.
+   */
+  it("hands every picked card up when a multi-select drag lands on New category", async () => {
+    const pick = mount(ROW, [BEAR, PONDER]);
+
+    const held = await pick();
+    await held.over(zone("New category"));
+    await held.drop();
+
+    expect(onNewCategory).toHaveBeenCalledWith([ROW, BEAR, PONDER]);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** The sibling it now agrees with: the same three-card drag onto a fixed zone writes all three. */
+  it("writes every picked card when a multi-select drag lands on a fixed zone", async () => {
+    const pick = mount(ROW, [BEAR, PONDER]);
+
+    const held = await pick();
+    await held.over(zone("Sideboard"));
+    await held.drop();
+
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop.mock.calls[0][0]).toHaveLength(3);
   });
 
   /** The pile's own name, not the fixed word — the two agree while the seeded zones cannot be
@@ -363,11 +416,11 @@ describe("QuickCategoryDialog", () => {
 
   beforeEach(() => onCreate.mockReset());
 
-  function open(failure: string | null = null, pending = false) {
+  function open(failure: string | null = null, pending = false, cardNames = ["Lightning Bolt"]) {
     render(
       <QuickCategoryDialog
         open
-        cardName="Lightning Bolt"
+        cardNames={cardNames}
         pending={pending}
         failure={failure}
         onCreate={onCreate}
@@ -387,6 +440,14 @@ describe("QuickCategoryDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
     expect(onCreate).toHaveBeenCalledWith("Removal");
+  });
+
+  /** A picked set is counted rather than named (issue #1534) — the drag preview's chip, said
+   *  again now that the drag is over. */
+  it("counts the cards when a picked set is being filed", () => {
+    open(null, false, ["Lightning Bolt", "Grizzly Bears", "Ponder"]);
+    expect(screen.getByText("3 cards")).toBeInTheDocument();
+    expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument();
   });
 
   /** The caret is in the field on open — the one dialog in this editor that does that, because

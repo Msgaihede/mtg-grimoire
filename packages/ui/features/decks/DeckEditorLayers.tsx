@@ -276,8 +276,11 @@ export type Layer =
    * {@link DragPayload} says and a card id does not. It is also frozen on purpose, unlike
    * `export`, `deleteCategory` and `clearCategory` above: those name a row the deck is re-read
    * into, while this names a gesture that is over. There is nothing live to look it up from.
+   *
+   * **Every card the drag carried, primary first, and never empty** (issue #1534) — a drag from
+   * a picked tile carries the whole set, and this arm held the grabbed card alone until then.
    */
-  | { kind: "quickCategory"; payload: DragPayload }
+  | { kind: "quickCategory"; payloads: readonly DragPayload[] }
   /**
    * A card's **Label card ▸ New label…** was pressed, and the label it will wear has no name
    * and no colour yet.
@@ -554,7 +557,7 @@ export function DeckEditorLayers({
   const clearCategory = deck.clearCategory.mutate;
   const clearPending = deck.clearCategory.isPending;
   const writeQuickAdd = deck.quickAddToCollection.mutate;
-  const quickCategoryPayload = layer?.kind === "quickCategory" ? layer.payload : null;
+  const quickCategoryPayloads = layer?.kind === "quickCategory" ? layer.payloads : null;
 
   return (
     <>
@@ -923,7 +926,7 @@ export function DeckEditorLayers({
           the delete confirmation's reason one dialog up: that banner is behind this scrim. */}
       <QuickCategoryDialog
         open={layer?.kind === "quickCategory"}
-        cardName={quickCategoryPayload?.name ?? ""}
+        cardNames={quickCategoryPayloads?.map((p) => p.name) ?? []}
         pending={meta.createCategory.isPending}
         failure={
           meta.createCategory.isError
