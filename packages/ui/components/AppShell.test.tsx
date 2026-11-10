@@ -816,6 +816,70 @@ it("switches the active view", async () => {
   expect(screen.getByRole("button", { name: "Search" })).not.toHaveAttribute("aria-current");
 });
 
+/**
+ * Issue #1596: the header's two ways into Settings each name their panel. Both used to be a bare
+ * `setActiveView("settings")`, which a fresh page drew at its first group (Updates) and an open
+ * one at whatever group it was on — so the sync marker never reached Sync, and neither button
+ * did anything from Settings › Storage. The hand-off is what `SettingsPage` spends.
+ */
+describe("the header's ways into Settings", () => {
+  const offered: Update = {
+    ...noUpdate,
+    status: {
+      currentVersion: "0.2.0",
+      installKind: "portable",
+      available: {
+        version: "0.3.0",
+        tag: "v0.3.0",
+        notes: "",
+        publishedAt: "2026-08-09T04:02:20Z",
+        htmlUrl: "https://github.com/Msgaihede/mtg-grimoire/releases/tag/v0.3.0",
+        assets: [],
+      },
+      asset: null,
+      lastCheckAt: null,
+      busy: false,
+      staged: false,
+    },
+    action: "download",
+  };
+
+  beforeEach(() => {
+    useAppStore.setState({ pendingSettingsPanel: null });
+  });
+
+  it("opens the Sync panel from the sync marker, from another view", async () => {
+    syncLiveState.mockResolvedValue("live");
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sync is live" }));
+
+    expect(useAppStore.getState().activeView).toBe("settings");
+    expect(useAppStore.getState().pendingSettingsPanel).toBe("sync");
+  });
+
+  it("opens the Sync panel from the sync marker while Settings is already open", async () => {
+    syncLiveState.mockResolvedValue("offline");
+    useAppStore.setState({ activeView: "settings" });
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sync is offline" }));
+
+    expect(useAppStore.getState().activeView).toBe("settings");
+    expect(useAppStore.getState().pendingSettingsPanel).toBe("sync");
+  });
+
+  it("opens the Updates panel from the update button while Settings is already open", async () => {
+    useAppStore.setState({ activeView: "settings" });
+    render(<AppShell update={offered}>{null}</AppShell>);
+
+    await userEvent.click(screen.getByRole("button", { name: /0\.3\.0/ }));
+
+    expect(useAppStore.getState().activeView).toBe("settings");
+    expect(useAppStore.getState().pendingSettingsPanel).toBe("updates");
+  });
+});
+
 /** Issue #1507: the entry of the page already open is the way back to that page's root. */
 it("asks the open view for its root when its own entry is pressed again", async () => {
   render(<AppShell update={noUpdate}>{null}</AppShell>);

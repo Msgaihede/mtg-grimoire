@@ -44,12 +44,17 @@
  * own colour. What still tells them apart is words — the caption and the accessible name say
  * `Deck folder` or `Managed wishlist` — and the glyph, which is the page's own for the same fact.
  *
- * **An empty pin set falls back to the cabinet's top level, in the order its page draws it.**
- * `folders` is in the default layout with `config: null`, so that fallback is what every reader
- * sees before they have pinned anything, and a dead card would be the first thing the home page
- * ever said. The order is `buildShelves`': the reader's own folders first, then the deck groups by
- * name and `Recently removed`, then the managed wishlists by name — so the binders that matter still
- * lead, and a box too small for everything cuts the app's own first. It used to be `user` folders
+ * **A pin set naming no folder falls back to the cabinet's top level, in the order its page draws
+ * it.** `folders` is in the default layout with `config: null`, so that fallback is what every
+ * reader sees before they have pinned anything, and a dead card would be the first thing the home
+ * page ever said. **A pin whose folder has since been deleted is no pin at all** (issue #1580): the
+ * fallback is keyed on what the stored ids *resolve* to, the settings picker counts and ticks only
+ * the ids it can show, and the next toggle drops the dead ones — so pinning one folder and deleting
+ * it reads `Automatic` in the settings and the top level on the card, rather than `1 folder` over
+ * `No collection folders yet` with no box left to untick. The order is `buildShelves`': the
+ * reader's own folders first, then the deck groups by name and `Recently removed`, then the managed
+ * wishlists by name — so the binders that matter still lead, and a box too small for everything
+ * cuts the app's own first. It used to be `user` folders
  * only, which made a deck's group reachable from its page and unreachable from here until pinned.
  * **It is not capped at six per cabinet** — that number was a wide card's glance, and the box
  * decides how many rows are a glance.
@@ -411,7 +416,9 @@ type CabinetState =
  *
  * The pinned ids resolved **in the order they were pinned** — the reader chose both which and
  * where — and an id naming nothing dropped, because another surface deleting a folder is a race
- * rather than a mistake. With nothing pinned it is the caller's fallback level: read off the
+ * rather than a mistake. With nothing pinned **or nothing the pins name still there** it is the
+ * caller's fallback level — the settings picker reads such a set as `Automatic` ({@link livePins}),
+ * so the card says what the picker says: read off the
  * *tree* rather than filtered out of the flat rows, because a folder whose parent this list does
  * not carry is drawn at the root, and "the top level" has to mean the level a reader can see.
  */
@@ -420,14 +427,38 @@ function pick<F extends FolderLike>(
   folders: readonly F[],
   fallback: () => readonly FolderNode<F>[],
 ): readonly F[] {
-  if (ids.length === 0) return fallback().map((node) => node.folder);
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   const seen = new Set<number>();
-  return ids.flatMap((id) => {
+  const pinned = ids.flatMap((id) => {
     const folder = byId.get(id);
     if (folder === undefined || seen.has(id)) return [];
     seen.add(id);
     return [folder];
+  });
+  return pinned.length === 0 ? fallback().map((node) => node.folder) : pinned;
+}
+
+/**
+ * The pins that still name a folder, once each, in the order they were pinned — what the settings
+ * picker ticks, counts and toggles (issue #1580). An id whose folder was deleted is not among the
+ * picker's options, so counting it drew `1 folder` over a list with nothing ticked, and keeping it
+ * through a toggle left a box nobody could untick between the reader and `Automatic`.
+ *
+ * **`undefined` folders — a list not read yet, or refused — keeps every stored id**, because a
+ * picker that has not been told which folders exist cannot tell a dead pin from a live one, and
+ * must not drop the reader's pins on its own ignorance.
+ */
+export function livePins(
+  ids: readonly number[],
+  folders: readonly FolderLike[] | undefined,
+): number[] {
+  if (folders === undefined) return [...ids];
+  const exists = new Set(folders.map((folder) => folder.id));
+  const seen = new Set<number>();
+  return ids.filter((id) => {
+    if (!exists.has(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
   });
 }
 
@@ -699,11 +730,17 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
   const wishlist = useWishlistFolders();
   const cabinets = cabinetsOf(widget);
   const config = foldersConfig(widget);
+  // Only the pins the picker can show — see `livePins`. A dead id is neither counted nor ticked,
+  // and the next toggle writes it away.
+  const pins: FoldersConfig = {
+    collectionFolderIds: livePins(config.collectionFolderIds, collection.query.data),
+    wishlistFolderIds: livePins(config.wishlistFolderIds, wishlist.query.data),
+  };
 
   /** Add at the end, remove in place — the stored order is the order the reader pinned in. */
   const toggle = (key: keyof FoldersConfig, value: string) => {
     const id = Number(value);
-    const current = config[key];
+    const current = pins[key];
     onConfig({
       [key]: current.includes(id) ? current.filter((each) => each !== id) : [...current, id],
     });
@@ -724,9 +761,9 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
             value: String(each.id),
             label: collectionFolderOption(each),
           }))}
-          selected={config.collectionFolderIds.map(String)}
+          selected={pins.collectionFolderIds.map(String)}
           onToggle={(value) => toggle("collectionFolderIds", value)}
-          triggerLabel={folderCount(config.collectionFolderIds)}
+          triggerLabel={folderCount(pins.collectionFolderIds)}
         />
       )}
       {cabinets !== "collection" && (
@@ -737,9 +774,9 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
             value: String(each.id),
             label: wishlistFolderOption(each, wishlist.folders),
           }))}
-          selected={config.wishlistFolderIds.map(String)}
+          selected={pins.wishlistFolderIds.map(String)}
           onToggle={(value) => toggle("wishlistFolderIds", value)}
-          triggerLabel={folderCount(config.wishlistFolderIds)}
+          triggerLabel={folderCount(pins.wishlistFolderIds)}
         />
       )}
     </div>

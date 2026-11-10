@@ -82,8 +82,15 @@ export function useCardZoomGesture(ref: RefObject<HTMLElement | null>, section: 
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      // Negative `deltaY` is a scroll *up*, which everything with a zoom reads as zooming in.
-      useAppStore.getState().zoomCards(section, e.deltaY < 0 ? 1 : -1);
+      // With Shift held, Chromium on Windows turns the wheel sideways: `deltaY` is 0 and the notch
+      // is in `deltaX`, wheel-up negative like a scroll up. A tilt wheel arrives the same way. Read
+      // that axis when the vertical one is silent — taking a zero as "down" zoomed out on
+      // Ctrl+Shift (the range-selection chord) whichever way the wheel turned (issue #1569). An
+      // event with no travel on either axis still cancels the window's zoom, and steps nothing.
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      // Negative is a scroll *up* (or left), which everything with a zoom reads as zooming in.
+      useAppStore.getState().zoomCards(section, delta < 0 ? 1 : -1);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     sectionElements.set(section, el);

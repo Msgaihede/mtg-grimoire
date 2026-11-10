@@ -494,12 +494,12 @@ describe("AddToCollectionButton", () => {
     // Everything that counts cards: this list, and the search results, whose owned badge is now
     // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
-    // **And deliberately not the wishlist**, which is the assertion that would go red if the
-    // root came back. It was here because a wish's `ownedQuantity` was summed from
-    // `collection_entries`, so a copy landing in a binder moved a figure on rows nobody had
-    // touched. The wishlist reads no collection figure since 2026-09-08, so refetching it would
-    // be work for a number that cannot have moved.
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // **And the wishlist** (issue #1570). This assertion said the opposite from 2026-09-08, when
+    // a wish read no collection figure; #988 and #1055 put `ownedExact`, `ownedOther` and
+    // `ownedPlaces` back on every wish, counted from `collection_entries`, so a copy added here
+    // is a copy some wish for the card now owns — and a Wishlist returned to inside the 30 s
+    // `staleTime` drew it unowned.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     // And every deck: this popup files into user folders and the root, never into a deck's
     // group — but the theory list's spare column counts exactly the copies that are in no
     // group, so a copy added here is a copy some plan may now read as spare.
@@ -552,7 +552,6 @@ describe("AddToCollectionButton", () => {
 
     expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Wishlist");
   });
-
 
   /** The popup is 256px of controls hanging over a list. Tabbing out of it must not leave
    *  it there, and a reader who has moved on is not owed the caret back. */
@@ -659,9 +658,7 @@ describe("AddToCollectionButton", () => {
       folderName,
     });
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Change folder for Lightning Bolt" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Change folder for Lightning Bolt" }));
 
     const list = screen.getByRole("group", { name: "File Lightning Bolt in a folder" });
     // One layer, not two: the list is drawn inside the popup that is already open.

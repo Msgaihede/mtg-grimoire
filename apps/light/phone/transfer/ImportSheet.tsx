@@ -4,6 +4,7 @@ import { Dialog } from "@grimoire/ui/components/Dialog";
 import type { ImportDestination } from "@grimoire/ui/features/transfer/import/destination";
 import { LEGACY_ENCODING_NOTICE } from "@grimoire/ui/features/transfer/import/ImportDialog";
 import { CsvNotes } from "@grimoire/ui/features/transfer/import/shared/CsvNotes";
+import { SourceRefusal } from "@grimoire/ui/features/transfer/import/shared/SourceRefusal";
 import { useImportSource } from "@grimoire/ui/features/transfer/import/useImportSource";
 import { plural } from "@grimoire/ui/lib/counts";
 import { FOCUS } from "@grimoire/ui/lib/focus";
@@ -176,7 +177,9 @@ function Body({
           autoCapitalize="off"
           autoCorrect="off"
           placeholder={"4 Lightning Bolt\n1 Sol Ring (C21) 263"}
-          aria-describedby={`${id}-hint${readAs === "windows-1252" ? ` ${id}-encoding` : ""}`}
+          aria-describedby={`${id}-hint${readAs === "windows-1252" ? ` ${id}-encoding` : ""}${
+            empty && parsed.issues.length > 0 ? ` ${id}-refused` : ""
+          }`}
           className={cn(
             "w-full resize-y rounded-md border border-border bg-surface px-3 py-2",
             "font-mono text-base leading-relaxed",
@@ -198,6 +201,9 @@ function Body({
             {parsed.issues.length > 0 && ` · ${plural(parsed.issues.length, "unreadable line")}`}
           </p>
         )}
+        {/* The desktop's rule (issue #1552): with nothing read, Preview is shut and the preview's
+            problem list out of reach, so the parser's sentence is said here. */}
+        <SourceRefusal parsed={parsed} id={`${id}-refused`} className="text-xs" />
 
         {/* The file, as the browser hands one over. A real button that presses the input rather
             than a `<label>` round it, so the focus ring is the button's own and the control is

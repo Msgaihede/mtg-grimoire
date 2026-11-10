@@ -7,7 +7,6 @@
  * one `absolute inset-0` layer holding a flash round the box's edge and the card itself, pinned to
  * the bottom. DOM order puts it over the detector's overlay; it needs no `LAYER` rung.
  */
-import { useEffect, useLayoutEffect, useRef } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Transition } from "motion/react";
 import { CircleHelp, RefreshCw } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
@@ -39,7 +38,7 @@ export interface LandedCard {
 }
 
 /**
- * How long the card stays up after a landing before {@link AddedToast} asks to be put away.
+ * How long the card stays up after a landing — `useTrayLanding`'s hold, which puts it away.
  *
  * Long enough to read a name and a printing at a glance, short enough that the card has gone
  * before a reader working at a steady pace has the next one under the camera. A card that lands
@@ -106,10 +105,12 @@ const TICK_DRAW: Transition = {
 const LABEL = "flex items-center gap-1.5 text-[13px] font-medium";
 
 export interface AddedToastProps {
-  /** The landing to show, or `null` to put the card away. */
+  /**
+   * The landing to show, or `null` to put the card away — `useTrayLanding`'s `shown`, which holds
+   * each landing for {@link LANDED_HOLD_MS}. **The overlay keeps no clock of its own** (issue
+   * #1555): one that ran only while the card was drawn left a card hidden by a Stop set forever.
+   */
   card: LandedCard | null;
-  /** Called {@link LANDED_HOLD_MS} after each landing; the page answers by passing `null`. */
-  onDone: () => void;
   /**
    * What the card costs, written out — one figure, or the span across a pick's candidates
    * (`useLandedPrice`, issue #1321). Absent draws nothing: no read has answered yet.
@@ -141,32 +142,16 @@ export interface AddedToastProps {
  * screen reader read every scan twice. Nothing in here is pressable either — the tray is where a
  * landing is acted on, which is why the layer is `pointer-events-none` throughout.
  *
- * While `card` is set the card is on screen; `onDone` is called {@link LANDED_HOLD_MS} after each
- * landing, and the page answers it by passing `null`, which is what lets the card leave through
- * its exit animation.
+ * While `card` is set the card is on screen; passing `null` is what lets it leave through its exit
+ * animation.
  */
 export function AddedToast({
   card,
-  onDone,
   price,
   tier = null,
   compact = false,
   raised = false,
 }: AddedToastProps) {
-  // Latched rather than a dependency, so a caller passing a fresh arrow each render does not
-  // restart the hold on every render — only a new landing does.
-  const done = useRef(onDone);
-  useLayoutEffect(() => {
-    done.current = onDone;
-  });
-
-  const stamp = card?.stamp ?? null;
-  useEffect(() => {
-    if (stamp === null) return;
-    const timer = setTimeout(() => done.current(), LANDED_HOLD_MS);
-    return () => clearTimeout(timer);
-  }, [stamp]);
-
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0">
       {card !== null && (

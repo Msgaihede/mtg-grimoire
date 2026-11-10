@@ -29,7 +29,7 @@ import {
   parseQuery,
   predicateKey,
   predicateLabel,
-  removeToken,
+  removeTokens,
   setTokenNegated,
   setTokenValue,
   tokenKey,
@@ -1068,9 +1068,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     return chips;
   }, [parsed, debouncedText]);
 
-  /** Every term that produced one predicate chip, latest first — so that splicing a later term
-   *  out leaves the earlier ones' spans still true. {@link removeTagChip}'s rule, and the same
-   *  reason: every span is an offset into the string being edited. */
+  /** Every term that produced one predicate chip, latest first — so that rewriting a later term
+   *  in place leaves the earlier ones' spans still true: every span is an offset into the string
+   *  being edited. A removal does not depend on the order; `removeTokens` takes them all at once. */
   const termsBehind = (key: string): PredicateToken[] =>
     parsed.predicates.filter((p) => predicateKey(p) === key).reverse();
 
@@ -1529,14 +1529,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     removeTagChip: (slug: string, namespace: TagNamespace) => {
       const key = chipKey(namespace, slug);
-      // Right to left: every span is an offset into the string being edited, so removing a
-      // later term first leaves the earlier ones' spans still true.
+      // All at once: every span is an offset into the box as typed, and `removeTokens` splices
+      // them all before it collapses a single space (issue #1565).
       const doomed = parsed.tags
         .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
         .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
-        .map(({ token }) => token)
-        .reverse();
-      rewrite(doomed.reduce((query, token) => removeToken(query, token), debouncedText));
+        .map(({ token }) => token);
+      rewrite(removeTokens(debouncedText, doomed));
     },
     /**
      * Put a real tag in place of one the box could not find — pressing a suggestion under the
@@ -1556,8 +1555,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     predicateChips,
     /** Take one typed predicate out of the query — a chip's ✕. Removes every term that produced
      *  the chip, for {@link removeTagChip}'s reason. */
-    removePredicateChip: (key: string) =>
-      rewrite(termsBehind(key).reduce((query, token) => removeToken(query, token), debouncedText)),
+    removePredicateChip: (key: string) => rewrite(removeTokens(debouncedText, termsBehind(key))),
     /** Flip one typed predicate between include and exclude — a chip's press. Rewrites each term
      *  where it stands rather than re-appending it, so the reader's own sentence keeps its
      *  order. A `-bolt` chip does not survive its own include press: `bolt` is free text, which
@@ -1860,7 +1858,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * button cannot clear.
      */
     resetAll: () => {
-      setText("");
+      // Flushed past the debounce, as a chip's press is: a `setText` alone left the old word
+      // driving the wall for 300 ms after the box had emptied (issue #1562).
+      rewrite("");
       setFormat("");
       setColorFilter(NO_COLORS);
       // Cleared although it is not counted above, and the asymmetry is the point: Reset all
@@ -1923,7 +1923,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       // The one view this touches, and only when the press named an order — the Coming soon
       // widget's `imageUpdated` (issue #1214). Every other caller keeps the reader's sort.
       if (order) setSort(order);
-      setText("");
+      // Flushed, `resetAll`'s reason: the typed word must not ask for itself within this set
+      // before the debounce catches up (issue #1562).
+      rewrite("");
       setFormat(ANY_CARD);
       setColorFilter(NO_COLORS);
       setSets([code]);

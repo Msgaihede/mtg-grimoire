@@ -50,11 +50,23 @@ const TAG_MEMORY = viewMemory<{ selection: TagSelection; text: string }>("search
  * Nothing here reads a tag: the queries are the picker's, and the picker mounts only when the
  * reader opens it. {@link TagFilter.tagTerms} is what the page hands `useCardSearch`.
  */
-export function useTagSelection() {
+export function useTagSelection({
+  withoutChips = false,
+}: {
+  /**
+   * Open with no chips picked, the remembered floor, taxonomy and box kept — read on the mount
+   * only. For a page that mounts on a hand-off which is the whole question (a set, a box of
+   * text): {@link TagFilter.clearTags} in render is too late there, since the wall's first
+   * request is built from the first render's terms (issue #1562). `settleFloor` drops a floor
+   * the cleared chips leave with nothing to narrow.
+   */
+  withoutChips?: boolean;
+} = {}) {
   const [remembered] = useState(() => TAG_MEMORY.recall());
-  const [selection, setSelection] = useState<TagSelection>(
-    remembered?.selection ?? EMPTY_SELECTION,
-  );
+  const [selection, setSelection] = useState<TagSelection>(() => {
+    const kept = remembered?.selection ?? EMPTY_SELECTION;
+    return withoutChips && kept.chips.length > 0 ? settleFloor({ ...kept, chips: [] }) : kept;
+  });
   const [text, setText] = useState(remembered?.text ?? "");
   useEffect(() => TAG_MEMORY.keep({ selection, text }), [selection, text]);
 

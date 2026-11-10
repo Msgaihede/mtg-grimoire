@@ -199,3 +199,30 @@ it("says where the tags came from, and does not blame the card sync for their ag
   expect(screen.getByText(/tags from scryfall tagger/i)).toBeInTheDocument();
   expect(screen.queryByText(/card-data sync/i)).not.toBeInTheDocument();
 });
+
+/**
+ * Issue #1543: a rejected tag read (a database busy with a sync) fell through to the empty
+ * sentence, which is a claim about the card — and the one a failure must never pass for.
+ */
+it("says the tag read failed rather than calling the card untagged", async () => {
+  oracleTagsForCards.mockRejectedValue("The card database is busy finishing a sync.");
+  renderWithCard({ oracleId: "o1" });
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Couldn't read this card's oracle tags — The card database is busy finishing a sync.",
+  );
+  expect(screen.queryByText(/No oracle tags/)).not.toBeInTheDocument();
+});
+
+/** And a rejected card read said as one, where it used to read "Loading card…" for good. */
+it("says the card read failed rather than loading for ever", async () => {
+  cardDetail.mockRejectedValue("The card database is busy finishing a sync.");
+  useAppStore.setState({ selectedCardId: "c1" });
+  useAppStore.getState().openCardOverlay("oracleTags");
+  render(wrap(<OracleTagsDialog />));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Couldn't read this card — The card database is busy finishing a sync.",
+  );
+  expect(screen.queryByText("Loading card…")).not.toBeInTheDocument();
+});

@@ -274,6 +274,55 @@ describe("CardModalArt", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("toggles an etched copy of a three-finish printing as etched, and back (issue #1561)", async () => {
+    // A printing sold nonfoil, foil *and* etched has two shiny answers, and "foil if listed" drew
+    // an etched deck row as Foil and turned it into foil on a regular → shiny round trip. The
+    // row says which shiny it is, so the toggle is about that one — and keeps being about it
+    // after its own `Set as regular` re-reads the row as `null`.
+    const three = card({ finishes: '["nonfoil","foil","etched"]' });
+    const onToggleFoil = vi.fn();
+    const { rerender } = render(
+      <CardModalArt
+        card={three}
+        {...rest}
+        deckRow={{ finish: "etched" }}
+        onToggleFoil={onToggleFoil}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Set as regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Set as regular" }));
+    // The write lands and the host re-reads the row as the regular copy.
+    rerender(
+      <CardModalArt
+        card={three}
+        {...rest}
+        deckRow={{ finish: null }}
+        onToggleFoil={onToggleFoil}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Set as etched" }));
+
+    expect(onToggleFoil.mock.calls).toEqual([[null], ["etched"]]);
+  });
+
+  it("seeds an etched toggle from the opening surface, where the printing has it", () => {
+    const three = card({ finishes: '["nonfoil","foil","etched"]' });
+    const { unmount } = render(<CardModalArt card={three} {...rest} openedAs="etched" />);
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    unmount();
+
+    // A plain row of the same printing still offers the foil, as it always did.
+    render(<CardModalArt card={three} {...rest} deckRow={{ finish: null }} />);
+    expect(screen.getByRole("button", { name: "Set as foil" })).toBeInTheDocument();
+  });
+
   it("seeds nothing from a plain copy, which is not the same as nobody knowing", () => {
     // `nonfoil` is a real answer and a *different* one from `null`: a surface saying "the copy
     // they pressed is the plain one". Both seed nothing, which is right — regular is the finish a

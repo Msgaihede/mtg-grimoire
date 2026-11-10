@@ -3659,6 +3659,60 @@ describe("the collection grain", () => {
 });
 
 /**
+ * The deck-custody fence on the reader's own writes (issue #1537), `collection::refuse_in_a_deck`'s
+ * tests one side over: a copy in a deck's group cannot be stepped, removed, re-finished or
+ * re-printed — and a grade or a note on it can still be corrected.
+ */
+describe("the deck-custody fence on a copy's own writes", () => {
+  const held = () =>
+    makeDb({
+      collectionEntries: [
+        entry({ id: 1, quantity: 1, folderId: 2 }),
+        entry({ id: 2, cardId: BOLT_JA.id, quantity: 2 }),
+      ],
+      collectionFolders: [
+        {
+          id: 2,
+          parentId: null,
+          name: "Burn",
+          kind: "deck",
+          deckId: 7,
+          sortOrder: 0,
+          locked: false,
+        },
+      ],
+    });
+  const IN_A_DECK = /Those copies are in a deck/;
+
+  it("refuses the stepper, the finish, the printing and the removes, and writes nothing", () => {
+    const db = held();
+    const w = writeHandlers(db);
+
+    expect(() => w.collection_set_quantity({ id: 1, quantity: 2 })).toThrow(IN_A_DECK);
+    expect(() => w.collection_set_quantity({ id: 1, quantity: 0 })).toThrow(IN_A_DECK);
+    expect(() => w.collection_update({ id: 1, patch: { finish: "foil" } })).toThrow(IN_A_DECK);
+    expect(() => w.collection_update({ id: 1, patch: { quantity: 3 } })).toThrow(IN_A_DECK);
+    expect(() => w.collection_set_printing({ id: 1, cardId: BOLT_2X2.id })).toThrow(IN_A_DECK);
+    expect(() => w.collection_remove({ id: 1 })).toThrow(IN_A_DECK);
+    expect(() => w.collection_remove_many({ ids: [2, 1] })).toThrow(IN_A_DECK);
+
+    expect(db.collectionEntries).toHaveLength(2);
+    expect(db.collectionEntries[0]).toMatchObject({ id: 1, quantity: 1, cardId: BOLT.id });
+  });
+
+  it("lets through an edit a deck never reads, and the copies outside the group", () => {
+    const db = held();
+    const w = writeHandlers(db);
+
+    expect(w.collection_update({ id: 1, patch: { notes: "the good one" } })).toMatchObject({
+      id: 1,
+    });
+    expect(w.collection_set_quantity({ id: 2, quantity: 3 })).toMatchObject({ quantity: 3 });
+    expect(w.collection_remove_many({ ids: [2] })).toMatchObject({ removed: 1 });
+  });
+});
+
+/**
  * `collection_set_printing` — issue #564, `collection::set_entry_printing`'s own tests one side
  * over: repoint and refresh, the two refusals, the no-op, and the fold that respects the folder.
  */
@@ -6442,12 +6496,51 @@ describe("moving copies across the deck boundary", () => {
 
     const out = w.deck_to_collection({ deckCardId: dc.id, quantity: 2 });
 
-    expect(out).toMatchObject({ fromDeck: null, quantity: 2 });
-    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
-    expect(copiesIn(db, groupId(1))).toBe(0);
-    // The row the deck started with survives the cut, holding a copy nobody owns: cutting two
-    // took the two that were filed and the list is what the reader still wants.
+    // Three listed, two held, two cut: one listed is left and the list still claims one of the
+    // two copies, so only the other is displaced (issue #1536). Until 2026-11-10 the cut gave
+    // back both and left the line reading one listed, none owned.
+    expect(out).toMatchObject({ fromDeck: null, quantity: 1 });
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(1);
+    expect(copiesIn(db, groupId(1))).toBe(1);
     expect(listed(db, 1)).toBe(1);
+  });
+
+  /**
+   * **A step down on a line the folder backs in part moves nothing** (issue #1536): four listed
+   * and two held, so the copy cut is one the reader never had. The cut used to release up to the
+   * cut quantity, clamped only at what the group held, and filed an owned copy away.
+   */
+  it("keeps the copies the list still claims when a partly backed line steps down", () => {
+    const db = boundary({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 4 })],
+    });
+
+    const out = writeHandlers(db).deck_to_collection({ deckCardId: 1, quantity: 1 });
+
+    expect(out).toEqual({ entryId: null, fromDeck: null, deckCardId: null, quantity: 0 });
+    expect(listed(db, 1)).toBe(3);
+    expect(copiesIn(db, groupId(1))).toBe(2);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+  });
+
+  /** **And a cut never takes the copy another pile still names** (issue #1536): Bolt in Main and
+   *  in the Sideboard, one copy held — cutting Main leaves it for the Sideboard. */
+  it("leaves the copy another pile still claims when a row is cut", () => {
+    const db = boundary({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).deck_to_collection({ deckCardId: 1, quantity: 1 });
+
+    expect(out.quantity).toBe(0);
+    expect(listed(db, 1)).toBe(1);
+    expect(copiesIn(db, groupId(1))).toBe(1);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
   });
 
   /**
@@ -6784,8 +6877,10 @@ describe("moving copies across the deck boundary", () => {
     expect(free()).toBe(0);
 
     // `Recently removed` is on the spare side deliberately: a card that left a deck without
-    // leaving the database is back on the reader's desk.
-    w.deck_to_collection({ deckCardId: db.deckCards[0].id, quantity: 1 });
+    // leaving the database is back on the reader's desk. The whole row is cut — the baseline's
+    // unbacked copy and the filed one — because a cut of one would leave the list still claiming
+    // the copy the folder holds (issue #1536).
+    w.deck_to_collection({ deckCardId: db.deckCards[0].id, quantity: 2 });
     expect(free()).toBe(1);
   });
 
@@ -7058,6 +7153,52 @@ describe("pulling owned copies into a deck", () => {
         picks: [{ entryId: 1, quantity: 1 }],
       }),
     ).toThrow(/copies are in a deck/);
+  });
+
+  /**
+   * **A locked drawer is not the reader's desk either** (issue #1541), and neither is a shelf
+   * inside it — locked by its parent and by nothing of its own, the arm that gets missed. Both
+   * ends again: the plan offers nothing, and a stale pick hears the lock's own sentence rather
+   * than "not short of that", because the deck is still short.
+   */
+  it("never offers a copy in a locked folder, and refuses one picked anyway", () => {
+    const db = shortOfThree({
+      collectionFolders: [
+        ...groupsOf([deck({ id: 1, name: "Burn" })]),
+        {
+          id: 1,
+          parentId: null,
+          name: "Set aside",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: true,
+        },
+        {
+          id: 2,
+          parentId: 1,
+          name: "Shelf",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 1, folderId: 2 }),
+      ],
+    });
+    expect(plan(db)).toEqual([]);
+    expect(() =>
+      writeHandlers(db).deck_pull_from_collection({
+        deckId: 1,
+        picks: [{ entryId: 3, quantity: 1 }],
+      }),
+    ).toThrow(/in a locked folder/);
+    expect(copiesIn(db, 1)).toBe(2);
+    expect(copiesIn(db, 2)).toBe(1);
   });
 
   /**
@@ -8325,7 +8466,9 @@ describe("a printing sold only in foil, across the deck boundary", () => {
       ["nonfoil", 1],
     ]);
 
-    const out = w.deck_to_collection({ deckCardId: 1, quantity: 2 });
+    // The whole row of three, so the list claims nothing behind it (issue #1536): a cut of two
+    // would leave one listed and keep the copy it still claims.
+    const out = w.deck_to_collection({ deckCardId: 1, quantity: 3 });
     expect(out.quantity).toBe(2);
     expect(heldIn(db, groupId(1))).toEqual([]);
   });
@@ -14087,7 +14230,9 @@ describe("the whole command table", () => {
         deckCardId: db.deckCards[0].id,
         quantity: 1,
       }),
-    ).resolves.toMatchObject({ quantity: 1 });
+      // Three listed and one owned: the copy cut is one the reader never had, so none moves
+      // (issue #1536).
+    ).resolves.toMatchObject({ quantity: 0 });
     // `deck_missing_to_wishlist` takes `deckId` where its four neighbours take `id` — the
     // odd one out, and Tauri matches by name.
     await expect(invoke<number>("deck_missing_to_wishlist", { id: 1 })).rejects.toThrow();

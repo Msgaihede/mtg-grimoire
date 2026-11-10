@@ -10,6 +10,7 @@ import {
   positionOfPrice,
   priceAtPosition,
   roundPrice,
+  stepPrice,
 } from "./PriceRange";
 
 /**
@@ -58,6 +59,25 @@ describe("the price scale", () => {
     expect(roundPrice(317)).toBe(315);
     // Across its own first boundary, which is where a non-monotonic rounding would show.
     expect(roundPrice(0.975)).toBe(1);
+  });
+
+  /**
+   * **An arrow key steps by price, not by position** (issue #1573). A native step is one of a
+   * thousand positions, which rounds back to the price it started at almost everywhere on the
+   * ladder; the next *distinct* price is what a press has to reach.
+   */
+  it("steps to the next distinct price either way, and reports the end of the ladder", () => {
+    expect(stepPrice(0, 1)).toBe(0.05);
+    expect(stepPrice(0.05, -1)).toBe(0);
+    expect(stepPrice(1, 1)).toBe(1.25);
+    expect(stepPrice(1000, -1)).toBe(995);
+    expect(stepPrice(995, 1)).toBe(1000);
+    // A typed number between two of the ladder's prices steps to its neighbours on the ladder.
+    expect(stepPrice(7.31, 1)).toBe(7.5);
+    expect(stepPrice(7.31, -1)).toBe(7.25);
+    expect(stepPrice(1000, 1)).toBeUndefined();
+    expect(stepPrice(2000, 1)).toBeUndefined();
+    expect(stepPrice(0, -1)).toBeUndefined();
   });
 
   /** A number past the top anchor has nowhere further to go; the box beside it keeps the truth. */
@@ -173,25 +193,25 @@ describe("PriceRange", () => {
    */
   it("paints the band gold only once an end is bound", () => {
     const fill = () =>
-      document.querySelector('input[type="range"]')!.parentElement!.querySelectorAll(
-        '[aria-hidden="true"]',
-      )[1];
+      document
+        .querySelector('input[type="range"]')!
+        .parentElement!.querySelectorAll('[aria-hidden="true"]')[1];
 
     range();
     expect(fill().className).toContain("bg-border");
     expect(fill().className).not.toContain("bg-accent");
 
     range({ min: 5 });
-    const bound = document.querySelectorAll('input[type="range"]')[2].parentElement!.querySelectorAll(
-      '[aria-hidden="true"]',
-    )[1];
+    const bound = document
+      .querySelectorAll('input[type="range"]')[2]
+      .parentElement!.querySelectorAll('[aria-hidden="true"]')[1];
     expect(bound.className).toContain("bg-accent");
 
     // …and a *ceiling* alone is a filter too, which is the arm a `min`-only test would miss.
     range({ max: 5 });
-    const capped = document.querySelectorAll('input[type="range"]')[4].parentElement!.querySelectorAll(
-      '[aria-hidden="true"]',
-    )[1];
+    const capped = document
+      .querySelectorAll('input[type="range"]')[4]
+      .parentElement!.querySelectorAll('[aria-hidden="true"]')[1];
     expect(capped.className).toContain("bg-accent");
   });
 
@@ -247,6 +267,113 @@ describe("PriceRange", () => {
     const other = range({ min: 10, max: 20 });
     drag(screen.getAllByRole("slider", { name: "Highest price, slider" })[1], positionOfPrice(2));
     expect(lastBand(other)).toEqual([2, 2]);
+  });
+
+  /**
+   * **One notch per press, from either end** (issue #1573). A native arrow step moved the handle
+   * one position, which rounded back to the price it was already at: the floor never left `0` —
+   * and worse, turned on a `≥ 0` filter that hides every unpriced printing — and the ceiling
+   * stuck four positions in.
+   *
+   * A keydown is what drives this, because the handler steps by price and suppresses the native
+   * step; jsdom has no native step to suppress, which is exactly why `fireEvent.keyDown`'s return
+   * value is checked — `false` is the `preventDefault` a real WebView depends on.
+   */
+  it("moves a handle one price per arrow key, and never moves it in place", () => {
+    const onChange = range();
+
+    const mins: (number | undefined)[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      expect(fireEvent.keyDown(low(), { key: i % 2 === 0 ? "ArrowRight" : "ArrowUp" })).toBe(false);
+      mins.push(lastBand(onChange)[0]);
+    }
+    // The first press lands on a real price and not on the zero floor.
+    expect(mins[0]).toBe(0.05);
+    mins.forEach((price, i) => {
+      expect(price).toBe(roundPrice(price as number));
+      if (i > 0) expect(price).toBeGreaterThan(mins[i - 1] as number);
+    });
+    expect(Number((low() as HTMLInputElement).value)).toBeGreaterThan(0);
+
+    // Back down to the left edge, which is the open floor and not a `0` filter.
+    for (let i = 0; i < 20; i += 1) fireEvent.keyDown(low(), { key: "ArrowLeft" });
+    expect(lastBand(onChange)[0]).toBeUndefined();
+    expect(low()).toHaveValue("0");
+    // …and a further press at the edge asks for nothing at all.
+    const calls = onChange.mock.calls.length;
+    fireEvent.keyDown(low(), { key: "ArrowDown" });
+    expect(onChange.mock.calls.length).toBe(calls);
+  });
+
+  it("walks the ceiling down from open and back up to open", () => {
+    const onChange = range();
+
+    const positions: number[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      fireEvent.keyDown(high(), { key: "ArrowLeft" });
+      positions.push(Number((high() as HTMLInputElement).value));
+    }
+    expect(lastBand(onChange)[1]).toBe(1000 - 12 * 5);
+    positions.forEach((pos, i) => {
+      expect(pos).toBeLessThan(i === 0 ? PRICE_POSITIONS : positions[i - 1]);
+    });
+
+    for (let i = 0; i < 12; i += 1) fireEvent.keyDown(high(), { key: "ArrowRight" });
+    expect(lastBand(onChange)[1]).toBeUndefined();
+    expect(high()).toHaveValue(String(PRICE_POSITIONS));
+  });
+
+  /**
+   * A typed ceiling past the top anchor shares the far-right position with "no ceiling", so a
+   * step *down* from it lands on the top anchor as a real bound — the handle cannot tell the two
+   * apart, and the direction of the press is what does.
+   */
+  it("steps a typed ceiling past the ladder down onto it, and up to open", () => {
+    const onChange = range({ max: 2000 });
+
+    fireEvent.keyDown(high(), { key: "ArrowLeft" });
+    expect(lastBand(onChange)[1]).toBe(1000);
+    fireEvent.keyDown(high(), { key: "ArrowLeft" });
+    expect(lastBand(onChange)[1]).toBe(995);
+
+    const raised = range({ max: 2000 });
+    fireEvent.keyDown(screen.getAllByRole("slider", { name: "Highest price, slider" })[1], {
+      key: "ArrowRight",
+    });
+    expect(lastBand(raised)[1]).toBeUndefined();
+  });
+
+  /** The push a drag does, from the keyboard too — one rule for both, not two that drift. */
+  it("carries the other end along when a key steps one past it", () => {
+    const onChange = range({ min: 2, max: 2 });
+
+    fireEvent.keyDown(low(), { key: "ArrowRight" });
+    expect(lastBand(onChange)).toEqual([2.25, 2.25]);
+
+    fireEvent.keyDown(high(), { key: "ArrowLeft" });
+    fireEvent.keyDown(high(), { key: "ArrowLeft" });
+    expect(lastBand(onChange)).toEqual([1.75, 1.75]);
+  });
+
+  /** Only the arrows are taken over: a chord is somebody else's shortcut, and Home is native. */
+  it("leaves other keys and chords to the browser", () => {
+    const onChange = range();
+
+    expect(fireEvent.keyDown(low(), { key: "ArrowRight", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(low(), { key: "Home" })).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A drag a hair off the left edge rounds to `0`, and a floor of `0` is the filter that drops
+   * every unpriced printing — not what a reader nudging the handle asked for.
+   */
+  it("reads a floor that rounds to nothing as no floor", () => {
+    const onChange = range();
+
+    drag(low(), 3);
+    expect(priceAtPosition(3)).toBe(0);
+    expect(lastBand(onChange)[0]).toBeUndefined();
   });
 
   /**

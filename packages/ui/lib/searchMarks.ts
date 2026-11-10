@@ -18,7 +18,9 @@ import { OWNED_WRITE_KEYS } from "./query";
  * - **one filtered by Owned or Missing**, where a write changes which rows *belong* on the wall
  *   and not only what their badges say — a patch can rewrite a row and never add or drop one;
  * - **one with a fetch in flight**, since a page arriving after the patch is built from the
- *   pages the fetch started with and would put the stale badges back;
+ *   pages the fetch started with and would put the stale badges back — asked before the read
+ *   and again after it, because the wall can ask for its next page while the read is out
+ *   (issue #1570);
  * - **anything under the prefix that did not stamp {@link SearchMarksMeta}** — the deck cover
  *   picker's search and any inactive query, which is only marked stale and refetches, as it
  *   always did, when it is next on screen.
@@ -65,39 +67,52 @@ function patchableMeta(query: Query): SearchMarksMeta | null {
 async function patchOne(client: QueryClient, query: Query, meta: SearchMarksMeta): Promise<void> {
   const held = query.state.data as Pages;
   const ids = [...new Set(held.pages.flatMap((page) => page.items.map((row) => row.id)))];
+  const refetch = () => client.invalidateQueries({ queryKey: query.queryKey, exact: true });
+  let marks: Awaited<ReturnType<typeof ipc.searchMarks>>;
   try {
-    const marks = await ipc.searchMarks({
+    marks = await ipc.searchMarks({
       ids,
       // Absent rather than `false`, as `useCardSearch` sends it: uncollapsed is the default.
       collapse: meta.collapse || undefined,
       availableForDeck: meta.availableForDeck,
     });
-    const byId = new Map(marks.map((m) => [m.id, m]));
-    client.setQueryData<Pages>(query.queryKey, (current) => {
-      if (!current) return current;
-      // Identity kept wherever nothing moved, so a "+" re-renders the rows it changed and not
-      // the whole wall. A row the answer leaves out — a corpus swapped since the page loaded —
-      // keeps what it said; the sync that swapped it refetches every search anyway.
-      let changed = false;
-      const pages = current.pages.map((page) => {
-        let pageChanged = false;
-        const items = page.items.map((row) => {
-          const m = byId.get(row.id);
-          if (!m || (m.ownedQuantity === row.ownedQuantity && m.wishlisted === row.wishlisted)) {
-            return row;
-          }
-          pageChanged = true;
-          return { ...row, ownedQuantity: m.ownedQuantity, wishlisted: m.wishlisted };
-        });
-        if (!pageChanged) return page;
-        changed = true;
-        return { ...page, items };
-      });
-      return changed ? { ...current, pages } : current;
-    });
   } catch {
-    await client.invalidateQueries({ queryKey: query.queryKey, exact: true });
+    await refetch();
+    return;
   }
+  // **Asked again after the read, not only before it** (issue #1570). `patchableMeta` saw the
+  // query idle, but the wall can ask for its next page while `search_marks` is in flight — and
+  // that fetch builds its answer from the pages it captured when it *started*, so a patch written
+  // now would be overwritten with the pre-write badges the moment the page lands, leaving the
+  // query neither stale nor invalidated. A fetch running now is the module doc's second case
+  // arriving late, and it gets that case's answer: the refetch, which cancels it and re-reads.
+  if (query.state.fetchStatus !== "idle") {
+    await refetch();
+    return;
+  }
+  const byId = new Map(marks.map((m) => [m.id, m]));
+  client.setQueryData<Pages>(query.queryKey, (current) => {
+    if (!current) return current;
+    // Identity kept wherever nothing moved, so a "+" re-renders the rows it changed and not
+    // the whole wall. A row the answer leaves out — a corpus swapped since the page loaded —
+    // keeps what it said; the sync that swapped it refetches every search anyway.
+    let changed = false;
+    const pages = current.pages.map((page) => {
+      let pageChanged = false;
+      const items = page.items.map((row) => {
+        const m = byId.get(row.id);
+        if (!m || (m.ownedQuantity === row.ownedQuantity && m.wishlisted === row.wishlisted)) {
+          return row;
+        }
+        pageChanged = true;
+        return { ...row, ownedQuantity: m.ownedQuantity, wishlisted: m.wishlisted };
+      });
+      if (!pageChanged) return page;
+      changed = true;
+      return { ...page, items };
+    });
+    return changed ? { ...current, pages } : current;
+  });
 }
 
 /**

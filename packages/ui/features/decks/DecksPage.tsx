@@ -9,7 +9,7 @@ import {
 import { ArrowUp, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
-import { FolderNameField } from "@/components/FolderNameField";
+import { FolderNameField, useFolderFieldReturn } from "@/components/FolderNameField";
 import { PageBar, type PageCrumb } from "@/components/PageBar";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import {
@@ -684,12 +684,16 @@ export function DecksPage() {
   // `useFolderFieldReturn`, which refs the pencil React renders in the field's place and restores
   // only when nothing else has taken the caret — so there is nothing for this to do on the wall,
   // and `openerRef` is `null` there by `startRename`'s own line.
+  // **A tree rename asked for while the tree is railed owes no row** (issue #1544): the rail
+  // draws no rows, so there is nothing for {@link refocusFolderRef} to find, and the wall's
+  // stand-in field ({@link railedRename}) hands the caret to the heading's `Folder` control
+  // through `useFolderFieldReturn` instead.
   const dismiss = useCallback(() => {
     if (panel?.kind === "renameFolder" && panel.at === "tree") {
-      refocusFolderRef.current = panel.folderId;
+      if (!collapsed && roomy) refocusFolderRef.current = panel.folderId;
     } else openerRef.current?.focus();
     setPanel(null);
-  }, [panel]);
+  }, [panel, collapsed, roomy]);
 
   // The other end of that, after the render that redraws the row. No deps: a hand-back owed is
   // a hand-back owed on whatever render pays it, and the ref is cleared as it is spent.
@@ -1441,6 +1445,24 @@ export function DecksPage() {
   );
 
   /**
+   * The folder whose tree rename has nowhere to stand, so the wall draws its field instead
+   * (issue #1544) — or `null`.
+   *
+   * The heading row's `Folder` control renames `at: "tree"`, and it is the only route to the
+   * folder verbs while the tree is folded or has railed itself — which is exactly when the tree
+   * unmounts its rows and fields. Without a stand-in the press drew nothing while the panel was
+   * still `renameFolder`, so the next Escape closed an invisible layer. The `newFolder` arm has
+   * the same stand-in for the same reason, beside it in the wall.
+   */
+  const railedRename =
+    panel?.kind === "renameFolder" && panel.at === "tree" && (collapsed || !roomy)
+      ? (folders.folders.find((f) => f.id === panel.folderId) ?? null)
+      : null;
+  /** The heading's `Folder` control — what opened that field, and still drawn while it is up —
+   *  is where the caret lands when the field goes and nothing else has taken it. */
+  const folderActionsRef = useFolderFieldReturn<HTMLButtonElement>(railedRename !== null);
+
+  /**
    * The tree's one field, as the tree needs to know it.
    *
    * **A rename reaches it only when the reader asked for it there** — `at === "tree"`, which is
@@ -1732,6 +1754,7 @@ export function DecksPage() {
                     The visible word stays the first word of the name, which is what WCAG
                     2.5.3 asks and what keeps "click Folder" working for a voice user. */}
                 <button
+                  ref={folderActionsRef}
                   type="button"
                   aria-haspopup="menu"
                   aria-label="Folder actions"
@@ -1759,6 +1782,10 @@ export function DecksPage() {
                 {panel?.kind === "deleteFolder" && (
                   <DeleteFolderConfirm
                     node={openNode}
+                    // Every deck in the subtree, archived ones included — the count the receipt
+                    // below states and the backend moves. `node.count` skips archived decks, so a
+                    // folder holding only those said "It's empty." and then moved them (#1546).
+                    decks={decksUnder(openNode, decks.decks, folderOf).length}
                     pending={folders.remove.isPending}
                     onConfirm={() => {
                       // Destructive, and the wall it was asked over is gone with it — so a
@@ -1914,6 +1941,24 @@ export function DecksPage() {
                 pending={folders.create.isPending}
                 onSubmit={nameFolder}
                 onCancel={dismiss}
+                onClose={close}
+              />
+            </div>
+          )}
+          {/* Its rename twin (issue #1544). `close` rather than `dismiss` for the ✕ and the blur,
+              as the tree's own field does: an outside click keeps the caret where the reader put
+              it, and {@link folderActionsRef} hands it back when nothing else took it. */}
+          {railedRename !== null && (
+            <div className="w-full max-w-sm">
+              <FolderNameField
+                mode="rename"
+                size="heading"
+                initial={railedRename.name}
+                label={`Rename ${railedRename.name}`}
+                submitLabel="Rename folder"
+                pending={folders.rename.isPending}
+                onSubmit={nameFolder}
+                onCancel={close}
               />
             </div>
           )}
@@ -2062,6 +2107,7 @@ export function DecksPage() {
                   // drawings of one folder cannot come to two sets of verbs. What differs is the
                   // `⋯`'s door, which only a card draws, and where a rename asked here stands.
                   rowMenu={folderCardMenu}
+                  menuOpenerRef={menuOpenerRef}
                 />
               ))}
               {shown.map((deck) => (
@@ -2548,12 +2594,16 @@ function DeckFilterRow({
  */
 function DeleteFolderConfirm({
   node,
+  decks,
   pending,
   onConfirm,
   onCancel,
   onClose,
 }: {
   node: FolderNode;
+  /** How many decks the delete moves to the top level: every one under the folder, archived
+   *  included — not `node.count`, which counts only what the wall draws. */
+  decks: number;
   pending: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -2587,9 +2637,7 @@ function DeleteFolderConfirm({
     >
       <p>Delete “{node.folder.name}”?</p>
       <p className="mt-1 leading-relaxed text-dim">
-        {node.count === 0
-          ? "It's empty."
-          : `Its ${plural(node.count, "deck")} will move to the top level.`}
+        {decks === 0 ? "It's empty." : `Its ${plural(decks, "deck")} will move to the top level.`}
         {inside > 0 &&
           ` ${plural(inside, "folder")} inside it will also be deleted.`}
       </p>

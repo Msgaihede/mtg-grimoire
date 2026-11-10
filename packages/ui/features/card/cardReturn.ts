@@ -136,9 +136,9 @@ export function isSameStop(stop: CardWalkStop, address: CardWalkStop): boolean {
  *
  * ## What it answers, and why the caller wants it
  *
- * The **depth** of that stack, which is `DialogProps.caretPulse`: it changes on exactly the two
- * moments the app moves the reader without being asked, and those are the two moments a control
- * may have vanished from under their caret. Answered from here rather than selected a second
+ * The **depth** of that stack, one of the signals behind `DialogProps.caretPulse`: it changes on
+ * exactly the two moments the app moves the reader without being asked, and those are the two
+ * moments a control may have vanished from under their caret. Answered from here rather than selected a second
  * time by the host, because a second subscriber to the same field is a second opinion about when
  * a move happened.
  */

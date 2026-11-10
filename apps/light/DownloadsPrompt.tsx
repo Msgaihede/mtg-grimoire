@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dialog } from "@grimoire/ui/components/Dialog";
 import { core } from "@grimoire/ui/lib/core";
+import { DialogHostContext, type DialogHost } from "@grimoire/ui/lib/dialogHost";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
 import { HeldDownloadsContext } from "./heldDownloads";
+import { LendDialogsContext } from "./lentDialogs";
 
 /** One download the launch is holding, as the host's `light_downloads` answers it. */
 export interface HeldDownload {
@@ -56,6 +58,13 @@ const BUTTON = cn(
  * - **While the host holds, the faces keep an offer** — the phone's empty Search and Settings —
  *   through {@link HeldDownloadsContext}, which this provides to `children`; its press asks again
  *   and opens this.
+ *
+ * **Under the phone face it is a Back step and a sheet a finger drags down** (issue #1599), as
+ * every other dialog there is (`apps/light/CLAUDE.md` §4). Mounted around the faces, it is outside
+ * the phone face's dialog host, so the face lends its host up through {@link LendDialogsContext}
+ * and the dialog is drawn under that: Back answers *Not now*, and the app is not sent to the
+ * background from under an open question. The desktop face lends nothing, and there it is the
+ * desktop's dialog it always was.
  */
 export function DownloadsPrompt({ children }: { children?: ReactNode }) {
   const [status, setStatus] = useState<DownloadsStatus | null>(null);
@@ -63,6 +72,8 @@ export function DownloadsPrompt({ children }: { children?: ReactNode }) {
   const [always, setAlways] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The host the face under this lends its dialogs — the phone face's, or none. */
+  const [host, setHost] = useState<DialogHost | null>(null);
   const live = useRef(true);
 
   const ask = useCallback(() => {
@@ -118,60 +129,66 @@ export function DownloadsPrompt({ children }: { children?: ReactNode }) {
 
   return (
     <HeldDownloadsContext.Provider value={heldDownloads}>
-      {children}
-      <Dialog
-        open={open}
-        title="Download on mobile data?"
-        subtitle={`About ${megabytes(total)} in all`}
-        closeLabel="Close"
-        size="w-full self-end rounded-t-xl border-t border-border sm:w-[26rem] sm:self-center"
-        onDismiss={close}
-        onClose={close}
-      >
-        <div className="space-y-3 px-4 py-3 text-sm">
-          <p className="text-dim">
-            Your connection says it is metered. These downloads wait until you say so — this is
-            asked again each time you come back to the app, and back on Wi-Fi they start by
-            themselves. Until the card data arrives, search and the card pages have nothing to show.
-          </p>
-          <ul className="divide-y divide-border rounded-md border border-border">
-            {status?.due.map((d) => (
-              <li key={d.key} className="flex items-center justify-between gap-3 px-3 py-2">
-                <span className="min-w-0">{d.label}</span>
-                <span className="shrink-0 font-mono text-xs text-dim">
-                  about {megabytes(d.bytes)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <label className="flex min-h-11 items-center gap-3">
-            <input
-              type="checkbox"
-              checked={always}
-              onChange={(e) => setAlways(e.target.checked)}
-              className={cn("size-4 accent-accent", FOCUS)}
-            />
-            Don't ask again on mobile data
-          </label>
-          <p role="alert" className="min-h-4 text-xs text-destructive">
-            {error}
-          </p>
-        </div>
-        <footer className="flex shrink-0 gap-2 border-t border-border px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          {/* First: the spec's default on a metered link, and what Escape and the scrim also do. */}
-          <button type="button" onClick={close} className={cn(BUTTON, "border border-border")}>
-            Not now
-          </button>
-          <button
-            type="button"
-            aria-disabled={busy || undefined}
-            onClick={start}
-            className={cn(BUTTON, "bg-accent font-medium text-accent-fg aria-disabled:opacity-40")}
-          >
-            Download
-          </button>
-        </footer>
-      </Dialog>
+      <LendDialogsContext.Provider value={setHost}>{children}</LendDialogsContext.Provider>
+      <DialogHostContext.Provider value={host}>
+        <Dialog
+          open={open}
+          title="Download on mobile data?"
+          subtitle={`About ${megabytes(total)} in all`}
+          closeLabel="Close"
+          size="w-full self-end rounded-t-xl border-t border-border sm:w-[26rem] sm:self-center"
+          onDismiss={close}
+          onClose={close}
+        >
+          <div className="space-y-3 px-4 py-3 text-sm">
+            <p className="text-dim">
+              Your connection says it is metered. These downloads wait until you say so — this is
+              asked again each time you come back to the app, and back on Wi-Fi they start by
+              themselves. Until the card data arrives, search and the card pages have nothing to
+              show.
+            </p>
+            <ul className="divide-y divide-border rounded-md border border-border">
+              {status?.due.map((d) => (
+                <li key={d.key} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <span className="min-w-0">{d.label}</span>
+                  <span className="shrink-0 font-mono text-xs text-dim">
+                    about {megabytes(d.bytes)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <label className="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={always}
+                onChange={(e) => setAlways(e.target.checked)}
+                className={cn("size-4 accent-accent", FOCUS)}
+              />
+              Don't ask again on mobile data
+            </label>
+            <p role="alert" className="min-h-4 text-xs text-destructive">
+              {error}
+            </p>
+          </div>
+          <footer className="flex shrink-0 gap-2 border-t border-border px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            {/* First: the spec's default on a metered link, and what Escape and the scrim also do. */}
+            <button type="button" onClick={close} className={cn(BUTTON, "border border-border")}>
+              Not now
+            </button>
+            <button
+              type="button"
+              aria-disabled={busy || undefined}
+              onClick={start}
+              className={cn(
+                BUTTON,
+                "bg-accent font-medium text-accent-fg aria-disabled:opacity-40",
+              )}
+            >
+              Download
+            </button>
+          </footer>
+        </Dialog>
+      </DialogHostContext.Provider>
     </HeldDownloadsContext.Provider>
   );
 }

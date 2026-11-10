@@ -258,6 +258,26 @@ export function valueHistoryKey(split: ValueSplit, marketplace: MarketplaceId, m
 }
 
 /**
+ * The prefixes of the four home reads **counted from collection entries** — {@link
+ * collectionBreakdownKey}, {@link setCompletionKey}, {@link priceMoversKey} and {@link
+ * valueHistoryKey} — for the one writer that cannot take the whole `["collection"]` root.
+ *
+ * That writer is the collection's entry settle (`features/collection/useCollectionEntryWrites.ts`):
+ * a stepper press or a single removal names the sub-keys it moves rather than the root, so as not to
+ * re-read the list whose row it has already rewritten. Before issue #1570 it named the header's
+ * summary (which {@link collectionTotalKey} sits under) and stopped there, so a quick return to Home
+ * drew a fresh total over bars, sets, a graph and movers still inside the 30 s `staleTime`. Spelled
+ * here, beside the keys, so a new entry-counted home read is added to the list where it is defined;
+ * `keys.test.tsx` holds each key above to one of these prefixes.
+ */
+export const COLLECTION_ENTRY_HOME_PREFIXES: readonly QueryKey[] = [
+  ["collection", "breakdown"],
+  ["collection", "setCompletion"],
+  ["collection", "priceMovers"],
+  ["collection", "valueHistory"],
+];
+
+/**
  * The wishlist's value over time, one way split — `ipc.wishlistValueHistory`, the Wishlist value
  * graph's read (issue #1378).
  *

@@ -6,7 +6,7 @@ import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
 import { panelsOf } from "@/features/settings/nav";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import { editionHas, useEdition } from "@/lib/edition";
-import { ipc } from "@/lib/ipc";
+import { ipc, type CollectionRow, type QueryPredicate } from "@/lib/ipc";
 import {
   GROUP_LIMIT,
   cardItems,
@@ -25,6 +25,54 @@ import {
 const CARD_FETCH = GROUP_LIMIT * 3;
 
 const NOT_SORTED = "Not sorted";
+
+/**
+ * The typed text's free words as `name:` terms, one per word, beside the box's own predicates —
+ * the same words narrowed to the name column, in any order (`bolt light` finds Lightning Bolt,
+ * as `rankName` does). `null` when nothing free was typed, so there is no name to look for.
+ */
+function nameTerms(input: string): {
+  predicates: QueryPredicate[];
+} | null {
+  const terms = searchTerms(input);
+  const words = (terms.text ?? "").split(/\s+/).filter((w) => w !== "");
+  if (words.length === 0) return null;
+  return {
+    predicates: [
+      ...(terms.predicates ?? []),
+      ...words.map((value): QueryPredicate => ({
+        field: "name",
+        op: "colon",
+        value,
+        negated: false,
+      })),
+    ],
+  };
+}
+
+/**
+ * The collection's copy records for typed `input`, **the cards called it first** (issue #1563).
+ *
+ * The list's free text reads name, type line and rules text, and its page arrives in the list's
+ * alphabetical order — so with a few hundred cards, `sol`'s first {@link CARD_FETCH} records are
+ * Soldiers that merely mention the word, and the owned Sol Ring never reaches `nameFirst` to be
+ * lifted. A second read asks for the name matches alone and goes ahead of the free-text page,
+ * which keeps the cards that only mention the word below them. The corpus does not need this
+ * (its bm25 weighs the name ×10); the wishlist's text is a name search already.
+ */
+async function collectionRows(input: string): Promise<CollectionRow[]> {
+  const named = nameTerms(input);
+  const [byName, byText] = await Promise.all([
+    named === null
+      ? Promise.resolve([])
+      : ipc.collectionList({ ...named, limit: CARD_FETCH, offset: 0 }).then((p) => p.items),
+    ipc
+      .collectionList({ ...searchTerms(input), limit: CARD_FETCH, offset: 0 })
+      .then((p) => p.items),
+  ]);
+  const seen = new Set(byName.map((row) => row.id));
+  return [...byName, ...byText.filter((row) => !seen.has(row.id))];
+}
 const WISHLIST_ROOT = "Wishlist";
 
 /**
@@ -76,19 +124,21 @@ export function useQuickSearch(
   const collectionFolders = useCollectionFolderList({ enabled: open && hasCollection });
   const wishlistFolders = useWishlistFolderList({ enabled: open && hasWishlist });
 
-  // With nothing typed, each list's newest rows — the recency a copy record keeps.
+  // With nothing typed, each list's newest rows — the recency a copy record keeps. Typed, the
+  // collection is read twice (issue #1563): see `collectionRows`.
   const collection = useQuery({
     queryKey: ["collection", "quickSearch", debounced],
     queryFn: async () => ({
       text: debounced,
-      rows: (
-        await ipc.collectionList({
-          ...searchTerms(debounced),
-          sort: typed ? undefined : [{ key: "added", dir: "desc" }],
-          limit: typed ? CARD_FETCH : GROUP_LIMIT,
-          offset: 0,
-        })
-      ).items,
+      rows: typed
+        ? await collectionRows(debounced)
+        : (
+            await ipc.collectionList({
+              sort: [{ key: "added", dir: "desc" }],
+              limit: GROUP_LIMIT,
+              offset: 0,
+            })
+          ).items,
     }),
     enabled: open && hasCollection,
     placeholderData: keepPreviousData,

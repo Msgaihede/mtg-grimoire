@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, within } from "storybook/test";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -13,14 +13,14 @@ import { AddedToast, landedFrom, type AddedToastProps } from "./AddedToast";
  * the same card again, because the whole point of the thing is an entrance. A compact card gets the
  * short picture it is for: a phone on its side.
  *
- * **The card stays up after its hold.** `onDone` reaches the Actions panel and nothing else: the
- * page answers it by putting the card away, and a workbench story that emptied itself after two
- * seconds would be a story with nothing to inspect.
+ * **The card stays up after its hold.** The hold is the page's (`useTrayLanding`), which puts the
+ * card away by passing `null`; the overlay keeps no clock, so the workbench card stays to be
+ * inspected.
  */
 function Held(args: AddedToastProps) {
   const [landings, setLandings] = useState(0);
   // A fresh stamp per press is exactly what a real landing is, so the replay runs the component's
-  // own path — the flash, the entrance and a restarted hold.
+  // own path — the flash and the entrance.
   const card =
     args.card === null ? null : { ...args.card, stamp: `${args.card.stamp}#${landings}` };
   return (
@@ -31,13 +31,7 @@ function Held(args: AddedToastProps) {
           args.compact === true ? "h-[12.5rem] w-[25rem]" : "h-[28rem] w-[46rem]",
         )}
       >
-        <AddedToast
-          card={card}
-          onDone={args.onDone}
-          price={args.price}
-          tier={args.tier}
-          compact={args.compact}
-        />
+        <AddedToast card={card} price={args.price} tier={args.tier} compact={args.compact} />
       </div>
       <button
         type="button"
@@ -61,7 +55,6 @@ const meta = {
   render: (args) => <Held {...args} />,
   args: {
     card: landedFrom(lotus, false, false),
-    onDone: fn(),
   },
 } satisfies Meta<typeof AddedToast>;
 

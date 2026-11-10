@@ -41,8 +41,11 @@ is not `2`; an `id` or a `kind` that is blank after `trim`; a `w` outside `1..=M
 that is present and outside `1..=2`; and a serialized document over `MAX_BYTES`, 64 KiB. **Rust
 knows nothing about how many columns a window has** — `layout.ts`'s `normalise` is what brings a
 stored document inside the grid it is drawn on, and it does so on every draw **without writing the
-result back**, so narrowing the window never rewrites the reader's arrangement until they change
-something.
+result back**, so narrowing the window never rewrites the reader's arrangement until they **move or
+resize** something there. A move is judged on the grid on screen, so it saves that grid's geometry;
+every other change — a setting, a chip, a removal, an Add — is written onto the stored document, so
+only that widget changes and widening the window gives the rest of the page back (issue #1581). An
+Add finds its free cell on the grid as drawn and appends the new widget to the stored list.
 
 **Version 1 still reads.** A version-1 row carries `span` and no geometry; Rust answers `0` for
 the four cells, and `parseLayout` reads `w === 0` as *never placed* and lays each widget out at its
@@ -962,6 +965,20 @@ behaviour on purpose. A reader of the column who counts gaps is reading it wrong
 note fills the ordinary dim token lands at about 4.3:1, under the 4.5:1 floor for body text, so it
 is a contrast bug no test in this repo catches. `text-dim` stays correct everywhere on the page
 background.
+
+**Every note is reachable, and the pin has a press**
+([issue #1583](https://github.com/Msgaihede/mtg-grimoire/issues/1583), 2026-11-10). Two gaps of
+the same kind as `sticky_note_reorder`'s above — plumbing with nothing pressing it. The Board cut
+the list at the tiles its footprint holds and the Pad's rail (tier 2) and index (tier 3) at the
+names they hold, with no way past the cut: the footer said *7 notes* over six tiles, and *New
+note* on a full board made exactly the note nobody could reach. Each cut surface now **pages**
+(`notePage` in `StickyNotesWidget.tsx`) with a `‹ ›` pair once the notes outrun the room; the page
+drawn is the one holding the widget's *shown note* — one id for both layouts, never stored — so
+*New note* names the note it made and the Board turns to its page while the Pad flips to it. And
+`StickyNotePatch.pinned` and `sticky_note_update` always carried the pin while no UI sent it, so
+*Pinned note first* (on by default), the pin dot and the Pad's pinned seed were dead for every
+reader; `StickyNoteDialog` now has a **Pin note** toggle (`aria-pressed`) that travels in the same
+debounced partial patch as the name and the colour, `null` until pressed.
 
 ---
 

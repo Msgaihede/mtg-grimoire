@@ -733,7 +733,9 @@ preferred_finish`'s nullability one table over.
   release *one card at a time* share `deck::release_group_copies`, the crate's one walk over a
   group's rows, which matches the exact `(card_id, finish)` and nothing looser since 2026-09-07
   (it fell back to the oracle card before that day; see above) — the four bulk ones reach it
-  through `release_live_copies`, which asks the `live` question for all of them;
+  through `release_live_copies`, which asks the `live` question for all of them, and the cut
+  through `release_displaced_copies`, the stepper's own release, so it never gives back a copy
+  the list still claims after the cut (issue #1536);
   the two that empty a whole folder — `delete_deck` and `clear_decks` — walk the sub-tree and
   re-file every row through `refile_entry`, the `delete_folder` rule reused. Everything else that
   changes the number is an ordinary

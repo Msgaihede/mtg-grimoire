@@ -912,6 +912,126 @@ describe("the theory difference dialog", () => {
   });
 
   /**
+   * **A row its own button sent is out of the footer's press** (issue #1539). The backend folds
+   * a wish onto the grain by *raising* it, so carrying the row again would write its shortfall a
+   * second time — a 3-copy shortfall becoming a 6-copy wish. The checkbox says so by being
+   * unticked and disabled, and the select-all and its readout count only what a press could still
+   * carry, so the band does not claim a partial selection the reader cannot complete.
+   */
+  it("leaves a row its own button sent out of the footer's press", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    const sol = await rowFor("Sol Ring");
+
+    await user.click(within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring" }));
+    await waitFor(() =>
+      expect(within(sol).getByRole("button", { name: /Wishlist/ })).toHaveTextContent("Wishlisted"),
+    );
+
+    const pick = screen.getByRole("checkbox", { name: "Select 3 more Sol Ring" });
+    expect(pick).not.toBeChecked();
+    expect(pick).toBeDisabled();
+    expect(selectAll()).toBeChecked();
+    expect(screen.getByText(/2 of 2 selected/)).toBeInTheDocument();
+
+    // The select-all's two presses stay over the rows it can move, and never re-tick the sent one.
+    await user.click(selectAll());
+    expect(screen.getByText(/0 of 2 selected/)).toBeInTheDocument();
+    await user.click(selectAll());
+    expect(pick).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "Send 2 selected to wishlist" }));
+
+    await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(2));
+    expect(deckTheoryMissingToWishlist).toHaveBeenLastCalledWith(
+      4,
+      ["bolt-lea|", "angel-lea|"],
+      null,
+    );
+  });
+
+  /** And while its write is still out — the footer must not carry a row that is on its way. */
+  it("leaves a row whose own press is in flight out of the footer's press", async () => {
+    const user = userEvent.setup();
+    deckTheoryMissingToWishlist.mockReturnValueOnce(new Promise(() => {}));
+    wrap(<TheoryDiffDialog {...props} />);
+    const sol = await rowFor("Sol Ring");
+
+    await user.click(within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring" }));
+    expect(within(sol).getByRole("button", { name: /Wishlist/ })).toHaveTextContent("Sending…");
+    expect(screen.getByRole("checkbox", { name: "Select 3 more Sol Ring" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Send 2 selected to wishlist" }));
+
+    await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(2));
+    expect(deckTheoryMissingToWishlist).toHaveBeenLastCalledWith(
+      4,
+      ["bolt-lea|", "angel-lea|"],
+      null,
+    );
+  });
+
+  /**
+   * **Two row presses in flight each keep their own answer** (issue #1539, the issue #1162
+   * pattern). With `mutate`'s per-call callbacks the second press replaced the first's, and the
+   * pending check read `wishRow.variables` (the newest press only) — so the first row went back
+   * to an enabled `Wishlist` with no mark and no toast, one press away from doubling its wish.
+   * The first write is held here and lands *after* the second.
+   */
+  it("marks and says both of two row presses that overlap", async () => {
+    const user = userEvent.setup();
+    let land!: (wishes: number) => void;
+    deckTheoryMissingToWishlist.mockReturnValueOnce(
+      new Promise<number>((resolve) => {
+        land = resolve;
+      }),
+    );
+    wrap(<TheoryDiffDialog {...props} />);
+    const sol = await rowFor("Sol Ring");
+    const bolt = await rowFor("Lightning Bolt");
+
+    await user.click(within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring" }));
+    await user.click(within(bolt).getByRole("button", { name: "Wishlist 2 more Lightning Bolt" }));
+
+    await waitFor(() =>
+      expect(within(bolt).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
+        "Wishlisted",
+      ),
+    );
+    // The held press is still its own: spinning, not re-enabled by the other one landing.
+    const solButton = within(sol).getByRole("button", { name: /Wishlist/ });
+    expect(solButton).toHaveTextContent("Sending…");
+    expect(solButton).toBeDisabled();
+    // And the destination stays locked while any press is out, not only the newest.
+    expect(destinationTrigger()).toBeDisabled();
+
+    await act(async () => land(3));
+
+    await waitFor(() => expect(solButton).toHaveTextContent("Wishlisted"));
+    expect(solButton).toBeDisabled();
+    expect(destinationTrigger()).toBeEnabled();
+    // One receipt per press.
+    expect(useNotifications.getState().notices).toHaveLength(2);
+  });
+
+  /** A change of folder makes a sent row a fresh wish again, so it rejoins the selection. */
+  it("lets a sent row back into the footer's press when the destination moves", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    const sol = await rowFor("Sol Ring");
+
+    await user.click(within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring" }));
+    await screen.findByRole("button", { name: "Send 2 selected to wishlist" });
+
+    await user.click(choose("Ordered"));
+
+    const pick = screen.getByRole("checkbox", { name: "Select 3 more Sol Ring" });
+    expect(pick).toBeEnabled();
+    expect(pick).toBeChecked();
+    expect(screen.getByRole("button", { name: "Send 3 selected to wishlist" })).toBeEnabled();
+  });
+
+  /**
    * The bulk press is one backend call — and it takes the wishlist and the search with it,
    * because `CardSummary.wishlisted` is an `EXISTS` against `c.oracle_id`: one press turns the
    * heart on for every printing of every card sent, whatever printing each wish was pinned to.

@@ -124,6 +124,59 @@ describe("refreshCardSearches (issue #552)", () => {
     await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(PAGES.length));
   });
 
+  /**
+   * **A page asked for while the marks are in flight** (issue #1570). The wall scrolls during a
+   * "+": the next-page fetch starts after the patch was decided on and builds its answer from the
+   * pages it captured at its start, so a patch written under it is put back to the pre-write badge
+   * the moment the page lands. The second look, after the read, refetches instead.
+   */
+  it("refetches rather than patches when a page fetch starts while the marks are read", async () => {
+    // The database: row "a"'s owned count, which the write moves from 0 to 3 before the refresh.
+    let owned = 0;
+    const pages = () => [[row("a", owned), row("b")], [row("c")], [row("d")]];
+    let holdPage: (() => void) | undefined;
+    const fetchPage = vi.fn(async ({ pageParam }: { pageParam: number }) => {
+      const items = pages()[pageParam];
+      // The third page is the scroll's, held open until the patch has had its chance to land.
+      if (pageParam === 2) await new Promise<void>((release) => (holdPage = release));
+      return { items, total: 4, totalIsCapped: false };
+    });
+    const key = ["cards", "search", "race"];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const observer = new InfiniteQueryObserver(client, {
+      queryKey: key,
+      queryFn: fetchPage,
+      initialPageParam: 0,
+      getNextPageParam: (_: SearchResponse, loaded: SearchResponse[]) =>
+        loaded.length < 3 ? loaded.length : undefined,
+      staleTime: Infinity,
+      meta: searchMarksMeta(PLAIN),
+    });
+    observer.subscribe(() => {});
+    await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+    await observer.fetchNextPage();
+
+    let answerMarks: ((marks: Awaited<ReturnType<typeof ipc.searchMarks>>) => void) | undefined;
+    searchMarks.mockReturnValue(new Promise((resolve) => (answerMarks = resolve)));
+    owned = 3;
+
+    const refresh = refreshCardSearches(client);
+    // The wall asks for its next page while `search_marks` is still out.
+    void observer.fetchNextPage();
+    await vi.waitFor(() => expect(holdPage).toBeDefined());
+    answerMarks!([
+      { id: "a", ownedQuantity: 3, wishlisted: false },
+      { id: "b", ownedQuantity: 0, wishlisted: false },
+      { id: "c", ownedQuantity: 0, wishlisted: false },
+    ]);
+    await refresh;
+    holdPage!();
+
+    await vi.waitFor(() => expect(client.getQueryState(key)?.fetchStatus).toBe("idle"));
+    const data = client.getQueryData<Pages>(key)!;
+    expect(data.pages[0].items[0]).toMatchObject({ id: "a", ownedQuantity: 3 });
+  });
+
   it("leaves an unobserved search to be refetched when it is next on screen", async () => {
     const { client, fetchPage, unsubscribe } = await mounted(["cards", "search", "x"], PLAIN);
     unsubscribe();
