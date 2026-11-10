@@ -17,6 +17,7 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 | `sets.ts`, `SetGrid.tsx`                     | MTGJSON's booster sets (`useBoosterSets`), one set's `BoosterSet` (`useBoosterSet`), the set wall                                                                                                                                                             |
 | `packs/`                                     | Open Packs: the set page's set picker (`SetSwitcher.tsx`), the product picker, the marketplace pick (`marketplaces.ts`), the reduced price (`reducedPick.ts`), the opened wall, the figures and the histogram                                                 |
 | `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                                                                                   |
+| `table.ts`                                   | The one draft slot as the page sees it: the saved draft (`useSavedDraft`, `DRAFT_SAVED_KEY`), a hosted pod drafting (`hostsDraftingPod`), a row's pack and pick (`whereOf`)                                                                                  |
 | `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                                                                                        |
 | `pick/`                                      | The pick screen (one or two cards a pick; the pack by rarity or as dealt), the Winston table, the pool as Deck and Sideboard (`PoolZones`, `split.ts`) under the pack or in side trays (`trayLayout.ts`), the large card preview on hover (`CardPreview.tsx`), the deck's stats on a wide page (`PickStats.tsx`) |
 | `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                                                                                           |
@@ -106,5 +107,11 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   `STATS_MIN_WIDTH` wide, measured with `useElementWidth` — never a container query, which would
   hold this screen's `fixed` previews — and hidden by the toggle beside the Pool switch, kept per
   device like the layout. Record: [draft-and-packs.md](../../../../docs/reference/draft-and-packs.md).
+- **The app holds one draft, and the page never puts one away unasked** (`table.ts`, issue #1586).
+  A solo Start asks before it replaces the saved draft (`SetupScreen`'s question, read at the
+  press), and Start and the hub's Resume are refused while a pod this app hosts is drafting
+  (`hostsDraftingPod`) — the host refuses them too (`draft::POD_AT_TABLE`). The hub's Abandon
+  ends this window's own solo draft by its name, or else drops the saved copy with
+  `draft_discard`; never `draft_resume` a draft only to have a name to end.
 - **Every pushed view is filtered** (`pick/pool.ts`' `acceptsView`): a `draft:view` for another seat
   or an older step is dropped.

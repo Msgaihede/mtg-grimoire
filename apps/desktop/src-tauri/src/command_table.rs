@@ -150,6 +150,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
     ),
     (
+        "draft_discard",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
         "draft_deck_create",
         "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
     ),

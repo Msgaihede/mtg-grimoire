@@ -45,6 +45,10 @@ const BUSY: &str = "The table is still picking.";
 const REPLACED: &str = "This draft was put away: another one has been started since.";
 const NOTHING_SAVED: &str = "There is no draft to resume.";
 const POD_FROM_LOBBY: &str = "A pod draft is started from its lobby.";
+/// A start or a resume while the pod this app hosts is at the table (issue #1586): it would take
+/// the pod's one slot, and every guest's picks would go unanswered.
+pub(crate) const POD_AT_TABLE: &str =
+    "You are hosting a pod draft. Finish it or leave its lobby before starting another draft.";
 
 /// The one draft, or none — shared with the lobby's task, which applies a guest's pick.
 #[derive(Default, Clone)]
@@ -143,6 +147,34 @@ impl<G> Slot<G> {
             *self = Self::Empty;
         }
     }
+
+    /// *Draft in progress*'s Abandon of the kept copy (issue #1586): a solo draft at the table is
+    /// that copy — every change to one writes the row — so it goes with it, wherever its page
+    /// is. The pod `pod` names is not the kept copy and stays, and so does a draft still being
+    /// dealt: its row is not written yet, and the start is someone's.
+    fn discard_solo(&mut self, pod: Option<u64>) {
+        if let Self::Held(d, _) | Self::Busy(d) = self {
+            if Some(*d) != pod {
+                *self = Self::Empty;
+            }
+        }
+    }
+}
+
+/// Whether the pod at the table is the one a live lobby this app hosts is drafting — `pod`, the
+/// slot's pod, against `hosted`, [`lobby::hosted_pod`]'s answer. A pod whose lobby has closed or
+/// gone strands nobody, and a new draft may take its place.
+fn pod_holds_table(pod: Option<u64>, hosted: Option<u64>) -> bool {
+    pod.is_some() && pod == hosted
+}
+
+/// [`POD_AT_TABLE`] while the pod this app hosts holds the slot.
+fn refuse_over_pod(shared: &Shared, lobby: &lobby::LobbySlot) -> Result<(), String> {
+    let hosted = lobby::hosted_pod(lobby);
+    if pod_holds_table(shared.lock().pod, hosted) {
+        return Err(POD_AT_TABLE.into());
+    }
+    Ok(())
 }
 
 /// What a solo draft's row holds.
@@ -396,17 +428,20 @@ async fn deal_off_the_slot(
 
 /// Deal a new draft — quick, sealed, cube, commander or winston; a pod is dealt by `lobby_start`
 /// — and answer seat 0's view. `draft` is the page's name for it, which every later call carries;
-/// the draft it replaces is gone at once.
+/// the draft it replaces is gone at once (the page asks first), but never the pod this app hosts
+/// ([`POD_AT_TABLE`]).
 #[tauri::command]
 pub async fn draft_start(
     state: tauri::State<'_, Arc<AppState>>,
     slot: tauri::State<'_, DraftSlot>,
+    lobby: tauri::State<'_, lobby::LobbySlot>,
     setup: DraftSetup,
     draft: u64,
 ) -> Result<DraftView, String> {
     if setup.mode == DraftMode::Pod {
         return Err(POD_FROM_LOBBY.into());
     }
+    refuse_over_pod(&slot.0, &lobby)?;
     deal(state.inner(), &slot.0, setup, draft)
         .await
         .map(|o| o.view)
@@ -516,6 +551,35 @@ pub async fn draft_end(
     .map_err(|e| e.to_string())?
 }
 
+/// Drop the kept solo draft without taking the table (issue #1586) — *Draft in progress*'s
+/// Abandon of a copy no page of this window runs. A solo draft at the table is that copy and goes
+/// with it ([`Slot::discard_solo`]); a pod at the table is not touched.
+#[tauri::command]
+pub async fn draft_discard(
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, DraftSlot>,
+) -> Result<(), String> {
+    let (app, shared) = (state.inner().clone(), slot.0.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _saving = crate::sync::lock_plain(&shared.saving);
+        {
+            let mut inner = shared.lock();
+            let pod = inner.pod;
+            inner.slot.discard_solo(pod);
+            if inner.slot.name().is_none() {
+                inner.pod = None;
+            }
+        }
+        crate::sync::with_write(&app, |conn| {
+            conn.execute("DELETE FROM app_meta WHERE key = ?1", [K_DRAFT_SESSION])
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The kept row, read; `None` for none or one that does not parse.
 fn saved_row(conn: &rusqlite::Connection) -> Option<SavedRow> {
     get_app_meta(conn, K_DRAFT_SESSION).and_then(|json| serde_json::from_str(&json).ok())
@@ -527,13 +591,16 @@ pub fn draft_saved(state: tauri::State<'_, Arc<AppState>>) -> Option<DraftSaved>
     saved_row(&crate::sync::lock_db_read(state.inner())).map(|row| row.saved)
 }
 
-/// Take the kept draft back up under the name `draft`, replacing whatever was at the table.
+/// Take the kept draft back up under the name `draft`, replacing whatever was at the table —
+/// but never the pod this app hosts ([`POD_AT_TABLE`]).
 #[tauri::command]
 pub async fn draft_resume(
     state: tauri::State<'_, Arc<AppState>>,
     slot: tauri::State<'_, DraftSlot>,
+    lobby: tauri::State<'_, lobby::LobbySlot>,
     draft: u64,
 ) -> Result<DraftView, String> {
+    refuse_over_pod(&slot.0, &lobby)?;
     let shared = slot.0.clone();
     {
         let mut inner = shared.lock();
@@ -662,6 +729,38 @@ mod tests {
         slot.take(1).unwrap();
         assert!(!slot.put_back(1, None));
         assert!(matches!(slot, Slot::Empty));
+    }
+
+    #[test]
+    fn discarding_the_kept_copy_ends_a_solo_draft_but_never_the_pod_or_a_deal() {
+        let mut solo = holding(1);
+        solo.discard_solo(None);
+        assert!(matches!(solo, Slot::Empty));
+
+        let mut busy = holding(1);
+        let _taken = busy.take(1).unwrap();
+        busy.discard_solo(None);
+        assert!(matches!(busy, Slot::Empty));
+
+        let mut pod = holding(7);
+        pod.discard_solo(Some(7));
+        assert_eq!(held(&pod), Some((7, "dealt")));
+
+        let mut dealing: Slot<&str> = Slot::default();
+        dealing.claim(3);
+        dealing.discard_solo(None);
+        assert_eq!(dealing.name(), Some(3));
+    }
+
+    #[test]
+    fn only_a_pod_a_live_lobby_hosts_holds_the_table() {
+        assert!(pod_holds_table(Some(7), Some(7)));
+        // A solo draft at the table, or no draft: a new one may take its place.
+        assert!(!pod_holds_table(None, Some(7)));
+        assert!(!pod_holds_table(None, None));
+        // The pod's lobby closed or went: it strands nobody.
+        assert!(!pod_holds_table(Some(7), None));
+        assert!(!pod_holds_table(Some(7), Some(8)));
     }
 
     #[test]

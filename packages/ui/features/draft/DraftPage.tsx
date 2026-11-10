@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   Boxes,
@@ -21,7 +21,6 @@ import {
   ipcError,
   type DraftMode,
   type DraftSaved,
-  type DraftStatus,
   type DraftView,
   type LobbyState,
 } from "@/lib/ipc";
@@ -40,6 +39,13 @@ import { DraftSession, MODE_TITLE } from "./pick/DraftSession";
 import { freshDraftName } from "./setup/deal";
 import { InlineError, LABEL, PANEL, QUIET_BUTTON } from "./setup/parts";
 import { SetupScreen, type SetupMode } from "./setup/SetupScreen";
+import {
+  DRAFT_SAVED_KEY,
+  hostsDraftingPod,
+  POD_HOLDS_TABLE,
+  useSavedDraft,
+  whereOf,
+} from "./table";
 
 /** Which screen of the page is up. The page keeps its own — there is no router below a view. */
 type Flow =
@@ -51,9 +57,6 @@ type Flow =
 
 /** The screen the reader left, for the window's life — a draft is `./pick/current.ts`'s. */
 const flowMemory = viewMemory<Flow>("draft.flow");
-
-/** The saved solo draft — read fresh whenever the hub is drawn (it moves with every pick). */
-export const DRAFT_SAVED_KEY = ["draft", "saved"] as const;
 
 function firstFlow(): Flow {
   const current = currentDraft.recall();
@@ -171,18 +174,6 @@ function podSeat(lobby: LobbyState | null): CurrentDraft | null {
   return lobby?.phase === "drafting" && current && current.role !== "solo" ? current : null;
 }
 
-/** Where a draft is, in a row's words: its pack and pick, or done picking. */
-function whereOf(at: {
-  status: DraftStatus;
-  packNumber: number;
-  packCount: number;
-  pickNumber: number;
-}): string {
-  return at.status === "deckbuilding"
-    ? "Done picking"
-    : `Pack ${at.packNumber + 1} of ${at.packCount} · Pick ${at.pickNumber + 1}`;
-}
-
 type StartMode = SetupMode | "pod" | "packs";
 
 const MODES: readonly {
@@ -247,18 +238,11 @@ function DraftHub({
   onDraft: (draft: number | null, view: DraftView | null, role: DraftRole) => void;
   onLobby: () => void;
 }): JSX.Element {
-  const saved = useQuery({
-    queryKey: DRAFT_SAVED_KEY,
-    queryFn: () => ipc.draftSaved(),
-    retry: false,
-    // Every pick moves it; the hub is drawn between drafts, so it is always asked again.
-    staleTime: 0,
-  });
+  const savedDraft = useSavedDraft();
   // Whole rows from `draft_deck_list`: no deck list answers a draft deck, so there is nothing to
   // filter — the row's `draft` flag is what put each one here.
   const draftDecks = useDraftDecks();
   const live = isLive(lobby) ? lobby : null;
-  const savedDraft = saved.data ?? null;
   const anything = savedDraft !== null || draftDecks.length > 0 || live !== null;
 
   return (
@@ -280,6 +264,7 @@ function DraftHub({
             {savedDraft !== null && (
               <SavedDraftRow
                 saved={savedDraft}
+                hostingPod={hostsDraftingPod(live)}
                 onResumed={(draft, view) => onDraft(draft, view, "solo")}
               />
             )}
@@ -339,6 +324,7 @@ function ProgressRow({
   detail,
   actions,
   error = null,
+  note = null,
 }: {
   icon: LucideIcon;
   title: string;
@@ -346,6 +332,8 @@ function ProgressRow({
   detail: string;
   actions: ReactNode;
   error?: string | null;
+  /** Why a press is withheld, said under the row. */
+  note?: string | null;
 }): JSX.Element {
   return (
     <li className={cn(PANEL, "flex flex-col gap-2 px-4 py-3")}>
@@ -364,6 +352,7 @@ function ProgressRow({
         </div>
         <div className="flex shrink-0 items-center gap-2">{actions}</div>
       </div>
+      {note !== null && <p className="m-0 text-xs text-dim">{note}</p>}
       <InlineError message={error} />
     </li>
   );
@@ -380,15 +369,19 @@ const MODE_ICON: Record<DraftMode, LucideIcon> = {
 
 /**
  * The solo draft left off. **Resume** takes it back up — the one this window is already running
- * if there is one, else the saved copy under a fresh name (`draft_resume`). **Abandon** asks twice
- * and drops it; a saved copy no window runs is taken up under a fresh name first, so `draft_end`
- * names a draft the host holds.
+ * if there is one, else the saved copy under a fresh name (`draft_resume`) — and is withheld
+ * while a pod this app hosts is drafting (issue #1586): the app holds one draft, and the pod's
+ * guests are answered from it. **Abandon** asks twice and drops the saved copy — this window's
+ * draft through `draft_end`, else `draft_discard`, which never takes the table, so abandoning
+ * this row never touches a pod's draft.
  */
 function SavedDraftRow({
   saved,
+  hostingPod,
   onResumed,
 }: {
   saved: DraftSaved;
+  hostingPod: boolean;
   onResumed: (draft: number, view: DraftView) => void;
 }): JSX.Element {
   const queryClient = useQueryClient();
@@ -403,15 +396,14 @@ function SavedDraftRow({
     return () => window.clearTimeout(t);
   }, [armed]);
 
-  /** The draft under a name the host holds: this window's, or the saved copy taken up again. */
-  const takeUp = async (): Promise<{ draft: number; view: DraftView }> => {
+  /** This window's own solo draft, when the host still holds it under the name it kept. */
+  const running = async (): Promise<{ draft: number; view: DraftView } | null> => {
     const current = currentDraft.recall();
     if (current && current.role === "solo" && current.draft !== null) {
       const view = await ipc.draftView(current.draft);
       if (view !== null) return { draft: current.draft, view };
     }
-    const draft = freshDraftName();
-    return { draft, view: await ipc.draftResume(draft) };
+    return null;
   };
 
   const act = async (work: () => Promise<void>) => {
@@ -428,13 +420,18 @@ function SavedDraftRow({
 
   const resume = () =>
     void act(async () => {
-      const { draft, view } = await takeUp();
-      onResumed(draft, view);
+      const mine = await running();
+      if (mine !== null) return onResumed(mine.draft, mine.view);
+      const draft = freshDraftName();
+      onResumed(draft, await ipc.draftResume(draft));
     });
   const abandon = () =>
     void act(async () => {
-      const { draft } = await takeUp();
-      await ipc.draftEnd(draft);
+      const mine = await running();
+      // Never `draft_resume` to have a name to end: that would take the table from whatever is
+      // at it — a hosted pod's draft included.
+      if (mine !== null) await ipc.draftEnd(mine.draft);
+      else await ipc.draftDiscard();
       currentDraft.keep(null);
       setArmed(false);
       await queryClient.invalidateQueries({ queryKey: DRAFT_SAVED_KEY });
@@ -448,6 +445,7 @@ function SavedDraftRow({
       chip={saved.status === "deckbuilding" ? "Building" : "Drafting"}
       detail={`${MODE_TITLE[saved.mode]} · ${where} · ${ago(saved.updatedAt / 1000, now)}`}
       error={error}
+      note={hostingPod ? POD_HOLDS_TABLE : null}
       actions={
         <>
           <button
@@ -462,11 +460,11 @@ function SavedDraftRow({
           </button>
           <button
             type="button"
-            aria-disabled={busy}
+            aria-disabled={busy || hostingPod}
             onClick={() => {
-              if (!busy) resume();
+              if (!busy && !hostingPod) resume();
             }}
-            className={cn(QUIET_BUTTON, "border-accent/60 text-accent")}
+            className={cn(QUIET_BUTTON, "border-accent/60 text-accent", hostingPod && "opacity-50")}
           >
             Resume
           </button>
