@@ -21,9 +21,9 @@
  *
  * ## The autosave, which is the only genuinely new interaction in this feature
  *
- * `DeckNotesPanel` is an explicit Save with no debounce and no unsaved-change guard. That is
- * tolerable in a band a reader deliberately opened to edit and it is not tolerable here: this
- * dialog closes on a scrim press, on Escape and on the ✕, and none of the three asks first. So a
+ * `DeckNotesPanel`'s editor is an explicit Save with no debounce, and since issue #1549 it asks
+ * *Discard …?* before any way out loses words. This dialog does neither: it closes on a scrim
+ * press, on Escape and on the ✕, and none of the three asks first. So a
  * draft is written on a debounce, the writing is reported in words, and **the pending draft is
  * flushed from a mount-only effect's cleanup** — without that last part the last keystrokes before
  * a close are precisely the ones lost, which is the failure the design exists to avoid.

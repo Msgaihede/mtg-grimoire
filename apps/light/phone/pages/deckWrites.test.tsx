@@ -374,4 +374,31 @@ describe("a deck's notes and to-do lists", () => {
       SETTLE,
     );
   });
+
+  /**
+   * **A refused Save keeps the dialog up with the text** (issue #1549) — the band's rule on this
+   * face too. It used to close at the press, so the receipt line said no and the body was gone.
+   */
+  it("keeps a refused note on screen with the reason, and closes once a retry lands", async () => {
+    vi.spyOn(ipc, "deckNoteCreate").mockRejectedValueOnce("database is locked");
+    renderPhone(<PhoneFace />, { path: `/decks/${KENRITH}` });
+    const notes = await screen.findByRole("region", { name: "Notes" }, SETTLE);
+
+    await userEvent.click(within(notes).getByRole("button", { name: "New note" }));
+    await userEvent.type(
+      await screen.findByLabelText("Body of New note", undefined, SETTLE),
+      "Fourteen sources.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save note" }));
+
+    const dialog = screen.getByRole("dialog", { name: "New note" });
+    expect(await within(dialog).findByRole("alert", undefined, SETTLE)).toHaveTextContent(
+      "database is locked",
+    );
+    expect(within(dialog).getByLabelText("Body of New note")).toHaveValue("Fourteen sources.");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument(), SETTLE);
+    expect((await ipc.deckNotes(KENRITH)).map((n) => n.body)).toEqual(["Fourteen sources."]);
+  });
 });

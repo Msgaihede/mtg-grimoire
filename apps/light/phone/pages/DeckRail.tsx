@@ -394,6 +394,8 @@ function CurveSection({ cards, row }: { cards: readonly DeckCard[]; row: DeckRow
  * names no card until the desktop attaches one, and the cards a note already names are drawn and
  * open the card sheet.
  */
+type NotePanel = { kind: "edit"; draft: NoteDraft } | { kind: "delete"; note: DeckNote } | null;
+
 function NotesSection({
   notes,
   receipt,
@@ -404,9 +406,9 @@ function NotesSection({
   onOpenCard: (cardId: string) => void;
 }) {
   /** Which dialog is up: the editor on a draft, the delete question on a note, or neither. */
-  const [panel, setPanel] = useState<
-    { kind: "edit"; draft: NoteDraft } | { kind: "delete"; note: DeckNote } | null
-  >(null);
+  const [panel, setPanel] = useState<NotePanel>(null);
+  /** The last Save's refusal and the panel it was refused on — drawn while that panel is up. */
+  const [refusal, setRefusal] = useState<{ panel: NotePanel; message: string } | null>(null);
   // The note as the deck now holds it, so a dialog never edits a body a refetch has replaced.
   const live = (id: number) => notes.notes.find((note) => note.id === id) ?? null;
   const editing = panel?.kind === "edit" ? panel.draft : null;
@@ -451,22 +453,34 @@ function NotesSection({
         open={editing !== null}
         draft={editing ?? { kind: "new" }}
         pending={notes.pending}
+        error={refusal !== null && refusal.panel === panel ? refusal.message : null}
         onSave={(text) => {
+          const saved = panel;
+          setRefusal(null);
+          let write: Promise<unknown>;
           if (editing?.kind === "edit") {
             const note = live(editing.note.id) ?? editing.note;
             // ⚠️ The note's own title goes back unchanged — `deck_note_update` takes both columns,
             // and this dialog edits the body only. The band's rule, for the band's reason.
-            receipt.track(
-              notes.update.mutateAsync({ id: note.id, patch: { title: note.title, body: text } }),
-              () => "Saved the note.",
-            );
+            const update = notes.update.mutateAsync({
+              id: note.id,
+              patch: { title: note.title, body: text },
+            });
+            receipt.track(update, () => "Saved the note.");
+            write = update;
           } else {
-            receipt.track(
-              notes.create.mutateAsync({ title: "", body: text, oracleIds: [] }),
-              () => "Saved a new note.",
-            );
+            const create = notes.create.mutateAsync({ title: "", body: text, oracleIds: [] });
+            receipt.track(create, () => "Saved a new note.");
+            write = create;
           }
-          close();
+          // ⚠️ **Closed when the write lands, never at the press** (issue #1549) — the band's
+          // rule: a refused Save keeps the dialog up with the text and the reason. Each arm checks
+          // the panel is still the one it was sent from, so a late answer cannot close or mark a
+          // dialog the reader opened since.
+          void write.then(
+            () => setPanel((now) => (now === saved ? null : now)),
+            (error: unknown) => setRefusal({ panel: saved, message: ipcError(error) }),
+          );
         }}
         onClose={close}
       />
