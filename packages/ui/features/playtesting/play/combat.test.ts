@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   NO_PICKS,
+  carryPicks,
   combatLine,
   phaseLine,
   pickAttacker,
@@ -162,6 +163,70 @@ describe("attacking", () => {
     const { view, goyf, ragavan } = attackStep();
     const picks = toggleAttacker(NO_PICKS, view, goyf.id);
     expect(aimAttacker(picks, view, ragavan.id)).toBe(picks);
+  });
+});
+
+describe("carryPicks (issue #1591)", () => {
+  it("keeps the picks across a new view of the same declaration", () => {
+    const { view, goyf, elves } = attackStep();
+    const picks = toggleAttacker(toggleAttacker(NO_PICKS, view, goyf.id), view, elves.id);
+    const stops = { ...view, stops: [{ seat: "opponent" as const, step: "end" as const }] };
+    expect(carryPicks(picks, view, stops)).toBe(picks);
+    expect(carryPicks(picks, view, { ...view, sandbox: true })).toBe(picks);
+  });
+
+  it("drops only the picks the new offer no longer allows", () => {
+    const { view, goyf, elves, jace } = attackStep();
+    let picks = toggleAttacker(NO_PICKS, view, goyf.id);
+    picks = aimAttacker(picks, view, jace.id);
+    picks = toggleAttacker(picks, view, elves.id);
+    picks = toggleAttacker(picks, view, goyf.id); // waiting to be aimed again
+    expect(picks.aiming).toBe(goyf.id);
+    const attack = view.attack!;
+    // The Elves were tapped in the sandbox, and Jace left the table.
+    const after = {
+      ...view,
+      attack: {
+        ...attack,
+        attackers: attack.attackers
+          .filter((a) => a.id !== elves.id)
+          .map((a) => (a.id === goyf.id ? { ...a, targets: [] } : a)),
+      },
+    };
+    expect(carryPicks(picks, view, after)).toEqual(NO_PICKS);
+    const keepsJace = {
+      ...view,
+      attack: { ...attack, attackers: attack.attackers.filter((a) => a.id !== elves.id) },
+    };
+    expect(carryPicks(picks, view, keepsJace)).toEqual({
+      ...NO_PICKS,
+      attacks: [{ attacker: goyf.id, target: jace.id, player: null }],
+      aiming: goyf.id,
+    });
+  });
+
+  it("keeps blocks and the blocker waiting while the offer allows them", () => {
+    const { view, goyf, elves, ragavan } = blockStep();
+    const picks = pickBlocker(
+      pickAttacker(pickBlocker(NO_PICKS, goyf.id), view, ragavan.id),
+      elves.id,
+    );
+    expect(carryPicks(picks, view, { ...view })).toBe(picks);
+    const block = { blockers: view.block!.blockers.filter((b) => b.id !== elves.id) };
+    expect(carryPicks(picks, view, { ...view, block })).toEqual({
+      ...NO_PICKS,
+      blocks: [{ blocker: goyf.id, attacker: ragavan.id }],
+    });
+  });
+
+  it("starts afresh on another stage, turn or active player", () => {
+    const { view, goyf } = attackStep();
+    const picks = toggleAttacker(NO_PICKS, view, goyf.id);
+    expect(carryPicks(picks, view, { ...view, stage: "respond" })).toBe(NO_PICKS);
+    expect(carryPicks(picks, view, { ...view, turn: view.turn + 2 })).toBe(NO_PICKS);
+    expect(carryPicks(picks, view, { ...view, active: "opponent" })).toBe(NO_PICKS);
+    expect(carryPicks(picks, null, view)).toBe(NO_PICKS);
+    expect(carryPicks(picks, view, null)).toBe(NO_PICKS);
   });
 });
 

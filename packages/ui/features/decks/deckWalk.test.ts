@@ -3,7 +3,8 @@ import type { DeckCard } from "@/lib/ipc";
 import type { PaneDeckContext } from "@/lib/store";
 import { card, resetRowIds } from "./validation/fixtures";
 import type { CardGroup } from "./grouping";
-import { deckWalkStops, sameDeckSlot, type CardWalkStop } from "./deckWalk";
+import { deckSlotOrder, deckWalkStops, sameDeckSlot, type CardWalkStop } from "./deckWalk";
+import { deckCardSlot } from "./dnd";
 
 beforeEach(resetRowIds);
 
@@ -333,5 +334,43 @@ describe("sameDeckSlot", () => {
    */
   it("does not read the category's name, which is the id spelled out", () => {
     expect(sameDeckSlot(SLOT, { ...SLOT, categoryName: "Mana" })).toBe(true);
+  });
+});
+
+describe("deckSlotOrder", () => {
+  /**
+   * **A hidden stack is off the order** (issue #1533): the range a Shift-click measures along is
+   * the cards on screen, and a stack hidden in Stacks view draws none of its own.
+   */
+  it("leaves out the cards of a hidden stack", () => {
+    const groups = [
+      group("Alpha", [inPile("Sol Ring", 1, "Alpha")], { categoryId: 1 }),
+      group("Beta", [inPile("Ponder", 6, "Beta")], { categoryId: 6 }),
+      group("Gamma", [inPile("Opt", 7, "Gamma")], { categoryId: 7 }),
+    ];
+    const slot = (categoryId: number, name: string) =>
+      groups.flatMap((g) => g.cards).find((c) => c.name === name && c.categoryId === categoryId)!;
+    const slots = (names: [number, string][]) =>
+      names.map(([id, name]) => deckCardSlot(id, slot(id, name).cardId, null));
+
+    expect(deckSlotOrder(groups)).toEqual(
+      slots([
+        [1, "Sol Ring"],
+        [6, "Ponder"],
+        [7, "Opt"],
+      ]),
+    );
+    expect(deckSlotOrder(groups, new Set([6]))).toEqual(
+      slots([
+        [1, "Sol Ring"],
+        [7, "Opt"],
+      ]),
+    );
+  });
+
+  /** A derived heading has no id to hide, so its cards stay on the order whatever the set says. */
+  it("keeps a derived group's cards", () => {
+    const groups = [group("Mana value 1", [inPile("Opt", 6, "Beta")], { categoryId: null })];
+    expect(deckSlotOrder(groups, new Set([6]))).toHaveLength(1);
   });
 });

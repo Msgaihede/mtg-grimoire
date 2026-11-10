@@ -11,6 +11,7 @@ import type { LightView } from "@grimoire/ui/lib/edition";
 import type { DeckVariant } from "@grimoire/ui/lib/ipc";
 import { queryClient } from "@grimoire/ui/lib/query";
 import { cn } from "@grimoire/ui/lib/utils";
+import { useLendDialogs } from "../lentDialogs";
 import type { Place } from "../routes";
 import { CardDataContext, useCardDataWatch } from "./cardData";
 import { CardSheet } from "./CardSheet";
@@ -150,6 +151,9 @@ export function PhoneFace() {
   });
   // The page stops zooming as a whole while this face is up — see `touchShell.ts`.
   useTouchShell();
+  // The mobile-data prompt is drawn above this face (`LightApp`), outside the provider below, so
+  // it is lent the same host from here: a Back step and a drag down like every sheet on the face.
+  useLendDialogs(PHONE_DIALOGS);
   const place = usePlace();
   // The stored folds, asked for at launch as `AppShell` asks for them — so neither cabinet draws
   // its shelves at the defaults and then re-folds a frame later.

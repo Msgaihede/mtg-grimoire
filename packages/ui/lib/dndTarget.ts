@@ -398,7 +398,10 @@ export const DND_SOURCE_ATTR = "data-dnd-source";
  * activation constraints off** — `PointerSensor.defaults.activationConstraints` returns
  * `undefined` for a mouse press inside a declared handle, so the drag would begin on
  * `pointerdown` and a plain click on the grip would be a zero-pixel drag. A `handle` caller
- * therefore passes its own `sensors`.
+ * therefore passes its own `sensors`. (The manager's own sensor no longer has that hole —
+ * `dndManager.ts`'s `pressCost` asks a handle for the same 5px as anything else, issue #1566 —
+ * but a source's `sensors` list replaces the manager's, so the callers that pass one still
+ * have to say it.)
  */
 export function dndDraggable({
   element,

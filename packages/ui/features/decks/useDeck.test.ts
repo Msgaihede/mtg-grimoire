@@ -1216,6 +1216,60 @@ describe("useDeck", () => {
   });
 
   /**
+   * **An older press's answer does not put the box back a press** (issue #1535).
+   *
+   * Three quick `+` presses on a 4, each computed from the number on screen as a reader's are, with
+   * press 1's answer landing after press 2's guess. That answer used to rewrite the row to 5, so
+   * press 3 was computed from 5 and sent 6 again — three presses stored 6 where the reader
+   * counted to 7.
+   */
+  it("keeps a newer press's guess when an older answer lands after it", async () => {
+    const answers: (() => void)[] = [];
+    deckSetCardQuantity.mockImplementation(
+      (
+        _deck: number,
+        _card: string,
+        _pile: number,
+        _variant: string,
+        _finish: null,
+        quantity: number,
+      ) =>
+        new Promise((resolve) => {
+          answers.push(() => resolve({ id: 9, quantity, removed: false }));
+        }),
+    );
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const press = async () => {
+      const sent = deckSetCardQuantity.mock.calls.length;
+      result.current.setQuantity.mutate({
+        cardId: "p1",
+        categoryId: MAIN.id,
+        finish: null,
+        quantity: result.current.cards[0].quantity + 1,
+      });
+      await waitFor(() => expect(deckSetCardQuantity).toHaveBeenCalledTimes(sent + 1));
+    };
+
+    await press();
+    await press();
+    await waitFor(() => expect(result.current.cards[0].quantity).toBe(6));
+
+    answers[0]();
+    // Give the older answer every chance to land.
+    await waitFor(() => expect(result.current.setQuantity.isPending).toBe(true));
+    await new Promise((settled) => setTimeout(settled, 0));
+    expect(result.current.cards[0].quantity).toBe(6);
+
+    await press();
+    answers[1]();
+    answers[2]();
+
+    expect(deckSetCardQuantity.mock.calls.map((call) => call[5])).toEqual([5, 6, 7]);
+    await waitFor(() => expect(result.current.cards[0].quantity).toBe(7));
+  });
+
+  /**
    * **The destination reaches the command, and the deck id keeps its place in front of it**
    * (issue #437).
    *

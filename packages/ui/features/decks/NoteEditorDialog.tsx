@@ -41,13 +41,21 @@
  * with no title to stand in, a blank save makes a note called `Untitled note` with nothing in it,
  * and the reader's only recourse is to delete it. `noteToPlainText` and not the markdown string —
  * an empty ProseMirror document is not an empty string.
+ *
+ * **Nothing typed is thrown away without a question** (issue #1549). Every way out — Escape, the
+ * ✕, the scrim, Cancel — goes through one `requestClose`, which closes at once on a draft with
+ * nothing to lose and otherwise turns the footer into *Discard …?* with the caret on the question.
+ * A refused Save is the other half: the host closes the dialog **when the write answers**, not
+ * when it is sent, and hands a refusal back as {@link NoteEditorDialogProps.error} — so the text
+ * and the reason it did not land are on screen together, and the reader can press Save again.
  */
-import { lazy, Suspense, useState, type JSX } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type JSX } from "react";
 import { Dialog } from "@/components/Dialog";
 import type { DeckNote, DeckNoteCard } from "@/lib/ipc";
+import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { noteTitle } from "./deckNotes";
-import { CONFIRM_CANCEL, META_SUBMIT } from "./metaRows";
+import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, META_SUBMIT, useConfirmFocus } from "./metaRows";
 import { noteToPlainText } from "./noteMarkdown";
 
 /**
@@ -78,9 +86,34 @@ export interface NoteEditorDialogProps {
    * The host turns it into `{ title, body, oracleIds }` for a create or `{ id, patch }` for an
    * edit — **this dialog only knows what the reader typed**, and which mutation that is is a fact
    * about the draft it was opened with rather than about the surface.
+   *
+   * ⚠️ **The host closes the dialog from the write's success, never from this call** (issue
+   * #1549). Closed here, a refused write — a busy database, the deck or the note removed in
+   * another window — left the reader's text nowhere at all; {@link pending} already greys Save for
+   * the round trip in between.
    */
   onSave: (body: string) => void;
+  /**
+   * The last Save's refusal, in words, or absent. Drawn under the surface, beside the text it
+   * refused, so the reader can see why and press Save again.
+   */
+  error?: string | null;
+  /** Close the dialog. **Already asked**: the dialog calls this only once there is nothing to lose
+   *  or the reader has said Discard. */
   onClose: () => void;
+}
+
+/**
+ * Whether closing now would lose words the reader typed.
+ *
+ * An edit asks against the body it opened on, exactly — a body typed away and typed back
+ * serialises to the same markdown and asks nothing. A create asks only once there are **words**,
+ * by `Save`'s own test, so a press on New note and straight back out never asks: there is nothing
+ * there a reader would miss.
+ */
+function unsaved(draft: NoteDraft, body: string): boolean {
+  if (draft.kind === "edit") return body !== draft.note.body;
+  return noteToPlainText(body).trim() !== "";
 }
 
 /**
@@ -104,12 +137,41 @@ export function NoteEditorDialog({
   draft,
   pending,
   onSave,
+  error = null,
   onClose,
 }: NoteEditorDialogProps): JSX.Element {
   // The note's stored name rather than the draft's first line: the heading says which note is
   // being edited, and a heading that renamed itself under the reader's hands as they typed would
   // be the one thing on screen that stopped identifying what they opened.
   const heading = draft.kind === "edit" ? noteTitle(draft.note) : "New note";
+
+  /**
+   * **The two facts a close has to ask about, held here rather than in {@link Body}**, because
+   * the ways out are the shell's — Escape, the ✕ and the scrim are `Dialog` props — and only this
+   * component can route them. `dirty` is told by the body on every change (an event, never an
+   * effect); `asking` is the footer's question.
+   */
+  const [dirty, setDirty] = useState(false);
+  const [asking, setAsking] = useState(false);
+
+  // A shut dialog has no draft to be dirty about — closed from the host (the note deleted in
+  // another window) as much as from a press here — so the next open starts clean. During render,
+  // `TodoListDialog`'s `confirming` reset, for its reason.
+  if (!open && (dirty || asking)) {
+    setDirty(false);
+    setAsking(false);
+  }
+
+  /**
+   * **Every way out, and the one place the question is asked.** A second Escape, ✕ or scrim press
+   * while the question is up is the reader *not* choosing Discard, so it puts the question away
+   * and leaves them writing — the only press that throws text away is the one that says so.
+   */
+  const requestClose = () => {
+    if (asking) setAsking(false);
+    else if (dirty) setAsking(true);
+    else onClose();
+  };
 
   return (
     <Dialog
@@ -121,10 +183,24 @@ export function NoteEditorDialog({
       subtitle={draft.kind === "newFromCard" ? `Linked to ${draft.card.name}` : undefined}
       closeLabel="Close"
       size="w-[40rem]"
-      onDismiss={onClose}
-      onClose={onClose}
+      onDismiss={requestClose}
+      onClose={requestClose}
     >
-      <Body draft={draft} heading={heading} pending={pending} onSave={onSave} onClose={onClose} />
+      <Body
+        draft={draft}
+        heading={heading}
+        pending={pending}
+        error={error}
+        asking={asking}
+        onDirty={setDirty}
+        onSave={onSave}
+        onCancel={requestClose}
+        onKeep={() => setAsking(false)}
+        // Straight to the host, with `asking` left true: the panel leaves with the props it had,
+        // and the question going away under it would hand the caret to a surface on its way out
+        // (`Body`'s effect). The render-phase reset above clears it once `open` is false.
+        onDiscard={onClose}
+      />
     </Dialog>
   );
 }
@@ -142,16 +218,48 @@ function Body({
   draft,
   heading,
   pending,
+  error,
+  asking,
+  onDirty,
   onSave,
-  onClose,
+  onCancel,
+  onKeep,
+  onDiscard,
 }: {
   draft: NoteDraft;
   heading: string;
   pending: boolean;
+  error: string | null;
+  asking: boolean;
+  onDirty: (dirty: boolean) => void;
   onSave: (body: string) => void;
-  onClose: () => void;
+  onCancel: () => void;
+  onKeep: () => void;
+  onDiscard: () => void;
 }) {
   const [body, setBody] = useState(draft.kind === "edit" ? draft.note.body : "");
+
+  /** A change from the surface — remembered, and reported up so a close knows to ask. */
+  const change = (next: string) => {
+    setBody(next);
+    onDirty(unsaved(draft, next));
+  };
+
+  /**
+   * **The question put away while the dialog stays open hands the caret back to the surface** —
+   * `Keep writing`, or a second Escape. Without it the caret is on the question's box as it
+   * unmounts, which drops it on `<body>` and makes the next keystroke go nowhere. Discard never
+   * reaches this: it closes with `asking` still true (see the host), and the panel leaves with
+   * the props it had.
+   */
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const wasAsking = useRef(false);
+  useEffect(() => {
+    if (wasAsking.current && !asking) {
+      surfaceRef.current?.querySelector<HTMLElement>('[role="textbox"]')?.focus();
+    }
+    wasAsking.current = asking;
+  }, [asking]);
 
   // An edit is a note that already exists and the verb says only what the press does to it; a
   // create has to name the thing it is about to make, because `Save` alone on a dialog a reader
@@ -171,40 +279,122 @@ function Body({
       {/* The floor is the surface's own plus room for the toolbar above it, so the dialog does
           not grow under the reader as the lazy chunk lands — a panel that jumped 200px the
           moment Tiptap arrived would move the footer out from under a press already on its way. */}
-      <div className="min-h-60 px-5 py-4">
+      <div ref={surfaceRef} className="min-h-60 px-5 py-4">
         {/* A sentence rather than a spinner: the chunk arrives off local disk, so what a reader
             actually sees is one frame of type, and a spinner for one frame is a flash. */}
         <Suspense fallback={<p className="text-[0.6875rem] text-dim">Loading editor…</p>}>
-          <NoteEditor value={body} onChange={setBody} ariaLabel={`Body of ${heading}`} />
+          <NoteEditor value={body} onChange={change} ariaLabel={`Body of ${heading}`} />
         </Suspense>
+        {/* Under the text it refused, which is still here because the host closes on success
+            only — the band's own line says the same thing, but under a modal scrim. */}
+        {error !== null && (
+          <p role="alert" className="mt-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
       </div>
 
-      <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
-        <button type="button" onClick={onClose} className={CONFIRM_CANCEL}>
-          Cancel
-        </button>
-
-        <button
-          type="button"
-          // **Two kinds of no, and only one of them is the attribute.** `pending` is the
-          // half-second a write is in flight and really does take the button out of reach.
-          // `blank` greys and un-greys as the reader types, and a real `disabled` control leaves
-          // the tab order — so a reader who cleared their last word would find the caret thrown
-          // out of the footer by their own press. `PullFromCollectionDialog`'s pull button is
-          // this exact pairing.
-          disabled={pending}
-          aria-disabled={blank || undefined}
-          // The guard the paint would otherwise be lying about: an `aria-disabled` control still
-          // delivers its press.
-          onClick={() => {
-            if (blank) return;
-            onSave(body);
-          }}
-          className={SAVE}
-        >
-          {verb}
-        </button>
-      </footer>
+      {asking ? (
+        <DiscardQuestion
+          what={draft.kind === "edit" ? "your changes to this note" : "this note"}
+          onDiscard={onDiscard}
+          onKeep={onKeep}
+        />
+      ) : (
+        <Footer
+          verb={verb}
+          blank={blank}
+          pending={pending}
+          onCancel={onCancel}
+          onSave={() => onSave(body)}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * Cancel and Save — the footer while nothing is being asked.
+ */
+function Footer({
+  verb,
+  blank,
+  pending,
+  onCancel,
+  onSave,
+}: {
+  verb: string;
+  blank: boolean;
+  pending: boolean;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+      {/* A way out like Escape and the ✕, so it asks first like them. */}
+      <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
+        Cancel
+      </button>
+
+      <button
+        type="button"
+        // **Two kinds of no, and only one of them is the attribute.** `pending` is the
+        // half-second a write is in flight and really does take the button out of reach.
+        // `blank` greys and un-greys as the reader types, and a real `disabled` control leaves
+        // the tab order — so a reader who cleared their last word would find the caret thrown
+        // out of the footer by their own press. `PullFromCollectionDialog`'s pull button is
+        // this exact pairing.
+        disabled={pending}
+        aria-disabled={blank || undefined}
+        // The guard the paint would otherwise be lying about: an `aria-disabled` control still
+        // delivers its press.
+        onClick={() => {
+          if (blank) return;
+          onSave();
+        }}
+        className={SAVE}
+      >
+        {verb}
+      </button>
+    </footer>
+  );
+}
+
+/**
+ * *Discard …?* — the footer while a close is being asked about (issue #1549).
+ *
+ * **In the footer's place rather than in a second dialog**: the question is about the text right
+ * above it, and a scrim over it would hide the very words being asked about. The caret goes into
+ * the **question** and not onto a button, `useConfirmFocus`'s rule — a stray Enter must not
+ * decide for the reader. The footer's own top rule is what sets it off, so `CONFIRM_BOX`'s rule
+ * and margin (written for a question *under* content) give way to the footer's geometry; the
+ * focus ring stays, because the box is what holds the caret.
+ */
+function DiscardQuestion({
+  what,
+  onDiscard,
+  onKeep,
+}: {
+  what: string;
+  onDiscard: () => void;
+  onKeep: () => void;
+}) {
+  const confirm = useConfirmFocus(`Discard ${what}?`);
+
+  return (
+    <footer className="border-t border-border px-5 py-3.5">
+      <div
+        {...confirm}
+        className={cn("flex flex-wrap items-center justify-end gap-2 rounded-md", FOCUS)}
+      >
+        <p className="mr-auto text-xs">Discard {what}?</p>
+        <button type="button" onClick={onDiscard} className={CONFIRM_DESTRUCTIVE}>
+          Discard
+        </button>
+        <button type="button" onClick={onKeep} className={CONFIRM_CANCEL}>
+          Keep writing
+        </button>
+      </div>
+    </footer>
   );
 }

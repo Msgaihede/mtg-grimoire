@@ -14,6 +14,7 @@ const ipcMock = vi.hoisted(() => ({
   draftView: vi.fn(),
   draftResume: vi.fn(),
   draftEnd: vi.fn(),
+  draftDiscard: vi.fn(),
   syncSupporterStatus: vi.fn(),
   packsBoosterSets: vi.fn(),
   onPacksRefreshed: vi.fn(),
@@ -292,6 +293,73 @@ describe("DraftPage", () => {
       await userEvent.click(within(progress).getByRole("button", { name: "Rejoin" }));
       expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 3" })).toBeInTheDocument();
       expect(ipcMock.lobbyRejoin).toHaveBeenCalled();
+    });
+  });
+
+  /** Issue #1586: the app holds one draft, and the hub never takes it from the pod unasked. */
+  describe("the one draft at the table", () => {
+    const POD: LobbyState = {
+      role: "host",
+      kind: "draft",
+      code: "K7QX2M",
+      phase: "drafting",
+      name: "Ada",
+      hostName: "Ada",
+      hostOnline: true,
+      peers: [{ peer: "p1", name: "Bea", online: true, deck: null }],
+      label: "The Hobbit",
+      closedReason: null,
+      trade: null,
+    };
+
+    it("abandons a saved draft without taking the table from the hosted pod", async () => {
+      ipcMock.draftSaved.mockResolvedValue(SAVED);
+      ipcMock.lobbyState.mockResolvedValue(POD);
+      ipcMock.draftDiscard.mockResolvedValue(undefined);
+      setup();
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      await within(progress).findByText("Rejoin");
+      await userEvent.click(within(progress).getByRole("button", { name: "Abandon" }));
+      ipcMock.draftSaved.mockResolvedValue(null);
+      await userEvent.click(within(progress).getByRole("button", { name: "Abandon this draft?" }));
+      await waitFor(() => expect(ipcMock.draftDiscard).toHaveBeenCalledOnce());
+      expect(ipcMock.draftResume).not.toHaveBeenCalled();
+      expect(ipcMock.draftEnd).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(within(progress).queryByText(SAVED.label)).not.toBeInTheDocument(),
+      );
+    });
+
+    it("ends this window's own solo draft by its name when it is the one abandoned", async () => {
+      currentDraft.keep({ draft: 4, role: "solo", view: VIEW });
+      ipcMock.draftSaved.mockResolvedValue(SAVED);
+      ipcMock.draftView.mockResolvedValue(VIEW);
+      ipcMock.draftEnd.mockResolvedValue(undefined);
+      setup();
+      // A kept solo draft opens on its pick; the hub is one press back.
+      await userEvent.click(await screen.findByRole("button", { name: "Back to Draft & Packs" }));
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      await userEvent.click(within(progress).getByRole("button", { name: "Abandon" }));
+      await userEvent.click(within(progress).getByRole("button", { name: "Abandon this draft?" }));
+      await waitFor(() => expect(ipcMock.draftEnd).toHaveBeenCalledExactlyOnceWith(4));
+      expect(ipcMock.draftDiscard).not.toHaveBeenCalled();
+      expect(ipcMock.draftResume).not.toHaveBeenCalled();
+    });
+
+    it("withholds Resume while a pod this app hosts is drafting, and says why", async () => {
+      ipcMock.draftSaved.mockResolvedValue(SAVED);
+      ipcMock.lobbyState.mockResolvedValue(POD);
+      setup();
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      expect(
+        await within(progress).findByText(
+          "You are hosting a pod draft. Finish it or leave its lobby before starting another draft.",
+        ),
+      ).toBeInTheDocument();
+      const resume = within(progress).getByRole("button", { name: "Resume" });
+      expect(resume).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(resume);
+      expect(ipcMock.draftResume).not.toHaveBeenCalled();
     });
   });
 });

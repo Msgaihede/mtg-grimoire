@@ -15,7 +15,9 @@ import type {
   SupporterStatus,
 } from "@/lib/ipc";
 import type { ConfettiBurst, TierConfettiProps } from "./reader/TierConfetti";
+import { DEFAULT_ZOOM } from "@/lib/cardZoom";
 import { useNotifications } from "@/lib/notifications";
+import { useAppStore } from "@/lib/store";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import { DEFAULT_SCANNER_PREFS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
@@ -567,6 +569,68 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * **A card added by hand while stopped is filed, not shown** (issue #1555): the view opens
+   * stopped, so *Add card…* is often pressed with nothing running. The popup is for a reader
+   * watching the camera; one raised at the next Start would announce a card that landed minutes
+   * ago — and might since have gone to the collection.
+   */
+  it("lays nothing over the camera for a card added by hand while stopped, then or at Start", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    const bolt: CardSummary = {
+      id: "bolt-2x2",
+      name: "Lightning Bolt",
+      setCode: "2x2",
+      setName: "Double Masters 2022",
+      collectorNumber: "117",
+      rarity: "uncommon",
+      typeLine: "Instant",
+      manaCost: "{R}",
+      price: null,
+      layout: "normal",
+      oracleId: "bolt",
+      finishes: '["nonfoil","foil"]',
+      promoTypes: null,
+      gameChanger: false,
+      releasedAt: null,
+      imageUpdatedAt: null,
+      ownedQuantity: 0,
+      wishlisted: false,
+      printings: 1,
+      priceLow: null,
+      priceHigh: null,
+    };
+    vi.mocked(ipc.searchCards).mockResolvedValue({ items: [bolt], total: 1, totalIsCapped: false });
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Start" });
+      await user.click(within(tray()).getByRole("button", { name: "Add card…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Add a card" });
+      await user.type(
+        within(dialog).getByRole("searchbox", { name: "Which card do you want to add?" }),
+        "bolt",
+      );
+      await user.click(await within(dialog).findByRole("radio", { name: /Lightning Bolt/ }));
+      await user.click(within(dialog).getByRole("radio", { name: "Foil" }));
+      await user.click(within(dialog).getByRole("button", { name: "Add to tray" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Add a card" })).not.toBeInTheDocument(),
+      );
+      expect(tray()).toHaveTextContent("Lightning Bolt");
+      expect(videoBox(container)).not.toHaveTextContent("Lightning Bolt");
+
+      await start();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards");
+      expect(videoBox(container)).not.toHaveTextContent("Lightning Bolt");
+    } finally {
+      restore();
+    }
+  });
+
   it("can stop recognition while a camera request is pending without cancelling the preview", async () => {
     const restore = shimVideo();
     let opened!: (stream: MediaStream) => void;
@@ -1075,6 +1139,60 @@ describe("ScannerPage", () => {
   });
 
   /**
+   * **A Start is not a landing** (issue #1555). The hold over the camera used to be the popup's
+   * own clock, which ran only while the popup was drawn — so a Stop inside it left the card set,
+   * and the next Start raised it again as news, confetti and all, with the HUD's live region still
+   * saying `Matched … Added` from the last stream's verdict until the new one answered.
+   */
+  it("raises nothing over the camera at a Start for a card that landed before the Stop", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ finish: "nonfoil" });
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // The first stream decides and keeps saying so — one decision, the same number every frame —
+    // and the second is a card still voting, so nothing it answers lands anything. A few
+    // milliseconds apart (`paced`'s reason).
+    let restarted = false;
+    const answers = [VERDICTS.voting];
+    vi.mocked(ipc.scannerFrame).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve(restarted ? VERDICTS.voting : (answers.shift() ?? VERDICTS.decided)),
+            10,
+          ),
+        ),
+    );
+    try {
+      const { container } = mount();
+      await start();
+      await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
+      expect(statusLine()).toHaveTextContent("Added");
+      // Stopped well inside the hold: the card is put away with the Stop.
+      fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      await waitFor(() =>
+        expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards"),
+      );
+
+      restarted = true;
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      // Nothing old is said in the render the Start makes…
+      expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards");
+      expect(statusLine()).not.toHaveTextContent(/Matched|Added/);
+      // …nor once the new stream is answering.
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent + 1),
+      );
+      expect(videoBox(container)).not.toHaveTextContent("Added to scanned cards");
+      expect(videoBox(container)).not.toHaveTextContent("Storm of Saruman");
+      expect(statusLine()).not.toHaveTextContent(/Matched|Added/);
+    } finally {
+      restore();
+    }
+  });
+
+  /**
    * **The landing's price reaches the popup and the confetti by the sound's own ladder**
    * (`useLandedTier`, Settings → Scanner — $1, $10, $100, $1000 on a fresh install): a card
    * priced past a rung wears its figure bold gold and throws one burst at that rung, keyed on its
@@ -1170,6 +1288,91 @@ describe("ScannerPage", () => {
     } finally {
       restore();
     }
+  });
+
+  /**
+   * **Issue #1554: the menu's guard compares against the camera that is open.** The menu ticks the
+   * open camera, so a press on the ticked row does nothing, and a press on the stored camera
+   * while the default is open in its place reopens it.
+   */
+  describe("the Camera menu", () => {
+    /** Two cameras listed; `open(id)` is what an `exact` request for `id` does. */
+    function cameras(open: (id: string | null) => Promise<string>) {
+      const getUserMedia = vi.fn(async (c?: MediaStreamConstraints) => {
+        const exact = (
+          (c?.video as MediaTrackConstraints).deviceId as ConstrainDOMStringParameters | undefined
+        )?.exact as string | undefined;
+        const id = await open(exact ?? null);
+        return {
+          getTracks: () => [{ stop: () => {} }],
+          getVideoTracks: () => [{ getSettings: () => ({ deviceId: id }) }],
+        } as unknown as MediaStream;
+      });
+      const enumerateDevices = vi.fn(() =>
+        Promise.resolve([
+          { kind: "videoinput", deviceId: "brio", label: "Brio" },
+          { kind: "videoinput", deviceId: "old", label: "Old cam" },
+        ] as MediaDeviceInfo[]),
+      );
+      Object.defineProperty(navigator, "mediaDevices", {
+        value: { getUserMedia, enumerateDevices },
+        configurable: true,
+      });
+      return getUserMedia;
+    }
+
+    async function pick(name: string) {
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole("button", { name: /^Camera: / }));
+      const group = await screen.findByRole("radiogroup", { name: "Camera" });
+      await user.click(within(group).getByRole("radio", { name: new RegExp(`^${name}`) }));
+    }
+
+    it("reopens the stored camera when the default opened in its place", async () => {
+      // The stored camera is unplugged at the first request, and back by the time it is pressed.
+      let plugged = false;
+      const getUserMedia = cameras((id) => {
+        if (id === "old" && !plugged) {
+          return Promise.reject(new DOMException("gone", "OverconstrainedError"));
+        }
+        return Promise.resolve(id ?? "brio");
+      });
+      storedPrefs({ cameraId: "old" });
+      frames();
+      const restore = shimVideo();
+      try {
+        mount();
+        expect(await screen.findByRole("button", { name: "Camera: Brio" })).toBeInTheDocument();
+        expect(getUserMedia).toHaveBeenCalledTimes(2);
+        plugged = true;
+        await pick("Old cam");
+        expect(await screen.findByRole("button", { name: "Camera: Old cam" })).toBeInTheDocument();
+        expect(getUserMedia).toHaveBeenCalledTimes(3);
+        expect(getUserMedia.mock.calls[2]).toMatchObject([
+          { video: { deviceId: { exact: "old" } } },
+        ]);
+        // Already stored: nothing to write.
+        expect(ipc.setScannerPrefs).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("does nothing on a press on the live camera, stored or not", async () => {
+      const getUserMedia = cameras((id) => Promise.resolve(id ?? "brio"));
+      frames();
+      const restore = shimVideo();
+      try {
+        mount();
+        expect(await screen.findByRole("button", { name: "Camera: Brio" })).toBeInTheDocument();
+        await pick("Brio");
+        await act(async () => {});
+        expect(getUserMedia).toHaveBeenCalledTimes(1);
+        expect(ipc.setScannerPrefs).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
   });
 
   it("stores the tray layout the reader picks", async () => {
@@ -2357,12 +2560,10 @@ describe("ScannerPage sending a scan", () => {
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
 
-      // The premise: as things stand there is a run to send, all seven frames of it.
-      await user.click(screen.getByRole("button", { name: "Send scan…" }));
-      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
-      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // As things stand the run is those seven frames ("freezes the run on the press…" opens it
+      // on this same arrangement). Not opened here: the dialog pauses the pump, and the start
+      // after it lets the run go and forgets the verdict by itself (issue #1555), which would say
+      // nothing about the filters.
 
       // The reader narrows the scan, and the session takes it — which is when it is stored.
       const resets = vi.mocked(ipc.scannerReset).mock.calls.length;
@@ -3191,6 +3392,41 @@ describe("ScannerPage's pack opener", () => {
     expect(screen.queryByRole("region", { name: PACK_OPENER })).toBeNull();
     expect(screen.queryByRole("button", { name: "Scanned cards" })).toBeNull();
     expect(screen.getByRole("button", { name: PACK_OPENER })).toHaveFocus();
+  });
+
+  /**
+   * Issue #1525: the drawer is the page's own tray, so ctrl+wheel over it steps the same
+   * `cardZoom.scanner` the page's column does — and a size set on one is the other's.
+   */
+  it("zooms the drawer's cards on a ctrl+wheel, the same number the page's column draws at", async () => {
+    useAppStore.setState(useAppStore.getInitialState());
+    refused();
+    vi.mocked(ipc.scannerTray).mockResolvedValue([...TRAY_ROWS]);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText(TRAY_ROWS[0].name);
+
+    // The page's column first.
+    fireEvent.wheel(tray(), { deltaY: -100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.1);
+
+    await openPack();
+    await user.click(screen.getByRole("button", { name: "Scanned cards" }));
+    const drawer = document.getElementById(
+      screen.getByRole("button", { name: "Scanned cards" }).getAttribute("aria-controls") ?? "",
+    )!;
+    expect(drawer).toContainElement(tray());
+    fireEvent.wheel(tray(), { deltaY: -100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.2);
+    expect(useAppStore.getState().zoomSection).toBe("scanner");
+
+    // Back on the page, the column draws at the size the drawer was left at.
+    await user.keyboard("{Escape}");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: PACK_OPENER })).toBeNull();
+    fireEvent.wheel(tray(), { deltaY: 100, ctrlKey: true });
+    fireEvent.wheel(tray(), { deltaY: 100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(DEFAULT_ZOOM);
   });
 
   it("is the Scanner view's alone — not offered over a trade", async () => {

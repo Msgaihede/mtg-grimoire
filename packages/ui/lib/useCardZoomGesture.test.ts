@@ -44,8 +44,13 @@ function mountOn(section: ZoomSection) {
  * that was never cancelable, so without it the `preventDefault` assertion below passes and fails
  * for reasons that have nothing to do with this hook.
  */
-function wheel(el: HTMLElement, deltaY: number, ctrlKey: boolean): WheelEvent {
-  const e = new WheelEvent("wheel", { deltaY, ctrlKey, cancelable: true, bubbles: true });
+function wheel(
+  el: HTMLElement,
+  deltaY: number,
+  ctrlKey: boolean,
+  extra: { deltaX?: number; shiftKey?: boolean } = {},
+): WheelEvent {
+  const e = new WheelEvent("wheel", { deltaY, ctrlKey, ...extra, cancelable: true, bubbles: true });
   el.dispatchEvent(e);
   return e;
 }
@@ -75,6 +80,33 @@ describe("useCardZoomGesture", () => {
     wheel(el, 100, true);
     expect(useAppStore.getState().cardZoom.search).toBe(0.9);
     expect(useAppStore.getState().zoomPulse).toBe(3);
+  });
+
+  /**
+   * Ctrl+Shift is the range-selection chord, and with Shift held Chromium on Windows delivers the
+   * wheel sideways — `deltaY` 0, the notch in `deltaX`. Reading the zero as "down" zoomed out
+   * whichever way the wheel turned (issue #1569); the sideways axis keeps up as in.
+   */
+  it("reads a sideways wheel's own direction when the vertical delta is zero", () => {
+    const { el } = mountOn("search");
+
+    wheel(el, 0, true, { deltaX: -100, shiftKey: true });
+    expect(useAppStore.getState().cardZoom.search).toBe(1.1);
+
+    wheel(el, 0, true, { deltaX: 100, shiftKey: true });
+    wheel(el, 0, true, { deltaX: 100, shiftKey: true });
+    expect(useAppStore.getState().cardZoom.search).toBe(0.9);
+  });
+
+  /** No travel on either axis is no step — but the window's own zoom is still held off. */
+  it("steps nothing for a wheel that moved neither way, and still cancels it", () => {
+    const { el } = mountOn("search");
+
+    const e = wheel(el, 0, true);
+
+    expect(useAppStore.getState().cardZoom.search).toBe(1);
+    expect(useAppStore.getState().zoomPulse).toBe(0);
+    expect(e.defaultPrevented).toBe(true);
   });
 
   /** The section is the hook's argument, not a guess from where the event landed. */

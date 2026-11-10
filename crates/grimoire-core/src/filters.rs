@@ -1239,7 +1239,8 @@ const PRODUCED_LETTERS: [&str; 6] = ["W", "U", "B", "R", "G", "C"];
 /// Strixhaven colleges, the shards, the wedges and the four-colour Nephilim names (short and
 /// long) are Scryfall's own list; `packages/ui/features/search/queryLanguage.ts` validates
 /// against the same names and resolves none of them, so this table is the one place a name
-/// becomes letters.
+/// becomes letters. `packages/ui/lib/ipc.test.ts` reads this table and holds the two together
+/// (issue #1564, when the plain colour names were here and not there).
 const COLOR_NAMES: [(&str, &str); 45] = [
     ("white", "W"),
     ("blue", "U"),

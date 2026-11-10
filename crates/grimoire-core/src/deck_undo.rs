@@ -1509,6 +1509,24 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                 if fields.contains_key("virtual_only") {
                     crate::deck::settle_deck_group(tx, deck_id)?;
                 }
+                // The group wears the deck's name (issue #1538): `update_deck`'s rename writes
+                // `collection_folders.name` beside `decks.name`, and nothing else keeps the two
+                // together, so a step that writes the name writes the group's too — or Ctrl+Z
+                // puts the deck back to "Burn" while the Collection page, `folderName` and every
+                // "in <deck>" sentence go on saying "Burn v2". Read back from the row the loop
+                // just wrote, so the group gets exactly the name the deck landed on, and only
+                // where it differs: `update_deck`'s own rule against a write that moves nothing.
+                if fields.contains_key("name") {
+                    tx.execute(
+                        "UPDATE collection_folders
+                            SET name = (SELECT name FROM decks WHERE id = ?1),
+                                updated_at = unixepoch()
+                          WHERE deck_id = ?1
+                            AND name IS NOT (SELECT name FROM decks WHERE id = ?1)",
+                        params![deck_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
             }
             Op::Tokens {
                 restore,
@@ -5757,6 +5775,48 @@ mod tests {
             None,
             "and the cursor moved on — a step that can never apply is not left to wedge it"
         );
+    }
+
+    /// **The deck's group follows a rename undone and redone** (issue #1538). `update_deck`
+    /// renames the group beside the deck; an undo that wrote `decks.name` alone left the
+    /// Collection page's pinned folder, `folderName` and every "in <deck>" sentence on the name
+    /// that was undone, and synced it.
+    #[test]
+    fn undoing_and_redoing_a_rename_carries_the_decks_collection_group_with_it() {
+        let conn = seeded_with_fks();
+        let id = deck(&conn, "Burn");
+        let group_name = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT name FROM collection_folders WHERE deck_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(group_name(&conn), "Burn", "a regular deck has its group");
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                name: Some("Burn v2".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let renamed = next_undo(&conn, id).unwrap().unwrap();
+        assert_eq!(group_name(&conn), "Burn v2");
+
+        undo(&conn, id).unwrap();
+        assert_eq!(deck_columns(&conn, id).0, "Burn");
+        assert_eq!(
+            group_name(&conn),
+            "Burn",
+            "the group went back with the deck"
+        );
+
+        redo(&conn, id, renamed).unwrap();
+        assert_eq!(deck_columns(&conn, id).0, "Burn v2");
+        assert_eq!(group_name(&conn), "Burn v2", "and came forward with it");
     }
 
     /// **The folder a reversal would write.** Moving a deck from F to G and then

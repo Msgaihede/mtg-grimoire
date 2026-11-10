@@ -105,6 +105,42 @@ export function playedFinish(stored: Finish | null, listed: string | null): Fini
   return stored ?? soleFinish(listed);
 }
 
+/**
+ * The finishes a copy of this printing can be **recorded** in — never empty, because an add has
+ * to name one.
+ *
+ * {@link parseFinishes} where the printing lists any, and the plain copy where it lists none
+ * (nothing is known, which is not the same as knowing there is no plain one). The first answer is
+ * the most ordinary finish the printing is actually sold in, so `recordableFinishes(f)[0]` is what
+ * a press that names no finish files: `nonfoil` for most printings, `foil` for a foil+etched one
+ * (issue #1561) and the only finish for a single-finish one.
+ *
+ * **Never `soleFinish(f) ?? "nonfoil"`**: `soleFinish` answers `null` for every multi-finish
+ * printing, so that fallback filed a nonfoil copy of a printing that was never made in nonfoil.
+ */
+export function recordableFinishes(finishes: string | null): Finish[] {
+  const listed = parseFinishes(finishes);
+  return listed.length > 0 ? listed : ["nonfoil"];
+}
+
+/**
+ * A finish a surface named, **if this printing was made in it** — else `null`, the same as no
+ * surface having named one.
+ *
+ * What the card modal reads `paneFinish` through (issue #1561). That field is a seed written by
+ * the surface that opened the card — a foil tile, the deck editor's search panel — and
+ * `viewPrinting` keeps it across a step to another printing on purpose, so it can name a finish
+ * the printing now open does not have. Read raw, a foil tile stepped to a nonfoil-only printing
+ * added a foil copy of it, linked to `?Printing=Foil` and hid `Edit` from the reader's plain copy.
+ *
+ * A printing whose `finishes` are unknown (`[]`) keeps the named finish: nothing says it is wrong.
+ */
+export function listedFinish(named: Finish | null, finishes: string | null): Finish | null {
+  if (named === null) return null;
+  const listed = parseFinishes(finishes);
+  return listed.length === 0 || listed.includes(named) ? named : null;
+}
+
 /** The finishes a printing exists in. Unknown values are dropped, not guessed at. */
 export function parseFinishes(json: string | null): Finish[] {
   const parsed = safeParse(json);

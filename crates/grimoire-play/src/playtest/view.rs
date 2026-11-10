@@ -622,7 +622,8 @@ pub enum PlaytestAction {
     Auto,
     /// Take back the cast or activation the prompt came out of.
     Cancel,
-    // The sandbox, refused while it is off, in the reader's main phase only: on any card the
+    // The sandbox, refused while it is off, taken wherever the reader plays or declares (`main`,
+    // `respond`, `attack`, `block`; issue #1522), never in a question: on any card the
     // reader owns or controls, and on any card the table shows (an opponent's battlefield,
     // graveyard, exile or command zone) — never on an opponent's hand or library.
     Move {

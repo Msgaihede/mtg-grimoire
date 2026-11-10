@@ -291,8 +291,10 @@ function Bench({ payload }: { payload: DragPayload }) {
     <div className="flex h-64 w-[52rem] flex-col gap-3 overflow-y-auto">
       <QuickZones
         categories={CATEGORIES}
-        onDrop={(writes: DeckWrite[]) => setWrote(JSON.stringify(writes.length === 1 ? writes[0] : writes))}
-        onNewCategory={(p) => setWrote(`new category for ${p.name}`)}
+        onDrop={(writes: DeckWrite[]) =>
+          setWrote(JSON.stringify(writes.length === 1 ? writes[0] : writes))
+        }
+        onNewCategory={(held) => setWrote(`new category for ${held.map((p) => p.name).join(", ")}`)}
       />
       <div className="flex flex-col gap-3 pt-16">
         <div
@@ -350,7 +352,7 @@ export const NamingTheNewPile: StoryObj<typeof QuickCategoryDialog> = {
   render: () => (
     <QuickCategoryDialog
       open
-      cardName="Lightning Bolt"
+      cardNames={["Lightning Bolt"]}
       pending={false}
       failure={null}
       onCreate={() => {}}
@@ -385,7 +387,7 @@ export const TheNameIsTaken: StoryObj<typeof QuickCategoryDialog> = {
   render: () => (
     <QuickCategoryDialog
       open
-      cardName="Lightning Bolt"
+      cardNames={["Lightning Bolt"]}
       pending={false}
       failure="Could not make that category — a category called Removal already exists"
       onCreate={() => {}}

@@ -27,13 +27,14 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
+import { cardScaleVars, DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
 import { CONDITION_LABEL, CONDITIONS, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
+import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import type {
   ScannerTrayChoice,
@@ -42,6 +43,8 @@ import type {
   ScannerTrayRow,
 } from "@/lib/ipc";
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
+import { useAppStore } from "@/lib/store";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import type { TrayDestinationFace } from "../useTrayDestination";
 import {
@@ -223,10 +226,17 @@ const TRAY_LAYOUTS = [
  * **`grid` (488×680), not the row's `thumb` and not the walls' `display`.** A tile is 144px at the
  * column floor and about 220px just before the grid gains a column, so on a 200%-scaled display
  * it asks for up to ~440 device pixels — `thumb`'s 146 would be tripled into a blur, and
- * `display`'s 672 is sized for a wall the reader can zoom to 340px, which this grid never is. The
- * home page's recent-cards strip picks `grid` on the same arithmetic.
+ * `display`'s 672 is sized for a wall the reader can zoom to 340px. The home page's recent-cards
+ * strip picks `grid` on the same arithmetic. **Zoomed past life size it is the walls' own
+ * `display`** ({@link tileVariant}): at 110% the floor is 185px and a tile runs to ~260px before
+ * the grid gains a column, past what `grid` holds on a 200%-scaled display.
  */
 const TILE_VARIANT: ImageVariant = "grid";
+
+/** The picture a tile asks for at this zoom — see {@link TILE_VARIANT}. */
+function tileVariant(zoom: number): ImageVariant {
+  return zoom > DEFAULT_ZOOM ? WALL_CARD_VARIANT : TILE_VARIANT;
+}
 
 /**
  * The grid's column template — an inline style, never an arbitrary Tailwind value, which is the
@@ -245,6 +255,62 @@ const TILE_VARIANT: ImageVariant = "grid";
  * tiles around them (issue #1004) — and on this template itself until the grid has been measured.
  */
 const TILE_COLUMNS = "repeat(auto-fill, minmax(min(10.5rem, calc(50% - 0.375rem)), 1fr))";
+
+/** {@link TILE_COLUMNS}' 10.5rem floor, px — what the tray's zoom (`cardZoom.scanner`) multiplies. */
+const TILE_FLOOR = 168;
+
+/**
+ * The least a tile is drawn at once its chin has folded onto two lines (below life size — see
+ * {@link chinFolds}): the finish holding `Unknown` whole on a line of its own (80px), the chin's
+ * `p-1` and the tile's border. Only the ladder's bottom stop is under it — 50% of 168 is 84px,
+ * 6px short of a whole `Unknown`.
+ */
+const FOLDED_FLOOR = 90;
+
+/**
+ * The grid's column template at the tray's zoom (issue #1525) — {@link TILE_COLUMNS} itself at
+ * life size, and its floor multiplied by the zoom either side of it.
+ *
+ * **Above life size the cap is the whole width, not half of it.** The half is what keeps a tray
+ * squeezed under two 10.5rem columns drawing two rather than one card the width of the tray — a
+ * fact about the size the cards were *chosen* at. A reader who has zoomed in has asked for bigger
+ * cards, and one to a line is what that means in the pack opener's 30rem drawer. `100%` still
+ * keeps a floor wider than the tray from pushing the grid sideways.
+ */
+export function tileColumns(zoom: number): string {
+  if (zoom === DEFAULT_ZOOM) return TILE_COLUMNS;
+  const floor = Math.max(scaled(TILE_FLOOR, zoom), FOLDED_FLOOR);
+  const cap = zoom > DEFAULT_ZOOM ? "100%" : "calc(50% - 0.375rem)";
+  return `repeat(auto-fill, minmax(min(${floor}px, ${cap}), 1fr))`;
+}
+
+/**
+ * Whether a tile's chin folds the stepper under the finish — **below life size, and only there.**
+ *
+ * The chin is one line because the owner chose it over two (2026-10-24) at the size the floor was
+ * measured for: the finish's `Unknown` (80px) and the `compact` stepper (72px) are what make the
+ * 10.5rem. Neither scales — `compact` is WCAG 2.5.8's 24px floor, and a smaller finish is
+ * type nobody reads — so a tile zoomed under that floor cannot hold both on a line, and the
+ * choice is a second line or a finish cut to `Unkn…`, which is no question at all. A reader who
+ * asked for smaller cards to see more of them has asked for the second line.
+ */
+function chinFolds(zoom: number): boolean {
+  return zoom < DEFAULT_ZOOM;
+}
+
+/** The list's thumbnail at 100%, px — `w-9`, the width it drew before the tray had a zoom. */
+const ROW_THUMB = 36;
+
+/** A list candidate at 100%, px — `w-16`. */
+const ROW_CHOICE = 64;
+
+/**
+ * The picture a list thumbnail of this width asks for: `thumb` (146px wide) while it holds the
+ * slot on a 200%-scaled display, `grid` once the zoom has made the slot wider than that.
+ */
+function rowVariant(px: number): ImageVariant {
+  return px * 2 > 146 ? "grid" : "thumb";
+}
 
 /**
  * A card that is a button rises a little under the pointer or the caret, with a shadow under it —
@@ -360,6 +426,17 @@ export function TrayPanel({
   // Read-only over `rows`, so it is free of `onRows`' rule: nothing here writes the tray.
   const [cursor, setCursor] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  // **Ctrl+wheel over the tray steps its cards** (issue #1525), the grid's tiles and the list's
+  // thumbnails alike — one number, `cardZoom.scanner`, in the page's column and the pack
+  // opener's drawer, which are this one panel drawn in two places. Caught on the section rather
+  // than on the scroller: the section is mounted from the first frame, where the scroller is not
+  // (an empty tray draws a sentence, and a layout switch swaps one `<ul>` for another) — and the
+  // hook attaches once, to the element its ref holds then. The header and the footer are the
+  // tray's too, and a ctrl+wheel over them that fell through would be WebView2's page zoom.
+  const sectionRef = useRef<HTMLElement>(null);
+  useCardZoomGesture(sectionRef, "scanner");
+  const zoom = useAppStore((s) => s.cardZoom.scanner);
+  const columnsTemplate = tileColumns(zoom);
   // The grid's explicit column count, for a waiting tile's span — read off an empty probe with the
   // grid's template, since an `auto-fill` template decides it from the width and the grid's own
   // resolved template counts the implicit tracks an oversized span makes (`useGridColumns`).
@@ -411,6 +488,7 @@ export function TrayPanel({
     // re-announced by name to a reader who never left it. `flex-1` so the tray — and its empty
     // sentence — runs the whole height of the column the page gives it.
     <section
+      ref={sectionRef}
       aria-labelledby={titleId}
       // `@container/tray`: the header and the footer fold by the tray's own width. Its popups are
       // anchored (absolute) and its dialogs are the page's, so the containment costs nothing here.
@@ -529,7 +607,9 @@ export function TrayPanel({
         <ul
           ref={listRef}
           className="relative grid min-h-0 flex-1 content-start gap-x-3 gap-y-[18px] overflow-y-auto p-3.5"
-          style={{ gridTemplateColumns: TILE_COLUMNS }}
+          // The marks on a card — its count, its finish chip — follow the zoom as they do on every
+          // wall (`cardScaleVars`); the chin's controls do not read it, which is `chinFolds`' case.
+          style={{ gridTemplateColumns: columnsTemplate, ...cardScaleVars(zoom) }}
         >
           {/* **The column probe**: the grid's template and column gap on an empty box exactly as
               wide as the grid's content — `inset-x-3.5` is the scroller's `p-3.5`, and an
@@ -539,11 +619,16 @@ export function TrayPanel({
               invisible and `aria-hidden`, so it is not a row to anyone. The three have to move
               with the grid's. */}
           <li
+            // **Keyed on the template, so a zoom is a new probe** (issue #1525): a new template
+            // can change the count without changing the probe's box, and a `ResizeObserver`
+            // hears sizes only — the span would keep the old count and push an implicit track
+            // in. A new element is observed afresh, and unmeasured (`0`, the whole width) until.
+            key={columnsTemplate}
             ref={columnProbe}
             aria-hidden="true"
             data-column-probe=""
             className="pointer-events-none invisible absolute inset-x-3.5 top-0 grid h-0 gap-x-3"
-            style={{ gridTemplateColumns: TILE_COLUMNS }}
+            style={{ gridTemplateColumns: columnsTemplate }}
           />
           {rows.map((row) => {
             const on = handlers(row);
@@ -552,6 +637,8 @@ export function TrayPanel({
                 key={row.key}
                 row={row}
                 columns={columns}
+                template={columnsTemplate}
+                variant={tileVariant(zoom)}
                 flash={row.key === flashKey}
                 onPick={on.onPick}
                 onRemove={on.onRemove}
@@ -561,6 +648,7 @@ export function TrayPanel({
               <TrayTile
                 key={row.key}
                 row={row}
+                zoom={zoom}
                 flash={row.key === flashKey}
                 price={priceOf(row)}
                 money={money}
@@ -582,6 +670,7 @@ export function TrayPanel({
             <TrayRow
               key={row.key}
               row={row}
+              zoom={zoom}
               flash={row.key === flashKey}
               price={priceOf(row)}
               money={money}
@@ -991,6 +1080,7 @@ function LayoutToggle({
  */
 function TrayRow({
   row,
+  zoom,
   flash,
   price,
   money,
@@ -1001,6 +1091,8 @@ function TrayRow({
   onMorePrintings,
 }: {
   row: ScannerTrayRow;
+  /** The tray's zoom, `cardZoom.scanner` — the thumbnail's width and its candidates'. */
+  zoom: number;
   flash: boolean;
   price: number | null | undefined;
   money: Money;
@@ -1016,8 +1108,9 @@ function TrayRow({
   // **The whole card, never the `art` crop.** A crop has no printed frame and so no artist credit,
   // a tray row carries no artist to name beside one, and the Scanner shows no other full card a
   // reader could read the credit off — `packages/ui/CLAUDE.md`'s art-credit rule, met by its second arm.
-  // `thumb` is the smallest variant that is a whole card.
-  const card = cardImageUrl(row.cardId, 0, "thumb");
+  // `thumb` is the smallest variant that is a whole card, and enough until the zoom outgrows it.
+  const thumb = scaled(ROW_THUMB, zoom);
+  const card = cardImageUrl(row.cardId, 0, rowVariant(thumb));
 
   return (
     <li data-tray-row={row.key} className="relative rounded-md px-2 py-2">
@@ -1031,8 +1124,8 @@ function TrayRow({
             cannot be read in a 36px column and would repeat the name set in type beside it. */}
         <span
           aria-hidden="true"
-          className="w-9 shrink-0 overflow-hidden rounded-[3px] bg-bg"
-          style={{ aspectRatio: CARD_ASPECT }}
+          className="shrink-0 overflow-hidden rounded-[3px] bg-bg"
+          style={{ width: thumb, aspectRatio: CARD_ASPECT }}
         >
           <CardImage
             src={card}
@@ -1054,7 +1147,7 @@ function TrayRow({
           </div>
 
           {waiting ? (
-            <Choices row={row} onPick={onPick} />
+            <Choices row={row} zoom={zoom} onPick={onPick} />
           ) : (
             // **One line**, as the tray's every row (`TrayPanel`'s header says why): under 28rem
             // *More printings…* says *Printings…*, its name the whole phrase.
@@ -1136,7 +1229,16 @@ function TrayRow({
  * at this size a set symbol is a smudge, and a reader choosing between three Forests needs to read
  * which three.
  */
-function Choices({ row, onPick }: { row: ScannerTrayRow; onPick: (cardId: string) => void }) {
+function Choices({
+  row,
+  zoom,
+  onPick,
+}: {
+  row: ScannerTrayRow;
+  zoom: number;
+  onPick: (cardId: string) => void;
+}) {
+  const width = scaled(ROW_CHOICE, zoom);
   return (
     <div className="flex flex-col gap-1.5">
       <p className="text-xs font-medium text-accent">Pick a printing</p>
@@ -1147,26 +1249,41 @@ function Choices({ row, onPick }: { row: ScannerTrayRow; onPick: (cardId: string
         className="flex flex-wrap gap-1.5"
       >
         {row.choices.map((choice) => (
-          <ChoiceButton key={choice.cardId} choice={choice} onPick={() => onPick(choice.cardId)} />
+          <ChoiceButton
+            key={choice.cardId}
+            choice={choice}
+            width={width}
+            onPick={() => onPick(choice.cardId)}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () => void }) {
+function ChoiceButton({
+  choice,
+  width,
+  onPick,
+}: {
+  choice: ScannerTrayChoice;
+  /** px — `w-16` at life size, times the tray's zoom. */
+  width: number;
+  onPick: () => void;
+}) {
   const printing = printingOf(choice);
-  const src = cardImageUrl(choice.cardId, 0, "thumb");
+  const src = cardImageUrl(choice.cardId, 0, rowVariant(width));
   return (
     <button
       type="button"
       aria-label={choiceLabel(choice)}
       onClick={onPick}
       className={cn(
-        "flex w-16 flex-col items-stretch gap-0.5 rounded-md border border-border p-0.5 hover:border-accent",
+        "flex flex-col items-stretch gap-0.5 rounded-md border border-border p-0.5 hover:border-accent",
         PRESS,
         FOCUS,
       )}
+      style={{ width }}
     >
       <span
         aria-hidden="true"
@@ -1225,6 +1342,7 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
  */
 function TrayTile({
   row,
+  zoom,
   flash,
   price,
   money,
@@ -1234,6 +1352,8 @@ function TrayTile({
   onMorePrintings,
 }: {
   row: ScannerTrayRow;
+  /** The tray's zoom, `cardZoom.scanner` — the picture's variant and whether the chin folds. */
+  zoom: number;
   flash: boolean;
   price: number | null | undefined;
   money: Money;
@@ -1243,6 +1363,7 @@ function TrayTile({
   onMorePrintings: () => void;
 }) {
   const tip = useTooltip();
+  const folds = chinFolds(zoom);
   const label = rowLabel(row);
   const printing = printingOf(row);
   // The picture and what is laid on it, drawn the same whether the box around it is a button or
@@ -1255,7 +1376,7 @@ function TrayTile({
       <CardArt
         cardId={row.cardId}
         name={row.name}
-        variant={TILE_VARIANT}
+        variant={tileVariant(zoom)}
         finish={isKnownFinish(row.finish) ? row.finish : null}
         loading="lazy"
         className="rounded-none border-0"
@@ -1320,11 +1441,17 @@ function TrayTile({
           )}
         </div>
 
-        {/* The chin: the finish taking what the stepper leaves, on one line — see above. */}
-        <div className="flex items-center gap-1 border-t border-border p-1">
+        {/* The chin: the finish taking what the stepper leaves, on one line — see above. Below
+            life size the stepper folds under the finish (`chinFolds`), at the line's end. */}
+        <div
+          className={cn(
+            "flex items-center gap-1 border-t border-border p-1",
+            folds && "flex-wrap justify-end",
+          )}
+        >
           {/* The mark the header's walk finds an unknown finish by. A box of its own here rather
               than the row's `contents`, because it is what grows. */}
-          <span data-decision="" className="min-w-0 flex-1">
+          <span data-decision="" className={folds ? "w-full min-w-0" : "min-w-0 flex-1"}>
             <Dropdown
               size="sm"
               fill
@@ -1402,6 +1529,8 @@ function TrayTile({
 function WaitingTile({
   row,
   columns,
+  template,
+  variant,
   flash,
   onPick,
   onRemove,
@@ -1410,6 +1539,10 @@ function WaitingTile({
   row: ScannerTrayRow;
   /** The grid's column count, or `0` before it has been measured. */
   columns: number;
+  /** The grid's own column template at the tray's zoom (`tileColumns`), for the unmeasured span. */
+  template: string;
+  /** The picture each candidate asks for at the tray's zoom (`tileVariant`). */
+  variant: ImageVariant;
   flash: boolean;
   onPick: (cardId: string) => void;
   onRemove: () => void;
@@ -1435,11 +1568,16 @@ function WaitingTile({
         data-decision=""
         className="grid gap-3"
         style={{
-          gridTemplateColumns: span === null ? TILE_COLUMNS : `repeat(${span}, minmax(0, 1fr))`,
+          gridTemplateColumns: span === null ? template : `repeat(${span}, minmax(0, 1fr))`,
         }}
       >
         {row.choices.map((choice) => (
-          <ChoiceCard key={choice.cardId} choice={choice} onPick={() => onPick(choice.cardId)} />
+          <ChoiceCard
+            key={choice.cardId}
+            choice={choice}
+            variant={variant}
+            onPick={() => onPick(choice.cardId)}
+          />
         ))}
         {more && (
           <button
@@ -1472,7 +1610,15 @@ function WaitingTile({
  * The printing is printed on the card as well as in its name, because the set symbol is small even
  * here and a reader choosing between three Lightning Bolts needs to read which three.
  */
-function ChoiceCard({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () => void }) {
+function ChoiceCard({
+  choice,
+  variant,
+  onPick,
+}: {
+  choice: ScannerTrayChoice;
+  variant: ImageVariant;
+  onPick: () => void;
+}) {
   const printing = printingOf(choice);
   return (
     <button
@@ -1481,7 +1627,7 @@ function ChoiceCard({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () 
       onClick={onPick}
       className={cn("relative block w-full overflow-hidden rounded-lg", LIFT, FOCUS)}
     >
-      <CardArt cardId={choice.cardId} name={choice.name} variant={TILE_VARIANT} loading="lazy" />
+      <CardArt cardId={choice.cardId} name={choice.name} variant={variant} loading="lazy" />
       {printing !== "" && (
         <span
           aria-hidden="true"

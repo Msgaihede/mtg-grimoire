@@ -673,6 +673,59 @@ describe("field selection", () => {
     ).toBe("1x Sol Ring (ltc) 285\n");
   });
 
+  /**
+   * Issue #1553: a collector number is read back as one only after `(SET)` or `[SET]`, so with
+   * the set switched off — or a card that has none — the number stays off the line, where it
+   * would otherwise become part of the card's name on the way back in.
+   */
+  it.each(["plain", "arena", "moxfield", "archidekt", "tcgplayer"] as const)(
+    "writes no collector number on a %s line without the set in front of it",
+    (format) => {
+      const bolt = card({
+        name: "Lightning Bolt",
+        quantity: 4,
+        setCode: "LEA",
+        collectorNumber: "117",
+      });
+      const noSet = card({
+        name: "Lightning Bolt",
+        quantity: 4,
+        setCode: null,
+        collectorNumber: "117",
+      });
+      for (const text of [
+        formatExport([bolt], format, ["quantity", "name", "collectorNumber"]),
+        formatExport([noSet], format, ["quantity", "name", "setCode", "collectorNumber"]),
+      ]) {
+        expect(text).not.toContain("117");
+        const back = parseDecklist(text);
+        expect(back.issues).toEqual([]);
+        expect(back.lines.map((l) => l.name)).toEqual(["Lightning Bolt"]);
+      }
+      const withSet = formatExport([bolt], format, [
+        "quantity",
+        "name",
+        "setCode",
+        "collectorNumber",
+      ]);
+      expect(withSet).toContain("117");
+      // The set back on, the number comes with it and reads back as a number — on every format
+      // `parse.ts` reads; TCGplayer's `[SET] 123` is write-only (see `golden.test.ts`' READABLE).
+      if (format !== "tcgplayer") {
+        expect(parseDecklist(withSet).lines[0]).toMatchObject({
+          name: "Lightning Bolt",
+          collectorNumber: "117",
+        });
+      }
+    },
+  );
+
+  it("keeps a CSV's collector number column without a set, since the column names it", () => {
+    expect(formatExport([card()], "csv", ["quantity", "name", "collectorNumber"])).toBe(
+      "Quantity,Name,Collector number\n1,Sol Ring,285\n",
+    );
+  });
+
   it("writes the finish mark only when the finish is on", () => {
     const foil = card({ finish: "foil" });
     expect(formatExport([foil], "plain", ["quantity", "name", "finish"])).toBe(

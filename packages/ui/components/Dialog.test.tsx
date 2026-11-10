@@ -140,6 +140,20 @@ describe("Dialog", () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
+  /** Issue #1574: a right-press is a reader reaching for a context menu and a middle-press an
+   *  autoscroll — neither throws the form away. Only the primary button closes. */
+  it("closes on a primary press on the scrim and not on a right or middle one", async () => {
+    const { onClose } = open();
+    const scrim = (await panel()).parentElement!;
+
+    fireEvent.mouseDown(scrim, { button: 2 });
+    fireEvent.mouseDown(scrim, { button: 1 });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(scrim, { button: 0 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   /** The ✕ is the other half of the dismiss, and it is named by the host rather than by the
    *  title — "Close Categories & labels" is not a sentence. */
   it("dismisses on the close control, which carries the host's own label", async () => {
@@ -908,6 +922,57 @@ describe("a dialog under a host that lends a finger's gestures", () => {
     touchAt("pointerMove", SWIPE_CLOSE_PX - 20, 1011);
     touchAt("pointerUp", SWIPE_CLOSE_PX - 20, 1011);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("springs the panel back when the close a drag asked for is refused", async () => {
+    // `onClose` is a bare spy: the dialog stays open, as a scan being sent keeps it.
+    const { onClose } = hosted({ claimBack: () => () => {}, swipeToClose: true });
+    const panel = screen.getByRole("dialog");
+    const to = SWIPE_CLOSE_PX + 60;
+    touchAt("pointerDown", 0, 1000);
+    touchAt("pointerMove", 20, 1010);
+    touchAt("pointerMove", to, 1011);
+    touchAt("pointerMove", to, 1111);
+    // Motion writes the transform on the next frame.
+    await waitFor(() => expect(panel.style.transform).toContain(`translateY(${to}px)`));
+    act(() => touchAt("pointerUp", to, 1111));
+    expect(onClose).toHaveBeenCalledOnce();
+    await waitFor(() => expect(panel.style.transform).not.toMatch(/translateY\([1-9]/), {
+      timeout: 2000,
+    });
+  });
+
+  it("leaves the panel where the finger let go when the close goes through", async () => {
+    function Closing() {
+      const [open, setOpen] = useState(true);
+      return (
+        <DialogHostContext.Provider value={{ claimBack: () => () => {}, swipeToClose: true }}>
+          <Dialog
+            open={open}
+            title="Filters"
+            closeLabel="Close filters"
+            size="w-[26rem]"
+            onDismiss={() => setOpen(false)}
+            onClose={() => setOpen(false)}
+          >
+            <p>Body</p>
+          </Dialog>
+        </DialogHostContext.Provider>
+      );
+    }
+    render(<Closing />);
+    const panel = screen.getByRole("dialog");
+    const to = SWIPE_CLOSE_PX + 60;
+    touchAt("pointerDown", 0, 1000);
+    touchAt("pointerMove", 20, 1010);
+    touchAt("pointerMove", to, 1011);
+    touchAt("pointerMove", to, 1111);
+    await waitFor(() => expect(panel.style.transform).toContain(`translateY(${to}px)`));
+    act(() => touchAt("pointerUp", to, 1111));
+    // The exit fades from the let-go: nothing tweens the drag back up under it, for longer than
+    // a settle would take.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 500)));
+    expect(panel.style.transform).toContain(`translateY(${to}px)`);
   });
 
   it("leaves a mouse's drag alone, and draws no grabber where nothing grants the gesture", () => {

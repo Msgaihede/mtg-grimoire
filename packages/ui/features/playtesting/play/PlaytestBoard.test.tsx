@@ -86,7 +86,8 @@ function setup(view: PlaytestView | null, options: Parameters<typeof board>[2] =
   const { rerender } = render(board(view, handlers, options));
   return {
     ...handlers,
-    rerender: (next: PlaytestView | null) => rerender(board(next, handlers, options)),
+    rerender: (next: PlaytestView | null, more: Parameters<typeof board>[2] = {}) =>
+      rerender(board(next, handlers, { ...options, ...more })),
   };
 }
 
@@ -176,6 +177,14 @@ describe("PlaytestBoard's opening hand", () => {
     fireEvent.mouseLeave(goyf);
     expect(preview()).not.toBeInTheDocument();
   });
+
+  it("offers neither Keep nor Mulligan while the engine is working (issue #1593)", () => {
+    const { onAct } = setup(openingHand(), { busy: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Working…");
+    fireEvent.click(screen.getByRole("button", { name: /^Mulligan to/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep 7" }));
+    expect(onAct).not.toHaveBeenCalled();
+  });
 });
 
 describe("PlaytestBoard's attack step", () => {
@@ -209,6 +218,55 @@ describe("PlaytestBoard's attack step", () => {
     const { onAct } = setup(attackStep().view);
     fireEvent.keyDown(window, { key: " " });
     expect(onAct).toHaveBeenCalledWith({ type: "attack", attacks: [] });
+  });
+});
+
+describe("PlaytestBoard's picks across a new view of the same declaration (issue #1591)", () => {
+  const pickTwo = () => {
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Delver/ }));
+    expect(screen.getByRole("button", { name: /Attack with 2/ })).toBeInTheDocument();
+  };
+
+  it.each<[string, (view: PlaytestView) => PlaytestView]>([
+    ["a Stop toggled", (v) => ({ ...v, stops: [{ seat: "opponent", step: "end" }] })],
+    ["the Sandbox pill", (v) => ({ ...v, sandbox: true })],
+    ["a lobby push", (v) => ({ ...v })],
+  ])("keeps the attackers picked across %s", (_, next) => {
+    const { view, elves, delver } = attackStep();
+    const { onAct, rerender } = setup(view);
+    pickTwo();
+    rerender(next(view));
+    fireEvent.keyDown(window, { key: " " });
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "attack",
+      attacks: [
+        { attacker: elves.id, target: null, player: "opponent" },
+        { attacker: delver.id, target: null, player: "opponent" },
+      ],
+    });
+  });
+
+  it("keeps the blocks picked across a new view of the block step", () => {
+    const { view, goyf, ragavan } = blockStep();
+    const { onAct, rerender } = setup(view);
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
+    fireEvent.click(within(theirs()).getByRole("button", { name: /^Ragavan/ }));
+    rerender({ ...view, stops: [{ seat: "you", step: "upkeep" }] });
+    fireEvent.click(screen.getByRole("button", { name: /Confirm blocks/ }));
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "block",
+      blocks: [{ blocker: goyf.id, attacker: ragavan.id }],
+    });
+  });
+
+  it("drops the picks once the declaration moves on", () => {
+    const { view } = attackStep();
+    const { rerender } = setup(view);
+    pickTwo();
+    rerender({ ...view, stage: "main", phase: "main2", attack: null });
+    rerender({ ...view, turn: view.turn + 2 });
+    expect(screen.getByRole("button", { name: /No attack/ })).toBeInTheDocument();
   });
 });
 
@@ -316,6 +374,45 @@ describe("PlaytestBoard's opponent", () => {
     expect(rows).not.toContain("Play");
     fireEvent.click(screen.getByRole("menuitem", { name: "Tap" }));
     expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [ragavan.id], tapped: true });
+  });
+
+  // Issue #1521: the opponent's graveyard offers what the reader's own does, sandbox permitting.
+  it.each([
+    ["a click", fireEvent.click],
+    ["a right-click", fireEvent.contextMenu],
+  ])("opens the opponent's graveyard with %s, to move a card with the sandbox on", (_how, open) => {
+    const view = turnFive().view;
+    const bolt = gameCard("Lightning Bolt");
+    const { onAct } = setup(
+      sandboxed({ ...view, opponents: [{ ...view.opponents[0], graveyard: [bolt] }] }),
+    );
+    open(screen.getByRole("button", { name: /^The opponent's graveyard, / }));
+    const dialog = screen.getByRole("dialog", { name: "The opponent's graveyard" });
+    const card = within(within(dialog).getByRole("group", { name: "Lightning Bolt" }));
+    expect(card.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Hand",
+      "Battlefield",
+      "Exile",
+      "Top",
+      "Bottom",
+    ]);
+    fireEvent.click(card.getByRole("button", { name: "Exile" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "move", id: bolt.id, to: "exile" });
+  });
+
+  it("opens the opponent's graveyard read-only with the sandbox off", () => {
+    const view = turnFive().view;
+    setup({
+      ...view,
+      opponents: [{ ...view.opponents[0], graveyard: [gameCard("Lightning Bolt")] }],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^The opponent's graveyard, / }));
+    const dialog = screen.getByRole("dialog", { name: "The opponent's graveyard" });
+    expect(
+      within(within(dialog).getByRole("group", { name: "Lightning Bolt" })).queryAllByRole(
+        "button",
+      ),
+    ).toEqual([]);
   });
 
   it("gives the opponent's plate a life stepper only with the sandbox on", () => {
@@ -626,10 +723,80 @@ describe("PlaytestBoard's sandbox", () => {
     expect(screen.getByRole("spinbutton", { name: "Opponent's life" })).toBeEnabled();
   });
 
-  it("takes no hand edits outside the reader's main phase, though it is on", () => {
-    const { onAct } = setup(sandboxed(respondStep().view));
+  it("takes the hand edits at a response too, not only in the main phase (issue #1522)", () => {
+    const { view, elves } = respondStep();
+    const { onAct } = setup(sandboxed(view));
     fireEvent.click(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [elves.id], tapped: true });
+    fireEvent.click(screen.getByRole("button", { name: /^Library, 48 cards\. Click to draw/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "draw", count: 1 });
+    expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
+    expect(screen.getByRole("spinbutton", { name: "Opponent's life" })).toBeEnabled();
+  });
+
+  it("picks an attacker on a click in the attack step, and taps by T (issue #1522)", () => {
+    const { view, elves } = attackStep();
+    const { onAct } = setup(sandboxed(view));
+    fireEvent.click(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }));
     expect(onAct).not.toHaveBeenCalled();
+    expect(within(yours()).getByRole("button", { name: /^Tarmogoyf/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.mouseEnter(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    fireEvent.keyDown(window, { key: "t" });
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [elves.id], tapped: true });
+    expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
+  });
+
+  describe("life steppers (issue #1593)", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    const life = () => screen.getByRole("spinbutton", { name: "Your life" });
+
+    it("send a change still in its wait before the board's next action", () => {
+      const view = sandboxed();
+      const { onAct } = setup(view);
+      fireEvent.click(screen.getByRole("button", { name: "Increase Your life" }));
+      fireEvent.keyDown(window, { key: " " });
+      expect(onAct.mock.calls).toEqual([
+        [{ type: "setLife", seat: "you", life: view.you.life + 1 }],
+        [{ type: "pass" }],
+      ]);
+      act(() => vi.advanceTimersByTime(400));
+      expect(onAct).toHaveBeenCalledTimes(2);
+    });
+
+    it("show the game's life again once a change is refused", () => {
+      const view = sandboxed();
+      const { onAct, rerender } = setup(view);
+      // The engine takes the action at once: the board is busy in the same task.
+      onAct.mockImplementationOnce(() => rerender(view, { busy: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Increase Your life" }));
+      act(() => vi.advanceTimersByTime(400));
+      expect(onAct).toHaveBeenCalledWith({ type: "setLife", seat: "you", life: view.you.life + 1 });
+      expect(life()).toHaveValue(view.you.life + 1);
+
+      // Refused: the same view back, the engine idle.
+      rerender(view, { busy: false });
+      expect(life()).toHaveValue(view.you.life);
+    });
+
+    it("keep an answered change through the round trip", () => {
+      const view = sandboxed();
+      const { onAct, rerender } = setup(view);
+      onAct.mockImplementationOnce(() => rerender(view, { busy: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Increase Your life" }));
+      act(() => vi.advanceTimersByTime(400));
+      const answered = { ...view, you: { ...view.you, life: view.you.life + 1 } };
+      rerender(answered, { busy: false });
+      expect(life()).toHaveValue(view.you.life + 1);
+    });
+  });
+
+  it("takes no hand edits in the middle of a question, though it is on", () => {
+    setup(sandboxed(targetPrompt().view));
     expect(screen.getByRole("button", { name: "Library, 48 cards" })).toBeDisabled();
     // The steppers are there, greyed, to come back to.
     expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeDisabled();

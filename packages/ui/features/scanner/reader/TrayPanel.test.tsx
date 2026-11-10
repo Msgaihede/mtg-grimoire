@@ -1,10 +1,12 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import type { ScannerTrayLayout, ScannerTrayRow } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { pickOption } from "@/test-dropdown";
 
 /**
@@ -65,7 +67,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { VERDICTS } from "../fixtures";
 import { NO_FINISHED_ROWS, rowFromDecision } from "./tray";
-import { addLabel, NEXT_DECISION_LABEL, TrayPanel, type TrayPanelProps } from "./TrayPanel";
+import {
+  addLabel,
+  NEXT_DECISION_LABEL,
+  tileColumns,
+  TrayPanel,
+  type TrayPanelProps,
+} from "./TrayPanel";
 
 const resolved = VERDICTS.resolved.decision!;
 const ambiguous = VERDICTS.ambiguous.decision!;
@@ -1326,6 +1334,137 @@ describe("TrayPanel's grid", () => {
     const flashes = container.querySelectorAll("[data-tray-flash]");
     expect(flashes).toHaveLength(1);
     expect(flashes[0].closest("li")).toHaveTextContent("Honored Hierarch");
+  });
+});
+
+/**
+ * **Ctrl+wheel zooms the tray** (issue #1525): `cardZoom.scanner`, one number for the page's column
+ * and the pack opener's drawer, caught on the section so an empty tray and a layout switch still
+ * have it — and nothing but that section's number moves.
+ */
+describe("TrayPanel's zoom", () => {
+  beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+
+  function region(): HTMLElement {
+    return screen.getByRole("region", { name: "Scanned cards" });
+  }
+
+  function gridList(): HTMLElement {
+    return region().querySelector("ul")!;
+  }
+
+  it("steps the tray's own section on a ctrl+wheel, and no other wall's", () => {
+    wrap(<TrayPanel {...grid()} />);
+    expect(gridList().style.gridTemplateColumns).toBe(tileColumns(DEFAULT_ZOOM));
+
+    // A plain wheel is a scroll, and moves nothing.
+    fireEvent.wheel(gridList(), { deltaY: -100 });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(DEFAULT_ZOOM);
+
+    fireEvent.wheel(gridList(), { deltaY: -100, ctrlKey: true });
+    const { cardZoom, zoomSection } = useAppStore.getState();
+    expect(cardZoom.scanner).toBe(1.1);
+    for (const section of ZOOM_SECTIONS.filter((s) => s !== "scanner")) {
+      expect(cardZoom[section]).toBe(DEFAULT_ZOOM);
+    }
+    expect(zoomSection).toBe("scanner");
+    expect(gridList().style.gridTemplateColumns).toBe(
+      "repeat(auto-fill, minmax(min(185px, 100%), 1fr))",
+    );
+
+    fireEvent.wheel(gridList(), { deltaY: 100, ctrlKey: true });
+    fireEvent.wheel(gridList(), { deltaY: 100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(0.9);
+    expect(gridList().style.gridTemplateColumns).toBe(
+      "repeat(auto-fill, minmax(min(151px, calc(50% - 0.375rem)), 1fr))",
+    );
+  });
+
+  it("is caught over the header too, so no ctrl+wheel over the tray is the window's page zoom", () => {
+    wrap(<TrayPanel {...grid()} />);
+    const header = screen.getByRole("heading", { name: /^Scanned cards/ }).closest("header")!;
+    const event = new WheelEvent("wheel", {
+      deltaY: -100,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      header.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.1);
+  });
+
+  /** The tray opens empty in most sessions: the gesture must not wait on a scroller that was not there. */
+  it("zooms a tray that opened empty, once its cards arrive", () => {
+    const { rerender } = wrap(<TrayPanel {...grid({ rows: [] })} />);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    rerender(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <TrayPanel {...grid()} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.wheel(gridList(), { deltaY: -100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.1);
+  });
+
+  it("asks for the walls' picture past life size, and keeps the grid's at it", () => {
+    const { container } = wrap(<TrayPanel {...grid({ rows: [newer] })} />);
+    expect(container.querySelector("img")!.getAttribute("src")).toContain("/grid/");
+    act(() => useAppStore.getState().zoomCards("scanner", 1));
+    expect(container.querySelector("img")!.getAttribute("src")).toContain("/display/");
+  });
+
+  /**
+   * Below life size the chin cannot hold `Unknown` and the 24px stepper on one line, and neither
+   * scales — so it folds, and only there; at 100% and above it is the one line the owner chose.
+   */
+  it("folds a tile's chin onto two lines below life size, and only there", () => {
+    wrap(<TrayPanel {...grid({ rows: [{ ...newer, finish: "unknown" }] })} />);
+    const chin = () =>
+      screen.getByRole("button", { name: /^Finish of/ }).closest("[data-decision]")!.parentElement!;
+    expect(chin().className).not.toMatch(/flex-wrap/);
+    act(() => useAppStore.getState().zoomCards("scanner", 1));
+    expect(chin().className).not.toMatch(/flex-wrap/);
+    act(() => useAppStore.getState().zoomCards("scanner", -1));
+    act(() => useAppStore.getState().zoomCards("scanner", -1));
+    expect(chin()).toHaveClass("flex-wrap");
+    expect(screen.getByRole("button", { name: /^Finish of/ })).toHaveTextContent("Unknown");
+  });
+
+  it("sizes the list's thumbnails and candidates by the same number", () => {
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    wrap(<TrayPanel {...props({ rows: [waiting, newer] })} />);
+    const thumb = () => screen.getAllByRole("listitem")[1].querySelector("img")!.parentElement!;
+    const candidate = () => within(region()).getAllByRole("button", { name: / — / })[0];
+    expect(thumb().style.width).toBe("36px");
+    expect(candidate().style.width).toBe("64px");
+
+    fireEvent.wheel(region(), { deltaY: -100, ctrlKey: true });
+    fireEvent.wheel(region(), { deltaY: -100, ctrlKey: true });
+    expect(useAppStore.getState().cardZoom.scanner).toBe(1.2);
+    expect(thumb().style.width).toBe("43px");
+    expect(candidate().style.width).toBe("77px");
+    // Past what a `thumb` holds on a 200%-scaled display, the candidate asks for a bigger picture.
+    expect(candidate().querySelector("img")!.getAttribute("src")).toContain("/grid/");
+  });
+});
+
+describe("tileColumns", () => {
+  it("is the grid's own template at life size", () => {
+    expect(tileColumns(DEFAULT_ZOOM)).toBe(
+      "repeat(auto-fill, minmax(min(10.5rem, calc(50% - 0.375rem)), 1fr))",
+    );
+  });
+
+  it("never floors a tile under a folded chin's whole `Unknown`", () => {
+    expect(tileColumns(0.5)).toBe(
+      "repeat(auto-fill, minmax(min(90px, calc(50% - 0.375rem)), 1fr))",
+    );
+    expect(tileColumns(2)).toBe("repeat(auto-fill, minmax(min(336px, 100%), 1fr))");
   });
 });
 

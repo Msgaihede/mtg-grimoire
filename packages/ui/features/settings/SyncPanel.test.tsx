@@ -608,6 +608,137 @@ describe("SyncPanel", () => {
   });
 
   /**
+   * **Issue #1594 — leaving the panel mid-pairing no longer abandons the attempt.** The poll is
+   * the only thing that advances the ceremony and it runs only while the panel is mounted, and
+   * `SettingsPage` unmounts the panel on every group or search change. The joining device used
+   * to come back to the idle buttons and never poll again — so it never fetched the sealed key,
+   * while the offering device had already toasted *Device paired*. Unmounted by rendering
+   * nothing in its place, under the same `QueryClient`, which is what the app does.
+   */
+  describe("leaving the panel mid-pairing", () => {
+    it("resumes a join on return and finishes it", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+      await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
+      await user.click(screen.getByRole("button", { name: /read the code/i }));
+      expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
+
+      rerender(<></>);
+      // The other device pressed Codes match while this one was looking elsewhere.
+      syncPairingPoll.mockResolvedValue({ stage: "complete", sas: null });
+      const pollsBefore = syncPairingPoll.mock.calls.length;
+      rerender(<SyncPanel />);
+
+      await waitFor(
+        () =>
+          expect(useNotifications.getState().notices[0]).toMatchObject({
+            title: "Device paired",
+          }),
+        { timeout: 3000 },
+      );
+      expect(syncPairingPoll.mock.calls.length).toBeGreaterThan(pollsBefore);
+      expect(syncPairingCancel).not.toHaveBeenCalled();
+      expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+      await waitFor(() => expect(syncNow).toHaveBeenCalledTimes(1));
+    });
+
+    it("shows the join's digits again on return while the other device has not pressed yet", async () => {
+      syncPairingPoll.mockResolvedValue({ stage: "compare", sas: "042913" });
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+      await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
+      await user.click(screen.getByRole("button", { name: /read the code/i }));
+      expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+
+      expect(screen.getByTestId("pairing-sas")).toHaveTextContent("042913");
+      expect(screen.getByText(/click codes match on the other device/i)).toBeInTheDocument();
+    });
+
+    it("keeps an offer's code on screen across a trip away, and its Codes match once answered", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+      expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+      // The invite is this side's alone — no poll could have rebuilt it.
+      expect(screen.getByTestId("pairing-qr")).toBeInTheDocument();
+      expect(screen.getByText(OFFER.code)).toBeInTheDocument();
+
+      syncPairingPoll.mockResolvedValue({ stage: "compare", sas: "042913" });
+      await waitFor(
+        () => expect(screen.getByTestId("pairing-sas")).toHaveTextContent("042913"),
+        { timeout: 3000 },
+      );
+      const confirm = screen.getByRole("button", { name: /codes match/i });
+      expect(confirm).toHaveAttribute("aria-disabled", "false");
+      await user.click(confirm);
+      expect(syncPairingConfirm).toHaveBeenCalledTimes(1);
+    });
+
+    it("says so on return when the attempt ran out of time while the reader was away", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+      expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+
+      rerender(<></>);
+      syncPairingPoll.mockResolvedValueOnce({ stage: "expired", sas: null });
+      syncPairingPoll.mockResolvedValue({ stage: "idle", sas: null });
+      rerender(<SyncPanel />);
+
+      expect(await screen.findByRole("alert", undefined, { timeout: 3000 })).toHaveTextContent(
+        /pairing code expired/i,
+      );
+      expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    });
+
+    it("does not resume an attempt the reader cancelled", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+      expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+      expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    });
+
+    /**
+     * `"reading"` has sent nothing to the backend, so there is nothing to resume — and
+     * `"scanning"`, the same, would put a live camera in front of a reader who had only once
+     * opened it.
+     */
+    it("opens on the idle buttons when nothing had reached the backend yet", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<SyncPanel />, { wrapper: unpaired });
+
+      await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+      expect(await screen.findByLabelText(/code shown on the other device/i)).toBeInTheDocument();
+
+      rerender(<></>);
+      rerender(<SyncPanel />);
+      expect(screen.getByRole("button", { name: /enter a code/i })).toBeInTheDocument();
+      expect(screen.queryByLabelText(/code shown on the other device/i)).not.toBeInTheDocument();
+    });
+  });
+
+  /**
    * **A scan whose `accept` is refused leaves the reader the typed box.** `QrScanner` stops its
    * tracks the moment it decodes and its effect never restarts, so without this the panel sits
    * on a frozen frame under *Point the camera at the code* with an error under it and no press
@@ -2082,5 +2213,117 @@ describe("the two sentences that name a membership, on a host that offers none",
     expect(outcomeText(null)).toBe("Nothing to sync. Connect a membership and pair a device first.");
     expect(outcomeText(null, true)).toBe("Nothing to sync. Sync is not on for this device.");
     expect(outcomeText(OUTCOME, true)).toBe(outcomeText(OUTCOME));
+  });
+});
+
+/**
+ * Issue #1595 — three ways the panel went on saying something that had stopped being true, each
+ * the panel's own state out of step with longer-lived mutation and query state.
+ */
+describe("the panel says only what is still true", () => {
+  /** The problem line belongs to the newest press. A fixed precedence over mutation errors —
+   *  which persist until the *same* mutation runs again — left a refused code red under the
+   *  fresh QR of a later, successful *Pair a device*. */
+  it("clears a refused code once a new pairing starts", async () => {
+    syncPairingAccept.mockRejectedValue("That pairing code isn't valid.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
+    await user.type(await screen.findByLabelText(/code shown on the other device/i), "WRONG");
+    await user.click(screen.getByRole("button", { name: /read the code/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/isn't valid/i);
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+
+    expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/isn't valid/i)).not.toBeInTheDocument());
+  });
+
+  /** …and an older refusal never outranks a newer one, whichever mutation each came from. */
+  it("draws a typed code's refusal over an earlier Pair a device's", async () => {
+    syncPairingBegin.mockRejectedValue("The relay could not be reached.");
+    syncPairingAccept.mockRejectedValue("That pairing code isn't valid.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/relay could not be reached/i);
+
+    await user.click(screen.getByRole("button", { name: /enter a code from another/i }));
+    await user.type(await screen.findByLabelText(/code shown on the other device/i), "WRONG");
+    await user.click(screen.getByRole("button", { name: /read the code/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/isn't valid/i));
+    expect(screen.queryByText(/relay could not be reached/i)).not.toBeInTheDocument();
+  });
+
+  /** The membership half's line, by the same rule: a failed Connect Patreon used to mask every
+   *  later claim refusal. */
+  it("draws a refused claim over an earlier failed Connect Patreon", async () => {
+    syncPatreonBegin.mockRejectedValue("The browser could not be opened.");
+    syncPatreonClaim.mockRejectedValue("That claim code has expired.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /connect patreon/i }));
+    expect(await screen.findByText(/browser could not be opened/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/claim code/i), "ABCD-EFGH-JKMN");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    expect(await screen.findByText(/claim code has expired/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(/browser could not be opened/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  /** The disabled poll's `{stage: "complete"}` outlived the component in the query cache while
+   *  the once-only guard did not, so a return to Settings › Sync replayed the completion: a
+   *  second *Device paired* and a second `syncNow`. */
+  it("does not raise Device paired again when the panel is reopened after a pairing", async () => {
+    syncPairingPoll.mockResolvedValueOnce({ stage: "waiting", sas: null });
+    syncPairingPoll.mockResolvedValue({ stage: "complete", sas: null });
+    const user = userEvent.setup();
+    // `rerender` keeps the wrapper — and so the one `QueryClient` — mounted across the panel's
+    // own unmount, which is what leaving and returning to the view does in the app.
+    const view = render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1), {
+      timeout: 3000,
+    });
+    await waitFor(() => expect(syncNow).toHaveBeenCalledTimes(1));
+
+    view.rerender(<></>);
+    view.rerender(<SyncPanel />);
+    expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    // Long enough for the remounted effect to have run, had it anything to replay.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(syncNow).toHaveBeenCalledTimes(1);
+  });
+
+  /** A refused trip is not the previous trip: its figures go when the press starts. */
+  it("drops the last trip's report when the next trip is refused", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    syncNow.mockResolvedValueOnce(OUTCOME);
+    syncNow.mockRejectedValue("The relay could not be reached.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+    expect(await screen.findByText(/sent 4 changes and received 9 changes/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /sync now/i }));
+
+    expect(await screen.findByText(/sync didn't finish/i)).toBeInTheDocument();
+    expect(screen.getByText(/relay could not be reached/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(/sent 4 changes and received 9 changes/i)).not.toBeInTheDocument(),
+    );
   });
 });

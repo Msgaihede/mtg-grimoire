@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { CollectionFolder } from "@/lib/ipc";
-import { countEditableIn, quantityRefusal } from "./entryFences";
+import { countEditableIn, deckCustodyRefusal, quantityRefusal } from "./entryFences";
 
 const folder = (id: number, kind: string, name: string): CollectionFolder =>
-  ({ id, kind, name, parentId: null, deckId: kind === "deck" ? 9 : null, sortOrder: 0 }) as CollectionFolder;
+  ({
+    id,
+    kind,
+    name,
+    parentId: null,
+    deckId: kind === "deck" ? 9 : null,
+    sortOrder: 0,
+  }) as CollectionFolder;
 
 const CABINET = [
   folder(1, "user", "Binder"),
@@ -44,5 +51,24 @@ describe("quantityRefusal", () => {
   it("refuses nothing the reader may step", () => {
     expect(quantityRefusal(CABINET, { folderId: null, folderName: null })).toBeNull();
     expect(quantityRefusal(CABINET, { folderId: 8, folderName: "Recently removed" })).toBeNull();
+  });
+});
+
+describe("deckCustodyRefusal", () => {
+  it("names the deck and the act for a copy in a deck's group", () => {
+    expect(deckCustodyRefusal(CABINET, { folderId: 4, folderName: "Modern Goodstuff" })).toBe(
+      "In Modern Goodstuff. Remove it from the deck to change the quantity.",
+    );
+    expect(deckCustodyRefusal(CABINET, { folderId: 4, folderName: null }, "change this copy")).toBe(
+      "In a deck. Remove it from the deck to change this copy.",
+    );
+  });
+
+  it("refuses nothing outside a deck's group, and fails open before the census answers", () => {
+    expect(deckCustodyRefusal(CABINET, { folderId: null, folderName: null })).toBeNull();
+    expect(deckCustodyRefusal(CABINET, { folderId: 1, folderName: "Binder" })).toBeNull();
+    expect(deckCustodyRefusal(CABINET, { folderId: 9, folderName: null })).toBeNull();
+    // The backend is the fence; this is the sentence, so an unanswered census says nothing.
+    expect(deckCustodyRefusal([], { folderId: 4, folderName: "Modern Goodstuff" })).toBeNull();
   });
 });

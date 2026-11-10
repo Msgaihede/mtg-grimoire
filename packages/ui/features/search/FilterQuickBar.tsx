@@ -17,6 +17,7 @@ import {
 } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DOCKED_SHADOW } from "@/lib/dockedBar";
+import { blurLeftTheWindow } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
@@ -61,7 +62,8 @@ const PRESS =
 /** The round chips at 32px, their pressed ring offset on the bar's `surface` rather than `bg`. */
 const CHIP_SM = "size-8 text-base ring-offset-surface";
 /** `FiltersButton`'s and `ResetAll`'s count badge, character for character. */
-const BADGE = "rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground";
+const BADGE =
+  "rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground";
 /**
  * Literal strings, because Tailwind reads source text: one pair per `manaValuesFrom`. An
  * interpolated `@min-[${px}px]/qb:flex` would emit no rule at all, and both halves would draw at
@@ -292,7 +294,7 @@ export function FilterQuickBar<SortKey extends string>({
                 // Moving between two of the bar's own controls is not leaving it.
                 if (e.currentTarget.contains(e.relatedTarget)) return;
                 // Nor is the window losing focus (Alt+Tab): the caret comes back with the window.
-                if (e.relatedTarget === null && !document.hasFocus()) return;
+                if (blurLeftTheWindow(e)) return;
                 setCaretHolds(false);
               }}
               // **Escape closes the bar's tray and hands the caret to Filters — bubbling on

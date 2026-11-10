@@ -71,6 +71,55 @@ describe("ScanSoundsPanel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(TIERS_MUST_CLIMB);
   });
 
+  /** Issue #1589: the ladder raised in list order — the drafts are checked and stored together. */
+  it("stores a refused box's draft once the next box makes the ladder climb", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ScanSoundsPanel />));
+    await waitFor(() => expect(box("Tier 1")).toHaveValue("1"));
+
+    await user.clear(box("Tier 1"));
+    await user.type(box("Tier 1"), "20");
+    await user.tab();
+    expect(screen.getByRole("alert")).toHaveTextContent(TIERS_MUST_CLIMB);
+    expect(setScanSounds).not.toHaveBeenCalled();
+
+    await user.clear(box("Tier 2"));
+    await user.type(box("Tier 2"), "50");
+    await user.tab();
+    expect(setScanSounds).toHaveBeenCalledWith({ ...DEFAULT_SCAN_SOUNDS, tier1: 20, tier2: 50 });
+    expect(box("Tier 1")).toHaveValue("20");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the refusal while a refused draft is still on screen", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ScanSoundsPanel />));
+    await waitFor(() => expect(box("Tier 1")).toHaveValue("1"));
+    await user.clear(box("Tier 1"));
+    await user.type(box("Tier 1"), "20");
+    await user.tab();
+    // Tier 2 at 15 still leaves Tier 1's 20 above it: nothing is stored, the sentence stays.
+    await user.clear(box("Tier 2"));
+    await user.type(box("Tier 2"), "15");
+    await user.tab();
+    expect(setScanSounds).not.toHaveBeenCalled();
+    expect(box("Tier 1")).toHaveValue("20");
+    expect(screen.getByRole("alert")).toHaveTextContent(TIERS_MUST_CLIMB);
+  });
+
+  /** Issue #1589: the box is one node for its whole life, so Enter keeps the caret in it. */
+  it("keeps focus in the box after Enter stores it", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ScanSoundsPanel />));
+    await waitFor(() => expect(box("Tier 2")).toHaveValue("10"));
+    const before = box("Tier 2");
+    await user.clear(before);
+    await user.type(before, "5{Enter}");
+    await waitFor(() => expect(setScanSounds).toHaveBeenCalled());
+    expect(box("Tier 2")).toBe(before);
+    expect(before).toHaveFocus();
+  });
+
   it("plays each sound from its row", async () => {
     render(wrap(<ScanSoundsPanel />));
     await userEvent.click(screen.getByRole("button", { name: "Play the Jackpot sound" }));

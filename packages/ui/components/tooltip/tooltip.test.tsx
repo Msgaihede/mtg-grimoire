@@ -8,7 +8,12 @@ import {
   TOOLTIP_WARM_MS,
 } from "./TooltipProvider";
 import { TooltipPanel } from "./TooltipPanel";
-import { useTooltip, type TooltipOptions } from "./useTooltip";
+import {
+  TooltipContext,
+  useTooltip,
+  type TooltipApi,
+  type TooltipOptions,
+} from "./useTooltip";
 
 /**
  * Captured before any test's `vi.useFakeTimers()` ever runs, while `setTimeout` and `Date.now`
@@ -561,6 +566,50 @@ describe("the tooltip", () => {
     fireEvent.pointerEnter(screen.getByRole("button"));
     advance(TOOLTIP_OPEN_MS);
     expect(tooltip()).toBeNull();
+  });
+
+  /**
+   * Issue #1574: the Collection page's "Reduced price …" button sits inside the `Figure` whose
+   * tooltip is the prices' date. Focus bubbles, so both bindings saw the one focus and the outer
+   * one, running last, put its words on the button. Only the nearest binding answers. Driven
+   * against a spy `TooltipApi` rather than the provider, so jsdom's stateful `:focus-visible`
+   * heuristic (see the wrapper tests below) has no say in what is proven.
+   */
+  it("answers a focus inside nested bound elements from the nearest one only", () => {
+    const api: TooltipApi = { enter: vi.fn(), focus: vi.fn(), leave: vi.fn() };
+    function Nested() {
+      const tip = useTooltip();
+      return (
+        <div {...tip("Prices as of 9 Nov")}>
+          <span tabIndex={0}>€120</span>
+          <button type="button" {...tip("Full value · Sell at 80% · Reduced price")}>
+            (Reduced price)
+          </button>
+        </div>
+      );
+    }
+    render(
+      <TooltipContext.Provider value={api}>
+        <Nested />
+      </TooltipContext.Provider>,
+    );
+    const button = screen.getByRole("button");
+    act(() => button.focus());
+    expect(api.focus).toHaveBeenCalledTimes(1);
+    expect(api.focus).toHaveBeenCalledWith(
+      button,
+      "Full value · Sell at 80% · Reduced price",
+      {},
+    );
+    act(() => button.blur());
+    expect(api.leave).toHaveBeenCalledTimes(1);
+    expect(api.leave).toHaveBeenCalledWith(button);
+
+    // A focus on an unbound child is the outer element's still — the wrapped-button shape.
+    const amount = screen.getByText("€120");
+    act(() => amount.focus());
+    expect(api.focus).toHaveBeenCalledTimes(2);
+    expect(api.focus).toHaveBeenLastCalledWith(amount, "Prices as of 9 Nov", {});
   });
 
   describe("a wrapper around a sometimes-disabled button", () => {

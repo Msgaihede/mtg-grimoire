@@ -128,6 +128,7 @@ describe("AddCardDialog", () => {
         name: "Lightning Bolt",
         setCode: "2x2",
         collectorNumber: "117",
+        finishes: ["nonfoil", "foil"],
       },
       "foil",
     );
@@ -138,6 +139,12 @@ describe("AddCardDialog", () => {
     await search("bolt");
     await userEvent.click(await tile("jgp"));
     expect(finish("Foil")).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(add());
+    // The printing's finishes ride along, so its tray row offers only those (issue #1557).
+    expect(onAdd).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cardId: "bolt-jgp", finishes: ["foil"] }),
+      "foil",
+    );
     await userEvent.click(await tile("2x2"));
     expect(finish("Nonfoil")).toHaveAttribute("aria-checked", "true");
     await userEvent.click(add());

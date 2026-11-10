@@ -56,6 +56,10 @@ const ROOT = "Collection";
  * one copy, as a sheet — and a press on the picture still opens the card. What the writes did is
  * said in one line at the foot of the page, or of the sheet while it is up.
  *
+ * **Import and export are on every state of it** — the wall's header beside the figures, and over
+ * the sentence when there is no wall (an empty collection, an empty folder, a filter that matched
+ * nothing), because a new install has no other way to fill this page (issue #1598).
+ *
  * **Filtered as Search is**: the box and one `Filters` button on a line that stays put, the
  * filters that are on stated under it, and the sheet behind the button drawing the desktop bar's
  * own cells for this list (`COLLECTION_TRAY`) with its own sorts. A filter suspends folding, as on
@@ -222,6 +226,23 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     />
   );
 
+  // Import and export — the desktop's two entries. Drawn on the wall beside the figures they
+  // change, and over the sentence when there is no wall: an empty collection, an empty folder and
+  // a filter that matched nothing still offer them (issue #1598), as the desktop header's
+  // `Import cards` and the Decks page's New deck are offered on every state. A new install has no
+  // other way to fill this page. The export sweeps what the wall covers: the hook's own `filters`,
+  // shelves at and below the level included, and inside a folder it says which one (the desktop
+  // page's `exportFiling`, word for word).
+  const transfer = (
+    <CollectionTransfer
+      filters={collection.filters}
+      filing={{
+        folder: folderId === null ? null : (folderById.get(folderId)?.name ?? null),
+        narrows: folderId !== null,
+      }}
+    />
+  );
+
   // The receipt line and the sheet, drawn under every answer below: a removal that empties a shelf
   // still says what it did, and still offers it back.
   const foot = (
@@ -263,6 +284,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     return (
       <>
         {top}
+        <div className="shrink-0 px-3 pt-3">{transfer}</div>
         <DimNote>
           {filtering
             ? "No cards match."
@@ -291,19 +313,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
               marketplace={marketplace}
               valueSettings={collection.valueSettings}
             />
-            {/* Import and export, beside the figures they change — the desktop's two entries.
-                The export sweeps what this wall covers: the hook's own `filters`, shelves at and
-                below the level included, and inside a folder it says which one (the desktop
-                page's `exportFiling`, word for word). */}
-            <div className="pt-3">
-              <CollectionTransfer
-                filters={collection.filters}
-                filing={{
-                  folder: folderId === null ? null : (folderById.get(folderId)?.name ?? null),
-                  narrows: folderId !== null,
-                }}
-              />
-            </div>
+            <div className="pt-3">{transfer}</div>
             {/* The shelves still say what they hold; it is the whole-level figures that are
                 missing, and an em dash for ever would say nothing about why. */}
             {collection.figuresRefused && (

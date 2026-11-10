@@ -6,6 +6,7 @@ import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipc, ipcError, type McpStatus } from "@/lib/ipc";
 import { MCP_KEY } from "@/lib/query";
 import { radioKeys } from "@/lib/radioGroup";
+import { useSeededDrafts } from "@/lib/useSeededDrafts";
 import { cn } from "@/lib/utils";
 import { writeFailure, type Write } from "@/lib/writes";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -481,10 +482,7 @@ export function LocalMcpSection(): JSX.Element {
       )}
 
       {status !== null && (
-        // Keyed by the stored port, so a press that moved it — here or in another window —
-        // re-seeds the box, and a refused one leaves the reader's draft where they can fix it.
         <PortForm
-          key={status.port}
           port={status.port}
           pressable={pressable}
           busy={setPort.isPending}
@@ -706,7 +704,11 @@ function PortForm({
   busy: boolean;
   onSubmit: (text: string) => void;
 }) {
-  const [draft, setDraft] = useState(String(port));
+  // Re-seeded when the stored port moves — a press here or in another window — and a refused one
+  // leaves the reader's draft where they can fix it. Never by React `key`, which would replace the
+  // focused box on Enter (issue #1589).
+  const { drafts, setDraft } = useSeededDrafts({ port: String(port) });
+  const draft = drafts.port;
   const unchanged = draft.trim() === String(port);
   const savable = pressable && !unchanged;
   return (
@@ -726,7 +728,7 @@ function PortForm({
         inputMode="numeric"
         autoComplete="off"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => setDraft("port", e.target.value)}
         aria-describedby={`${ID}-port-hint`}
         className={cn(
           "w-24 rounded-md border border-border bg-bg px-2 py-1 font-mono text-sm text-text",

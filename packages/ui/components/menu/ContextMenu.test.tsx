@@ -446,8 +446,8 @@ describe("ContextMenu", () => {
    * first row while the reader arrows down into a submenu — and then nudges the mouse.
    *
    * Every other close in the cascade hands the caret back before it unmounts anything: ArrowLeft
-   * focuses the parent row, a submenu's Escape focuses its own row, a click on a parent row is
-   * focused by the click itself. The hover timer was the one route that wrote `openPath` directly,
+   * focuses the parent row, a submenu's Escape focuses its own row, and an in-menu scroll hands
+   * the caret back before it closes the panels it moved. The hover timer was the one route that wrote `openPath` directly,
    * and an element holding `document.activeElement` unmounting drops the caret on `<body>` — which
    * is outside the React root, so the panel's `onKeyDown` never fires again. The arrows, Home and
    * End go dead, and so does **Tab**, which then falls through to the browser and walks focus into

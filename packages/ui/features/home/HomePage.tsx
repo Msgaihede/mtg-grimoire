@@ -623,14 +623,22 @@ export function HomePage(): ReactElement {
     [arranged, cols],
   );
 
+  /**
+   * **A settings change and a removal are written onto the stored arrangement, never onto
+   * `arranged`** (issue #1581). `arranged` is the layout brought inside *this* many columns, so a
+   * Density press or a chip in a narrowed or zoomed window that wrote from it would save every
+   * widget's re-flowed geometry as the reader's own — and widening the window would no longer give
+   * their page back. Only the geometry gestures above write from `arranged`, because a move is
+   * judged on the grid the reader is looking at.
+   */
   const configure = useCallback(
-    (id: string, fields: Record<string, unknown>) => update(patchConfig(arranged, id, fields)),
-    [arranged, update],
+    (id: string, fields: Record<string, unknown>) => update(patchConfig(layout, id, fields)),
+    [layout, update],
   );
 
   const remove = useCallback(
-    (id: string) => update(removeWidget(arranged, id)),
-    [arranged, update],
+    (id: string) => update(removeWidget(layout, id)),
+    [layout, update],
   );
 
   /* ------------------------------------------------------------------ the catalogue ------- */
@@ -700,7 +708,7 @@ export function HomePage(): ReactElement {
   const addCustom = useCallback(
     (widget: CustomWidget) => {
       update(
-        addWidget(arranged, CUSTOM_KIND, cols, {
+        addWidget(layout, CUSTOM_KIND, cols, {
           footprint: [widget.w, widget.h],
           config: { widgetId: widget.id, name: widget.name },
         }),
@@ -708,7 +716,7 @@ export function HomePage(): ReactElement {
       returnCustomCaret.current = true;
       setCustomOpen(false);
     },
-    [arranged, cols, update],
+    [layout, cols, update],
   );
 
   /**
@@ -724,23 +732,24 @@ export function HomePage(): ReactElement {
         notify.error(`Couldn't delete “${widget.name}”`, { body: ipcError(e) });
         return;
       }
-      const copies = new Set(placedCopies(arranged, widget.id).map((copy) => copy.id));
+      const copies = new Set(placedCopies(layout, widget.id).map((copy) => copy.id));
       if (copies.size > 0) {
-        update({ ...arranged, widgets: arranged.widgets.filter((entry) => !copies.has(entry.id)) });
+        update({ ...layout, widgets: layout.widgets.filter((entry) => !copies.has(entry.id)) });
       }
       await client.invalidateQueries({ queryKey: CUSTOM_WIDGETS_KEY });
     },
-    [arranged, client, update],
+    [layout, client, update],
   );
 
-  /** An Add press: the kind at its own footprint, at the first free cell of the grid on screen. */
+  /** An Add press: the kind at its own footprint, at the first free cell of the grid on screen —
+   *  which `addWidget` finds on the drawn grid while appending to the stored one (issue #1581). */
   const add = useCallback(
     (kind: WidgetKind) => {
-      update(addWidget(arranged, kind, cols));
+      update(addWidget(layout, kind, cols));
       returnCaret.current = true;
       setCatalogueOpen(false);
     },
-    [arranged, cols, update],
+    [layout, cols, update],
   );
 
   /* ----------------------------------------------------------------------- drawing ------- */

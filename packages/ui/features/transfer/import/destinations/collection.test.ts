@@ -719,3 +719,53 @@ describe("tags and the tradelist round-trip through the collection's own CSV", (
     expect(plan.unreadableTradelists).toEqual([]);
   });
 });
+
+/**
+ * **The "Default finish" fills silence, never a regular copy the file said** (issue #1550). The
+ * dropdown is session-sticky and shared with the wishlist step, so it can still say Foil from an
+ * earlier import — and `normal` used to reach the planner as the same `null` a plain decklist
+ * line does, so every regular row of a CSV landed foil.
+ */
+describe("the default finish against a file's own finish column", () => {
+  const FOIL = { condition: "NM" as const, finish: "foil" as const };
+  const hits = (n: number) => Array.from({ length: n }, (_, i) => hit(i, `c${i}`));
+
+  it("files a row the file marks regular as nonfoil, whatever the dropdown says", () => {
+    const list = parseDecklist("Name,Quantity,Foil\nSol Ring,1,normal\nShock,1,foil\nOpt,1,etched\n");
+    const plan = planCollectionImport(list, hits(3), FOIL);
+    expect(plan.items.map((i) => i.finish)).toEqual(["nonfoil", "foil", "etched"]);
+  });
+
+  it.each([
+    ["ManaBox", "Name,Quantity,Foil", "normal"],
+    ["Dragon Shield", "Card Name,Quantity,Printing", "Normal"],
+    ["TCGplayer", "Name,Quantity,Printing", "REGULAR"],
+    ["a blank cell", "Name,Quantity,Finish", ""],
+  ])("reads %s's regular word as the regular copy", (_, header, word) => {
+    const list = parseDecklist(`${header}\nSol Ring,1,${word}\n`);
+    expect(list.lines[0].finishStated).toBe(true);
+    expect(planCollectionImport(list, hits(1), FOIL).items[0].finish).toBe("nonfoil");
+  });
+
+  it("still fills a plain decklist line, and a CSV with no finish column, from the default", () => {
+    const text = planCollectionImport(parseDecklist("1 Sol Ring\n1 Shock *F*\n"), hits(2), FOIL);
+    expect(text.items.map((i) => i.finish)).toEqual(["foil", "foil"]);
+    const csv = planCollectionImport(parseDecklist("Name,Quantity\nSol Ring,1\n"), hits(1), FOIL);
+    expect(csv.items[0].finish).toBe("foil");
+  });
+
+  it("re-imports this app's own collection CSV at the finishes it wrote", () => {
+    const rowOf = (finish: string): CollectionRow =>
+      ({
+        name: "Sol Ring", quantity: 1, setCode: "LTC", collectorNumber: "285", finish,
+        lang: "en", condition: "NM",
+      }) as unknown as CollectionRow;
+    const text = formatExport(
+      [fromCollectionRow(rowOf("nonfoil")), fromCollectionRow(rowOf("foil"))],
+      "csv",
+      defaultFields("csv", "collection"),
+    );
+    const plan = planCollectionImport(parseDecklist(text), hits(2), FOIL);
+    expect(plan.items.map((i) => i.finish)).toEqual(["nonfoil", "foil"]);
+  });
+});

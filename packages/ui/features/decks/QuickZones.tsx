@@ -6,9 +6,11 @@ import type { DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
+import { plural } from "@/lib/counts";
 import {
   dropWrite,
   dropWrites,
+  readCards,
   readDragData,
   readDragGroup,
   type DeckWrite,
@@ -116,9 +118,14 @@ export function QuickZones({
    *
    * The name has to be asked for, and a modal cannot be opened mid-gesture — the platform owns
    * the pointer until the drop — so this fires on the drop and the dialog opens after it. The
-   * payload travels because by then there is no drag left to read it from.
+   * payloads travel because by then there is no drag left to read them from.
+   *
+   * **Every card the drag was carrying, primary first** (issue #1534) — `readDragGroup`'s
+   * answer, exactly what the three sibling zones hand to `dropWrites`. Never empty. It was the
+   * grabbed card alone until then, so a picked set of three filed one card into the new pile and
+   * left the other two where they were, still picked.
    */
-  onNewCategory: (payload: DragPayload) => void;
+  onNewCategory: (payloads: DragPayload[]) => void;
 }): ReactElement | null {
   /**
    * The card in the air, or `null`.
@@ -185,7 +192,7 @@ export function QuickZoneBar({
   payload: DragPayload;
   categories: readonly DeckCategory[];
   onDrop: (writes: DeckWrite[]) => void;
-  onNewCategory: (payload: DragPayload) => void;
+  onNewCategory: (payloads: DragPayload[]) => void;
 }): ReactElement {
   const maybeboard = categories.find((c) => c.kind === "maybe");
   const sideboard = categories.find((c) => c.kind === "side");
@@ -242,9 +249,13 @@ export function QuickZoneBar({
       // into it. There is no `DeckWrite` to resolve because nothing is written until the reader
       // has typed a name.
       takes: true,
-      accepts: (data) => readDragData(data) !== null,
+      accepts: (data) => readCards(data) !== null,
+      // **The whole group, not the primary** (issue #1534): the three zones around this one read
+      // `readDragGroup`, and a drag from a picked tile carries the whole set to every target —
+      // `packages/ui/CLAUDE.md`'s rule. The writes are resolved on Create, against the id the
+      // new pile answers with, so what travels is the payloads rather than any `DeckWrite`.
       drop: (data) => {
-        const held = readDragData(data);
+        const held = readCards(data);
         if (held) onNewCategory(held);
       },
     },
@@ -418,16 +429,16 @@ function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElem
  * been would be a control the reader is no longer looking at. It is a `Dialog` like every
  * other surface this editor opens over itself.
  *
- * **Two writes, in order, and only the first is asked about here.** The category is created, then
- * the card is filed into it by whichever write the drag meant — an add for a printing off a wall,
- * a move for a row of this deck. A refused *create* keeps the dialog open with the name still in
+ * **Two acts, in order, and only the first is asked about here.** The category is created, then
+ * every card the drag carried is filed into it by whichever write it meant — an add for a
+ * printing off a wall, a move for a row of this deck. A refused *create* keeps the dialog open with the name still in
  * the field, which is what makes the one refusal that actually happens survivable: the grain is
  * `(deck_id, name)`, so a name the deck already has comes back as a refusal rather than as a
  * second pile. A refused *file* is `DeckEditor`'s banner, like every other add and move.
  */
 export function QuickCategoryDialog({
   open,
-  cardName,
+  cardNames,
   pending,
   failure,
   onCreate,
@@ -435,9 +446,11 @@ export function QuickCategoryDialog({
   onClose,
 }: {
   open: boolean;
-  /** The card that was thrown at the zone, named so the reader can see what they are filing —
-   *  the platform's drag preview was the last thing that said it, and it is gone. */
-  cardName: string;
+  /** The cards that were thrown at the zone, named so the reader can see what they are filing —
+   *  the platform's drag preview was the last thing that said it, and it is gone. One name is
+   *  said; several are counted (issue #1534), the drag preview's own chip and the receipt's
+   *  `namedCards` rule. */
+  cardNames: readonly string[];
   pending: boolean;
   /** `deck_category_create`'s refusal, or `null`. */
   failure: string | null;
@@ -455,7 +468,7 @@ export function QuickCategoryDialog({
       onClose={onClose}
     >
       <QuickCategoryBody
-        cardName={cardName}
+        cardNames={cardNames}
         pending={pending}
         failure={failure}
         onCreate={onCreate}
@@ -467,12 +480,12 @@ export function QuickCategoryDialog({
 /** Mounted only while the dialog is open — `Dialog`'s guarantee — so the draft below starts
  *  clean on every open with no effect clearing it. */
 function QuickCategoryBody({
-  cardName,
+  cardNames,
   pending,
   failure,
   onCreate,
 }: {
-  cardName: string;
+  cardNames: readonly string[];
   pending: boolean;
   failure: string | null;
   onCreate: (name: string) => void;
@@ -501,9 +514,14 @@ function QuickCategoryBody({
   return (
     <form onSubmit={submit} className="flex flex-col gap-3 px-5 pt-4 pb-6">
       <p className="text-[0.6875rem] leading-relaxed text-dim">
-        {cardName ? (
+        {cardNames.length > 1 ? (
           <>
-            <span className="text-text">{cardName}</span> will be moved to the new category.
+            <span className="text-text">{plural(cardNames.length, "card")}</span> will be moved to
+            the new category.
+          </>
+        ) : cardNames[0] ? (
+          <>
+            <span className="text-text">{cardNames[0]}</span> will be moved to the new category.
           </>
         ) : (
           "The card will be moved to the new category."

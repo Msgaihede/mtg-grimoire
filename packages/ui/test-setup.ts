@@ -132,6 +132,17 @@ afterAll(async () => {
   if (scrolled) await new Promise((resolve) => setTimeout(resolve, 200));
 });
 
+/**
+ * **The test's window is the focused one, the way a browser's is while a reader is in it.**
+ * jsdom answers `document.hasFocus()` with "is anything focused": after a bare `el.blur()`, or a
+ * press on non-focusable content, it says `false`. A browser keeps saying `true` in both cases and
+ * says `false` only when the window itself deactivates (Alt+Tab). `blurLeftTheWindow`
+ * (`lib/focus.ts`, issue #1571) reads that difference, so under jsdom's answer every "blur that
+ * left the caret nowhere" in the suite looked like the window going away and closed nothing.
+ * A test about the window losing focus spies on `document.hasFocus` itself.
+ */
+Document.prototype.hasFocus = () => true;
+
 // jsdom has no layout engine and no ResizeObserver. The card grid measures its container
 // to decide how many columns fit, so without this every grid test renders nothing — and
 // `@tanstack/react-virtual` observes its scroll element with one too.

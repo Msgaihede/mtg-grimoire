@@ -10,12 +10,12 @@
  * **The sandbox decides most of what is in them** (`PlaytestView.sandbox`, the owner's decision
  * of 2026-10-17). Its moves — a card put anywhere by hand, a tap, counters, a token, a draw, a
  * mill, a shuffle — are the reader's hand changing the game outside the rules, and the engine
- * takes them only while the sandbox is on and only in the reader's main phase. So each builder
- * takes `sandbox` as the board works it out (on, the main phase, nothing with the engine) and,
- * off, offers only what the rules do: a hand card's Play (and its Foretell and Activate ability —
- * cycling), a commander's Cast, a
- * foretold or flashback card's Cast, a permanent's Activate ability and its Tap for mana. A row
- * the engine would only refuse is not offered.
+ * takes them only while the sandbox is on and the reader is playing or declaring
+ * (`play/sandbox.ts`). So each builder takes `sandbox` as the board works it out (on, that stage,
+ * nothing with the engine) and, off, offers only what the rules do: a hand card's Play (and its
+ * Foretell and Activate ability — cycling), a commander's Cast, a foretold or flashback card's
+ * Cast, a permanent's Activate ability and its Tap for mana. A row the engine would only refuse
+ * is not offered.
  */
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat, PlaytestView } from "@/lib/ipc";
@@ -71,7 +71,7 @@ export function cardMenu({
   card: GameCard;
   ids: number[];
   place: GamePlace;
-  /** The sandbox's moves work now: it is on, it is the reader's main phase, nothing is out. */
+  /** The sandbox's moves work now: it is on, the reader is playing or declaring, nothing is out. */
   sandbox: boolean;
   onAct: Act;
   onActivate?: (id: number) => void;
@@ -286,8 +286,8 @@ export type GameMenuView = Pick<PlaytestSeat, "graveyard" | "exile"> &
  *
  * **Two flags say what works now, and the board works both out**: `playing` — a game on the
  * table, not its opening hand and not over — opens the graveyard and exile to look through, which
- * is public and needs no sandbox; `sandbox` — the sandbox is on, it is the reader's main phase
- * and nothing is with the engine — is every row that changes the game by hand: untapping
+ * is public and needs no sandbox; `sandbox` — the sandbox is on, the reader is playing or
+ * declaring and nothing is with the engine — is every row that changes the game by hand: untapping
  * everything, a token, and looking through the library, which the rules never let a reader do.
  *
  * **The sandbox's own row is a setting, not a move**: a check mark that turns it on or off
@@ -318,7 +318,7 @@ export function gameMenu({
   view: GameMenuView | null;
   /** A game is on the table: not being dealt, not its opening hand, not over. */
   playing: boolean;
-  /** The sandbox's moves work now: on, the reader's main phase, nothing with the engine. */
+  /** The sandbox's moves work now: on, the reader playing or declaring, nothing with the engine. */
   sandbox: boolean;
   /** A game with people at the table, over a lobby: no undo, no sandbox, no New game. */
   lobby?: boolean;

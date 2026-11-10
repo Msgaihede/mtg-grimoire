@@ -151,6 +151,18 @@ const STEP: Readonly<Record<string, -1 | 1>> = {
   ArrowRight: 1,
 };
 
+/**
+ * The focus requests a card has already acted on — **once per request object**, for the life of
+ * the page rather than of the card.
+ *
+ * The band keeps its `focus` after honouring it (it is where the reader was *put*), and it
+ * unmounts its cards when collapsed — so a card-local ref would forget on every expand, and the
+ * effect below would pull the caret and the scroll back onto that note each time the reader
+ * reopened the band, leaving their next Enter on a `tabIndex={-1}` landing pad (issue #1546).
+ * Keyed on identity, as the band is: a second `Notes ▸` press is a new object and is honoured.
+ */
+const honoured = new WeakSet<NoteFocus>();
+
 export function NoteCard({
   note,
   focused,
@@ -207,9 +219,10 @@ export function NoteCard({
    * absence `CardGrid`'s tile works around.
    */
   useEffect(() => {
-    if (focused === null) return;
+    if (focused === null || honoured.has(focused)) return;
     const el = elementRef.current;
     if (el === null) return;
+    honoured.add(focused);
     el.focus();
     el.scrollIntoView?.({ block: "nearest" });
   }, [focused, elementRef]);

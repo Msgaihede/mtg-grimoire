@@ -12,6 +12,7 @@ import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { DeckColorBar } from "@grimoire/ui/features/decks/DeckColorBar";
 import { coverUrl, deckBadge, hasCover } from "@grimoire/ui/features/decks/deckCover";
 import { deckColorsLabel } from "@grimoire/ui/features/decks/deckPips";
+import { DeckCardCount, deckSizeProblem } from "@grimoire/ui/features/decks/deckSizeMark";
 import { sortDecks } from "@grimoire/ui/features/decks/deckSort";
 import { bracketLabel, useDeckBrackets } from "@grimoire/ui/features/decks/useDeckBrackets";
 import { useDeckFolders } from "@grimoire/ui/features/decks/useDeckFolders";
@@ -222,6 +223,7 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
           deck={deck}
           pips={pipsByDeck.get(deck.id) ?? null}
           bracket={bracketFor(deck)}
+          sizeProblem={deckSizeProblem(deck, formatSpecFor(deck.formatKey))}
         />
       ))}
     </ul>
@@ -414,10 +416,13 @@ function DeckCover({
   deck,
   pips,
   bracket,
+  sizeProblem,
 }: {
   deck: DeckRow;
   pips: PipCounts | null;
   bracket: string | null;
+  /** Why the count does not fit the format, or `null` — the desktop tile's red count (#1524). */
+  sizeProblem: string | null;
 }) {
   const image = useImageRetry(coverUrl(deck));
   const badge = deckBadge(deck);
@@ -461,8 +466,7 @@ function DeckCover({
         <span className="block truncate text-xs leading-4 text-dim">
           {deck.formatName ?? deck.formatKey}
           {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-          <span className="font-mono tabular-nums">{deck.cardCount}</span>{" "}
-          {deck.cardCount === 1 ? "card" : "cards"}
+          <DeckCardCount count={deck.cardCount} problem={sizeProblem} />
         </span>
       </a>
 

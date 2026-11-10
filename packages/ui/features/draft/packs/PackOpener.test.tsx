@@ -644,10 +644,10 @@ describe("PackOpener", () => {
       await user.click(await screen.findByRole("button", { name: /Test Set/ }));
       await screen.findByText(/^Expected value/);
       // A bulk price prices the cards under the minimum: with none, there is nothing to price.
-      expect(screen.getByLabelText("Bulk")).toBeDisabled();
+      expect(screen.getByLabelText("Bulk")).toHaveAttribute("aria-disabled", "true");
       await user.type(screen.getByLabelText("Sell at"), "50");
       await user.type(screen.getByLabelText("Minimum"), "0.50{Enter}");
-      expect(screen.getByLabelText("Bulk")).toBeEnabled();
+      expect(screen.getByLabelText("Bulk")).not.toHaveAttribute("aria-disabled");
       await user.type(screen.getByLabelText("Bulk"), "0.05{Enter}");
       await user.click(screen.getByRole("button", { name: "Open" }));
 
@@ -672,6 +672,18 @@ describe("PackOpener", () => {
       await user.tab();
       expect(screen.getByText("Bulk has to be a price of zero or more.")).toBeInTheDocument();
       expect(usePackReducedStore.getState().settings.bulkPrice).toBe(0);
+    });
+
+    /** Issue #1589: Enter stores the figure and the caret stays in the box. */
+    it("keeps focus in a box after Enter stores it", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      const box = await screen.findByLabelText("Minimum");
+      await user.type(box, "0.5{Enter}");
+      expect(usePackReducedStore.getState().settings.minimumValue).toBe(0.5);
+      expect(screen.getByLabelText("Minimum")).toBe(box);
+      expect(box).toHaveFocus();
+      expect(box).toHaveValue("0.50");
     });
 
     it("opens on the figures this device remembers", async () => {

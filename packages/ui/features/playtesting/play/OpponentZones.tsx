@@ -1,4 +1,4 @@
-import type { JSX } from "react";
+import type { JSX, MouseEvent } from "react";
 import type { GameCard, PlaytestSeat } from "@/lib/ipc";
 import { CountTag } from "@/components/CountTag";
 import { GrimoireMark } from "@/components/GrimoireMark";
@@ -14,11 +14,13 @@ import { markSize } from "../table/ZonePile";
  * and graveyard on the left, exile and the command zone on the right, the hand face down along
  * the top edge.
  *
- * **Looked at, never handled.** Their cards are the rules' and the AI's to move, so nothing here
- * is a drag source or a drop target and nothing has a menu: a face-up card can be pointed at (the
- * preview) and a face-up zone opened to look through, and that is all. (The sandbox reaches their
- * battlefield's cards through `Battlefield`'s menu, never these zones.) What the reader may not
- * see is not on the wire (`ipc/playtest.ts`): their hand and library are counts, drawn as backs.
+ * **Looked at, never dragged.** Their cards are the rules' and the AI's to move, so nothing here
+ * is a drag source or a drop target: a face-up card can be pointed at (the preview) and a face-up
+ * zone opened to look through — a click or a right-click, as the reader's own. The sandbox reaches
+ * their graveyard's and exile's cards through that look (`LibraryDialog`, the same places as the
+ * reader's own, issue #1521) and their battlefield's through `Battlefield`'s menu. What the reader
+ * may not see is not on the wire (`ipc/playtest.ts`): their hand and library are counts, drawn as
+ * backs.
  *
  * **Compact, always**: each zone's count is a `CountTag` on its card rather than a line under it,
  * so a column is the card's width and no more.
@@ -101,7 +103,11 @@ export function OpponentLibrary({
   );
 }
 
-/** Their graveyard or exile, face up, its last card on top; a click opens it to look through. */
+/**
+ * Their graveyard or exile, face up, its last card on top; a click or a right-click opens it to
+ * look through — with the sandbox's moves working, to move its cards too (the board's
+ * `LibraryDialog`).
+ */
 export function OpponentPile({
   seat,
   zone,
@@ -126,6 +132,11 @@ export function OpponentPile({
   const title = zone === "graveyard" ? "Graveyard" : "Exile";
   const where = zone === "graveyard" ? "their graveyard" : "their exile";
   const n = `${cards.length} ${cards.length === 1 ? "card" : "cards"}`;
+  const browse = (e: MouseEvent) => {
+    e.preventDefault();
+    onUnpoint();
+    onLook({ zone, mode: "browse", count: "all" });
+  };
   return (
     <div className={cn("flex flex-col", className)}>
       {top === null ? (
@@ -134,11 +145,8 @@ export function OpponentPile({
         <button
           type="button"
           aria-label={`${capital(owner)} ${title.toLowerCase()}, ${n}; ${top.name} on top. Click to look through it`}
-          onClick={() => {
-            onUnpoint();
-            onLook({ zone, mode: "browse", count: "all" });
-          }}
-          onContextMenu={(e) => e.preventDefault()}
+          onClick={browse}
+          onContextMenu={browse}
           onMouseEnter={(e) =>
             onPoint({
               card: top,

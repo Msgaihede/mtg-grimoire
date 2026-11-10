@@ -129,7 +129,10 @@ card search aside.
   The actions read such a param back from the spec's state (`valueOf` in `registry.tsx`); no value
   they take begins with `/`. That is why `SpecView` runs on a store of its own: the handlers read it.
 - **Conclusions TypeScript owns are `$computed` functions**: `formatPrice` (at the reader's
-  marketplace — a spec never spells a currency), `formatNumber`, `formatPercent`, `formatDate`.
+  marketplace — a spec never spells a currency), `formatNumber`, `formatPercent`, `formatDate`
+  (an instant, in the reader's zone) and `formatDay` (a day field — a UTC midnight such as a
+  price- or value-history point's `day` — in UTC, so it is not a day early west of Greenwich;
+  issue #1584).
 - **Optional props are `.nullable()`**, json-render's convention: a model sends `null` for a prop it
   leaves out. Every element carries `children`, `[]` for a leaf — `validate` requires it.
 - **Content security**: json-render renders React elements only — no `eval`, no `innerHTML`, no

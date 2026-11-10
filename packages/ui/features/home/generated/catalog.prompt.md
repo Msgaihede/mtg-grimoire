@@ -171,6 +171,7 @@ Use $bindState for form inputs (text fields, checkboxes, selects, sliders, etc.)
    - formatNumber
    - formatPercent
    - formatDate
+   - formatDay
 
 STATE WATCHERS:
 Elements can have an optional `watch` field to react to state changes and trigger actions. The `watch` field is a top-level field on the element (sibling of type/props/children), NOT inside props.
@@ -211,6 +212,6 @@ RULES:
 26. Inside a repeat, `{ "$item": "id" }` in an action's params passes the item's state path; the navigation actions read it back as the value.
 27. Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.
 28. Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.
-29. Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.
+29. Timestamps are Unix seconds unless a field's description says milliseconds. Write a day field — one whose description calls it a UTC midnight, such as a price- or value-history point's `day` or a `today` — with the `formatDay` function, and any other timestamp (when something happened) with `formatDate`; `formatDate` draws a UTC midnight a day early west of Greenwich.
 30. Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.
 31. Optional props take null when not used — never omit them.

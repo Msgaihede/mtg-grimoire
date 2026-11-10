@@ -13,7 +13,7 @@
  * reading it out of `DecksPage.tsx` would have been an import back into the file this was lifted
  * out of — erased at runtime, and a cycle to a reader and to `import/no-cycle` all the same.
  */
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type ReactNode, type RefObject } from "react";
 import { Archive, ArchiveRestore, Check, Copy, FolderInput, Pencil, Trash2, X } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { useFolderFieldReturn } from "@/components/FolderNameField";
@@ -38,6 +38,7 @@ import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import type { Panel } from "./panels";
 import { useTagOverflow, type TagOverflow } from "./tagRow";
 import { receipt, type Decks } from "./useDecks";
+import { DeckCardCount } from "./deckSizeMark";
 import { ANY_GAME, gameLabel } from "./useFormatSpecs";
 
 // The badge moved to `deckCover.ts` with the cover rules, so the phone gallery can draw both
@@ -213,6 +214,7 @@ export function DeckTile({
   pips,
   bracketLabel,
   bracketExpected,
+  sizeProblem,
   decks,
   nodes,
   folderId,
@@ -280,6 +282,12 @@ export function DeckTile({
    * print a label; this is that answer handed down rather than a second opinion formed here.
    */
   bracketExpected: boolean;
+  /**
+   * Why the deck's card count does not fit its format — the editor's own deck-size sentence —
+   * or `null` when it fits or the format judges nothing. The page answers it from the engine
+   * (`useDeckWallMarks`' `sizeProblemFor`); the tile only draws the count red (issue #1524).
+   */
+  sizeProblem: string | null;
   decks: Decks;
   nodes: readonly FolderNode[];
   /** The folder it is in now, normalised through the folder list this screen actually has. */
@@ -372,11 +380,23 @@ export function DeckTile({
    *
    * Held here rather than in a component of its own because the field is three elements on this
    * tile — the input in the caption's place and the two answers in the tray over the art — and a
-   * component drawn around them would have to be the whole tile. It is seeded on the render that
-   * opens the field and thrown away with it: the page mounts this branch off `panel`, so a
-   * cancelled rename cannot survive into the next one.
+   * component drawn around them would have to be the whole tile.
+   *
+   * **Reseeded on the render that opens the field, during render rather than in an effect**
+   * (issue #1545). The tile does not unmount when the field closes, so this state outlives a
+   * cancelled rename — and a reseed in the focus effect below came one render late: the input
+   * mounted holding the stale draft, `select()` ran over it, and the re-render that then wrote the
+   * real name collapsed the selection to the end, so F2 → `Zoo` after a cancelled `Sunburn` read
+   * `BurnZoo`. Set here, the value is already the deck's current name — renamed elsewhere or not —
+   * by the time the input commits, which is `FolderNameField`'s `round` reset, and React's own
+   * pattern for resetting state on a prop change.
    */
   const [draft, setDraft] = useState(deck.name);
+  const [draftSeededOpen, setDraftSeededOpen] = useState(renaming);
+  if (renaming !== draftSeededOpen) {
+    setDraftSeededOpen(renaming);
+    if (renaming) setDraft(deck.name);
+  }
   const renameRef = useRef<HTMLInputElement>(null);
   /**
    * The caret's way back to the pencil, and it has to be a ref taken here rather than the element
@@ -406,31 +426,60 @@ export function DeckTile({
     const opened = renaming && !wasRenaming.current;
     wasRenaming.current = renaming;
     if (!opened) return;
-    setDraft(deck.name);
     const input = renameRef.current;
     if (input === null) return;
     input.focus();
     input.select();
-  }, [renaming, deck.name]);
+  }, [renaming]);
 
   const trimmed = draft.trim();
   /** The one place the rename is sent, because two controls send it: the form's Enter and the
-   *  tray's ✓, which is outside the form and therefore cannot be a `type="submit"`. */
+   *  tray's ✓, which is outside the form and therefore cannot be a `type="submit"`.
+   *
+   *  **An unchanged name is not a write** (issue #1545): `update_deck` stamps `updated_at`
+   *  whatever it is sent, so F2 → Enter would move the tile to the front of a "Last updated"
+   *  wall. It closes the field the way a landed rename does — the caret back on the opener. */
   const submitRename = () => {
     if (!trimmed || decks.update.isPending) return;
+    if (trimmed === deck.name) {
+      onCancelPanel();
+      return;
+    }
     onRename(trimmed);
+  };
+
+  /**
+   * Looking away discards a half-typed name, and **"away" is measured against the whole tile**:
+   * the ✓ and the ✕ live in the tray over the art, outside the form, so a press on either is a
+   * blur that must not cancel first. Bound on the `<li>` while the field stands rather than on the
+   * form, so a Tab on past the ✕ is a look away too — on the form it only heard the input leave.
+   *
+   * **`onClosePanel`, never `onCancelPanel`** (issue #1545): the reader has put the caret somewhere
+   * else — the filter box, another tile — and the cancel path's hand-back would pull it off that
+   * and onto this tile's button. The delete question and the move popup on this tile make the
+   * same split. Suspended while the write is in flight — a control the browser disables on the
+   * press is blurred with no `relatedTarget` at all, which would read as looking away.
+   */
+  const onRenameBlur = (e: FocusEvent<HTMLLIElement>) => {
+    if (decks.update.isPending) return;
+    if (!ref.current?.contains(e.relatedTarget)) onClosePanel();
   };
 
   /** The caption's words, drawn in the button at rest and again under the field — see
    *  {@link CAPTION_LINE}. One node, so the two drawings cannot come to say different things. */
-  const caption = <DeckCaption deck={deck} />;
+  const caption = <DeckCaption deck={deck} sizeProblem={sizeProblem} />;
 
   return (
     // The two scale variables are set here, on the tile's own root, so everything drawn inside it
     // inherits them — including the shared marks in `components/`, which read
     // `var(--mark-scale, 1)` and get the fallback on every surface that is not a card. That is
     // the whole mechanism: a table's 12px gem stays 12px without knowing this variable exists.
-    <li ref={ref} style={cardScaleVars(zoom)} className="group relative">
+    <li
+      ref={ref}
+      style={cardScaleVars(zoom)}
+      className="group relative"
+      onBlur={renaming ? onRenameBlur : undefined}
+    >
       {/* The art and the caption are one button — a deck is picked by looking at it, and a
           reader who aims at the name should not miss. The controls below are siblings of it
           rather than children: a button inside a button is invalid HTML. */}
@@ -617,15 +666,8 @@ export function DeckTile({
               e.preventDefault();
               submitRename();
             }}
-            // Looking away discards a half-typed name, and **"away" is measured against the whole
-            // tile** rather than against this form: the ✓ and the ✕ live in the tray over the
-            // art, outside the form, so a press on either is a blur that must not cancel first.
-            // Suspended while the write is in flight — a control the browser disables on the
-            // press is blurred with no `relatedTarget` at all, which would read as looking away.
-            onBlur={(e) => {
-              if (decks.update.isPending) return;
-              if (!ref.current?.contains(e.relatedTarget)) onCancelPanel();
-            }}
+            // Looking away is the `<li>`'s `onRenameBlur`, which measures "away" against the
+            // whole tile rather than this form.
           >
             <input
               ref={renameRef}
@@ -1296,15 +1338,15 @@ function TagHover({ tags, edgeTaken }: { tags: readonly string[]; edgeTaken: boo
 /**
  * `Modern · Arena · 60 cards` — what rules the list is built to, where it is played and how big
  * it is. One definition for every tile that captions a deck; {@link DeckTile}'s note on the line
- * says why `Any` is never printed and why the bracket is not a fourth segment.
+ * says why `Any` is never printed and why the bracket is not a fourth segment. The count goes red
+ * when it does not fit the format ({@link DeckCardCount}, issue #1524).
  */
-function DeckCaption({ deck }: { deck: DeckRow }) {
+function DeckCaption({ deck, sizeProblem }: { deck: DeckRow; sizeProblem: string | null }) {
   return (
     <>
       {deck.formatName ?? deck.formatKey}
       {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-      <span className="font-mono tabular-nums">{deck.cardCount}</span>{" "}
-      {deck.cardCount === 1 ? "card" : "cards"}
+      <DeckCardCount count={deck.cardCount} problem={sizeProblem} />
     </>
   );
 }
@@ -1329,6 +1371,7 @@ export function DeckPickTile({
   pips,
   bracketLabel,
   bracketExpected,
+  sizeProblem,
   zoom,
   picked,
   onPick,
@@ -1341,6 +1384,8 @@ export function DeckPickTile({
   bracketLabel: string | null;
   /** As {@link DeckTile}'s: whether a pill is coming, which places the tag row. */
   bracketExpected: boolean;
+  /** As {@link DeckTile}'s: why the count does not fit the format, or `null`. */
+  sizeProblem: string | null;
   /** How large the reader draws the deck gallery — the lobby's wall follows the same zoom. */
   zoom: number;
   picked: boolean;
@@ -1368,7 +1413,7 @@ export function DeckPickTile({
         <span className={NAME_LINE}>{deck.name}</span>
         {colorsLabel !== null && <span className="sr-only">{colorsLabel}</span>}
         <span className={CAPTION_LINE}>
-          <DeckCaption deck={deck} />
+          <DeckCaption deck={deck} sizeProblem={sizeProblem} />
         </span>
         {tagsHidden && <TagHover tags={deck.tags} edgeTaken={edgeTaken} />}
       </button>

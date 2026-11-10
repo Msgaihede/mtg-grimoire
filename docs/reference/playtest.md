@@ -10,15 +10,15 @@ reader's, turned around.
 Built 2026-10-13; four players added 2026-10-14 (issue #994); the goldfish and the sandbox setting
 folded in 2026-10-17. The owner's choices that shape it:
 
-| Question                 | Choice                                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who plays the opponent   | phase-ai, at a difficulty the reader picks; or the goldfish, which takes no actions (2026-10-17)                                           |
-| How strict the rules are | The rules decide, with a prompt for targets, modes and the rest                                                                            |
-| The sandbox              | A setting (2026-10-17): off by default against the AI, on against the goldfish. On, it edits every card the table shows, in the main phase |
-| Where a game starts      | The Playtesting page: your deck, who it plays (any of your own decks, or the goldfish), a difficulty; or the deck editor's goldfish button |
-| How many opponents       | The goldfish, one, or three for a four-player game (issue #994): one player against three AI seats                                         |
-| Playing with people      | A supporter's lobby, joined by code (issue #1419): guests bring their own decks and take opponents' seats; the host's app runs the game    |
-| Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                   |
+| Question                 | Choice                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who plays the opponent   | phase-ai, at a difficulty the reader picks; or the goldfish, which takes no actions (2026-10-17)                                                                             |
+| How strict the rules are | The rules decide, with a prompt for targets, modes and the rest                                                                                                              |
+| The sandbox              | A setting (2026-10-17): off by default against the AI, on against the goldfish. On, it edits every card the table shows, whenever the reader plays or declares (issue #1522) |
+| Where a game starts      | The Playtesting page: your deck, who it plays (any of your own decks, or the goldfish), a difficulty; or the deck editor's goldfish button                                   |
+| How many opponents       | The goldfish, one, or three for a four-player game (issue #994): one player against three AI seats                                                                           |
+| Playing with people      | A supporter's lobby, joined by code (issue #1419): guests bring their own decks and take opponents' seats; the host's app runs the game                                      |
+| Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                                                     |
 
 The engine, the nightly pin, the 16 MiB stack, the hybrid model of rules and sandbox, the goldfish
 as an opponent (its emblems, its library, `deadOn`), the table's shared pieces and the licences are
@@ -183,7 +183,11 @@ generically, never matched variant by variant.
   `DiscardChoice`. The page puts the common ones in words and splits any other at its capitals.
 - Each option is one `GameAction`, described by the facts in its JSON data (`option_of`):
   - the cards and players it names, read from a handful of field names: `object_id`, `targets`,
-    `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`;
+    `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`.
+    A retarget's `new_targets` (`RetargetSpell`, Deflecting Swat's "choose new targets") is one
+    entry per target of the spell, `null` for each left as it is, so each answer names its new
+    target — a card the board lights up and takes a click on (`pickableCards`), or a player — and
+    the answer that names none is "Keep the targets" (issue #1520);
   - a number (`value`, `index`, `ability_index`, the first of `indices`), which is 0-based;
   - a yes or no (`accept`, `pay`, `top`);
   - a named choice's word (`choice`);
@@ -326,7 +330,7 @@ land drop left, too little mana, nothing to target), what happens is the sandbox
 - **Sandbox off: it is refused with a sentence** that ends "Turn the sandbox on to put it down by
   hand." Putting a card down unpaid against an opponent would be cheating it, so it is never done
   unasked.
-- **Sandbox on, in the reader's main phase: it is played unpaid** (`unpaid`): cast without paying
+- **Sandbox on, in the main phase or a response: it is played unpaid** (`unpaid`): cast without paying
   its mana cost (CR 118.9, under a `CastFromHandFree` emblem held only while the cast is made —
   [goldfish.md](goldfish.md)), so its cast and enter triggers happen (issue #1075), told as `cast`.
   Only when even that is not legal is it put where it would have gone — a permanent onto the
@@ -396,7 +400,22 @@ which the engine permits for the reader's seat (`debug_permitted`) and never for
 
 - **Off,** every one of them is refused: "That changes the game by hand. Turn the sandbox on in the
   game menu to do it." `run` checks it first (`is_sandbox`), so no action slips past.
-- **On,** they are taken in the reader's main phase only, where nothing is half done, on the
+- **On,** they are taken **wherever the game waits on the reader to play or to declare** (issue
+  #1522, 2026-11-10; until then the main phase only): their main phase, `respond` — the opponent's
+  spell, combat after blocks, or any step they stopped at, so a reader who wants to change the
+  table in the opponent's upkeep sets a stop there — and the `attack` and `block` steps (`edit`).
+  phase's `apply` takes a debug action whatever it waits for, and re-reads the declare steps'
+  attackers and blockers after one (`refresh_combat_declaration_waiting_for`), so a creature
+  tapped by hand mid-declaration is no longer offered. Tap the last one that could attack and phase
+  makes the empty declaration itself (CR 508.1a: it is then the only one), and the game plays on
+  to the second main phase as after declaring no attack. **The reader stays where they were**: in
+  the main phase the game plays on as after any play (an edit's trigger resolves, and the reader
+  is home again); anywhere else `play_on`'s `held` stops at the first priority or declaration it
+  comes back to, so neither a response's window nor a stop is passed over because the table
+  changed (`stopped_at` would otherwise let it go by). **Not in a question** (`prompt`, a cast
+  half made among them): phase does not re-read a question's answers after an edit, so it is
+  refused, "Answer the question first, or cancel it."; nor at the opening hand ("Keep or
+  mulligan the opening hand first."). They are taken on the
   reader's own cards anywhere and on **any card the table shows**: an opponent's battlefield,
   graveyard, exile and command zone (`editable`). **Never an opponent's hand or library**, which
   the reader may not see: "That card is in a zone you cannot see." Every emblem is out of reach
@@ -708,8 +727,17 @@ playing / End game); a game the engine has ended (`over`), or one still being de
 once. The goldfish keeps its own rule, a game held for the board's life: `usePlaytestGame` with no
 held game deals one on mount and ends it on unmount. **The host holds one game**, so "Goldfish this
 deck" asks before dealing over a kept game that is underway ("End your Playtesting game?"; Keep it
-goes back to the deck with nothing dealt), and puts away a kept game that is over without asking. A
-restart opens the setup page; the host's old game is dropped by the next deal.
+goes back to the deck with nothing dealt), and puts away a kept game that is over without asking —
+unless it is a lobby host's game, which it always asks about ("Close your lobby game?") and whose
+lobby it closes, with a toast, as the board's own Back does (issue #1592). A restart opens the setup
+page; the host's old game is dropped by the next deal.
+
+**The setup is `inert` under the board, and the board takes the focus** (issue #1592). The setup
+stays mounted under it so the way back finds it as it was left, but the Start game just pressed
+must not keep the caret: Enter would press it again and deal a new game over the one on the board,
+and Tab would walk into the covered controls. So `PlaytestSetup` takes `covered` (its `section` is
+`inert`), and `PlaytestPage`'s frame is a `tabIndex={-1}` landing pad focused on mount (no outline,
+`lib/focus.ts`' rule).
 
 **The goldfish is drawn in the duel layout** (the owner's choice of 2026-10-17), exactly as a single
 AI opponent is: its band with its face-down hand count, its plate, its zone columns and its empty
@@ -819,28 +847,34 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 | `attack`                  | Attack with N, or No attack                                                                                                        |                       |
 | `block`                   | Confirm blocks, or No blocks                                                                                                       |                       |
 | busy                      | A spinner and "Opponent is thinking…" ("Playing on…" against the goldfish; "Passing turn…" while `endTurn` runs)                   |                       |
+| busy at the opening hand  | Keep and Mulligan `aria-disabled`, and the instruction line a spinner and what is being done (issue #1593)                         |                       |
 | `over`                    | A centred banner ("You won", "You lost", "Draw"; "On turn N") with New game and the way back ("Back to setup", "Back to the deck") |                       |
 
 **Interactions.**
 
 - **The sandbox decides most of what is offered.** The board works it out once (`edits`: the
-  sandbox on, the reader's main phase, nothing with the engine) and hands it to every piece.
+  sandbox on, a stage the engine takes its moves at — `play/sandbox.ts`' `sandboxEditsAt`: `main`,
+  `respond`, `attack`, `block` — and nothing with the engine) and hands it to every piece. In the
+  declare steps a click on a creature that may attack or block still picks it; T taps it.
   - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Foretell, Cast,
     Activate ability, Tap for mana), and a castable card in the graveyard or exile dialog its Cast; a click taps only for mana; T, G, E and H do nothing; the only drag is a play onto the
     table; the library pile is disabled; a graveyard or exile opens read-only; and every life plate
     is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
   - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,
     the keys and every drag ([goldfish.md](goldfish.md#the-table)). **The opponents' battlefield
-    cards get a card menu** too (tap, counters, token copy, move), and their plates steppers. An
-    opponent's card is never dragged, and their hand and library stay counts.
+    cards get a card menu** too (tap, counters, token copy, move), their graveyard and exile the
+    same places to move a card to as the reader's own (issue #1521) — the engine puts it in its
+    owner's zones — and their plates steppers. An opponent's card is never dragged, and their hand
+    and library stay counts.
 - **Your cards:** a double-click or a drop on the table plays a card from the hand or the command
   zone, and "Activate ability" heads a battlefield card's menu. **A click on a permanent the rules
   let tap for mana (`canTapForMana`) taps it for mana**, sandbox or not, and "Tap for mana" is on
   its menu; with the sandbox on, the menu's plain Tap still only turns the card. A pile is split by
-  `canTapForMana` (`pileKey`), so a click never lands on a summoning-sick twin. In `respond`, the hand and the
-  abilities are playable as in the main phase; the sandbox is not.
+  `canTapForMana` (`pileKey`), so a click never lands on a summoning-sick twin. In `respond`, the hand, the
+  abilities and the sandbox are all as in the main phase.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
-  read-only. They are never dragged, and their table takes no zone drops (`refuse`) — only the
+  (a click or a right-click) as the reader's own do: read-only with the sandbox's moves not
+  working, with every card's places and a castable card's Cast with them (issue #1521). They are never dragged, and their table takes no zone drops (`refuse`) — only the
   rules' aims below.
 - **Drag beside every click** (issue #1335, `play/aim.ts`). A card carried onto a card or a plate
   makes the same picks and sends the same actions as the clicks; nothing new reaches the engine.
@@ -896,6 +930,10 @@ For a seat that is not the reader's, and for the sandbox:
 - `PlateFrame`: `aim`, the player as a drop target. `tableDrag.ts`' `useAimTarget` registers one.
 - `LifePlate`: `compact`, a one-row plate 38 px tall; `readOnly`, the number as plain text with the
   sandbox off.
+  A plate sends `setLife` 400 ms after the last press; the board has every plate send a change
+  still in that wait before any other action (`table/lifeCommits.ts`, issue #1593), so `+` then
+  Space reaches the engine in that order, and a plate whose change the engine refused shows the
+  game's life again once the engine is idle.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with
   its untouched twin.
 - The zone components: a `size`, whose `compact` puts each zone's count on its card.
@@ -1003,6 +1041,13 @@ waits. The host's game is an ordinary held game dealt by `lobbyGameStart`, which
 `waiting` as "Waiting for {name}…" and, on the host's, offers "Let the AI play {name}" for a guest
 who is offline or gone (`lobbyKick`). Back puts the game away and leaves the lobby: the host's
 closes it for everyone.
+
+**The host's board comes up once the deal answers** (issue #1592). Until then the lobby panel says
+"Dealing the game…" and Start waits. A refused deal — a seat with no deck yet, a printing the host's
+card data lacks — never reached the table (`lobby_game_start` refuses before the lobby leaves
+`open`), so it is said under Start in the lobby panel, the never-dealt game is put away, and the
+lobby stays open to fix and start again. `keptGame.ts`' `atLobbyTable` is the one test of whether
+putting a host's game away closes its lobby: dealt or being dealt, never refused.
 
 ## What is not there yet
 

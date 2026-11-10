@@ -227,11 +227,18 @@ function writeLine(
   spec: LineSpec,
 ): string {
   const parts = [`${card.quantity}${spec.quantitySuffix}`, card.name];
-  if (fields.has("setCode") && card.setCode !== null && card.setCode !== "") {
-    const set = spec.setCase === "lower" ? card.setCode.toLowerCase() : card.setCode.toUpperCase();
+  const setCode = fields.has("setCode") ? card.setCode : null;
+  const setWritten = setCode !== null && setCode !== "";
+  if (setWritten) {
+    const set = spec.setCase === "lower" ? setCode.toLowerCase() : setCode.toUpperCase();
     parts.push(spec.setWrap === "brackets" ? `[${set}]` : `(${set})`);
   }
-  if (fields.has("collectorNumber") && card.collectorNumber !== null) {
+  // **Only behind a set that was written** (issue #1553). A collector number names a printing
+  // only within its set, and on a line it is read as one only after `(SET)` or `[SET]`: with no
+  // set in front of it, `4 Lightning Bolt 117` reads back as a card called `Lightning Bolt 117`.
+  // So `Set code` unticked, or a card with no set, writes no number on the line — the CSV, which
+  // gives the number a column of its own, still does.
+  if (setWritten && fields.has("collectorNumber") && card.collectorNumber !== null) {
     parts.push(card.collectorNumber);
   }
   let line = parts.join(" ");

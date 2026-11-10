@@ -489,6 +489,132 @@ describe("the import dialog", () => {
   });
 
   /**
+   * **A pick is not a commander once the format stops offering it** (issue #1551). Sisay picked
+   * under Commander is no candidate under Oathbreaker, which wants a planeswalker; the step then
+   * says nothing can be the commander, and the commit used to send him there anyway.
+   */
+  it("drops a commander pick the new format no longer offers", async () => {
+    formatSpecs.mockResolvedValue([spec("commander"), spec("oathbreaker"), spec("casual")]);
+    const user = userEvent.setup();
+    wrap(<Harness defaultFormatKey="commander" />);
+    const go = await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
+
+    await user.click(await screen.findByRole("button", { name: /Captain Sisay/ }));
+    expect(await piles()).toContainEqual(["Commander", "1"]);
+
+    await pickOption(user, "Format", "Oathbreaker");
+    expect(
+      await screen.findByText(
+        "No card in this list can be the commander. The deck will import without one.",
+      ),
+    ).toBeInTheDocument();
+    expect(await piles()).not.toContainEqual(["Commander", "1"]);
+
+    await user.type(screen.getByLabelText("Name"), "Sisay");
+    await user.click(go);
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    const items = deckImportCommit.mock.calls[0][3] as ImportItem[];
+    expect(items.map((item) => [item.cardId, item.categoryName])).toEqual([
+      [SISAY.cardId, "Creature"],
+      [KENRITH.cardId, "Creature"],
+      [SOL_RING.cardId, "Artifact"],
+    ]);
+  });
+
+  /** And the pick is filtered, not forgotten: the format back gives the reader the same press. */
+  it("offers the same pick again when the format comes back", async () => {
+    formatSpecs.mockResolvedValue([spec("commander"), spec("oathbreaker"), spec("casual")]);
+    const user = userEvent.setup();
+    wrap(<Harness defaultFormatKey="commander" />);
+    await preview("1 Captain Sisay\n1 Kenrith, the Returned King\n1 Sol Ring");
+
+    await user.click(await screen.findByRole("button", { name: /Captain Sisay/ }));
+    await pickOption(user, "Format", "Oathbreaker");
+    await pickOption(user, "Format", "Commander");
+
+    expect(await screen.findByRole("button", { name: /Captain Sisay/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "No commander" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  /**
+   * **A merge into a deck that already has its commander asks rather than states** (issue
+   * #1551). One legendary creature in the paste used to read "goes in the command zone" with no
+   * control and land beside Kenrith — outranking even the pile the right-click aimed at.
+   */
+  it("asks, defaulting to none, when merging into a deck that has a commander", async () => {
+    deckGet.mockResolvedValue({
+      ...DETAIL,
+      cards: [
+        ...DETAIL.cards,
+        deckCard({
+          id: 3,
+          cardId: KENRITH.cardId,
+          name: KENRITH.name,
+          categoryId: 3,
+          categoryName: "Commander",
+          categoryKind: "commander",
+          quantity: 1,
+        }),
+      ],
+    });
+    wrap(<Harness into={{ ...INTO_DECK, forcedCategoryName: "Creature" }} />);
+    const go = await preview("1 Captain Sisay\n1 Llanowar Elves");
+
+    expect(
+      await screen.findByText(/Kenrith, the Returned King is already this deck’s commander/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Captain Sisay goes in the command zone.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Captain Sisay/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "No commander" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(go);
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    const items = deckImportCommit.mock.calls[0][3] as ImportItem[];
+    expect(items.map((item) => [item.cardId, item.categoryName])).toEqual([
+      [SISAY.cardId, "Creature"],
+      [ELVES.cardId, "Creature"],
+    ]);
+  });
+
+  /** A replace clears the command zone with the rest of the list, so the one candidate is the
+   *  deck's commander again and the step goes back to stating it. */
+  it("states the one candidate again on a replace", async () => {
+    deckGet.mockResolvedValue({
+      ...DETAIL,
+      cards: [
+        deckCard({
+          id: 3,
+          cardId: KENRITH.cardId,
+          name: KENRITH.name,
+          categoryKind: "commander",
+          categoryName: "Commander",
+          quantity: 1,
+        }),
+      ],
+    });
+    wrap(<Harness into={INTO_DECK} />);
+    await preview("1 Captain Sisay\n1 Sol Ring");
+
+    expect(await screen.findByText(/is already this deck’s commander/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: /Replace/ }));
+    expect(await screen.findByText("Captain Sisay goes in the command zone.")).toBeInTheDocument();
+  });
+
+  /**
    * **The preview has to describe what Import will write — that is the whole job of a
    * preview-then-commit screen, and it did not.** Measured live 2026-08-12 on a **debug**
    * build: the reference list previewed as `117 cards · 6 categories` with `Creature 56` and
@@ -1394,5 +1520,74 @@ describe("the import dialog's toast", () => {
         tone: "success",
       }),
     );
+  });
+});
+
+/**
+ * Issue #1552: a file the parser refused as a whole — or a list whose every line it refused —
+ * reads zero lines, so Preview is shut and the preview step's problem list, the one other place
+ * a `ParseIssue` is drawn, is out of reach. The source step says the parser's sentence instead.
+ */
+describe("a list with nothing to preview", () => {
+  it.each([
+    [
+      "a Cardmarket export",
+      "idProduct;groupCount;price;idLanguage;condition;isFoil;isSigned;isAltered;isPlayset\n" +
+        "743311;1;;1;2;1;;;\n",
+      "this looks like a spreadsheet, but no column names the card",
+    ],
+    [
+      "a Cockatrice .cod",
+      '<?xml version="1.0"?>\n<cockatrice_deck version="1">\n</cockatrice_deck>',
+      "this is an XML file, but not an MTGO .dek deck",
+    ],
+    ["a list of refused lines", "0 Shock", "Quantity can't be zero."],
+  ])("says why it will not preview %s", async (_, text, reason) => {
+    importPickFile.mockResolvedValue({ text, encoding: "utf-8" });
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.getByText(/0 lines · 0 cards · 1 unreadable line/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeDisabled();
+    // It describes the box, so a screen reader in the box hears why too — and it is not an
+    // alert, because it follows the text as it is typed.
+    expect(screen.getByLabelText("Card list")).toHaveAccessibleDescription(
+      expect.stringContaining(reason),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /** With any line read the preview is one press away and quotes every issue itself. */
+  it("says nothing on the source step once a line was read", async () => {
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(screen.getByLabelText("Card list"));
+    await userEvent.paste("0 Shock\n1 Sol Ring");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled());
+    expect(screen.getByText(/1 line · 1 card · 1 unreadable line/)).toBeInTheDocument();
+    expect(screen.queryByText("Quantity can't be zero.")).not.toBeInTheDocument();
+  });
+
+  it("goes as soon as the reader fixes the line", async () => {
+    wrap(<Harness />);
+    await panel();
+    const box = screen.getByLabelText("Card list");
+
+    await userEvent.click(box);
+    await userEvent.paste("0 Shock");
+    expect(await screen.findByText("Quantity can't be zero.")).toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.paste("1 Shock");
+
+    await waitFor(() =>
+      expect(screen.queryByText("Quantity can't be zero.")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled();
   });
 });

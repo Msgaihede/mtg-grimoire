@@ -1,7 +1,10 @@
 import { useId, useMemo, useState } from "react";
 import { FinishMark } from "@grimoire/ui/components/FinishMark";
 import { RarityGem } from "@grimoire/ui/components/RarityGem";
-import { buildPrintingGroups, PRINTING_GROUP_BY_OPTIONS } from "@grimoire/ui/features/card/printings";
+import {
+  buildPrintingGroups,
+  PRINTING_GROUP_BY_OPTIONS,
+} from "@grimoire/ui/features/card/printings";
 import { usePrintingGroupBy } from "@grimoire/ui/features/card/usePrintingGroupBy";
 import { plural } from "@grimoire/ui/lib/counts";
 import { parseFinishes } from "@grimoire/ui/lib/finish";
@@ -82,16 +85,20 @@ export function PrintingsSection({
    * are drawn — so folding keeps the first rows of the reader's own ordering rather than the first
    * row of every group. A group the cut leaves empty is not drawn at all, heading included: a
    * heading with nothing under it reads as a group that failed to load.
+   *
+   * **Each group keeps its whole size beside the cut rows** (`size`, issue #1599): its heading
+   * counts the group, as the desktop's does and as it reads after *Show all*, never the rows the
+   * fold happened to leave drawn.
    */
   const shown = useMemo(() => {
-    if (expanded) return groups;
+    if (expanded) return groups.map((group) => ({ ...group, size: group.printings.length }));
     let left = PRINTINGS_FOLDED;
     const cut = [];
     for (const group of groups) {
       if (left <= 0) break;
       const printings = group.printings.slice(0, left);
       left -= printings.length;
-      cut.push({ ...group, printings });
+      cut.push({ ...group, printings, size: group.printings.length });
     }
     return cut;
   }, [groups, expanded]);
@@ -114,7 +121,7 @@ export function PrintingsSection({
               {group.heading !== null && (
                 <p className="flex items-baseline gap-1.5 pb-1 text-[0.7rem] text-dim">
                   <span className="min-w-0 truncate">{group.heading}</span>
-                  <span className="font-mono tabular-nums">· {group.printings.length}</span>
+                  <span className="font-mono tabular-nums">· {group.size}</span>
                 </p>
               )}
               <ul className="flex flex-col">

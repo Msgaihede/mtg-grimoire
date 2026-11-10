@@ -111,6 +111,12 @@ pub const FOLDER_HOLDS_LOCKED: &str =
 /// What [`set_entry_folder`] says about the row it was **given**, when that row is sitting in a
 /// deck's group.
 ///
+/// **And what the reader's own writes to that row say** since issue #1537 —
+/// [`crate::collection::refuse_in_a_deck`], asked by `collection::set_quantity`, `update_entry` (a
+/// changed finish or count), `set_entry_printing`, `remove_entry` and `remove_entries`. The same
+/// sentence for the same fact: those copies are the deck's arithmetic, and the way to change them
+/// is to cut the card from the deck.
+///
 /// **A sibling of [`FOLDER_NOT_YOURS`] rather than a reuse of it, and the difference is which
 /// noun the sentence is about.** That one is about the *destination* — the reader tried to
 /// change a folder the app owns. This one is about the *source*, and the reader is not changing

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { pickOption } from "@/test-dropdown";
@@ -387,9 +387,7 @@ describe("Dropdown search", () => {
 
   it("keeps the caret in the search box while the pointer picks", async () => {
     const user = userEvent.setup();
-    render(
-      <Dropdown label="Format" value="" onChange={vi.fn()} options={FORMATS} searchable />,
-    );
+    render(<Dropdown label="Format" value="" onChange={vi.fn()} options={FORMATS} searchable />);
     await user.click(screen.getByRole("button", { name: "Format" }));
     const box = screen.getByRole("combobox");
     expect(box).toHaveFocus();
@@ -470,6 +468,61 @@ describe("Dropdown search", () => {
     expect(screen.getByText("Showing 4 of 40.")).toBeInTheDocument();
   });
 
+  /**
+   * Issue #1571: a press on the panel's own non-row content — a footer's sentence, the padding —
+   * is a press inside the popup. It used to drop focus on `<body>`, which the root's blur read as
+   * leaving. The caret stays in the search box, so the arrow keys still work after it.
+   */
+  it("stays open, caret in the search box, when its footer or padding is pressed", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown
+        label="Format"
+        value="modern"
+        onChange={vi.fn()}
+        options={FORMATS}
+        searchable
+        searchLabel="Search formats"
+        footer={<p>Showing 4 of 40.</p>}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Format" });
+    await user.click(trigger);
+    const search = screen.getByRole("combobox", { name: "Search formats" });
+    expect(search).toHaveFocus();
+
+    await user.click(screen.getByText("Showing 4 of 40."));
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(search).toHaveFocus();
+
+    // The panel's own box, padding and all.
+    await user.click(screen.getByRole("listbox").parentElement!);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(search).toHaveFocus();
+
+    // A press in the search box itself still places the caret there.
+    await user.click(search);
+    expect(search).toHaveFocus();
+  });
+
+  /** Issue #1571: switching windows is not leaving the dropdown; a blur onto `<body>` still is. */
+  it("stays open when the window loses focus, and closes on a blur that stays in it", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Format" });
+    await user.click(trigger);
+    const list = screen.getByRole("listbox");
+
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    fireEvent.focusOut(list, { relatedTarget: null });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    hasFocus.mockReturnValue(true);
+    fireEvent.focusOut(list, { relatedTarget: null });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    hasFocus.mockRestore();
+  });
+
   it("resets the uncontrolled query on a fresh opening", async () => {
     // Carried over from Task 4: openAt clears localQuery in the same batch as the active-index
     // reset, but nothing pinned it until now. A reader who typed a filter, closed without
@@ -502,28 +555,24 @@ describe("Dropdown type-ahead", () => {
     );
   });
 
-  it(
-    "resets the type-ahead buffer once it has sat idle past the timeout",
-    async () => {
-      const user = userEvent.setup();
-      render(<Dropdown label="Format" value="" onChange={vi.fn()} options={TYPE_AHEAD_OPTIONS} />);
-      await user.click(screen.getByRole("button", { name: "Format" }));
-      await user.keyboard("{Escape}");
-      await user.keyboard("s");
-      // Real time, not fake: userEvent awaits real timers internally, and this repo has already
-      // been bitten by the two not mixing (a naive vi.useFakeTimers() hangs the whole file, not
-      // just this test). A genuine wait comfortably past the 600ms buffer is simpler and safe
-      // for the one test that needs it.
-      await new Promise((resolve) => setTimeout(resolve, 700));
-      await user.keyboard("t");
-      // A fresh "t", not a continued "st" — Timer (row 2), not Standard (row 1).
-      expect(screen.getByRole("listbox")).toHaveAttribute(
-        "aria-activedescendant",
-        expect.stringContaining("option-2"),
-      );
-    },
-    10000,
-  );
+  it("resets the type-ahead buffer once it has sat idle past the timeout", async () => {
+    const user = userEvent.setup();
+    render(<Dropdown label="Format" value="" onChange={vi.fn()} options={TYPE_AHEAD_OPTIONS} />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{Escape}");
+    await user.keyboard("s");
+    // Real time, not fake: userEvent awaits real timers internally, and this repo has already
+    // been bitten by the two not mixing (a naive vi.useFakeTimers() hangs the whole file, not
+    // just this test). A genuine wait comfortably past the 600ms buffer is simpler and safe
+    // for the one test that needs it.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await user.keyboard("t");
+    // A fresh "t", not a continued "st" — Timer (row 2), not Standard (row 1).
+    expect(screen.getByRole("listbox")).toHaveAttribute(
+      "aria-activedescendant",
+      expect.stringContaining("option-2"),
+    );
+  }, 10000);
 
   it("opens a searchable dropdown into its search box on a printable key", async () => {
     const user = userEvent.setup();
@@ -540,6 +589,21 @@ describe("Dropdown type-ahead", () => {
     // Filtered by "s", substring, case-insensitive: only Standard has one.
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Standard"]);
   });
+
+  // Issue #1574: Space is the button's own key for opening a picker, not a character to search.
+  it("opens a searchable dropdown on Space with nothing seeded in its search box", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="modern" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{Escape}");
+    await user.keyboard(" ");
+    const box = screen.getByRole("combobox");
+    expect(box).toHaveFocus();
+    expect(box).toHaveValue("");
+    expect(screen.getAllByRole("option")).toHaveLength(FORMATS.length);
+  });
 });
 
 describe("MultiDropdown", () => {
@@ -550,9 +614,7 @@ describe("MultiDropdown", () => {
         label="Format"
         triggerLabel={picked.length === 0 ? "Any format" : `${picked.length} formats`}
         selected={picked}
-        onToggle={(v) =>
-          setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))
-        }
+        onToggle={(v) => setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))}
         options={FORMATS}
       />
     );
@@ -705,10 +767,7 @@ describe("MultiDropdown", () => {
     render(<MultiHarness />);
     await user.click(screen.getByRole("button", { name: "Format" }));
     expect(screen.getByRole("listbox")).toHaveAttribute("aria-multiselectable", "true");
-    expect(screen.getByRole("option", { name: "Modern" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(screen.getByRole("option", { name: "Modern" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("toggles the active row on Enter without closing", async () => {
@@ -739,9 +798,7 @@ describe("MultiDropdown", () => {
         label="Format"
         triggerLabel={picked.length === 0 ? "Any format" : `${picked.length} formats`}
         selected={picked}
-        onToggle={(v) =>
-          setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))
-        }
+        onToggle={(v) => setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))}
         options={FORMATS}
         searchable
       />
@@ -767,9 +824,7 @@ describe("MultiDropdown", () => {
         label="Format"
         triggerLabel={picked.length === 0 ? "Any format" : `${picked.length} formats`}
         selected={picked}
-        onToggle={(v) =>
-          setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))
-        }
+        onToggle={(v) => setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))}
         options={FORMATS}
         searchable
       />
@@ -869,8 +924,9 @@ describe("Dropdown dismissal on scroll", () => {
     );
     await user.click(screen.getByRole("button", { name: "Format" }));
 
-    act(() =>
-      void screen.getByRole("combobox", { name: "Search" }).dispatchEvent(new Event("scroll")),
+    act(
+      () =>
+        void screen.getByRole("combobox", { name: "Search" }).dispatchEvent(new Event("scroll")),
     );
 
     expect(screen.getByRole("listbox")).toBeInTheDocument();

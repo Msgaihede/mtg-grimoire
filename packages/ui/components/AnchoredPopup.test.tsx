@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnchoredPopup } from "./AnchoredPopup";
@@ -103,7 +103,11 @@ describe("AnchoredPopup", () => {
    */
   it("hands a function child a close that returns the caret to the trigger", async () => {
     render(
-      <AnchoredPopup label="Remove Summary" panelLabel="Remove Summary?" icon={<span aria-hidden />}>
+      <AnchoredPopup
+        label="Remove Summary"
+        panelLabel="Remove Summary?"
+        icon={<span aria-hidden />}
+      >
         {(close) => (
           <button type="button" onClick={close}>
             Keep
@@ -240,5 +244,24 @@ describe("AnchoredPopup", () => {
       ).not.toBeInTheDocument(),
     );
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  /** Issue #1571: switching windows is not leaving the popup; a blur onto `<body>` still is. */
+  it("stays open when the window loses focus, and closes on a blur that stays in it", async () => {
+    popup();
+    const panel = await open();
+
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    fireEvent.focusOut(panel, { relatedTarget: null });
+    expect(
+      screen.getByRole("dialog", { name: "Edit Lightning Bolt on your wishlist" }),
+    ).toBeInTheDocument();
+
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    fireEvent.focusOut(panel, { relatedTarget: null });
+    expect(screen.getByRole("button", { name: "Edit Lightning Bolt" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 });

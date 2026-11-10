@@ -63,7 +63,7 @@ export function readTableDrag(data: Record<string, unknown>): TableDrag | null {
  * dragging a pile of seven Forests to the graveyard is one Forest, the way picking the top card
  * off a real pile is.
  *
- * `sandbox` is the board's own reading of it: on, the reader's main phase, nothing out.
+ * `sandbox` is the board's own reading of it: on, the reader playing or declaring, nothing out.
  */
 export function dropAction(
   drag: TableDrag,

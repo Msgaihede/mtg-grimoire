@@ -2134,6 +2134,31 @@ describe("CardGrid multi-select", () => {
     expect(useAppStore.getState().cardSelection).toBeNull();
   });
 
+  /**
+   * **Issue #1566.** A press on a tile outside the set, held still past dnd-kit's old 200ms
+   * mouse delay, was a drag — and a drag from outside the set throws the set away, so a slow
+   * Ctrl-click or Shift-click cleared the selection while the button was still down. A press
+   * that has not travelled is not a drag, however long it is held.
+   */
+  it("keeps the set through a press held still on a tile outside it", async () => {
+    wall({
+      dragPayload: (c) => ({ kind: "card", cardId: c.id, name: c.name, typeLine: c.typeLine }),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+
+    const tile = screen
+      .getByRole("button", { name: "Brainstorm" })
+      .closest<HTMLElement>(`[${DND_SOURCE_ATTR}]`)!;
+    const held = await startPointerDrag(boxed(tile, 0), { move: false });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 350)));
+
+    expect(held.started).toBe(false);
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "ccc"]);
+    await held.drop();
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "ccc"]);
+  });
+
   /** The menu slot is handed the set, so a surface can put its rows in the plural — and is
    *  handed nothing at all for a card outside it. */
   it("hands the card menu the picked rows, and only for a card inside the set", async () => {

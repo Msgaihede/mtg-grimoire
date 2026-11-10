@@ -347,8 +347,12 @@ rung and `unknown` are the whole rule.
   behind any frame still on the wire, and every decision of the stream is news — **except the card
   that was standing when the last stream stopped**: the identity (oracle, else printing) of the last
   decision a taken verdict carried, kept in window-lifetime module memory (`viewMemory`) and dropped
-  by any taken frame with no quad. The stream's first decision naming it is that card still lying
-  on the mat, already in the tray, and is not passed on. A start whose reset is refused says so and
+  by `STANDING_FORGET_AFTER` (5) taken frames running with no quad — the session's own
+  `forget_after`, which `useScanLoop.test.ts` reads out of `session.rs` — and never by one (#1558,
+  2026-11-10): a detector that misses a frame around a pause had the card filed again. The run is
+  counted across a stop, so an empty stretch the stop cut in two is one. The stream's first
+  decision naming it is that card still lying on the mat, already in the tray, and is not passed
+  on. A start whose reset is refused says so and
   falls back to the baseline.
 - **A decision that moves again within `DECISION_GAP_FRAMES` (3) frames of the last is dropped**
   (#735, 2026-10-01): a card really swapped in needs the old one lifted, the new one laid and frames
@@ -982,6 +986,17 @@ picture is the whole card, never the `art` crop**: a crop has no printed frame a
 apart is the frame. A waiting row spans the grid (`col-span-full`) with its candidates on the grid's
 own column template (issue #1004).
 
+**Ctrl+wheel zooms the tray** (issue #1525): `cardZoom.scanner`, one section for the page's column and
+the pack opener's drawer — they are one `TrayPanel` drawn in two places, so a size set in one is the
+other's. The gesture is caught on the tray's `<section>`, which is mounted from the first frame, rather
+than on its scroller, which an empty tray and a layout switch replace. The grid's 10.5rem floor is
+multiplied by the zoom (`tileColumns`); above life size its 50% cap becomes the whole width, so a
+zoomed tray can go to one card a line, and past life size a tile asks for the walls' `display`
+picture. Below it the chin folds the stepper under the finish (`chinFolds`): neither control scales,
+and a tile under 10.5rem cannot hold `Unknown` and the 24px stepper on one line. The column probe is
+keyed on the template, since a new template can change the count without resizing the probe. The
+list's thumbnails (36px) and candidates (64px) follow the same number.
+
 **Every resolved row carries one copy's price at the reader's marketplace** (issue #736): one
 `printing_prices(cardIds, marketplace)` read for the whole tray under `["cards", "prices"]`, the row's
 own finish (`reader/trayPrice.ts`; for `unknown` the chain `nonfoil → foil → etched`). A row waiting on
@@ -1059,7 +1074,14 @@ tray stays intact, and the decision gap is cleared.
 `LANDED_HOLD_MS`) — its picture, a tick, the name, the set, number and finish, *Added again ×N* on a
 bump, *Printing updated* on a re-read, the first two candidates fanned for a pick — and closes its
 line with a price (issue #1321, `reader/useLandedPrice.ts`: the card's figure, or the span across a
-pick's candidates). It is `aria-hidden`, since the HUD's live region says the same.
+pick's candidates). It is `aria-hidden`, since the HUD's live region says the same. **The hold is
+`useTrayLanding`'s, not the popup's** (issue #1555): the hook's `shown` is a landing made while the
+reader is *armed* (scanning, or point and shoot on) for those 2.2 s, and a Stop puts it away at once.
+A card added by hand while stopped is filed, flashed and sounded but never shown, and a Start raises
+nothing. The popup used to keep the clock itself, which ran only while it was drawn — so a card
+hidden by a Stop stayed set and came back, confetti and all, at the next Start. The pump likewise
+forgets its verdict as it starts (`useScanLoop`), since the start resets the session: the old
+corners and the HUD's `Matched … Added` are not drawn over the new stream.
 
 **A landing at a price tier throws confetti over the picture** (`reader/TierConfetti.tsx`, pieces and
 motion in `confetti.ts`, the tier from `useLandedTier`): the sound's own ladder (`priceTier` against
