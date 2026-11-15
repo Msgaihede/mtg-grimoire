@@ -10,6 +10,7 @@ const ON = { exact: true, name: true, unplanned: true };
  *  names one, exactly as `deckTokens.ts` derives it. */
 function view(over: Partial<DeckTokenView>): DeckTokenView {
   const base: DeckTokenView = {
+    promoTypes: null,
     oracleId: "o-treasure",
     name: "Treasure",
     typeLine: "Token Artifact — Treasure",

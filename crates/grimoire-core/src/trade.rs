@@ -240,6 +240,10 @@ pub struct TradeLine {
     pub lang: Option<String>,
     pub type_line: Option<String>,
     pub legalities: Option<String>,
+    /// `cards.promo_types` as stored: a JSON array, as text — what names a Surge Foil line on
+    /// its chip and draws it as surge rather than as plain foil. `None` when the printing has
+    /// none or has left the database.
+    pub promo_types: Option<String>,
     pub finish: String,
     pub quantity: i64,
     pub source: String,
@@ -509,7 +513,7 @@ fn lines_sql(market: Marketplace, open: bool) -> String {
                 coalesce((SELECT sum(w.quantity) FROM wishlist_entries w
                             LEFT JOIN wishlist_folders wf ON wf.id = w.folder_id
                            WHERE {wished}), 0),
-                c.lang, c.type_line, c.legalities
+                c.lang, c.type_line, c.legalities, c.promo_types
            FROM trade_lines l
            LEFT JOIN cards c ON c.id = l.card_id
           WHERE l.trade_id = ?1
@@ -676,6 +680,7 @@ pub fn get_trade(conn: &Connection, id: i64) -> Result<Option<Trade>, String> {
                 lang: r.get(19)?,
                 type_line: r.get(20)?,
                 legalities: r.get(21)?,
+                promo_types: r.get(22)?,
                 finish: r.get(11)?,
                 quantity: r.get(12)?,
                 source: r.get(13)?,
@@ -2256,6 +2261,32 @@ mod tests {
         unwish_received: false,
         wish_given: false,
     };
+
+    /// A line carries its printing's promo types — what draws a Surge Foil line as surge — and
+    /// a printing with none answers `None`.
+    #[test]
+    fn a_line_carries_its_printings_promo_types() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'bolt'",
+            [],
+        )
+        .unwrap();
+        let id = new_trade(&conn);
+        put(&conn, id, "mine", "bolt", "foil", 1);
+        put(&conn, id, "mine", "goyf", "foil", 1);
+        let lines = trade(&conn, id).lines;
+        let promo = |card: &str| {
+            lines
+                .iter()
+                .find(|l| l.card_id == card)
+                .unwrap()
+                .promo_types
+                .clone()
+        };
+        assert_eq!(promo("bolt").as_deref(), Some(r#"["surgefoil"]"#));
+        assert_eq!(promo("goyf"), None);
+    }
 
     /// A trade made with nothing said is named after its own id, priced where the reader
     /// currently is, and born open at 100% on both sides.

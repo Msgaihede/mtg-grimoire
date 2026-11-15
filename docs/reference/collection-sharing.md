@@ -132,6 +132,14 @@ that moves drawers a structural diff rather than a field change.
 deriving them would save a few percent and buy a dependency on a URL scheme this app does not
 control. `image_uri::has_cache_buster` exists because that scheme has moved before.
 
+**`pt` is the printing's promo types** (2026-11-15), the JSON text `cards.promo_types` holds
+(`["surgefoil"]`), on every kind of share and absent where the printing has none — four cards in
+five, and every card in the goldens, so neither golden moved and `v` stays 1. It is what lets both
+viewers draw a Surge or Ripple Foil copy as its own kind, since the picture is the plain
+printing's. A fact about the printing, not about the reader's copy, so it is no new absence to
+guard. The projector reads it beside its rows as a `#[serde(skip)]` field, so `Projection v1` is
+unchanged; viewers read it through `sharePromoTypes`, which takes anything but a string as none.
+
 ### The absences are absences, not switches
 
 **Six columns are absent from the format and cannot be turned on**: `purchase_price`,

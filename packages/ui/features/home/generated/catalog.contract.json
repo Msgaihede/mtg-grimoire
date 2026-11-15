@@ -779,7 +779,7 @@
       }
     },
     "CardArt": {
-      "description": "A card's picture, by its printing's Scryfall id (`cardId`). `face` 1 is a double-faced card's back. `finish: foil` draws the foil sheen.",
+      "description": "A card's picture, by its printing's Scryfall id (`cardId`). `face` 1 is a double-faced card's back. `finish: foil` draws the foil sheen; bind `promoTypes` from the graph's field of that name and a Surge, Ripple or other special foil draws as its own kind (optional).",
       "slots": [],
       "props": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -832,6 +832,19 @@
                 "type": "null"
               }
             ]
+          },
+          "promoTypes": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -845,7 +858,7 @@
       }
     },
     "CardTile": {
-      "description": "A card as the app's walls draw it: its picture, and its set, number and rarity under it, with an optional price. Pressable when its `press` event is bound — usually to `openCard`.",
+      "description": "A card as the app's walls draw it: its picture, and its set, number and rarity under it, with an optional price. Bind `promoTypes` from the graph's field of that name and a special foil draws as its own kind and is named on the chin (optional). Pressable when its `press` event is bound — usually to `openCard`.",
       "slots": [],
       "props": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -889,6 +902,19 @@
               "number",
               "null"
             ]
+          },
+          "promoTypes": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -928,7 +954,7 @@
       }
     },
     "FinishMark": {
-      "description": "A copy's finish as the app's glyph — sparkles for foil, a gem for etched.",
+      "description": "A copy's finish as the app's glyph — sparkles for foil, a gem for etched. With `promoTypes` bound, a special foil is named as itself (Surge Foil) (optional).",
       "slots": [],
       "props": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -940,6 +966,19 @@
               "nonfoil",
               "foil",
               "etched"
+            ]
+          },
+          "promoTypes": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         },

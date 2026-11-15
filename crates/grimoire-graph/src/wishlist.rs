@@ -253,6 +253,12 @@ impl WishlistEntry<'_> {
     async fn layout(&self) -> Option<&str> {
         self.0.layout.as_deref()
     }
+    /// Scryfall's `promo_types` for the printing the wish is drawn as (`surgefoil`, `halofoil`,
+    /// `showcase`, …) — what names a foil's kind, so a widget can draw a Surge Foil wish as surge.
+    /// Absent when it has none.
+    async fn promo_types(&self) -> Option<Vec<String>> {
+        crate::decks::parse_string_array(self.0.promo_types.as_deref())
+    }
     /// Copies wanted.
     async fn quantity(&self) -> i64 {
         self.0.quantity

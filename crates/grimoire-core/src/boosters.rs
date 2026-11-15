@@ -154,6 +154,10 @@ pub struct BoosterCard {
     pub cmc: Option<f64>,
     /// Letters, `"WU"`, as the corpus stores them.
     pub colors: Option<String>,
+    /// The printing's `promo_types`, as the JSON text `cards.promo_types` holds — what draws an
+    /// opened Surge Foil as surge rather than as plain foil. `None` for a printing with none and
+    /// for one the corpus lacks: MTGJSON's record is not asked for it.
+    pub promo_types: Option<String>,
     /// `false`: the facts are MTGJSON's alone — this corpus has no such printing.
     pub in_corpus: bool,
 }
@@ -704,7 +708,7 @@ fn card_facts(
         let marks = vec!["?"; chunk.len()].join(",");
         let sql = format!(
             "SELECT id, name, set_code, collector_number, rarity, type_line, mana_cost, cmc,
-                    colors
+                    colors, promo_types
                FROM cards WHERE id IN ({marks})"
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -720,6 +724,7 @@ fn card_facts(
                     mana_cost: r.get(6)?,
                     cmc: r.get(7)?,
                     colors: r.get(8)?,
+                    promo_types: r.get(9)?,
                     in_corpus: true,
                 })
             })
@@ -744,6 +749,7 @@ fn card_facts(
                     mana_cost: r.and_then(|r| r.mana_cost.clone()),
                     cmc: r.and_then(|r| r.mana_value),
                     colors: r.and_then(|r| r.colors.as_ref().map(|c| c.concat())),
+                    promo_types: None,
                     in_corpus: false,
                 }
             })
@@ -814,16 +820,16 @@ mod tests {
           "type":"Legendary Creature — Hobbit","manaCost":"{1}{G}","manaValue":2.0,
           "colors":["G","W"],"identifiers":{"scryfallId":"topper-src"}}]}}"#;
 
-    /// The corpus knows two of the four printings: the bolt and the angel.
+    /// The corpus knows two of the four printings: the bolt and the angel, a Surge Foil.
     fn corpus() -> Connection {
         let conn = crate::schema::memory_pair();
         conn.execute_batch(
             "INSERT INTO cards (id,name,lang,set_code,collector_number,rarity,layout,mana_cost,
-                                cmc,type_line,colors,raw)
+                                cmc,type_line,colors,promo_types,raw)
              VALUES ('bolt-tst','Lightning Bolt','en','tst','1','common','normal','{R}',1.0,
-                     'Instant','R','{}'),
+                     'Instant','R',NULL,'{}'),
                     ('angel-tst','Serra Angel','en','tst','2','uncommon','normal','{3}{W}{W}',
-                     5.0,'Creature — Angel','W','{}');",
+                     5.0,'Creature — Angel','W','[\"surgefoil\"]','{}');",
         )
         .unwrap();
         conn
@@ -951,6 +957,24 @@ mod tests {
             Some("Legendary Creature — Hobbit")
         );
         assert_eq!(s.cards[2].colors.as_deref(), Some(""), "[] is colourless");
+    }
+
+    /// A printing's promo types come off `cards` — what draws an opened Surge Foil as surge —
+    /// and a printing with none, or one only MTGJSON knows, answers `None`.
+    #[test]
+    fn a_cards_promo_types_come_from_the_corpus() {
+        let s = set();
+        let promo = |id: &str| {
+            s.cards
+                .iter()
+                .find(|c| c.card_id == id)
+                .unwrap()
+                .promo_types
+                .clone()
+        };
+        assert_eq!(promo("angel-tst").as_deref(), Some(r#"["surgefoil"]"#));
+        assert_eq!(promo("bolt-tst"), None);
+        assert_eq!(promo("topper-src"), None);
     }
 
     #[test]

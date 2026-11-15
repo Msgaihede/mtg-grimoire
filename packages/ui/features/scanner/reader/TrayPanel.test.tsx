@@ -865,6 +865,19 @@ describe("TrayPanel's prices", () => {
     expect(tile).toHaveTextContent("LTR 72");
   });
 
+  /** The price read is the tray's one read of `cards`, so the promo types ride it — a Surge
+   *  Foil tile draws as surge, and a printing with none as traditional foil. */
+  it("draws a tile's special foil as its own kind, from the price read", async () => {
+    printingPrices.mockResolvedValueOnce([
+      { ...quoted[0], promoTypes: '["surgefoil"]' },
+      { ...quoted[1], cardId: "plain", promoTypes: null },
+    ]);
+    const plain = { ...storm, key: "plain", cardId: "plain" };
+    const { container } = wrap(<TrayPanel {...grid({ rows: [storm, plain] })} />);
+    await waitFor(() => expect(container.querySelector('[data-foil="surge"]')).not.toBeNull());
+    expect(container.querySelectorAll('[data-foil="foil"]')).toHaveLength(1);
+  });
+
   it("prices an Unknown finish along the printing's cheapest finish first", async () => {
     printingPrices.mockResolvedValueOnce(quoted);
     wrap(<TrayPanel {...props({ rows: [{ ...storm, finish: "unknown" }] })} />);

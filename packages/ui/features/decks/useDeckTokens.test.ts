@@ -27,6 +27,7 @@ import { useDeckTokens } from "./useDeckTokens";
 
 /** One entry as Rust answers it — the implicit Treasure unless a case says otherwise. */
 const row = (over: Partial<DeckTokenRow> = {}): DeckTokenRow => ({
+  promoTypes: null,
   oracleId: "o-treasure",
   name: "Treasure",
   typeLine: "Token Artifact — Treasure",

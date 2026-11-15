@@ -114,6 +114,14 @@ export interface ShareCard {
   mc?: string;
   /** The mana value. A deck share's alone. */
   mv?: number;
+  /**
+   * The printing's promo types, as the JSON text `cards.promo_types` holds (`["surgefoil"]`) —
+   * what lets the viewer draw a Surge Foil copy as surge rather than as plain foil, because the
+   * picture is the plain printing's. On every kind of share; absent where the printing has none,
+   * and on every card a build older than this one published. Read it through
+   * {@link sharePromoTypes}: nothing has checked its shape.
+   */
+  pt?: string;
 }
 
 /**
@@ -172,6 +180,16 @@ export const SHARE_IMAGE_ORIGIN = "https://cards.scryfall.io/";
 export function shareImage(card: Pick<ShareCard, "img">): string | null {
   const img: unknown = card.img;
   return typeof img === "string" && img.startsWith(SHARE_IMAGE_ORIGIN) ? img : null;
+}
+
+/**
+ * The card's promo types for `finishTreatments`, or `null` — for a card with no `pt` and for one
+ * whose `pt` is not a string. {@link shareImage}'s rule: a key the reader has not checked is read
+ * defensively at its one door, and a malformed one is no promo types rather than a refusal.
+ */
+export function sharePromoTypes(card: Pick<ShareCard, "pt">): string | null {
+  const pt: unknown = card.pt;
+  return typeof pt === "string" ? pt : null;
 }
 
 /** One folder. The set of these is the tree the viewer draws the cards into. */

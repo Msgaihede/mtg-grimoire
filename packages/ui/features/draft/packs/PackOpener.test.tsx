@@ -31,6 +31,7 @@ const CARDS: BoosterCard[] = [
     manaCost: null,
     cmc: null,
     colors: cardId.startsWith("c-") ? cardId[2].toUpperCase() : "",
+    promoTypes: null,
     inCorpus: cardId !== "land",
   }));
 
@@ -116,14 +117,16 @@ function answerPrices(ids: string[], marketplace: string): PrintingPrices[] {
     // TCGplayer's alone, which is what makes the lowest a per-card answer.
     if (marketplace === "cardkingdom") {
       return cardId === "rare" || cardId === "mythic"
-        ? [{ cardId, finishPrices: halved(finishPrices) }]
+        ? [{ cardId, finishPrices: halved(finishPrices), promoTypes: null }]
         : [];
     }
     // Cardmarket quotes the rare alone, at half the dollar figure — in euros.
     if (marketplace === "cardmarket") {
-      return cardId === "rare" ? [{ cardId, finishPrices: halved(finishPrices) }] : [];
+      return cardId === "rare"
+        ? [{ cardId, finishPrices: halved(finishPrices), promoTypes: null }]
+        : [];
     }
-    return [{ cardId, finishPrices }];
+    return [{ cardId, finishPrices, promoTypes: null }];
   });
 }
 

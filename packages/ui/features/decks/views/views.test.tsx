@@ -4686,6 +4686,7 @@ describe("the deck grid's art", () => {
  */
 function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
   const base: DeckTokenView = {
+    promoTypes: null,
     oracleId: "o-treasure",
     name: "Treasure",
     typeLine: "Token Artifact — Treasure",

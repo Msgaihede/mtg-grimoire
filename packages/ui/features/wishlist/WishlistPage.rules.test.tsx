@@ -83,6 +83,7 @@ const REDS: WishlistFolder = {
 };
 
 const BOLT: WishRow = {
+  promoTypes: null,
   legalities: null,
   layout: null,
   id: 7,

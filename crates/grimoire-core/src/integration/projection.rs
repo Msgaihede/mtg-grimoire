@@ -198,6 +198,10 @@ pub struct CollectionEntryRow {
     /// ([`Rows::unknown`]).
     #[serde(skip)]
     pub(crate) printing: Printing,
+    /// The printing's `promo_types`, verbatim. **Never on the wire**: `Projection v1` does not
+    /// carry it — a share does, as its card's `pt`, so a viewer draws the copy's kind of foil.
+    #[serde(skip)]
+    pub(crate) promo_types: Option<String>,
     /// The printing's name — or its id, for a printing that has left the corpus: still a card the
     /// reader owns, so the row falls back rather than being dropped.
     pub name: String,
@@ -257,6 +261,10 @@ pub struct WishlistEntryRow {
     /// The printing the wish is drawn as, which a share sends as its `id`.
     #[serde(skip)]
     pub(crate) drawn_id: String,
+    /// The `promo_types` of the printing it is drawn as, verbatim. **Never on the wire**:
+    /// `Projection v1` does not carry it — a share does, as its card's `pt`, so a viewer draws the copy's kind of foil.
+    #[serde(skip)]
+    pub(crate) promo_types: Option<String>,
     pub name: String,
     pub set: String,
     pub cn: String,
@@ -320,6 +328,10 @@ pub struct DeckCardRow {
     /// `deck_categories.id`, local — a share's pile is its position.
     #[serde(skip)]
     pub(crate) category_id: i64,
+    /// The printing's `promo_types`, verbatim. **Never on the wire**: `Projection v1` does not
+    /// carry it — a share does, as its card's `pt`, so a viewer draws the copy's kind of foil.
+    #[serde(skip)]
+    pub(crate) promo_types: Option<String>,
     /// The pile's name, as the reader named it.
     pub pile: String,
     /// The pile's rules role — `main`, `side`, `commander`, `companion`, `maybe`.
@@ -648,7 +660,8 @@ pub(crate) fn collection_entries(
                 e.set_code, e.collector_number, {lang}, e.finish, e.quantity, {condition},
                 (SELECT f.sync_uid FROM collection_folders f WHERE f.id = e.folder_id),
                 {price}, {tags}, {notes}, {printing},
-                {image}
+                {image},
+                c.promo_types
            FROM collection_entries e LEFT JOIN cards c ON c.id = e.card_id
           WHERE {filter}
             AND e.quantity > 0
@@ -675,6 +688,8 @@ pub(crate) fn collection_entries(
                 notes: said(r.get(12)?),
                 printing: Printing::from_code(r.get(13)?),
                 image: crate::image_uri::front_face_uri(|i| r.get(IMAGE_COL + i))?,
+                // After the image pair, which is the last thing the SELECT names before it.
+                promo_types: r.get(IMAGE_COL + crate::image_uri::FRONT_FACE_COLUMNS)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -824,7 +839,8 @@ pub(crate) fn wishlist_entries(
                 {lang}, coalesce({finish}, 'nonfoil'), w.quantity, w.folder_id,
                 (SELECT f.sync_uid FROM wishlist_folders f WHERE f.id = w.folder_id),
                 {value}, {notes}, {printing}, {tags},
-                {image}
+                {image},
+                c.promo_types
            FROM wishlist_entries w
            LEFT JOIN cards c
              ON c.id = coalesce(w.card_id,
@@ -856,6 +872,8 @@ pub(crate) fn wishlist_entries(
                 printing: Printing::from_code(r.get(14)?),
                 tags: tag_list(r.get(15)?),
                 image: crate::image_uri::front_face_uri(|i| r.get(IMAGE_COL + i))?,
+                // After the image pair, which is the last thing the SELECT names before it.
+                promo_types: r.get(IMAGE_COL + crate::image_uri::FRONT_FACE_COLUMNS)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -990,7 +1008,8 @@ pub(crate) fn deck_cards(
                          'nonfoil'),
                 dc.quantity, {price},
                 c.type_line, c.mana_cost, c.cmc, {printing},
-                {image}
+                {image},
+                c.promo_types
            FROM deck_cards dc
            JOIN deck_categories cat ON cat.id = dc.category_id
            JOIN decks d ON d.id = dc.deck_id
@@ -1020,6 +1039,8 @@ pub(crate) fn deck_cards(
             mana_value: r.get(16)?,
             printing: Printing::from_code(r.get(17)?),
             image: crate::image_uri::front_face_uri(|i| r.get(IMAGE_COL + i))?,
+            // After the image pair, which is the last thing the SELECT names before it.
+            promo_types: r.get(IMAGE_COL + crate::image_uri::FRONT_FACE_COLUMNS)?,
         })
     };
     let rows = match deck {

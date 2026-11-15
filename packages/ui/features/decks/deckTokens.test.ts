@@ -38,6 +38,7 @@ import {
  * check them against real data.
  */
 const row = (over: Partial<DeckTokenRow> = {}): DeckTokenRow => ({
+  promoTypes: null,
   oracleId: "o-treasure",
   name: "Treasure",
   typeLine: "Token Artifact — Treasure",

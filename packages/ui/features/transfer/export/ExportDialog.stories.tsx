@@ -237,6 +237,7 @@ const COLLECTION_CARDS: TransferCard[] = [
  *  story, exactly as {@link ../TransferCard}'s doc says a wishlist row cannot carry either. */
 function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {}): WishRow {
   return {
+    promoTypes: null,
     id: 1,
     legalities: card.legalities,
     layout: card.layout ?? null,

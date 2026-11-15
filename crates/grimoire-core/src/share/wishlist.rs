@@ -197,6 +197,7 @@ pub fn snapshot(
             t: None,
             mc: None,
             mv: None,
+            pt: w.promo_types,
         })
         .collect();
 

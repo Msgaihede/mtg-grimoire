@@ -46,6 +46,7 @@ beforeEach(() => {
 /** `WishlistGrid.test.tsx`'s `BOLT`, copied rather than shared — a fixture two suites reach into
  *  is a fixture neither can change. */
 const BOLT: WishRow = {
+  promoTypes: null,
   legalities: null,
   layout: null,
   id: 7,

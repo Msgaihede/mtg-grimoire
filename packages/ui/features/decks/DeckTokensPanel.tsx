@@ -150,6 +150,7 @@ import type { Currency } from "@/lib/marketplace";
 import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { finishTreatments } from "@/lib/treatment";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { stackCardWidth } from "./CardStack";
@@ -611,6 +612,7 @@ function TokenTile({
 }) {
   const tip = useTooltip();
   const handAdded = isHandAdded(view);
+  const treatments = finishTreatments(view.promoTypes, view.finish);
 
   /**
    * Why this token is on the wall — the deck cards that make it, or the reader's own press.
@@ -665,6 +667,7 @@ function TokenTile({
             // handed through as a word it would paint the chip's felt with nothing in it (the
             // collection page's `finishMarkOf`).
             finish={view.finish === "nonfoil" ? null : view.finish}
+            treatments={treatments}
             // Not virtualised: every token the deck makes is mounted at once, so the browser's
             // own intersection gate is the only thing bounding what the wall asks for.
             loading="lazy"
@@ -705,6 +708,7 @@ function TokenTile({
             view.setName === null ? null : `${view.setName} · #${view.collectorNumber ?? ""}`
           }
           finish={view.finish}
+          treatments={treatments}
           money={formatPrice(view.unitPrice, currency)}
           seam="art"
           // The outline's colour, carried through the foot: the chin paints its own edges, and a

@@ -1207,10 +1207,15 @@ describe("ScannerPage", () => {
     const bolts = VERDICTS.ambiguous.decision?.choices ?? [];
     expect(bolts).toHaveLength(3);
     vi.mocked(ipc.printingPrices).mockResolvedValue([
-      { cardId: "storm-of-saruman-ltr-72", finishPrices: { nonfoil: 12, foil: 30, etched: null } },
+      {
+        cardId: "storm-of-saruman-ltr-72",
+        finishPrices: { nonfoil: 12, foil: 30, etched: null },
+        promoTypes: null,
+      },
       ...bolts.map((choice, n) => ({
         cardId: choice.id,
         finishPrices: { nonfoil: [1.5, 3, 40][n] ?? null, foil: null, etched: null },
+        promoTypes: null,
       })),
     ]);
     // The decided card lands and lies there past the loop's gap between two decisions

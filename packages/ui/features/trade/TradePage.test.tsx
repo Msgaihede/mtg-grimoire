@@ -105,6 +105,7 @@ let nextLine = 100;
 function line(over: Partial<TradeLine> & Pick<TradeLine, "side" | "name">): TradeLine {
   const id = nextLine++;
   return {
+    promoTypes: null,
     id,
     cardId: `card-${id}`,
     oracleId: `oracle-${id}`,

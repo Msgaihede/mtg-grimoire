@@ -249,3 +249,21 @@ describe("deckCardItem", () => {
     );
   });
 });
+
+/** The phone's walls draw a Surge Foil as surge from the printing's promo types, which every
+ *  item hands `CardTile` verbatim — and `null` where the row has none. */
+describe("promo types", () => {
+  const SURGE = '["surgefoil"]';
+
+  it("carries each row's promo types onto its item", () => {
+    expect(searchItem(summary({ promoTypes: SURGE }), "usd").promoTypes).toBe(SURGE);
+    expect(collectionItem(tileOf({ promoTypes: SURGE }), "usd").promoTypes).toBe(SURGE);
+    expect(wishItem(wish({ promoTypes: SURGE }), "usd").promoTypes).toBe(SURGE);
+    expect(deckCardItem(deckCard({ promoTypes: SURGE }), "usd").promoTypes).toBe(SURGE);
+  });
+
+  it("is none for a row with none", () => {
+    expect(searchItem(summary({ promoTypes: null }), "usd").promoTypes).toBeNull();
+    expect(wishItem(wish({ promoTypes: null }), "usd").promoTypes).toBeNull();
+  });
+});

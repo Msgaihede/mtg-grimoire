@@ -376,6 +376,12 @@ impl CollectionEntry<'_> {
     async fn layout(&self) -> Option<&str> {
         self.0.layout.as_deref()
     }
+    /// Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+    /// names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+    /// none.
+    async fn promo_types(&self) -> Option<Vec<String>> {
+        crate::decks::parse_string_array(self.0.promo_types.as_deref())
+    }
     async fn finish(&self) -> Result<Finish> {
         Finish::from_id(&self.0.finish)
             .ok_or_else(|| format!("unknown finish `{}`", self.0.finish).into())

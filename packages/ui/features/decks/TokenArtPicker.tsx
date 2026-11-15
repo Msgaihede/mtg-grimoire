@@ -49,6 +49,7 @@ import { ipc, ipcError, type Printing, type TokenPrinting } from "@/lib/ipc";
 import type { Currency, MarketplaceId } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { tileKeyOf } from "@/lib/tileKey";
+import { finishTreatments } from "@/lib/treatment";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { stackCardWidth } from "./CardStack";
@@ -859,6 +860,7 @@ function PrintingTile({
   onPick: () => void;
 }) {
   const { printing, finish } = tile;
+  const treatments = finishTreatments(printing.promoTypes, finish);
 
   /** `TMOM · 12 · 2023` — what a reader tells two pictures of one token apart by. */
   const label = [
@@ -917,6 +919,8 @@ function PrintingTile({
             // word through would paint the chip's felt with nothing in it — the collection page's
             // `finishMarkOf` rule.
             finish={finish === "nonfoil" ? null : finish}
+            // What the printing is called at this finish — a Surge Foil draws as surge.
+            treatments={treatments}
             // This wall is not virtualised: every printing of the token is mounted at once, so the
             // browser's own gate is the only thing bounding what 97 tiles ask for.
             loading="lazy"
@@ -932,6 +936,7 @@ function PrintingTile({
             printing.setName === null ? null : `${printing.setName} · #${printing.collectorNumber}`
           }
           finish={finish}
+          treatments={treatments}
           // One copy **at this tile's finish**, at the marketplace the read was asked for — an em
           // dash where it quotes none, never another finish's or another marketplace's number.
           money={formatPrice(printing.finishPrices[finish], currency)}

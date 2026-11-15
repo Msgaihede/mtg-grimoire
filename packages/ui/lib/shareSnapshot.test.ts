@@ -18,6 +18,7 @@ import {
   SHARE_IMAGE_ORIGIN,
   shareDeckOf,
   shareImage,
+  sharePromoTypes,
   SNAPSHOT_NOT_A_SNAPSHOT,
   SNAPSHOT_TOO_NEW,
   SNAPSHOT_VERSION,
@@ -277,6 +278,22 @@ describe("a shared deck", () => {
  * Issue #1153: a snapshot is its publisher's document and nothing upstream reads its `img`s, so
  * the viewer draws a picture only from the host the writer takes every one of them from.
  */
+describe("sharePromoTypes", () => {
+  it("reads a card's promo types, and a golden card's as none", () => {
+    expect(sharePromoTypes({ pt: '["surgefoil"]' })).toBe('["surgefoil"]');
+    // The goldens' printings have none, which is why they did not move when `pt` arrived.
+    for (const text of [golden, deckGolden]) {
+      for (const card of parseSnapshot(text).cards) expect(sharePromoTypes(card)).toBeNull();
+    }
+  });
+
+  it("is none for a card a build older than this one published, and for a malformed key", () => {
+    expect(sharePromoTypes({})).toBeNull();
+    expect(sharePromoTypes({ pt: null as never })).toBeNull();
+    expect(sharePromoTypes({ pt: ["surgefoil"] as never })).toBeNull();
+  });
+});
+
 describe("shareImage", () => {
   it("passes every picture the golden carries", () => {
     for (const text of [golden, deckGolden]) {

@@ -58,6 +58,7 @@ export function searchItem(card: CardSummary, currency: Currency): WallItem {
       printingTitle: card.setName,
     },
     finish,
+    promoTypes: card.promoTypes,
     money: formatPrice(card.price, currency),
     count: card.ownedQuantity,
     pressLabel: labelOf(card.name, printingWords(card.setCode, card.collectorNumber), finish),
@@ -84,6 +85,7 @@ export function collectionItem(tile: CollectionTile, currency: Currency): WallIt
       printingTitle: tile.setName,
     },
     finish,
+    promoTypes: tile.promoTypes,
     money: formatPrice(tile.unitPrice, currency),
     count: tile.copies,
     pressLabel: labelOf(tile.name, printingWords(tile.setCode, tile.collectorNumber), finish),
@@ -114,6 +116,8 @@ export function wishItem(row: WishRow, currency: Currency): WallItem {
     // drawn as would contradict the words.
     chin: { printing: wishPrinting(row), printingTitle: null },
     finish,
+    // The drawn printing's, off the same join as `artCardId`.
+    promoTypes: row.promoTypes,
     money: formatPrice(row.unitPrice, currency),
     count: row.quantity,
     pressLabel: labelOf(
@@ -142,6 +146,7 @@ export function deckCardItem(card: DeckCard, currency: Currency): WallItem {
       printingTitle: card.setName,
     },
     finish,
+    promoTypes: card.promoTypes,
     money: formatPrice(card.unitPrice, currency),
     count: card.quantity,
     pressLabel: labelOf(card.name, printingWords(card.setCode, card.collectorNumber), finish),

@@ -169,6 +169,7 @@ function boosterCard(c: FakeCard): BoosterCard {
     manaCost: c.manaCost,
     cmc: c.cmc,
     colors: c.colors,
+    promoTypes: c.promoTypes,
     inCorpus: true,
   };
 }

@@ -226,6 +226,9 @@ export function foldCopies(
       // printing *and* the same finish, so they all carry the same figure — see
       // {@link CopyTile.unitPrice}. `?? null` for the row that arrives without the field at all.
       unitPrice: first.unitPrice ?? null,
+      // The printing's, which every row in the group shares — what draws a Surge Foil as surge
+      // (`CardGrid`'s fallback reads it when the wall is handed no `treatment`).
+      promoTypes: first.promoTypes ?? null,
       add: chosen?.row ?? null,
       from: chosen?.source ?? null,
       here: entries.filter((e) => e.source.kind === "here").reduce((n, e) => n + held(e.row), 0),

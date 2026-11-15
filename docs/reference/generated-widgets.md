@@ -135,6 +135,10 @@ card search aside.
   issue #1584).
 - **Optional props are `.nullable()`**, json-render's convention: a model sends `null` for a prop it
   leaves out. Every element carries `children`, `[]` for a leaf — `validate` requires it.
+  **A prop added after widgets were stored is `.nullish()` instead** — a `.nullable()` prop is a
+  required key, so every stored spec drawing that component would stop validating the day it
+  ships. The first is `promoTypes` on `CardArt`, `CardTile` and `FinishMark` (2026-11-15), the
+  graph's field of that name, which draws a Surge or Ripple Foil as its own kind.
 - **Content security**: json-render renders React elements only — no `eval`, no `innerHTML`, no
   injected styles — so a spec stays inside `script-src 'self'` and `style-src 'self'`. `Grid`'s
   column count is an inline `style` attribute, which the policy allows. **zod runs jitless**

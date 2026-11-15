@@ -428,6 +428,10 @@ pub fn list_printings(
 pub struct PrintingPrices {
     pub card_id: String,
     pub finish_prices: FinishPrices,
+    /// The printing's `promo_types`, as the JSON text `cards.promo_types` holds. Not a price,
+    /// and here because this is the tray's one read of `cards`: it is what names a Surge Foil
+    /// tray row on its chip and draws it as surge rather than as plain foil.
+    pub promo_types: Option<String>,
 }
 
 /// Every printing in `card_ids` priced per finish at `market`, in one statement.
@@ -452,7 +456,7 @@ pub fn read_printing_prices(
     }
     let ids = serde_json::to_string(card_ids).map_err(|e| e.to_string())?;
     let sql = format!(
-        "SELECT c.id, {prices} FROM cards c
+        "SELECT c.id, c.promo_types, {prices} FROM cards c
           WHERE c.id IN (SELECT value FROM json_each(?1))
           ORDER BY c.id",
         prices = finish_price_columns(market)
@@ -462,7 +466,8 @@ pub fn read_printing_prices(
         .query_map(params![ids], |r| {
             Ok(PrintingPrices {
                 card_id: r.get(0)?,
-                finish_prices: read_finish_prices(r, 1)?,
+                promo_types: r.get(1)?,
+                finish_prices: read_finish_prices(r, 2)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1192,6 +1197,28 @@ mod tests {
         assert!(read_printing_prices(&conn, &[], Marketplace::Tcgplayer)
             .unwrap()
             .is_empty());
+    }
+
+    /// The tray's read carries each printing's promo types beside its prices — what draws a
+    /// Surge Foil tray row as surge — and a printing with none answers `None`.
+    #[test]
+    fn printing_prices_carry_each_printings_promo_types() {
+        let conn = seeded();
+        seed_etched(&conn);
+        conn.execute(
+            "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'p1'",
+            [],
+        )
+        .unwrap();
+        let ids = ["etch", "p1"].map(String::from);
+        let got = read_printing_prices(&conn, &ids, Marketplace::Tcgplayer).unwrap();
+        let promo: Vec<_> = got
+            .iter()
+            .map(|p| (p.card_id.as_str(), p.promo_types.as_deref()))
+            .collect();
+        assert_eq!(promo, [("etch", None), ("p1", Some(r#"["surgefoil"]"#))]);
+        // The prices still read from where they did, past the new column.
+        assert_eq!(got[1].finish_prices.foil, Some(40.00));
     }
 
     /// **The etched contrast**, which is the one place the four marketplaces visibly disagree

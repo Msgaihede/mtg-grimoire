@@ -81,6 +81,12 @@ export interface TradeLine {
   typeLine: string | null;
   legalities: string | null;
   finish: Finish;
+  /**
+   * JSON: the printing's `promo_types`, verbatim, or `null` — `null` too when the printing has left the database. Read it with
+   * `finishTreatments` from `@/lib/treatment`, which names a Surge Foil on the chip and draws it
+   * as surge rather than as plain foil.
+   */
+  promoTypes: string | null;
   quantity: number;
   source: TradeSource;
   /** At 100%, in the trade's marketplace. Live while the trade is open; the figure it closed

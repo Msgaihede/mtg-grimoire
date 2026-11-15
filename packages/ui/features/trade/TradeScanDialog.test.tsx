@@ -383,9 +383,21 @@ describe("TradeScanDialog", () => {
 
   it("prices the list at the trade's own marketplace and percentage", async () => {
     vi.mocked(ipc.printingPrices).mockResolvedValue([
-      { cardId: SAGA.cardId, finishPrices: { nonfoil: 10, foil: 40, etched: null } },
-      { cardId: TOMB.cardId, finishPrices: { nonfoil: 1, foil: 20, etched: null } },
-      { cardId: LOTUS.cardId, finishPrices: { nonfoil: null, foil: null, etched: null } },
+      {
+        cardId: SAGA.cardId,
+        finishPrices: { nonfoil: 10, foil: 40, etched: null },
+        promoTypes: null,
+      },
+      {
+        cardId: TOMB.cardId,
+        finishPrices: { nonfoil: 1, foil: 20, etched: null },
+        promoTypes: null,
+      },
+      {
+        cardId: LOTUS.cardId,
+        finishPrices: { nonfoil: null, foil: null, etched: null },
+        promoTypes: null,
+      },
     ]);
     mount({ tray: RESOLVED, trade: { ...TRADE, marketplace: "cardmarket", rateTheirs: 80 } });
     const tray = await screen.findByRole("region", { name: "Scanned for their side" });

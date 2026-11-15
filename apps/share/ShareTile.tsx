@@ -5,7 +5,7 @@ import { CONDITION_LABEL, type Condition } from "@grimoire/ui/lib/conditions";
 import { isFinish, type Finish } from "@grimoire/ui/lib/finish";
 import type { Currency } from "@grimoire/ui/lib/marketplace";
 import { formatPrice } from "@grimoire/ui/lib/prices";
-import { shareImage, type ShareCard } from "@grimoire/ui/lib/shareSnapshot";
+import { shareImage, sharePromoTypes, type ShareCard } from "@grimoire/ui/lib/shareSnapshot";
 
 /**
  * The absence, drawn.
@@ -97,6 +97,8 @@ export function ShareTile({
         name={card.n}
         remoteSrc={shareImage(card)}
         finish={marked}
+        // A Surge Foil draws as surge and says so on the chin; absent on an older build's card.
+        promoTypes={sharePromoTypes(card)}
         rarity={null}
         chin={{ setCode: card.s, collectorNumber: card.cn }}
         zoom={DEFAULT_ZOOM}

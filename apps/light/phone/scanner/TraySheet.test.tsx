@@ -19,8 +19,16 @@ const RESOLVED = [SAGA, TOMB, LOTUS];
 
 /** Urza's Saga at $50 and Ancient Tomb at $12.34 in foil; Black Lotus nobody quotes. */
 const PRICES: PrintingPrices[] = [
-  { cardId: SAGA.cardId, finishPrices: { nonfoil: 50, foil: null, etched: null } },
-  { cardId: TOMB.cardId, finishPrices: { nonfoil: null, foil: 12.34, etched: null } },
+  {
+    cardId: SAGA.cardId,
+    finishPrices: { nonfoil: 50, foil: null, etched: null },
+    promoTypes: null,
+  },
+  {
+    cardId: TOMB.cardId,
+    finishPrices: { nonfoil: null, foil: 12.34, etched: null },
+    promoTypes: null,
+  },
 ];
 
 /**

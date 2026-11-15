@@ -24,6 +24,8 @@ export interface TradeCandidate {
   collectorNumber: string;
   rarity: string | null;
   finish: Finish;
+  /** The printing's `promo_types`, verbatim — what draws a Surge Foil row as surge. */
+  promoTypes: string | null;
   /** At 100%, in the marketplace the caller named. `null` is "no price", never zero. */
   unitPrice: number | null;
   /**
@@ -324,6 +326,7 @@ export function collectionCandidates(
       collectorNumber: row.collectorNumber,
       rarity: row.rarity,
       finish: row.finish,
+      promoTypes: row.promoTypes,
       unitPrice: row.unitPrice,
       owned: row.quantity,
       source: "collection",
@@ -374,6 +377,7 @@ export function deckCandidates(
       collectorNumber: row.collectorNumber,
       rarity: row.rarity,
       finish: row.finish,
+      promoTypes: row.promoTypes,
       unitPrice: row.unitPrice,
       owned: row.quantity,
       source: "collection",
@@ -406,6 +410,7 @@ function fromSearch(card: CardSummary): TradeCandidate {
     collectorNumber: card.collectorNumber,
     rarity: card.rarity,
     finish,
+    promoTypes: card.promoTypes,
     unitPrice: card.price,
     owned: null,
     source: "search",

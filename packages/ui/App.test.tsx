@@ -485,6 +485,7 @@ const BOLT_ENTRY: CollectionRow = {
 /** And as a wish — **pinned to a printing**, because an any-printing wish opens no pane and
  *  a row that cannot open the card cannot test what Escape does to one. */
 const BOLT_WISH: WishRow = {
+  promoTypes: null,
   legalities: null,
   layout: null,
   id: 11,

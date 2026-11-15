@@ -249,7 +249,7 @@ fn parse_json_text(text: &str) -> Value {
 
 /// A JSON-text array of strings (`finishes`, `promo_types`), its non-string members dropped;
 /// `None` when it is not an array — the page's `parseStringArray`.
-fn parse_string_array(text: Option<&str>) -> Option<Vec<String>> {
+pub(crate) fn parse_string_array(text: Option<&str>) -> Option<Vec<String>> {
     match parse_json_text(text?) {
         Value::Array(items) => Some(
             items

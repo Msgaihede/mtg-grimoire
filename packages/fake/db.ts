@@ -6857,6 +6857,7 @@ function toDeckTokenRow(
     setName: drawn?.setName ?? null,
     rarity: drawn?.rarity ?? null,
     finishes: drawn?.finishes ?? null,
+    promoTypes: drawn?.promoTypes ?? null,
     // **At the entry's own finish, with no fallback** — `deck_tokens::printing_price`, which is
     // `price_expr(market, finish)`: a foil Treasure quoted at the nonfoil rate is a price nobody
     // published. It was {@link chainPriceAt}'s `nonfoil → foil → etched` chain until v52, while a
@@ -8276,6 +8277,8 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     artCardId: card?.id ?? null,
     // The drawn printing's layout, off the same join — what says the wall's tile turns over.
     layout: card?.layout ?? null,
+    // The drawn printing's promo types, off the same join — what draws a Surge Foil wish as surge.
+    promoTypes: card?.promoTypes ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
     // The cheapest way to satisfy the wish, per copy — {@link wishPriceAt}, which the folder
@@ -10859,7 +10862,15 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(args.marketplace);
       return [...new Set(args.cardIds)].sort(cmp).flatMap((id) => {
         const card = cardById(db, id);
-        return card ? [{ cardId: id, finishPrices: finishPricesAt(db, card, mp) }] : [];
+        return card
+          ? [
+              {
+                cardId: id,
+                finishPrices: finishPricesAt(db, card, mp),
+                promoTypes: card.promoTypes,
+              },
+            ]
+          : [];
       });
     },
 
@@ -27162,6 +27173,7 @@ function toTradeLine(db: FakeDb, trade: FakeTrade, line: FakeTradeLine): TradeLi
     lang: card?.lang ?? null,
     typeLine: card?.typeLine ?? null,
     legalities: card?.legalities ?? null,
+    promoTypes: card?.promoTypes ?? null,
     finish: line.finish,
     quantity: line.quantity,
     source: line.source,
@@ -27665,6 +27677,8 @@ function toShareSnapshot(db: FakeDb, held: FakeRelayShare): ShareSnapshot {
         ...(held.deck && card?.typeLine ? { t: card.typeLine } : {}),
         ...(held.deck && card?.manaCost ? { mc: card.manaCost } : {}),
         ...(held.deck && card?.cmc != null ? { mv: card.cmc } : {}),
+        // On every kind of share, absent where the printing has none — `ShareCard.pt`.
+        ...(card?.promoTypes ? { pt: card.promoTypes } : {}),
       };
     }),
     ...(held.deck ? { deck: held.deck } : {}),

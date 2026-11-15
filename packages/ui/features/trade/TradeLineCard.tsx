@@ -17,6 +17,7 @@ import type { Currency } from "@/lib/marketplace";
 import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { finishTreatments } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 import { RATE_DEFAULT, fromCents, holdingOf, isOpen, lineMoney, rateOf } from "./trade";
 import { FIGURE, REFUSAL, TRADE_BARE_BUTTON } from "./tradeControls";
@@ -158,6 +159,7 @@ export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }
             name=""
             variant="thumb"
             finish={line.finish}
+            treatments={finishTreatments(line.promoTypes, line.finish)}
             className="w-14 rounded-[3px]"
           />
         </button>
@@ -167,6 +169,7 @@ export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }
           name=""
           variant="thumb"
           finish={line.finish}
+          treatments={finishTreatments(line.promoTypes, line.finish)}
           className={cn("w-14 self-start rounded-[3px]", editable && "row-span-2")}
         />
       )}

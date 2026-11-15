@@ -24,7 +24,7 @@ function row(over: Partial<ScannerTrayRow>): ScannerTrayRow {
 }
 
 function priced(cardId: string, finishPrices: FinishPrices) {
-  return trayPriceMap([{ cardId, finishPrices }]);
+  return trayPriceMap([{ cardId, finishPrices, promoTypes: null }]);
 }
 
 describe("trayRowPrice", () => {
@@ -76,9 +76,9 @@ describe("the scan popup's price (issue #1321)", () => {
   const settled = landedFrom(row({ cardId: "c1", finish: "foil" }), false, false);
   const pick = landedFrom(row({ cardId: "c3", finish: "nonfoil", choices }), false, false);
   const prices = trayPriceMap([
-    { cardId: "c1", finishPrices: { nonfoil: 1.5, foil: 4, etched: null } },
-    { cardId: "c2", finishPrices: { nonfoil: 0.25, foil: 9, etched: null } },
-    { cardId: "c3", finishPrices: { nonfoil: null, foil: 30, etched: null } },
+    { cardId: "c1", finishPrices: { nonfoil: 1.5, foil: 4, etched: null }, promoTypes: null },
+    { cardId: "c2", finishPrices: { nonfoil: 0.25, foil: 9, etched: null }, promoTypes: null },
+    { cardId: "c3", finishPrices: { nonfoil: null, foil: 30, etched: null }, promoTypes: null },
   ]);
 
   it("asks about the filed card alone, or every candidate of a pick, sorted", () => {
