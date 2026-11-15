@@ -124,13 +124,23 @@ export type PriceMoverDirection = "both" | "up" | "down";
  * Every id is **direct**: the widget expands a chosen folder into the folders inside it before it
  * asks, as the Wishlist savings widget does. `0` is a cabinet's root — the copies or wishes filed
  * in no folder. `cards` are printing ids, owned or not, each measured in every finish it is priced
- * in. All three are `#[serde(default)]` on the Rust side, so a misspelt key here is not a refusal:
- * it is an empty list, which `ipc.test.ts` reads the struct to rule out.
+ * in — a card chosen at *Any finish*. `printings` are printings each measured in the **one**
+ * finish named — a card chosen as that finish (issue #1675), so a chosen foil is never the plain
+ * copy's move. All four are `#[serde(default)]` on the Rust side, so a misspelt key here is not a
+ * refusal: it is an empty list, which `ipc.test.ts` reads the struct to rule out.
  */
 export interface PriceMoverScope {
   collectionFolders: number[];
   wishlistFolders: number[];
   cards: string[];
+  printings: PriceMoverPrinting[];
+}
+
+/** One printing in one finish, in a {@link PriceMoverScope} — `price_history.rs`'s
+ *  `PriceMoverPrinting`. */
+export interface PriceMoverPrinting {
+  cardId: string;
+  finish: Finish;
 }
 
 /** One owned printing whose price moved — `price_history.rs`'s `PriceMover`. */

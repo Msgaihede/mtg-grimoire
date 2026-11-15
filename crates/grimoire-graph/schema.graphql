@@ -1845,6 +1845,17 @@ enum PriceMoverDirection {
 }
 
 """
+One printing in one finish, for `PriceMoverScopeInput.printings`.
+"""
+input PriceMoverPrintingInput {
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	finish: Finish!
+}
+
+"""
 Narrows price movers to the printings named here instead of every owned printing. Folder ids
 are direct — a folder's subfolders are not included unless listed. A scope naming nothing
 answers no movers.
@@ -1859,6 +1870,11 @@ input PriceMoverScopeInput {
 	Collection folder ids; `0` is copies filed in no folder.
 	"""
 	collectionFolders: [Int!]
+	"""
+	Printings, owned or not, each measured in the one finish named — a foil named here is
+	the foil's move alone.
+	"""
+	printings: [PriceMoverPrintingInput!]
 	"""
 	Wishlist folder ids; `0` is wishes filed in no folder.
 	"""

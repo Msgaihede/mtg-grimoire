@@ -47,6 +47,11 @@
  * ({@link chosenNoHistory}) rather than the collection's, naming when its window fills. The
  * choices are read off the config in `../priceMoversScope.ts`.
  *
+ * **A chosen card is followed in one finish or in every one (issue #1675).** Its row in the
+ * settings carries a finish pick — *Any finish*, the default and what every card chosen before
+ * the pick existed means, or one of the finishes the printing is made in — so a reader following
+ * a foil is shown the foil's move and never the plain copy's.
+ *
  * ## A mover is a press
  *
  * It opens the price history popup on that printing, at that finish, over the widget's own window
@@ -59,12 +64,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus, TrendingDown, TrendingUp, X } from "lucide-react";
 import { useEffect, useId, useState, type ReactElement } from "react";
 
+import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import { plural } from "@/lib/counts";
-import { FINISH_LABEL } from "@/lib/finish";
+import { FINISH_LABEL, FINISHES, parseFinishes, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, flattenFolders } from "@/lib/folderTree";
 import {
@@ -145,9 +151,9 @@ const CARD_RESULTS = 8;
 
 /**
  * The most cards one widget follows. **The layout document is capped at 64 KiB** (`home.rs`'
- * `MAX_BYTES`) and every chosen card rides in it with its words, about a hundred bytes each, so a
- * hundred is a tenth of the document — and five such widgets still sit inside the watch list's
- * own 500.
+ * `MAX_BYTES`) and every chosen card rides in it with its words and its finishes, about a hundred
+ * and forty bytes each, so a hundred is about a fifth of the document — and five such widgets
+ * still sit inside the watch list's own 500.
  */
 export const MAX_CHOSEN_CARDS = 100;
 
@@ -381,6 +387,43 @@ function cardLabel(card: ChosenCard): string {
   return `${card.name} · ${card.setCode.toUpperCase()} #${card.collectorNumber}`;
 }
 
+/** {@link cardLabel} with the finish followed, when it is one — what a press on the row names. */
+function chosenLabel(card: ChosenCard): string {
+  return card.finish === undefined
+    ? cardLabel(card)
+    : `${cardLabel(card)} · ${FINISH_LABEL[card.finish]}`;
+}
+
+/** The finish pick's value for *Any finish* — no finish is spelled this way. */
+const ANY_FINISH = "any";
+/** The words for every finish at once — `QuickUnwishDialog`'s, for a wish that names none. */
+const ANY_FINISH_LABEL = "Any finish";
+
+/**
+ * What a chosen card's finish pick offers: *Any finish*, then the finishes the printing is made
+ * in — or all three for a card chosen before they were kept, since nothing says which it lacks.
+ * A finish the card already follows is always offered, so the trigger can name it. `null` when
+ * there is nothing to choose: a printing made in one finish is followed in it either way.
+ */
+function finishOptions(card: ChosenCard): DropdownOption[] | null {
+  const made: readonly Finish[] =
+    card.finishes === undefined || card.finishes.length === 0 ? FINISHES : card.finishes;
+  const offered = FINISHES.filter((finish) => made.includes(finish) || finish === card.finish);
+  if (offered.length < 2) return null;
+  return [
+    { value: ANY_FINISH, label: ANY_FINISH_LABEL },
+    ...offered.map((finish) => ({ value: finish, label: FINISH_LABEL[finish] })),
+  ];
+}
+
+/** `card` following `finish`, or every finish for `undefined` — the key left off, not `undefined`. */
+function withFinish(card: ChosenCard, finish: Finish | undefined): ChosenCard {
+  const next: ChosenCard = { ...card };
+  if (finish === undefined) delete next.finish;
+  else next.finish = finish;
+  return next;
+}
+
 /**
  * The three lists behind `Chosen`: collection folders, wishlist folders, and cards.
  *
@@ -473,6 +516,11 @@ export function PriceMoversWidgetSettings({ widget, onConfig }: WidgetSettingsPr
           onConfig({ cards: [...config.cards, card] });
         }}
         onRemove={(id) => onConfig({ cards: config.cards.filter((each) => each.id !== id) })}
+        onFinish={(id, finish) =>
+          onConfig({
+            cards: config.cards.map((each) => (each.id === id ? withFinish(each, finish) : each)),
+          })
+        }
         note="Prices of cards you don't own are remembered from the day you choose them."
       />
     </div>
@@ -499,11 +547,17 @@ const ROW_BUTTON = cn(
  * finds one printing; the matches are printings rather than cards, because a price is a printing's.
  * Debounced by the app's own 300ms, and an empty field asks nothing. A match already chosen is not
  * offered again. The chosen list is drawn from the words stored beside each id, so it needs no read.
+ *
+ * **Given `onFinish`, each chosen row picks its finish** (issue #1675) — *Any finish* or one the
+ * printing is made in ({@link finishOptions}) — and an added card keeps the finishes its match
+ * listed, so the pick is drawn without a read too. A card is added at *Any finish*. Without
+ * `onFinish` (a generated widget's `CardSearch`, whose catalogue names no finish) neither is kept.
  */
 export function CardPicker({
   cards,
   onAdd,
   onRemove,
+  onFinish,
   max = MAX_CHOSEN_CARDS,
   note,
   label = "Cards",
@@ -511,6 +565,8 @@ export function CardPicker({
   cards: readonly ChosenCard[];
   onAdd: (card: ChosenCard) => void;
   onRemove: (id: string) => void;
+  /** A chosen card's finish picked — `undefined` for every finish. Absent: no finish pick. */
+  onFinish?: (id: string, finish: Finish | undefined) => void;
   /** The most it holds; the search field greys at it. */
   max?: number;
   /** A closing line under the picker, for what choosing a card means to the widget. */
@@ -555,23 +611,41 @@ export function CardPicker({
       </label>
       {cards.length > 0 && (
         <ul aria-label="Chosen cards" className="m-0 grid list-none gap-0.5 p-0">
-          {cards.map((card) => (
-            <li key={card.id} className="flex min-w-0 items-center gap-1">
-              <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{cardLabel(card)}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${cardLabel(card)}`}
-                onClick={() => onRemove(card.id)}
-                className={cn(
-                  "grid size-5 shrink-0 place-items-center rounded-sm text-dim hover:text-text",
-                  "coarse:size-[var(--target-min)]",
-                  FOCUS,
+          {cards.map((card) => {
+            const options = onFinish === undefined ? null : finishOptions(card);
+            return (
+              <li key={card.id} className="flex min-w-0 items-center gap-1">
+                <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{cardLabel(card)}</span>
+                {options !== null && onFinish !== undefined && (
+                  <Dropdown
+                    size="sm"
+                    align="end"
+                    label={`Finish of ${cardLabel(card)}`}
+                    // Its own word's width, not a column's: the settings popover is 268px, and
+                    // every pixel a `Foil` row gives back is the card's set and number shown.
+                    className="shrink-0"
+                    options={options}
+                    value={card.finish ?? ANY_FINISH}
+                    onChange={(value) =>
+                      onFinish(card.id, value === ANY_FINISH ? undefined : (value as Finish))
+                    }
+                  />
                 )}
-              >
-                <X aria-hidden="true" className="size-3.5" />
-              </button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  aria-label={`Remove ${chosenLabel(card)}`}
+                  onClick={() => onRemove(card.id)}
+                  className={cn(
+                    "grid size-5 shrink-0 place-items-center rounded-sm text-dim hover:text-text",
+                    "coarse:size-[var(--target-min)]",
+                    FOCUS,
+                  )}
+                >
+                  <X aria-hidden="true" className="size-3.5" />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
       <input
@@ -596,11 +670,14 @@ export function CardPicker({
       {matches.length > 0 && (
         <ul aria-label="Matching cards" className="m-0 grid list-none gap-0.5 p-0">
           {matches.map((item) => {
+            // Kept only where they are offered, and only when the printing lists any.
+            const finishes = onFinish === undefined ? [] : parseFinishes(item.finishes);
             const card: ChosenCard = {
               id: item.id,
               name: item.name,
               setCode: item.setCode,
               collectorNumber: item.collectorNumber,
+              ...(finishes.length === 0 ? {} : { finishes }),
             };
             return (
               <li key={item.id}>

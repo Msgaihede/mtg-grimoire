@@ -890,6 +890,17 @@ refresh, which on a desktop left open could be days. Until a window's baseline e
 says *no price history for your chosen cards yet* rather than counting the table's days, and
 names when that window fills (a week for `7d`, thirty days for `30d`, the next day for `all`).
 
+**A chosen card is followed in one finish or in every one**
+([issue #1675](https://github.com/Msgaihede/mtg-grimoire/issues/1675)). Each chosen card's row in
+the settings has a finish pick: *Any finish* — the default, and what every card chosen before the
+pick existed means — or one of the finishes the printing is made in, which the card search listed
+and the widget keeps beside the card's words in `config` (`finishes`; a card chosen before they
+were kept offers all three, and a printing made in one finish offers no pick). A card at *Any
+finish* travels in the scope's `cards`, measured in every finish it is priced in; one followed as a
+single finish travels in `printings` (`{ cardId, finish }`), so a reader following a foil sees the
+foil's move and never the plain copy's. The watch list is unchanged — it names the card, and the
+snapshot keeps every finish of it.
+
 **A mover is a press, and it opens the Price history popup**
 ([issue #515](https://github.com/Msgaihede/mtg-grimoire/issues/515)). `price_history(card_id,
 finish, marketplace)` answers every kept snapshot of that one copy **before today**, oldest first,

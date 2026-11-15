@@ -27,6 +27,7 @@ import type {
 import type { MarketplaceId } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { makeFit, type WidgetFit } from "../fit";
 import { priceMoversKey } from "../keys";
 import {
@@ -363,9 +364,22 @@ describe("a widget narrowed to what the reader chose (issue #906)", () => {
       collectionFolders: [],
       wishlistFolders: [],
       cards: ["bolt"],
+      printings: [],
     });
     expect(collectionFolderList).not.toHaveBeenCalled();
     expect(wishlistFolderList).not.toHaveBeenCalled();
+  });
+
+  /** Issue #1675: a card chosen as foil is asked about as the foil, never the plain copy. */
+  it("asks about a card chosen as one finish in that finish alone", async () => {
+    draw({ scope: "chosen", cards: [{ ...bolt, finish: "foil" }] });
+    await screen.findByText("Black Lotus");
+    expect(priceMovers).toHaveBeenCalledWith("7d", "both", "tcgplayer", PRICE_MOVERS_READ, {
+      collectionFolders: [],
+      wishlistFolders: [],
+      cards: [],
+      printings: [{ cardId: "bolt", finish: "foil" }],
+    });
   });
 
   it("expands a chosen folder into the folders filed inside it, the root standing alone", async () => {
@@ -380,6 +394,7 @@ describe("a widget narrowed to what the reader chose (issue #906)", () => {
       collectionFolders: [0, 7, 8],
       wishlistFolders: [0],
       cards: [],
+      printings: [],
     });
     expect(wishlistFolderList).not.toHaveBeenCalled();
   });
@@ -442,7 +457,15 @@ describe("PriceMoversWidgetSettings", () => {
   it("offers both cabinets and adds a card found by search, owned or not", async () => {
     const user = userEvent.setup();
     searchCards.mockResolvedValue({
-      items: [{ id: "bolt", name: "Lightning Bolt", setCode: "m21", collectorNumber: "161" }],
+      items: [
+        {
+          id: "bolt",
+          name: "Lightning Bolt",
+          setCode: "m21",
+          collectorNumber: "161",
+          finishes: '["nonfoil","foil"]',
+        },
+      ],
       total: 1,
     });
     const onConfig = settings({ scope: "chosen" });
@@ -452,8 +475,17 @@ describe("PriceMoversWidgetSettings", () => {
 
     await user.type(screen.getByLabelText("Cards"), "bolt");
     await user.click(await screen.findByRole("button", { name: "Add Lightning Bolt · M21 #161" }));
+    // At every finish, with the finishes the printing is made in kept for its finish pick.
     expect(onConfig).toHaveBeenLastCalledWith({
-      cards: [{ id: "bolt", name: "Lightning Bolt", setCode: "m21", collectorNumber: "161" }],
+      cards: [
+        {
+          id: "bolt",
+          name: "Lightning Bolt",
+          setCode: "m21",
+          collectorNumber: "161",
+          finishes: ["nonfoil", "foil"],
+        },
+      ],
     });
     expect(searchCards).toHaveBeenCalledWith(
       expect.objectContaining({ text: "bolt", marketplace: "tcgplayer", offset: 0 }),
@@ -486,5 +518,68 @@ describe("PriceMoversWidgetSettings", () => {
     expect(within(list).getByText("Sol Ring · LEA #270")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove Sol Ring · LEA #270" }));
     expect(onConfig).toHaveBeenLastCalledWith({ cards: [bolt] });
+  });
+
+  /** Issue #1675: the foil of a card can be followed apart from its plain copy. */
+  describe("a chosen card's finish", () => {
+    const bolt = {
+      id: "bolt",
+      name: "Lightning Bolt",
+      setCode: "m21",
+      collectorNumber: "161",
+      finishes: ["nonfoil", "foil"] as ("nonfoil" | "foil")[],
+    };
+    const ring = { id: "ring", name: "Sol Ring", setCode: "lea", collectorNumber: "270" };
+
+    it("starts at every finish and offers only the finishes the printing is made in", async () => {
+      const user = userEvent.setup();
+      settings({ scope: "chosen", cards: [bolt] });
+      const trigger = await openDropdown(user, "Finish of Lightning Bolt · M21 #161");
+      expect(trigger).toHaveTextContent("Any finish");
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Any finish",
+        "Nonfoil",
+        "Foil",
+      ]);
+    });
+
+    it("follows the foil alone once Foil is picked", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ scope: "chosen", cards: [ring, bolt] });
+      await pickOption(user, "Finish of Lightning Bolt · M21 #161", "Foil");
+      expect(onConfig).toHaveBeenLastCalledWith({ cards: [ring, { ...bolt, finish: "foil" }] });
+    });
+
+    it("names the finish it follows, and goes back to every finish", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ scope: "chosen", cards: [{ ...bolt, finish: "foil" }] });
+      expect(
+        screen.getByRole("button", { name: "Finish of Lightning Bolt · M21 #161" }),
+      ).toHaveTextContent("Foil");
+      expect(
+        screen.getByRole("button", { name: "Remove Lightning Bolt · M21 #161 · Foil" }),
+      ).toBeInTheDocument();
+      await pickOption(user, "Finish of Lightning Bolt · M21 #161", "Any finish");
+      expect(onConfig).toHaveBeenLastCalledWith({ cards: [bolt] });
+      // The key is left off rather than written as `undefined`.
+      expect(onConfig.mock.lastCall?.[0].cards[0]).not.toHaveProperty("finish");
+    });
+
+    it("offers all three for a card chosen before its finishes were kept", async () => {
+      const user = userEvent.setup();
+      settings({ scope: "chosen", cards: [ring] });
+      await openDropdown(user, "Finish of Sol Ring · LEA #270");
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Any finish",
+        "Nonfoil",
+        "Foil",
+        "Etched",
+      ]);
+    });
+
+    it("offers no pick for a printing made in one finish", () => {
+      settings({ scope: "chosen", cards: [{ ...ring, finishes: ["foil"] }] });
+      expect(screen.queryByRole("button", { name: "Finish of Sol Ring · LEA #270" })).toBeNull();
+    });
   });
 });
