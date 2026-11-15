@@ -4,15 +4,18 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ActiveFilterChip,
   ColorExactChip,
+  CountPill,
   FILTER_CONTROL,
   FILTER_FOCUS,
   filterChipState,
   FiltersButton,
+  JoinedChoices,
   LayoutToggle,
   ManaChip,
   ManaValueChips,
   RarityChip,
   ResetAll,
+  StackPrintingsToggle,
   ToggleChip,
 } from "./FilterChips";
 
@@ -319,28 +322,40 @@ describe("ResetAll", () => {
     expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 2 filters active");
     expect(screen.getByRole("button")).toHaveTextContent("2");
   });
+
+  /** The Filter bar board (2026-11): the word drawn is `Reset`, the name keeps `Reset all`, and a
+   *  caller's `labelClass` hides the word alone — the pill and the name stay. */
+  it("draws the word Reset beside its pill, and lets a caller hide the word", () => {
+    const { rerender } = render(<ResetAll count={2} onReset={vi.fn()} />);
+    const reset = screen.getByRole("button");
+    expect(reset).toHaveTextContent(/^Reset2$/);
+    expect(reset.querySelector("svg.lucide-rotate-ccw")).not.toBeNull();
+    expect(within(reset).getByText("Reset").classList.contains("hidden")).toBe(false);
+
+    rerender(<ResetAll count={2} onReset={vi.fn()} labelClass="hidden" />);
+    expect(within(screen.getByRole("button")).getByText("Reset").classList.contains("hidden")).toBe(
+      true,
+    );
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 2 filters active");
+    expect(screen.getByRole("button").querySelector("[data-count-pill]")).toHaveTextContent("2");
+  });
 });
 
 describe("FiltersButton", () => {
   const button = () => screen.getByRole("button", { name: /filters/i });
 
   /**
-   * **The border and the word are the count; the fill is the tray** — and the two are
-   * independent, which is the whole of what this control was changed to say (2026-08-26). It used
-   * to wear the gold border whether or not anything was on, so it was the one control on the row
-   * drawn in the on-treatment while off; a reader sweeping the row for what is switched on found
-   * it every time and had to read the badge to learn it was not.
+   * **Gold while a filter is on or the popup is open; the fill is the popup's** (the Filter bar
+   * board, 2026-11). It was gold on the count alone until then — an open popup now lights the
+   * control that opened it, so the reader can see which button the panel under the bar belongs to.
    *
    * **The off pair is asserted against `filterChipState` rather than typed out**, because that is
-   * the claim: this control wears the row's own recipe, not a lookalike. Typing `border-border`
-   * here would keep passing if the component grew a hand-copied pair of its own and the recipe
-   * then moved.
+   * the claim: this control wears the row's own recipe, not a lookalike.
    *
    * `toHaveClass` reads `classList`, so these are real tokens rather than a substring of the
-   * `className` string — a `hover:` variant would pass either way and is deliberately not
-   * asserted here (it is a state jsdom cannot enter).
+   * `className` string — a `hover:` variant would pass either way.
    */
-  it("takes its border and word from the count, and its fill from the tray", () => {
+  it("goes gold on a count or an open popup, and takes its fill from the popup", () => {
     const off = filterChipState(false).split(" ");
     const on = filterChipState(true).split(" ");
 
@@ -348,8 +363,7 @@ describe("FiltersButton", () => {
       <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />,
     );
 
-    // Nothing on: the row's own off treatment — a hairline and a dim word, like every other
-    // bordered control here — and no fill.
+    // Nothing on and shut: the row's own off treatment, and no fill.
     expect(button()).toHaveClass(...off);
     expect(button()).not.toHaveClass("border-accent", "text-accent", "bg-surface");
 
@@ -357,32 +371,173 @@ describe("FiltersButton", () => {
     expect(button()).toHaveClass(...on);
     expect(button()).not.toHaveClass("bg-surface");
 
-    // Open with nothing on: the tray's own grey, and still no gold — gold on this row means "a
-    // filter is on", which is the border's sentence rather than the fill's.
+    // Open with nothing on: gold all the same — the open popup is what lights it here.
     rerender(<FiltersButton open count={0} onToggle={vi.fn()} controls="tray" />);
-    expect(button()).toHaveClass("bg-surface", ...off);
-    expect(button()).not.toHaveClass("border-accent", "text-accent");
+    expect(button()).toHaveClass("bg-surface", ...on);
 
-    // **The word stays gold with the tray up**, which is the one thing opening must not undo:
-    // the count is still on, and a reader who opened the tray to change it has not changed it
-    // yet. Both readings are drawn at once, which is `filterChipState`'s rule too.
     rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
     expect(button()).toHaveClass("bg-surface", ...on);
   });
 
-  /** The badge is drawn only when there is something to say — a `0` on every quiet row teaches
-   *  the eye to skip the control it is attached to. The digit is spelled into the name, because
-   *  left to the accname algorithm this announces as `"Filters2"`. */
-  it("draws no badge at zero, and spells the count into its name", () => {
+  /** **The pill is drawn at zero too** — the board's "a button never changes width when used"; a
+   *  badge that appeared on the first filter moved everything beside it. The digit is spelled
+   *  into the name, because left to the accname algorithm this announces as `"Filters2"`. */
+  it("always draws its count pill, and spells the count into its name", () => {
     const { rerender } = render(
       <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />,
     );
     expect(button()).toHaveAccessibleName("Show filters — 0 active");
-    expect(button()).not.toHaveTextContent("0");
+    expect(button().querySelector("[data-count-pill]")).toHaveTextContent(/^0$/);
 
     rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
     expect(button()).toHaveAccessibleName("Hide filters — 2 active");
-    expect(button()).toHaveTextContent("2");
+    expect(button().querySelector("[data-count-pill]")).toHaveTextContent(/^2$/);
+    expect(button().querySelectorAll("[data-count-pill]")).toHaveLength(1);
+  });
+});
+
+/**
+ * The count on Filters and on Reset — one fixed width, drawn from the first paint, grey at 0 and
+ * gold at N (the Filter bar board, 2026-11). `aria-hidden`: each button says its count in its name.
+ */
+describe("CountPill", () => {
+  const pill = () => document.querySelector("[data-count-pill]") as HTMLElement;
+
+  it("draws zero in the hairline's grey, and a count in gold", () => {
+    const { rerender } = render(<CountPill count={0} />);
+    expect(pill()).toHaveTextContent(/^0$/);
+    expect(pill().classList.contains("bg-border")).toBe(true);
+    expect(pill().classList.contains("text-dim")).toBe(true);
+    expect(pill().classList.contains("bg-accent")).toBe(false);
+
+    rerender(<CountPill count={3} />);
+    expect(pill()).toHaveTextContent(/^3$/);
+    expect(pill().classList.contains("bg-accent")).toBe(true);
+    expect(pill().classList.contains("text-accent-foreground")).toBe(true);
+    expect(pill().classList.contains("bg-border")).toBe(false);
+  });
+
+  /** One width whatever the count, so the button around it never moves. */
+  it("keeps one width at every count, and stays out of the accessible name", () => {
+    const { rerender } = render(<CountPill count={0} />);
+    expect(pill().classList.contains("w-[22px]")).toBe(true);
+    expect(pill()).toHaveAttribute("aria-hidden", "true");
+
+    rerender(<CountPill count={12} />);
+    expect(pill().classList.contains("w-[22px]")).toBe(true);
+  });
+});
+
+/**
+ * A two- or three-way choice as one joined control — Universe, Finish, Border and Owned. Each
+ * segment is its own `aria-pressed` button and the caller decides what a press does, so one control
+ * serves a partition (Universe, Owned) and an OR (Finish, Border) alike.
+ */
+describe("JoinedChoices", () => {
+  const choice = (over: Record<string, unknown> = {}) => ({
+    value: "a",
+    label: "Alpha",
+    pressed: false,
+    onClick: vi.fn(),
+    ...over,
+  });
+
+  it("names the group, and says which segment is on", async () => {
+    const onBeta = vi.fn();
+    render(
+      <JoinedChoices
+        label="Finish"
+        choices={[choice({ pressed: true }), choice({ value: "b", label: "Beta", onClick: onBeta })]}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: "Finish" });
+    const [alpha, beta] = within(group).getAllByRole("button");
+    expect(alpha).toHaveAttribute("aria-pressed", "true");
+    expect(beta).toHaveAttribute("aria-pressed", "false");
+    expect(alpha.classList.contains("text-accent")).toBe(true);
+    expect(beta.classList.contains("text-accent")).toBe(false);
+
+    await userEvent.click(beta);
+    expect(onBeta).toHaveBeenCalledTimes(1);
+  });
+
+  /** The row's greying rule: `aria-disabled`, still in the tab order, and the press refused. */
+  it("greys a segment without leaving the tab order, and refuses its press", async () => {
+    const onClick = vi.fn();
+    render(<JoinedChoices label="Border" choices={[choice({ disabled: true, onClick })]} />);
+
+    const alpha = screen.getByRole("button", { name: "Alpha" });
+    expect(alpha).toHaveAttribute("aria-disabled", "true");
+    expect(alpha).not.toBeDisabled();
+    alpha.focus();
+    expect(alpha).toHaveFocus();
+
+    await userEvent.click(alpha);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  /** `title` is the name when given; else a `hint` folds in as `label, hint`; else the word. */
+  it("names each segment by its title, or its word and hint, or its word", () => {
+    render(
+      <JoinedChoices
+        label="Universe"
+        choices={[
+          choice({ title: "Alpha — 5 printings" }),
+          choice({ value: "b", label: "Beta", hint: "the second one" }),
+          choice({ value: "c", label: "Gamma" }),
+        ]}
+      />,
+    );
+
+    const [alpha, beta, gamma] = within(screen.getByRole("group")).getAllByRole("button");
+    expect(alpha).toHaveAccessibleName("Alpha — 5 printings");
+    expect(beta).toHaveAccessibleName("Beta, the second one");
+    expect(gamma).toHaveAccessibleName("Gamma");
+    expect(gamma).not.toHaveAttribute("aria-label");
+  });
+
+  /** Joined: one frame, a hairline between segments, and only the ends rounded. */
+  it("draws the segments in one frame with a hairline between them", () => {
+    render(
+      <JoinedChoices
+        label="Owned"
+        choices={[
+          choice(),
+          choice({ value: "b", label: "Beta" }),
+          choice({ value: "c", label: "Gamma" }),
+        ]}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: "Owned" });
+    expect(group.classList.contains("border")).toBe(true);
+    const [first, middle, last] = within(group).getAllByRole("button");
+    expect(first.classList.contains("border-l")).toBe(false);
+    expect(middle.classList.contains("border-l")).toBe(true);
+    expect(last.classList.contains("border-l")).toBe(true);
+    expect(first.classList.contains("rounded-l-[5px]")).toBe(true);
+    expect(middle.classList.contains("rounded-l-[5px]")).toBe(false);
+    expect(middle.classList.contains("rounded-r-[5px]")).toBe(false);
+    expect(last.classList.contains("rounded-r-[5px]")).toBe(true);
+  });
+});
+
+/** `Stack printings` — pressed means one tile per card, the default; the word hides by class. */
+describe("StackPrintingsToggle", () => {
+  it("says whether printings are stacked, and presses through", async () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<StackPrintingsToggle stacked onToggle={onToggle} />);
+    const toggle = () => screen.getByRole("button", { name: "Stack printings" });
+    expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    expect(toggle()).toHaveClass(...filterChipState(true).split(" "));
+
+    rerender(<StackPrintingsToggle stacked={false} onToggle={onToggle} labelClass="hidden" />);
+    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(within(toggle()).getByText("Stack printings").classList.contains("hidden")).toBe(true);
+
+    await userEvent.click(toggle());
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });
 

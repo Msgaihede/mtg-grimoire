@@ -1,10 +1,9 @@
-import { useId, useState, type ReactNode, type Ref } from "react";
-import { ArrowUp } from "lucide-react";
+import { useEffect, useId, useState, type ReactNode, type Ref } from "react";
+import { ArrowUp, Check, Plus, Search } from "lucide-react";
 import { motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import {
-  ActiveFilterChip,
   ColorExactChip,
   FILTER_CONTROL,
   FILTER_FIELD,
@@ -12,11 +11,13 @@ import {
   FILTER_LABEL,
   filterChipState,
   FiltersButton,
+  JoinedChoices,
   LayoutToggle,
   ManaChip,
   ManaValueChips,
   RarityChip,
   ResetAll,
+  StackPrintingsToggle,
   ToggleChip,
 } from "@/components/FilterChips";
 import { PriceRange } from "@/components/PriceRange";
@@ -28,6 +29,8 @@ import type { FacetResponse } from "@/lib/ipc";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
 import type { SortDir } from "@/lib/sort";
+import { DOCKED_SHADOW } from "@/lib/dockedBar";
+import { LAYER } from "@/lib/layers";
 import { useAppStore, type ListSection } from "@/lib/store";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { useElementWidth } from "@/lib/useElementWidth";
@@ -35,19 +38,23 @@ import { UNIVERSES, UNIVERSE_CHIP_LABEL, UNIVERSE_LABEL, type Universe } from "@
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import {
-  activeChips,
   conditionChip,
   formatPickerRows,
+  pickedFormat,
   RARITIES,
   SEARCH_SORT_ROWS,
   sentence,
   sortDirectionName,
+  TOKENS_AND_EXTRAS,
+  TOKENS_AND_EXTRAS_HINT,
   useFormatOptions,
 } from "./filterOptions";
 import { BREAKS_FOLDER_RULES, SEARCH_TRAY, type TrayCell } from "./filterOptions";
 import { SetCombobox } from "./SetCombobox";
 import { TagQueryRow, type TagQuerySurface } from "./TagQueryRow";
+import { StatedFiltersLine } from "./StatedFiltersLine";
 import {
+  ANY_CARD,
   CARD_TYPES,
   cycleTriState,
   type ColorKey,
@@ -65,37 +72,58 @@ export { StatedFiltersLine } from "./StatedFiltersLine";
 export { SEARCH_TRAY, type TrayCell };
 
 /**
- * The printings switch's name, on the bar and in the tray alike — one control, so one name, and
- * a `getByRole` or a voice command finds it wherever the width put it. A verb since issue #911:
- * off the tray's `Printings` caption, the bare `All printings` it was read as a label rather than
- * as something to press.
+ * The printings switch's name, on the bar and in the quick bar alike — one control, so one name,
+ * and a `getByRole` or a voice command finds it wherever the width put it. `Stack printings` since
+ * the Filter bar board (2026-11), with its meaning turned over: pressed — the default — stacks a
+ * card's printings into one tile. It was `Show all printings`, pressed for the other reading.
  */
-export const SHOW_ALL_PRINTINGS = "Show all printings";
+export { STACK_PRINTINGS } from "@/components/FilterChips";
 
 /**
- * **Where `Show all printings` rides the bar beside Filters rather than waiting in the tray** —
- * two bands of the row's own width, because the bar folds into one line at 1500 and that fold
- * spends the room the switch had (issue #911).
+ * **Which of the Filter bar board's layouts the bar's own width calls for** (2026-11).
  *
- * The switch is 140px and the row's 12px gap, and both bands open where the search box can still
- * hold its 192px basis (`basis-48`) with it there: below that the box's hypothetical size no
- * longer fits its line and `flex-wrap` throws the switch onto a line of its own. Swept in
- * headless Chromium over `Search/FilterBar` and the built stylesheet, 1px steps (2026-10-11),
- * **with the Filters badge drawn**, which is the widest the first line gets — the line fits from
- * 1015 on two lines and from 1603 on one. Each edge carries ~20px over that: a second badge digit
- * is ~8, and the rest keeps the edge off the 15–17px a scrollbar moves `main`'s content box by, so
- * a 1280 window (1032 of row, 1015 under a scrollbar) does not swap the switch in and out as
- * results arrive and the page starts to scroll. A badge that appears is never what moves it:
- * a control that left the bar on a press of a different one would be leaving under the hand.
+ * One line at every band but the narrowest, each band dropping what the line cannot hold:
  *
- * A width read from script rather than a container query, and the row's own fold reasoning is why:
- * one switch is drawn **once**, on the bar or in the tray, never in both with one hidden — that is
- * two controls with one accessible name the moment the tray opens. `0` is unmeasured
- * (`useElementWidth`), and it lands in the tray: the one home that fits every width, so a first
- * paint, jsdom and the docked panel's 206px floor are all safe in it.
+ * - `widest` (≥ 1400): every word on its control — Filters, Stack printings, Reset — with the
+ *   hairlines either side of the sort, and the Grid/List pair.
+ * - `roomy` (1100–1399): the same controls, icons named by tooltip.
+ * - `normal` (980–1099): the Grid/List pair leaves the bar for the Filters popup's View cell.
+ * - `tight` (800–979): the sort leaves too, into the same cell, and the mana values tighten.
+ * - `panel` (< 800, the deck editor's 384px column): four lines — the search box, the colours
+ *   spread across theirs, the mana values stretched across theirs, then Filters, the sort,
+ *   Stack printings and Reset.
+ *
+ * The board labels Widest ≥ 1500 but draws that row 1432px wide, and labels Normal 860–1099 and
+ * Tight < 860; the edges here are where the board's own
+ * controls, at the app's sizes, really fit one line with the search box at its 112px floor
+ * (summed from the board's widths, 2026-11-15) — a band that opened at 860 would overflow by ~90.
+ *
+ * **Read from script, not a container query**, because what moves between bands is *where a
+ * control is*, not only its size: the sort and the Grid/List pair are drawn once — on the bar or
+ * in the popup — never twice with one hidden, which would be two controls with one accessible
+ * name. The width is the row less the page title (`lead`), so a title never pushes the line
+ * over. `0` is unmeasured — jsdom, or a box not laid out yet — and lands on `widest`, the band
+ * with every control on the bar: a browser's `ResizeObserver` reports the real width before the
+ * first paint, so `0` is never what a reader sees, and a suite gets the whole bar to press.
  */
-export function printingsOnBar(rowWidth: number): boolean {
-  return rowWidth >= 1040 && (rowWidth < 1500 || rowWidth >= 1624);
+export type BarBand = "panel" | "tight" | "normal" | "roomy" | "widest";
+
+export function barBand(width: number): BarBand {
+  if (width === 0 || width >= 1400) return "widest";
+  if (width >= 1100) return "roomy";
+  if (width >= 980) return "normal";
+  if (width >= 800) return "tight";
+  return "panel";
+}
+
+/** Whether a band draws the sort on the bar (else in the popup's View cell). */
+export function sortOnBar(band: BarBand): boolean {
+  return band !== "tight";
+}
+
+/** Whether a band draws the Grid/List pair on the bar (else in the popup's View cell). */
+export function layoutOnBar(band: BarBand): boolean {
+  return band === "roomy" || band === "widest";
 }
 
 /**
@@ -214,20 +242,20 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   priceMax?: number | undefined;
   setPriceRange?: (min: number | undefined, max: number | undefined) => void;
   /**
-   * Whether the format picker offers `Any card`.
+   * Whether the Filters popup offers **Tokens & extras** — the Include cell, which replaced the
+   * format picker's `Any card` row (the Filter bar board, 2026-11) and sets the same `format`
+   * sentinel (`ANY_CARD`).
    *
-   * **A capability and not a state**, which is the distinction that makes it worth a field. `Any
-   * card` is not a format — it is the row that puts back the printings *no* format allows, and it
+   * **A capability and not a state.** The toggle puts back the printings *no* format allows, so it
    * only means something on a surface whose default corpus leaves them out. **Two of the four
    * hooks answer about such a corpus, and they are the two that set it.** `useCardSearch`: every
-   * row of its picker but this one rides `playableOnly` (see `formatParams`). And since token
-   * stacks (2026-09-26, spec §3.6) the deck search's Collection tab, `useCollectionSearch`, which
-   * spells its format through that same `formatParams` — so its `Any format` means *legal
-   * somewhere*, the reader's own tokens and orphan copies are left out under it, and this row is
-   * the only way back to them on a tab that opens on the deck's format. The collection page and
-   * the wishlist (`useCollection`, `useWishlist`) are lists of cardboard the reader already owns or
-   * wants, filtered by nothing of the kind — so on them the row would set `format` to a sentinel
-   * their backend reads as a legalities key nothing matches, and answer an empty list.
+   * format rides `playableOnly` (see `formatParams`). And since token stacks (2026-09-26, spec
+   * §3.6) the deck search's Collection tab, `useCollectionSearch`, which spells its format through
+   * that same `formatParams` — so its `Any format` means *legal somewhere*, the reader's own
+   * tokens and orphan copies are left out under it, and this toggle is the only way back to them.
+   * The collection page and the wishlist (`useCollection`, `useWishlist`) filter by nothing of the
+   * kind — on them the sentinel would read as a legalities key nothing matches, and answer an
+   * empty list.
    *
    * Absent is therefore the safe default, and the one those two take.
    */
@@ -312,8 +340,8 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
 }
 
 /**
- * Every filter the search view offers — four controls on the bar, the rest in a tray, and the
- * search itself stated in words underneath.
+ * Every filter the search view offers — four controls on the bar, the rest behind Filters in a
+ * popup, and the search itself stated in words underneath (the Filter bar board, 2026-11).
  *
  * **The shape is the feature.** The row used to be every control this view has, wrapped: at a
  * standard window that was two ragged lines of twelve controls, and the reader's own filters were
@@ -323,11 +351,11 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
  * one button, and what is *on* is stated as chips on a line under the bar — drawn only while
  * something is on — where a search can be read in a glance and undone one filter at a time.
  *
- * **It lays out by its own width and not the window's**, which is what `@container` is here for.
- * The same component is the search page's bar across a maximised window and the deck editor's
- * docked panel at 384px — draggable down to 206 — so a media query would be answering a question
- * about the wrong box. The four breakpoints are 640, 900 and 1500, and each is the width at which
- * a line's own contents stop fitting rather than a device.
+ * **It lays out by its own width and not the window's.** The same component is the search page's
+ * bar across a maximised window and the deck editor's docked panel at 384px — draggable down to
+ * 206 — so a media query would be answering a question about the wrong box. The bands are
+ * {@link barBand}'s, read from the box's measured width; the popup's columns are container
+ * queries on `/fb`.
  *
  * The colour chips are the app's one deliberate splash of colour and the reason the rest of the
  * chrome stays grey: a real mana symbol on its authentic printed fill is recognisable at 36px to
@@ -339,7 +367,8 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
  * its own row out of. This file owns the layout and *which* filters the search offers.
  *
  * Not every control on it is a filter. The sort picker, the printings mode and the layout pair
- * each say how the results are *shown* rather than which ones there are — so none of them is counted by the Reset all badge or cleared by pressing it, and the sort
+ * each say how the results are *shown* rather than which ones there are — so neither pill counts
+ * them and Reset leaves them, and the sort
  * in particular is one piece of state shared with the table's headers rather than something this
  * row owns.
  */
@@ -368,10 +397,9 @@ export function FilterBar<SortKey extends string>({
   rootRef?: Ref<HTMLDivElement>;
   /**
    * The row's first item, before the search box — the Search page's title (`PageTitle`), so the
-   * page is named without a row of its own. **Inside the row, not beside the bar**, because the
-   * row's one-line layout is measured on this box (`@min-[1500px]/fb`): a title beside it would
-   * narrow the box and drop the mana values to a second line, where inside it the search box,
-   * which is the row's one flexible item, gives up the width instead.
+   * page is named without a row of its own. **Inside the row, not beside the bar**: the band is
+   * the row less this title ({@link barBand}), so the search box, the row's one flexible item,
+   * gives up the width; in the four-line panel band the title takes a line of its own above.
    */
   lead?: ReactNode;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
@@ -434,67 +462,33 @@ export function FilterBar<SortKey extends string>({
   statesFilters?: boolean;
 }) {
   /**
-   * Whether the tray is open, and **this component's own state rather than the store's.**
+   * Whether the Filters popup is open, and **this component's own state rather than the store's.**
    *
    * A stored preference would be shared by the two surfaces that draw this bar, which are on
-   * screen together in the deck editor — opening the panel's tray would open the search page's
-   * behind it. It is also the kind of state a reader re-decides every time they look: the tray is
-   * one press away and its button says how much is behind it, so remembering the answer buys
-   * nothing and costs a `app_meta` row and a migration.
+   * screen together in the deck editor — opening the panel's popup would open the search page's
+   * behind it. It is also the kind of state a reader re-decides every time they look.
    */
   const [trayOpen, setTrayOpen] = useState(false);
   const trayId = useId();
+  /** The row and its popup, in state for the outside-press effect's dependency list. */
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
   /**
-   * The row's width, for the one placement a container query cannot make — see
-   * {@link printingsOnBar}. The row rather than the root: the root is a column whose height
-   * changes as the tray opens and the stated filters come and go, and none of that is a width.
+   * The row and the page title, measured apart: the band is the row **less the title** — the
+   * room the controls have — and it is taken from two boxes whose widths do not depend on the
+   * band. Measuring the controls' own box instead would oscillate at the panel edge, where the
+   * title moves onto a line of its own and hands the controls its width back.
    */
   const [rowRef, rowWidth] = useElementWidth<HTMLDivElement>();
-  const printingsUp = search.toggleAllPrintings !== undefined && printingsOnBar(rowWidth);
-  // On the bar, the tray drops its cell rather than drawing the switch a second time.
-  const trayCells = printingsUp ? tray.filter((cell) => cell !== "printings") : tray;
-  /**
-   * How many printings each option would leave, or `undefined` when that is not known.
-   *
-   * Every control below reads it through `facets.ts`, which is where the rule lives:
-   * greyed means "turning this on would not change the result set", not-greyed means "we
-   * don't know" — so `undefined` here leaves the whole row live, which is what a cold index,
-   * a failed query and the first render all arrive as.
-   */
-  const facets = search.facets;
+  const [leadRef, leadWidth] = useElementWidth<HTMLDivElement>();
+  const band = barBand(
+    rowWidth === 0 ? 0 : Math.max(1, rowWidth - (lead !== undefined ? leadWidth + 12 : 0)),
+  );
+  const panel = band === "panel";
+  const widest = band === "widest";
+  const sortUp = sortOnBar(band);
+  const layoutUp = layoutToggle && layoutOnBar(band);
   const formatOptions = useFormatOptions(search);
-  // Which way the list runs, or nothing when it runs in an order that has no direction. **The
-  // surface's own answer** — it was derived here from `sortSelection === ""` until 2026-08-25,
-  // which is a rule about the card search's empty spec and not about a sort. See
-  // {@link FilterSurface.sortDir}.
-  const sortDir = search.sortDir;
-  const tip = useTooltip();
-  const currency = search.marketplace.currency;
-  const chips = activeChips(search, currency);
-  /**
-   * **Every row comes from the prop, pinned one included** — see {@link SEARCH_SORT_ROWS}, which
-   * is the default and carries the argument for the row that is pinned. It was written into this
-   * markup until 2026-08-25, which made `Best match` a fact about the *control* rather than about
-   * the search behind it; the collection has no ranking to fall back to and every row of its
-   * picker is a real column, so a hard-coded first row would be a destination one of the two
-   * surfaces cannot go to.
-   *
-   * **`disabled` rides on the row and never on this markup**, which is what lets one picker serve
-   * three surfaces. No row of the *card search's* list is ever disabled — every one of them is a
-   * real destination. The collection's `Custom…` is, and the two look alike while being opposites:
-   * that one is a state the control can only be *put* into, from a column header this picker has
-   * no option for. So the surface that has such a state says so on its own row, and the one that
-   * does not says nothing.
-   *
-   * **The flag has to be carried through here or it is lost.** These options are the whole of what
-   * the panel draws, so a mapper that took only `value` and `label` would silently make the
-   * collection's `Custom…` pickable — a control that offers a destination it cannot reach. It read
-   * that way for one commit while this file and `sortRows` were being merged.
-   *
-   * `aria-disabled` rather than `disabled` once it reaches a row: a `<Dropdown>` row is never in
-   * the tab order at all — the walk is `aria-activedescendant` — so the house rule lands on the
-   * same attribute a native `<option>` reached by being exempt from it.
-   */
+  const facets = search.facets;
   const sortDropdownOptions: readonly DropdownOption[] = sortRows.map((s) => ({
     value: s.value,
     label: s.label,
@@ -502,27 +496,59 @@ export function FilterBar<SortKey extends string>({
   }));
 
   /**
-   * **The bar's own row — one flex container for both lines, ordered rather than duplicated.**
-   *
-   * The obvious build is a `<div>` per breakpoint with `hidden` on the ones that do not
-   * apply — and it puts two mana-value groups and two sort pickers in the tree at once, which
-   * is two controls with one accessible name, two tab stops for one filter, and a
-   * `getByLabelText` that starts throwing "found multiple". So the items are written once and
-   * the arrangement is `order` plus a `basis-full` spacer that forces a line break. The order
-   * numbers below are the whole layout; each item carries its own.
-   *
-   * The gaps close as the box narrows — 12px, 10px, 8px — because at 640 the same gaps that
-   * gave a 1500px bar its air are what tip the second line into a third.
+   * **A press outside the bar closes its popup** — the board's rule, and the quick bar's code:
+   * capture phase on `document`, so a control that stops propagation cannot keep the popup open
+   * under a press aimed elsewhere. "Outside" is outside the frame the popup hangs in, and nothing
+   * in the popup portals (`SetCombobox`, `Dropdown` and `PriceRange` all anchor inside their own
+   * roots), so a press on an open set picker's row is a press inside.
    */
-  const row = (
-    <div
-      ref={rowRef}
-      className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3"
-    >
-      {lead !== undefined && (
-        <div className="order-[0] flex h-9 shrink-0 items-center">{lead}</div>
-      )}
+  useEffect(() => {
+    if (!trayOpen || frame === null) return;
+    const onDown = (e: PointerEvent) => {
+      if (!frame.contains(e.target as Node)) setTrayOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [trayOpen, frame]);
 
+  const sort = (
+    <SortControl
+      idStem={labels.idStem}
+      value={search.sortSelection}
+      options={sortDropdownOptions}
+      onChange={(key) => search.setSortKey(key as SortKey)}
+      dir={search.sortDir}
+      onFlip={search.flipSortDir}
+      // A fixed trigger width, so picking a longer order never moves the bar (the board's "a
+      // button never changes width when used"); the panel's line gives it the rest instead.
+      triggerClass={panel ? "min-w-0 flex-1" : widest || band === "roomy" ? "w-30" : "w-28"}
+      className={panel ? "min-w-0 flex-1" : undefined}
+    />
+  );
+  const layout = <ViewToggle section={layoutFor} />;
+
+  /** The popup's last cell: whichever of the sort and the Grid/List pair left the bar. */
+  const viewCell =
+    !sortUp || (layoutToggle && !layoutUp) ? (
+      <TrayField key="view" label="View">
+        <div className="flex min-w-0 items-center gap-2">
+          {!sortUp && sort}
+          {layoutToggle && !layoutUp && layout}
+        </div>
+      </TrayField>
+    ) : null;
+
+  const searchField = (
+    <div
+      className={cn(
+        "relative flex items-center",
+        panel ? "w-full" : "w-70 min-w-28 shrink",
+      )}
+    >
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 left-2.5 my-auto size-3.5 text-dim"
+      />
       {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
           apart. */}
       <label htmlFor={`${labels.idStem}-text`} className="sr-only">
@@ -533,450 +559,292 @@ export function FilterBar<SortKey extends string>({
         type="search"
         value={search.text}
         onChange={(e) => search.setText(e.target.value)}
-        // Escape empties the box while there is something in it to empty, and falls through
-        // when there is not. Chromium clears an `<input type="search">` by itself but leaves
-        // `defaultPrevented` false, so on a view where Escape also means "go back" the same
-        // press would do both — and this row is the deck editor's docked panel as well as the
-        // search page's. jsdom implements no native clear at all, so the handler is also the
-        // only half of the behaviour a test can see. The rule is {@link clearFieldOnEscape}'s.
+        // Escape empties the box while there is something in it to empty, and falls through when
+        // there is not — {@link clearFieldOnEscape}'s rule, which jsdom (no native clear) can see.
         onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
-        // The accessible name with an ellipsis, so the two say the same thing — a placeholder
-        // that differed from the label would be two names for one box.
+        // The accessible name with an ellipsis, so the two say the same thing.
         placeholder={`${labels.search}…`}
-        // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
-        // a box the reader types into must not, or the native ✕ slides out from under the
-        // pointer clearing it. Issue #179 — the reason is on the constant. It is also where the
-        // finger's floor comes from: `FILTER_SHAPE`'s `coarse:min-h-[var(--target-min)]` is what
-        // makes this box 44 tall under a coarse pointer without a number being written a second
-        // time here.
-        //
-        // **A whole line to itself below 640** (`basis-full`), which is the one control here
-        // that earns it: it is the only one whose usefulness scales with its width, and in a
-        // 206px panel a box sharing a line with six colour chips is four characters wide.
-        // Above that it is `flex-1` again and capped, so a maximised window does not hand it
-        // half the bar.
+        // `FILTER_FIELD`, not `FILTER_CONTROL`: a box the reader types into must not dip under
+        // the press (issue #179).
         className={cn(
           FILTER_FIELD,
           FILTER_FOCUS,
-          "order-[1] min-w-0 basis-full border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
-          "@min-[640px]/fb:max-w-[min(34%,460px)] @min-[640px]/fb:flex-1 @min-[640px]/fb:basis-48",
-          // A title before it (`lead`) is width the one-line layout's 1500px did not count, so
-          // the box starts 32px narrower and still grows into whatever the line leaves.
-          lead !== undefined && "@min-[640px]/fb:basis-40",
+          "h-8 w-full min-w-0 border-border bg-surface pr-2.5 pl-8 placeholder:text-dim focus:border-accent",
         )}
-      />
-
-      {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
-          edge, and at 4px apart two pressed chips look like one welded object.
-
-          `flex-wrap` for the narrowest surface's sake — the panel's floor is 206px, where six
-          chips at 246 do not fit a line and an unwrapped group would hang out of the panel
-          and put a horizontal scrollbar across the whole deck builder. */}
-      <div role="group" aria-label="Color identity" className="order-[2] flex flex-wrap gap-1.5">
-        {MANA_KEYS.map((key) => (
-          <ManaChip
-            key={key}
-            symbol={key}
-            pressed={search.colors.includes(key)}
-            // The one control on this row that does not ask "would this return nothing".
-            // The count is the size of the result set *after* the press, read against
-            // `facets.total`. And that total is the facets' own: printings, exact, and not
-            // the collapsed, capped number the results caption prints.
-            //
-            // **Which way a press moves is now the reader's choice**, which is why this stays
-            // "after the press" rather than becoming a direction: loose, `colors` is subset
-            // semantics and pressing a chip with another already on *broadens*; with `Exact`
-            // on it *narrows*. `colorDisabled` needs no branch on the mode — the backend
-            // counted under whichever one the request carried.
-            disabled={colorDisabled(
-              facets?.colors[key],
-              facets?.total ?? 0,
-              search.colors.includes(key),
-            )}
-            title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
-            onClick={() => search.toggleColor(key)}
-          />
-        ))}
-
-        {/* **The reading these six chips get — loose or exact — closing the group they modify.**
-            It was a chip here once before, until 2026-09-23, and left for the tray because it
-            was drawn only while a colour was picked: a control that came and went under the
-            reader's hand and reflowed the group on the first press. It is back **always drawn**,
-            so neither cost returns, and a reader no longer opens a disclosure to learn what the
-            chips beside it mean. Inside the group rather than beside it so it wraps with them at
-            the deck panel's 206px floor instead of stranding on a line of its own.
-
-            Not in `activeFilterCount` — it modifies the colour filter rather than being one —
-            so the strip states it as a word inside the colour chip, `Colour: exactly White,
-            Blue`, and that chip's × clears it with the colours. */}
-        <ColorExactChip pressed={search.colorsStrict} onClick={search.toggleColorsStrict} />
-      </div>
-
-      {/* The empty flex item that pushes everything after it to the right end of its line. At
-          1500 it separates the mana values from Filters; below that, the colours from Filters.
-          Gone below 640, where the Filters button takes the rest of the colours' line itself. */}
-      <div aria-hidden="true" className="order-[4] hidden flex-1 @min-[640px]/fb:block" />
-
-      {/* **`Show all printings`, beside Filters wherever there is room for it** (issue #911) — see
-          {@link printingsOnBar} for the widths. A view mode and not a filter, as it is in the
-          tray, so neither the badge nor Reset all counts it. Before Filters in the tree at the
-          same `order`, so Filters stays the last thing ahead of the hairline and the
-          controls about how the results are shown; `shrink-0` and `whitespace-nowrap` because
-          the bands were measured against its full 140px, and a switch that wrapped its own
-          words would be one line taller than the bar. */}
-      {printingsUp && (
-        <ToggleChip
-          label={SHOW_ALL_PRINTINGS}
-          pressed={search.allPrintings ?? false}
-          onClick={() => search.toggleAllPrintings?.()}
-          className="order-[5] shrink-0 whitespace-nowrap"
-        />
-      )}
-
-      <FiltersButton
-        open={trayOpen}
-        count={search.activeCount}
-        onToggle={() => setTrayOpen((open) => !open)}
-        controls={trayId}
-        // The word appears at 900 rather than at 640, because it is the widest thing in the
-        // right-hand group and the second line has to hold the mana values at their full 396px
-        // before it holds anything else.
-        labelClass="hidden @min-[900px]/fb:inline"
-        // Fills what the colours leave of its line below 640, where there is no spacer to push
-        // it right and a 44px button floating beside six chips reads as a seventh chip.
-        className="order-[5] flex-1 @min-[640px]/fb:flex-none"
-      />
-
-      {/* A hairline between the filters and the two controls that are not filters. Only at the
-          widest, where the sort sits on this line and would otherwise read as one more thing
-          the tray is about. */}
-      <div
-        aria-hidden="true"
-        className="order-[6] hidden h-9 w-px bg-border @min-[1500px]/fb:block"
-      />
-
-      {/* The sort, from the other end of the state the table's headers already drive. Picking
-          here *replaces* the sort with that one term; the headers refine and extend it. So the
-          picker follows a header press and a header's arrow follows the picker — one piece of
-          state with two controls on it.
-
-          **Drawn in both layouts and on both surfaces, which is the whole of the feature.** The
-          grid has no headers to press, and the deck editor's docked panel is a grid with no
-          table to switch to at all — so `layoutToggle` is deliberately not the fence. That prop
-          says "this surface has no second layout", which names exactly the surface with no other
-          way to sort; fencing on it would take the control away from the one place it is the
-          only one.
-
-          **On the bar rather than in the tray, which is the one thing here that is not a
-          filter and is on it anyway.** A list is always in some order, so a reader who wants a
-          different one is not narrowing — they are reading — and a control behind a disclosure
-          called Filters would be the wrong cupboard.
-
-          The pair is boxed rather than left to the row's own gap, which would stand the arrow
-          12px off the order it belongs to and let `flex-wrap` break the two onto separate lines
-          — a direction with its order on the line above is a button about nothing. 4px apart,
-          like the layout pair at the far end of the row.
-
-          It costs the docked panel nothing at its 206px floor, for a different reason since the
-          2026-08-25 move to `<Dropdown>`. The old `<select>` was as wide as its widest option
-          — `Best match` and `Mana value`, both ten characters, the same count as the `Any
-          format` in the tray — measured at 119px against the built stylesheet with the app's
-          own fonts loaded (2026-08-24), a floor no narrow panel could shrink under whichever
-          row was picked. A `<Dropdown>` trigger sizes to its own **picked** text instead, never
-          to the widest row it could show, so it is narrower than that measurement for every
-          order shorter than the widest and the docked panel has more headroom than it used to
-          need rather than exactly as much. **Below 640 it still does not have to fit
-          anything** — the trigger is `flex-1` on a line of its own, so neither sizing rule
-          matters at the panel's floor, and the break at `order-[28]` above is what makes that
-          line its own. */}
-      <div className="order-[30] flex min-w-0 flex-1 items-center gap-1 @min-[640px]/fb:flex-none @min-[1500px]/fb:order-[7]">
-        {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
-            `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
-            of them already has a `Sort`: the deck editor's toolbar sorts **the deck**, this sorts
-            **the search results**, and with the docked panel open both lists are on screen at
-            once. Two controls with one name is not a WCAG failure — it is a control that cannot
-            be addressed unambiguously, by a screen reader walking the form, by anyone driving the
-            app by voice, or by a `getByRole("button", { name: "Sort" })` that starts throwing
-            "found multiple".
-
-            The widening goes here rather than on the deck editor's label for the reason that
-            decides every one of these: that one has only to be unambiguous where it is mounted,
-            and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar` made
-            the same call and wrote down the same trap — a bare verb names an action and not the
-            thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
-        <label
-          id={`${labels.idStem}-sort-label`}
-          htmlFor={`${labels.idStem}-sort`}
-          className="sr-only"
-        >
-          Sort results
-        </label>
-        <Dropdown
-          id={`${labels.idStem}-sort`}
-          labelledBy={`${labels.idStem}-sort-label`}
-          value={search.sortSelection}
-          onChange={(key) => search.setSortKey(key as SortKey)}
-          options={sortDropdownOptions}
-          // **Never gold** — no `active` passed, unlike the format picker in the tray. Accent
-          // there means "this is not where the control opens", which is a state a filter can be
-          // in and out of. A list is always in *some* order, so a sort cannot be inactive — and
-          // a gold sort picker would be saying "a filter is on" about the one control on this
-          // row that is not a filter, and that Reset all deliberately does not clear.
-          className="min-w-0 flex-1 @min-[640px]/fb:flex-none"
-        />
-
-        {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is the rule
-            `SortableHeader.tsx:51-55` states and this is the reason it states it: a different
-            element in the same slot is unmounted and remounted, so the indicator *teleports*,
-            and the whole of what the press means is that the order reversed. Half a turn is that
-            fact, drawn. `initial={false}`, so a row that opens already descending draws its
-            arrow turned rather than spinning on first paint — the header's rule, for the
-            header's reason.
-
-            `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and
-            no `useReducedMotion` opt-out is owed here (`docs/reference/motion.md` — the trap
-            there is the *non*-positional properties, and this animates none).
-
-            **The real `disabled`, and the row's `aria-disabled` rule does not bind.** That rule
-            is about a filter row greying *as the reader types*, where a control leaving the tab
-            order would shrink the row out from under a keyboard caret. This one can only grey
-            when the reader themselves puts the select back to `Best match`, and their caret
-            is on that select when they do it — the button never vanishes from under the thing
-            focusing it. */}
-        {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**
-            `aria-label` already carries the whole sentence, so the tooltip is `describes: false`
-            — pure redundancy for a pointer, which is the state this button spends most of a
-            default search in: `disabled={!sortDir}`. A `disabled` control fires no pointer
-            events at all, so `{...tip()}` bound to the button directly would be silently inert
-            in exactly the state a reader is likeliest to hover it, which is a real loss rather
-            than a no-op (Chromium still draws a native `title` on a disabled control today). The
-            wrapper adds no box beyond the button's own, so an enabled press and an enabled hover
-            both work exactly as before. */}
-        <span {...tip(sortDirectionName(sortDir), { describes: false })}>
-          <button
-            type="button"
-            onClick={search.flipSortDir}
-            disabled={!sortDir}
-            aria-label={sortDirectionName(sortDir)}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "flex size-9 items-center justify-center",
-              // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
-              // the other half of a control that is always doing something. `filterChipState`'s
-              // unpressed arm is what every other quiet control on this row wears, and its
-              // `unavailable` arm is the row's one greying treatment rather than a second one
-              // written next to it.
-              filterChipState(false, !sortDir),
-            )}
-          >
-            {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
-                non-replaced inline box, a transform does not apply to one at all, and the rotation
-                would silently do nothing. `SortableHeader` carries the same class for the same
-                reason. */}
-            <motion.span
-              aria-hidden="true"
-              initial={false}
-              animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
-              transition={TRANSITION.fast}
-              className="flex"
-            >
-              <ArrowUp className="size-4" />
-            </motion.span>
-          </button>
-        </span>
-      </div>
-
-      {/* The second hairline, and it precedes the grid-or-table pair, which is about the drawing
-          rather than about which cards there are — so, like the sort, it is neither counted by
-          the badge nor cleared by Reset all. */}
-      {layoutToggle && (
-        <div
-          aria-hidden="true"
-          className="order-[8] hidden h-9 w-px bg-border @min-[640px]/fb:block"
-        />
-      )}
-
-      {/* **The pair's own group, kept as a wrapper so `order` can place it.** It is a view mode
-          rather than a filter — how the rows are laid out — so it sits past the divider with the
-          sort rather than among the statements about which cards to show. The wrapper was lifted
-          out of {@link ViewToggle} while the Flatten switch shared it, and it stays because the
-          `order-[40]` / `@min-[640px]/fb:order-[9]` reasoning below is the wrapper's, not the
-          pair's.
-
-          **`ml-auto` on `LayoutToggle`'s own group survives this and does nothing**, which was
-          worth checking rather than assuming: an auto margin absorbs positive free space, and
-          this wrapper is a flex item at `flex: 0 1 auto` whose base size is its contents — so
-          there is none to absorb. Swept in headless Chromium over this row's real markup and the
-          app's own compiled stylesheet, 206px to 1700px in 2px steps (2026-08-26):
-          `margin-left` computed to `0px` at every width, the chip stood exactly the wrapper's
-          8px from the pair at every width while Flatten shared the wrapper, the two never landed
-          on different lines, and forcing the margin to zero changed no measurement. **jsdom
-          applies no container query and loads no stylesheet**, so none of that is visible to the
-          suite.
-
-          **`order-[40]`, and not `order-[9]` unconditionally.** At 640 and up the group rides
-          the first line past the divider, which is where the design puts it; below that there is
-          no first line to ride — the colours already share theirs with Filters — so an
-          `order-[9]` would strand it on a line of its own between the colours and the mana
-          values. Ordered past the sort instead, it shares that line, which is the other control
-          on this bar that is about how the results are *shown* rather than which ones there
-          are. */}
-      {layoutToggle && (
-        <div className="order-[40] flex items-center gap-2 @min-[640px]/fb:order-[9]">
-          <ViewToggle section={layoutFor} />
-        </div>
-      )}
-
-      {/* **Reset all, at the far end of the bar — and drawn whether or not there is anything to
-          reset**, greyed at zero. It moved up from a line of its own under the bar on 2026-09-27
-          (the collection and wishlist header redesign, option A): that line was unconditional for
-          this button's sake alone, so on every unfiltered page it was a 57px band holding one
-          greyed control. Unconditional *here* keeps the rule it was drawn for — a control that
-          appears mid-press moves everything beside it — because it never appears: it holds its
-          width on the bar from the first paint, and the chips line below is what comes and goes.
-
-          **Three places, one per band, and each is where a line had room — swept in Storybook
-          against the real stylesheet on 2026-09-27, 230px to 2400px.** From 900 it ends the first
-          line (`order-[9]`, after the view pair in the tree, so a surface without one ends the
-          line with it too); at 1500, where the bar is one line, that costs the search box width
-          and it still reads 269px at a 1501px container. Between 640 and 900 the first line has
-          no room left — pinned there it wrapped onto a line of its own and pushed the sort onto
-          a third — so it ends the second line instead, after the sort (`order-[35]`), which has
-          room from a 685px container up; in the 640–670 sliver below that it takes a third line
-          of its own, which is still shorter than the ruled row it replaced. Below 640 it follows
-          the sort's own line (`order-[45]`), which is where the docked deck panel's narrow bar
-          has room for it. The hairline is its own, so a surface without the view pair still
-          separates it from the sort. */}
-      <div className="order-[45] flex items-center gap-2 @min-[640px]/fb:order-[35] @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:order-[9] @min-[900px]/fb:gap-x-3">
-        <div aria-hidden="true" className="hidden h-9 w-px bg-border @min-[640px]/fb:block" />
-        <ResetAll count={search.activeCount} onReset={search.resetAll} />
-      </div>
-
-      {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
-          everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
-          line and the items after it fold back into their places between `order-[2]` and
-          `order-[8]`. */}
-      <div aria-hidden="true" className="order-[10] h-0 basis-full @min-[1500px]/fb:hidden" />
-
-      {/* The mana values, and the one control whose *size* moves with the breakpoint. */}
-      <div className="order-[20] flex min-w-0 @min-[1500px]/fb:order-[3]">
-        <ManaValueChips
-          // **32px below 640 and the family's 36 above it**, which buys exactly one line: ten
-          // chips at `gap-1` are 396px at 36 and 356 at 32, and the deck panel's 384px default
-          // leaves ~371 of content. `flex-wrap` inside the group is still what makes the
-          // panel's 206px floor safe — this is a fit, never a fence.
-          chipClass="size-8 @min-[640px]/fb:size-9"
-          selected={search.manaValues}
-          onToggle={search.toggleManaValue}
-          disabled={(value) =>
-            optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
-          }
-          // The chip hands its own label back, so "8 or more" is spelled in one place.
-          title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
-          xSelected={search.manaX}
-          onToggleX={search.toggleManaX}
-          // `manaX` is a **field** of the facet response beside `manaValues` rather than a key
-          // inside it, so this reads a bare count — and `countDisabled` is the same rule the
-          // nine chips to its left grey by rather than a second one written next to it. Rust
-          // counts it off the same `Skip::Mana` base, so X greys when and only when its
-          // neighbours would: because nothing in this search has one.
-          xDisabled={countDisabled(facets?.manaX, search.manaX)}
-          xTitle={(label) => facetTitle(label, facets?.manaX)}
-        />
-      </div>
-
-      {/* Pushes the sort to the right end of the second line. Hidden at 1500, where there is no
-          second line and this item would land past the layout toggle. */}
-      <div
-        aria-hidden="true"
-        className="order-[25] hidden flex-1 @min-[640px]/fb:block @min-[1500px]/fb:hidden"
-      />
-
-      {/* **The second break, and it is a fix rather than a tidy.** Below 640 the sort is
-          `flex-1` so it can fill a line of its own; without this it instead shares the mana
-          values' line wherever one is left over, and `flex-1` then makes it take *whatever is
-          left* — which between about 360 and 560 of container is a handful of pixels. The div
-          shrinks (it carries `min-w-0`); the 36px direction button inside it cannot, so it
-          spills out of the panel, and `DeckEditor`'s page section computes `overflow-x` to
-          `auto` and draws a horizontal scrollbar across the whole deck builder. Measured at a
-          369px container before this existed: the sort was allotted **5px** and overflowed by
-          **53**. The panel is draggable from 206, so that band is reachable by a drag.
-
-          Above 640 it is gone and the sort is `flex-none`, which is what makes the second line
-          safe there without a break: an item that cannot be crushed *wraps* instead. */}
-      <div
-        aria-hidden="true"
-        className="order-[28] h-0 basis-full @min-[640px]/fb:hidden"
       />
     </div>
   );
 
-  /**
-   * **The search, in words — drawn only when there is something to say.**
-   *
-   * This row was unconditional until 2026-09-27, and the whole reason was Reset all, which lived
-   * at its right end: always drawn and greyed at zero, because a control that appears mid-press
-   * moves everything beside it. On every unfiltered page that made it a ruled band of 57px with
-   * one greyed button in it. Reset all is on the bar now (see the note in `row`), still
-   * unconditional there, so what is left here is the chips — and an appearing chip line moves
-   * only the wall of cards, which has just been re-queried and is moving anyway. No rule over it
-   * either: the rule separated a permanent row from the bar, and a row that is only there while
-   * the reader is filtering is read as the bar's own second line.
-   */
-  const statedFilters = chips.length > 0 && (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
-      {chips.map((chip) => (
-        <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
+  /** The colour chips — 26px on the line, 34px and spread across their own line in the panel. */
+  const pip = panel ? "size-[34px]" : "size-[26px] text-sm ring-offset-1";
+  const colours = (
+    <div
+      role="group"
+      aria-label="Color identity"
+      className={cn("flex shrink-0 items-center", panel ? "w-full justify-between" : "gap-1")}
+    >
+      {MANA_KEYS.map((key) => (
+        <ManaChip
+          key={key}
+          symbol={key}
+          className={pip}
+          pressed={search.colors.includes(key)}
+          // The count is the result set *after* the press, read against `facets.total` — the
+          // one control here that does not ask "would this return nothing".
+          disabled={colorDisabled(
+            facets?.colors[key],
+            facets?.total ?? 0,
+            search.colors.includes(key),
+          )}
+          title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
+          onClick={() => search.toggleColor(key)}
+        />
       ))}
+      {/* The reading these chips get — loose or exact — closing the group it modifies. Not
+          counted; the colour chip on the stated line says it. */}
+      <ColorExactChip
+        className={cn(pip, !panel && "ml-0.5")}
+        pressed={search.colorsStrict}
+        onClick={search.toggleColorsStrict}
+      />
+    </div>
+  );
+
+  const manaValues = (
+    <ManaValueChips
+      className={
+        panel ? "w-full flex-nowrap" : band === "tight" ? "shrink-0 flex-nowrap gap-0.5" : "shrink-0 flex-nowrap gap-[3px]"
+      }
+      chipClass={
+        panel
+          ? "h-7 w-auto min-w-0 flex-1 px-0 text-[0.6875rem]"
+          : band === "tight"
+            ? "size-6 text-[0.6875rem]"
+            : "size-[26px] text-[0.6875rem]"
+      }
+      selected={search.manaValues}
+      onToggle={search.toggleManaValue}
+      disabled={(value) =>
+        optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
+      }
+      title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
+      xSelected={search.manaX}
+      onToggleX={search.toggleManaX}
+      // `manaX` is a field beside `manaValues`, counted off the same base — so X greys when and
+      // only when its neighbours would.
+      xDisabled={countDisabled(facets?.manaX, search.manaX)}
+      xTitle={(label) => facetTitle(label, facets?.manaX)}
+    />
+  );
+
+  const filters = (
+    <FiltersButton
+      open={trayOpen}
+      count={search.activeCount}
+      onToggle={() => setTrayOpen((open) => !open)}
+      controls={trayId}
+      labelClass={widest ? undefined : "hidden"}
+      className="h-8 px-2.5"
+    />
+  );
+  const stack = search.toggleAllPrintings ? (
+    <StackPrintingsToggle
+      // Inverted on purpose: the hooks keep `allPrintings`, the control says what is on screen.
+      stacked={!(search.allPrintings ?? false)}
+      onToggle={() => search.toggleAllPrintings?.()}
+      labelClass={widest ? undefined : "hidden"}
+      className="h-8"
+    />
+  ) : null;
+  const reset = (
+    <ResetAll
+      count={search.activeCount}
+      onReset={search.resetAll}
+      labelClass={widest ? undefined : "hidden"}
+      className="h-8"
+    />
+  );
+  const divider = <span aria-hidden="true" className="h-8 w-px shrink-0 bg-border" />;
+
+  /**
+   * **The bar's own row, one arrangement per band** — each control written once and placed by
+   * {@link barBand}, so no band draws a control twice. The board's order: search, colours, mana
+   * values, then — pushed right — Filters, the sort, Stack printings, Grid/List and Reset.
+   */
+  const controls = panel ? (
+    <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+      {searchField}
+      {colours}
+      {manaValues}
+      <div className="flex min-w-0 items-center gap-2">
+        {filters}
+        {sort}
+        {stack}
+        {reset}
+      </div>
+    </div>
+  ) : (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      {searchField}
+      {colours}
+      <div className={cn("shrink-0", widest && "ml-1.5")}>{manaValues}</div>
+      <span aria-hidden="true" className="min-w-0 flex-1" />
+      {filters}
+      {sortUp && (
+        <>
+          {widest && divider}
+          {sort}
+          {widest && divider}
+        </>
+      )}
+      {stack}
+      {layoutUp && layout}
+      {reset}
     </div>
   );
 
   return (
-    // **A named container, and the name is what keeps it from being claimed by another.**
-    // `@container` variants bind to the nearest ancestor container, so an unnamed one here would
-    // be the box any future `@container` in a card tile or a panel resolved against. Everything
-    // below reads `/fb` explicitly.
-    //
-    // **Nothing that has to cover the window may be mounted inside it.** `container-type:
-    // inline-size` applies **layout containment**, and a layout-contained box is the containing
-    // block for every `fixed` descendant under it — so a `Dialog`, whose scrim is a bare
-    // `fixed inset-0` with no correction of its own, opened from in here would stretch to this
-    // bar rather than to the window. The dropdowns escape it the other way: `usePopupPlacement`
-    // measures a zero-size frame precisely so it can subtract whatever containing block it landed
-    // in. **jsdom applies no stylesheet and computes no containment**, so nothing in the suite
-    // can see the failure; `packages/ui/CLAUDE.md` carries the rule.
+    // **A named container, and nothing that has to cover the window may be mounted inside it.**
+    // `container-type: inline-size` makes this box the containing block for every `fixed`
+    // descendant — the dropdowns' frames account for it (`usePopupPlacement`), a `Dialog` would
+    // not. The popup's grid reads `/fb` for its columns.
     <div ref={rootRef} className="@container/fb flex flex-col gap-2">
-      {row}
+      <div
+        ref={setFrame}
+        className="relative"
+        // **Escape closes the popup and hands the caret to Filters — bubbling on purpose.** An
+        // open set picker or dropdown inside it is a capture-phase `"inner"` layer: it closes
+        // first and consumes the key, so this sees `defaultPrevented` and leaves the popup open.
+        // One press per layer. With the popup shut the press is not this bar's at all.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || !trayOpen || e.defaultPrevented) return;
+          e.preventDefault();
+          setTrayOpen(false);
+          frame?.querySelector<HTMLButtonElement>(`[aria-controls="${trayId}"]`)?.focus();
+        }}
+      >
+        {/* Four lines in the panel band put the page title on a line of its own above them,
+            rather than centred beside a stack it no longer reads as the head of. */}
+        <div
+          ref={rowRef}
+          className={cn("flex min-w-0 gap-3", panel ? "flex-col" : "items-center")}
+        >
+          {lead !== undefined && (
+            <div ref={leadRef} className="flex h-9 shrink-0 items-center self-start">
+              {lead}
+            </div>
+          )}
+          {controls}
+        </div>
 
-      {trayOpen && (
-        <FilterTray
-          id={trayId}
-          search={search}
-          cells={trayCells}
-          labels={labels}
-          formatOptions={formatOptions}
-        />
-      )}
+        {/* **The popup drops from the bar over the results** (the board), rather than pushing
+            them down as the tray did: what is on is stated under the bar once it closes. */}
+        {trayOpen && (
+          <div className={cn("absolute inset-x-0 top-full mt-1.5", LAYER.popup, DOCKED_SHADOW)}>
+            <FilterTray
+              id={trayId}
+              search={search}
+              cells={tray}
+              labels={labels}
+              formatOptions={formatOptions}
+              view={viewCell}
+            />
+          </div>
+        )}
+      </div>
 
-      {statesFilters && statedFilters}
+      {statesFilters && <StatedFiltersLine search={search} />}
 
-      {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
-          stated filters rather than among them: these are the *query's* own terms, which the box
-          above still holds the text of, and a reader looking for why a name did not resolve is
-          looking under the box they typed it into. Renders nothing at all until there is
-          something to say. */}
+      {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets — the
+          query's own terms, under the box they were typed into. Renders nothing until then. */}
       <TagQueryRow search={search} />
     </div>
   );
 }
 
 /**
- * Everything the bar does not have room for, in a grid that halves and halves again.
+ * **The sort as one joined control** — the order picker and its direction arrow in one frame,
+ * split by a hairline (the Filter bar board, 2026-11). Joined so `flex-wrap` can never break the
+ * arrow from the order it turns over, and so the pair reads as one thing.
  *
- * Three columns, two, then one — 900 and 640, the same two thresholds the bar itself uses, so the
- * tray reflows on the same presses the bar does rather than at a width of its own.
+ * `Sort results`, never a bare `Sort`: this row is drawn beside the deck editor's own `Sort`, and
+ * two controls with one name cannot be addressed by a screen reader, a voice command or a test.
+ *
+ * Never gold: a list is always in *some* order, so a sort cannot be "on", and Reset leaves it.
+ * One arrow turned over rather than two icons swapped, so the press reads as the order reversing
+ * (`SortableHeader`'s rule). The arrow is `disabled` only on `Best match`, which has no direction;
+ * it is wrapped so its tooltip still answers a hover in that state.
+ */
+export function SortControl({
+  idStem,
+  value,
+  options,
+  onChange,
+  dir,
+  onFlip,
+  triggerClass,
+  className,
+}: {
+  idStem: string;
+  value: string;
+  options: readonly DropdownOption[];
+  onChange: (value: string) => void;
+  dir: SortDir | undefined;
+  onFlip: () => void;
+  /** The trigger's box — a fixed width on a line, `flex-1` where it fills one. */
+  triggerClass?: string;
+  className?: string;
+}) {
+  const tip = useTooltip();
+  return (
+    <div className={cn("flex shrink-0 items-stretch", className)}>
+      <label id={`${idStem}-sort-label`} htmlFor={`${idStem}-sort`} className="sr-only">
+        Sort results
+      </label>
+      <div className={cn("min-w-0", triggerClass)}>
+        <Dropdown
+          id={`${idStem}-sort`}
+          labelledBy={`${idStem}-sort-label`}
+          value={value}
+          onChange={onChange}
+          options={options}
+          fill
+          className="h-8 rounded-r-none"
+        />
+      </div>
+      <span className="flex" {...tip(sortDirectionName(dir), { describes: false })}>
+        <button
+          type="button"
+          onClick={onFlip}
+          disabled={!dir}
+          aria-label={sortDirectionName(dir)}
+          className={cn(
+            FILTER_CONTROL,
+            FILTER_FOCUS,
+            "-ml-px flex size-8 items-center justify-center rounded-l-none",
+            filterChipState(false, !dir),
+          )}
+        >
+          {/* `flex` on the span is load-bearing: a transform does not apply to an inline box. */}
+          <motion.span
+            aria-hidden="true"
+            initial={false}
+            animate={{ rotate: dir === "desc" ? 180 : 0 }}
+            transition={TRANSITION.fast}
+            className="flex"
+          >
+            <ArrowUp className="size-4" />
+          </motion.span>
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Everything the bar does not have room for — the Filters popup's grid, in the board's order: Set,
+ * Format, Universe, Type, Rarity, Price, Finish, Border, Owned, then Include, and the View cell
+ * when the bar's width moved the sort or the Grid/List pair into it.
  *
  * **A plain conditional and no animation.** A height transition is not a positional property, so
  * `MotionConfig reducedMotion="user"` does not reach it and it would owe a `useReducedMotion`
@@ -995,10 +863,14 @@ export function FilterTray<SortKey extends string>({
   cells,
   labels,
   formatOptions,
+  view,
 }: {
   id: string;
   search: FilterSurface<SortKey>;
   labels: FilterLabels;
+  /** The View cell — the sort and the Grid/List pair when the bar's width put them here. Drawn
+   *  last, after Include; not a filter, so neither pill counts it. */
+  view?: ReactNode;
   /** Which cells to draw, in the order to draw them — {@link TrayCell}. */
   cells: readonly TrayCell[];
   formatOptions: { value: string; label: string; disabled: boolean }[];
@@ -1015,9 +887,9 @@ export function FilterTray<SortKey extends string>({
    * list is a string array and the fields it needs are optional — so they are made here, once,
    * where the failure is a missing box rather than a dead control.
    */
-  // The pinned `Any card` and `Any format`, then the formats — `formatPickerRows`, which the
-  // phone's filters sheet reads too.
-  const formatDropdownOptions = formatPickerRows(search, formatOptions);
+  // The pinned `Any format`, then the formats — `formatPickerRows`, which the phone's filters
+  // sheet reads too.
+  const formatDropdownOptions = formatPickerRows(formatOptions);
   const drawn: Record<TrayCell, ReactNode> = {
     set: (
       <TrayField key="set" label="Set">
@@ -1045,19 +917,18 @@ export function FilterTray<SortKey extends string>({
         <Dropdown
           id={`${labels.idStem}-format`}
           labelledBy={`${labels.idStem}-format-label`}
-          value={search.format}
-          onChange={search.setFormat}
+          // Tokens & extras is the format sentinel and has no row here: the picker reads `Any
+          // format` under it, and picking `Any format` again leaves the toggle on.
+          value={pickedFormat(search.format)}
+          onChange={(next) => {
+            if (next !== pickedFormat(search.format)) search.setFormat(next);
+          }}
           options={formatDropdownOptions}
           fill
           searchable
-          // Gold means "this is not where the control opens", which is a wider claim than "a
-          // filter is on" — `Any card` is a *widening* and lights the same way, because the
-          // reader needs to see that the wall in front of them has art cards and tokens in it.
-          // `Any format` is the default and the only value that reads as untouched.
-          //
-          // It matters more in a tray than it did on the bar: a shut tray is a filter the reader
-          // cannot see, so the gold is what the Filters badge is counting on their behalf.
-          active={search.format !== ""}
+          // Gold means "this is not where the control opens". `Any format` is the default and
+          // the only value that reads as untouched; Tokens & extras lights its own toggle.
+          active={pickedFormat(search.format) !== ""}
         />
       </TrayField>
     ),
@@ -1078,22 +949,27 @@ export function FilterTray<SortKey extends string>({
             pressing would give; pressed, it is what the reader is already looking at. */
     owned: search.setOwned ? (
       <TrayField key="owned" label="Owned">
-        <div className="flex gap-1.5">
-          <ToggleChip
-            label="Owned"
-            pressed={search.owned === true}
-            title={facetTitle("Owned", facets?.owned.owned)}
-            onClick={() => search.setOwned?.(true)}
-            className="flex-1"
-          />
-          <ToggleChip
-            label="Missing"
-            pressed={search.owned === false}
-            title={facetTitle("Missing", facets?.owned.missing)}
-            onClick={() => search.setOwned?.(false)}
-            className="flex-1"
-          />
-        </div>
+        {/* Two answers in one joined control; pressing the one that is on turns it off. Never
+            greyed — each title counts what its word names, read either way. */}
+        <JoinedChoices
+          label="Owned"
+          choices={[
+            {
+              value: "owned",
+              label: "Owned",
+              pressed: search.owned === true,
+              title: facetTitle("Owned", facets?.owned.owned),
+              onClick: () => search.setOwned?.(true),
+            },
+            {
+              value: "missing",
+              label: "Missing",
+              pressed: search.owned === false,
+              title: facetTitle("Missing", facets?.owned.missing),
+              onClick: () => search.setOwned?.(false),
+            },
+          ]}
+        />
       </TrayField>
     ) : null,
 
@@ -1129,12 +1005,12 @@ export function FilterTray<SortKey extends string>({
       </TrayField>
     ) : null,
 
-    /* Two by two below 640 and one line above it. Four gems and four words is 340px at its
-            widest, which fits a third of the tray on the search page and does not fit one column
-            of a 206px panel — and a chip that cannot shrink hangs out of the panel. */
+    /* Two by two below the widest bar and one line at it (the board). Four gems and four words
+       is ~340px, which a third of a 1100px popup does not hold, and a chip that cannot shrink
+       hangs out of its cell. */
     rarity: (
       <TrayField key="rarity" label="Rarity">
-          <div className="grid grid-cols-2 gap-1.5 @min-[640px]/fb:flex">
+          <div className="grid grid-cols-2 gap-1.5 @min-[1500px]/fb:flex">
             {RARITIES.map((rarity) => (
               <RarityChip
                 key={rarity}
@@ -1191,7 +1067,7 @@ export function FilterTray<SortKey extends string>({
               disabled={optionDisabled(facets?.types, t, search.types?.includes(t) ?? false)}
               title={facetTitle(t, facets?.types?.[t])}
               onClick={() => search.toggleType?.(t)}
-              className="flex-1"
+              className="flex-none"
             />
           ))}
         </div>
@@ -1216,24 +1092,22 @@ export function FilterTray<SortKey extends string>({
        chips are wider than the ~161px cell, and a row that cannot break hangs out of the panel. */
     border: search.toggleBorder ? (
       <TrayField key="border" label="Border">
-        <div role="group" aria-label="Border" className="flex flex-wrap gap-1.5">
-          {BORDERS.map((b) => {
+        {/* Three ORed choices joined — not a partition (a borderless full-art printing answers
+            both of the last two), so each segment presses on its own. */}
+        <JoinedChoices
+          label="Border"
+          choices={BORDERS.map((b) => {
             const pressed = search.borders?.includes(b) ?? false;
-            return (
-              <ToggleChip
-                key={b}
-                label={BORDER_LABEL[b]}
-                pressed={pressed}
-                // The selected arm, like the types above: a border the reader picked stays
-                // pressable however its own count reads, so the way out is never what greys.
-                disabled={optionDisabled(facets?.borders, b, pressed)}
-                title={facetTitle(BORDER_LABEL[b], facets?.borders?.[b])}
-                onClick={() => search.toggleBorder?.(b)}
-                className="flex-1"
-              />
-            );
+            return {
+              value: b,
+              label: BORDER_LABEL[b],
+              pressed,
+              disabled: optionDisabled(facets?.borders, b, pressed),
+              title: facetTitle(BORDER_LABEL[b], facets?.borders?.[b]),
+              onClick: () => search.toggleBorder?.(b),
+            };
           })}
-        </div>
+        />
       </TrayField>
     ) : null,
 
@@ -1243,19 +1117,17 @@ export function FilterTray<SortKey extends string>({
        for it, and `facets.ts`' fail-open rule is that a missing count leaves a control live. */
     universe: search.setUniverse ? (
       <TrayField key="universe" label="Universe">
-        <div role="group" aria-label="Universe" className="flex flex-wrap gap-1.5">
-          {UNIVERSES.map((u) => (
-            <ToggleChip
-              key={u}
-              label={UNIVERSE_LABEL[u]}
-              pressed={search.universe === u}
-              // The full name as the tooltip, joined to a name that begins with the word drawn.
-              hint={UNIVERSE_CHIP_LABEL[u]}
-              onClick={() => search.setUniverse?.(u)}
-              className="flex-1"
-            />
-          ))}
-        </div>
+        {/* A partition, so pressing the one that is on turns the filter off. No facet count. */}
+        <JoinedChoices
+          label="Universe"
+          choices={UNIVERSES.map((u) => ({
+            value: u,
+            label: UNIVERSE_LABEL[u],
+            pressed: search.universe === u,
+            hint: UNIVERSE_CHIP_LABEL[u],
+            onClick: () => search.setUniverse?.(u),
+          }))}
+        />
       </TrayField>
     ) : null,
 
@@ -1297,22 +1169,20 @@ export function FilterTray<SortKey extends string>({
        arm, which fails open rather than greying a copy's question by a printing's count. */
     finish: search.toggleFinish ? (
       <TrayField key="finish" label="Finish">
-        <div role="group" aria-label="Finish" className="flex flex-wrap gap-1.5">
-          {FINISHES.map((f) => {
+        <JoinedChoices
+          label="Finish"
+          choices={FINISHES.map((f) => {
             const pressed = search.finishes?.includes(f) ?? false;
-            return (
-              <ToggleChip
-                key={f}
-                label={FINISH_LABEL[f]}
-                pressed={pressed}
-                disabled={optionDisabled(facets?.finishes, f, pressed)}
-                title={facetTitle(FINISH_LABEL[f], facets?.finishes?.[f])}
-                onClick={() => search.toggleFinish?.(f)}
-                className="flex-1"
-              />
-            );
+            return {
+              value: f,
+              label: FINISH_LABEL[f],
+              pressed,
+              disabled: optionDisabled(facets?.finishes, f, pressed),
+              title: facetTitle(FINISH_LABEL[f], facets?.finishes?.[f]),
+              onClick: () => search.toggleFinish?.(f),
+            };
           })}
-        </div>
+        />
       </TrayField>
     ) : null,
 
@@ -1393,35 +1263,49 @@ export function FilterTray<SortKey extends string>({
       </TrayField>
     ) : null,
 
-    /* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
-            one per printing — so it is untouched by Reset all and absent from the badge. In the
-            tray only where the bar has no room for it: since issue #911 a wide bar draws it
-            beside Filters and `FilterBar` leaves this cell out of the list it passes, so it is
-            never drawn twice ({@link printingsOnBar}). The quick bar has no room of its own for
-            it and keeps the cell at every width. */
-    printings: search.toggleAllPrintings ? (
-      <TrayField key="printings" label="Printings">
-        {/* **One label, never flipped to `One per card` when it is off.** This is a plain
-            two-state toggle and `aria-pressed` already carries the state, so a label that
-            changed with it would say the same thing twice — and say it as a double negative,
-            since an unpressed `One per card` means "not one per card". The Owned pair beside it
-            flips nothing either: it answers the same problem with two buttons, because *its*
-            two states are two different questions rather than one question's on and off. */}
+    include: search.anyCard ? (
+      <TrayField key="include" label="Include">
+        {/* **Tokens & extras** — the format picker's old `Any card` row as its own toggle, at the
+            regular height and the end of the grid (the board). It is that row's sentinel, so
+            turning it on puts the format back to `Any format` and picking a format turns it
+            off: see {@link TOKENS_AND_EXTRAS} for why the two never stand on at once. */}
         <ToggleChip
-          label={SHOW_ALL_PRINTINGS}
-          pressed={search.allPrintings ?? false}
-          onClick={() => search.toggleAllPrintings?.()}
-          className="w-full"
+          label={TOKENS_AND_EXTRAS}
+          hint={TOKENS_AND_EXTRAS_HINT}
+          pressed={search.format === ANY_CARD}
+          icon={
+            search.format === ANY_CARD ? (
+              <Check aria-hidden="true" className="size-3.5" />
+            ) : (
+              <Plus aria-hidden="true" className="size-3.5" />
+            )
+          }
+          onClick={() => search.setFormat(search.format === ANY_CARD ? "" : ANY_CARD)}
+          className="self-start"
         />
       </TrayField>
     ) : null,
   };
 
   return (
-    <div id={id} className="rounded-lg border border-border bg-surface px-4 py-3.5">
-      <div className="grid grid-cols-1 gap-x-6 gap-y-3.5 @min-[640px]/fb:grid-cols-2 @min-[900px]/fb:grid-cols-3">
-        {cells.map((cell) => drawn[cell])}
+    // **A regular grid, filled left to right in the caller's order, each row only as tall as its
+    // own tallest filter** (`items-start`, auto rows — the board). Three columns from 980, the
+    // bar's Normal band; two from 640; one below, where the cells scroll inside a frame that
+    // keeps its four corners and fades out above the foot (the deck panel's popup). **The
+    // scroller is never a container**: the format and set popups draw in a `fixed` frame whose
+    // containing block is the bar's own `@container/fb`, outside this box, so it cannot clip
+    // them.
+    <div id={id} className="relative overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="max-h-[min(470px,60vh)] overflow-y-auto px-4 pt-3.5 pb-8 @min-[640px]/fb:max-h-none @min-[640px]/fb:overflow-visible @min-[640px]/fb:pb-3.5">
+        <div className="grid grid-cols-1 items-start gap-x-6 gap-y-3.5 @min-[640px]/fb:grid-cols-2 @min-[980px]/fb:grid-cols-3">
+          {cells.map((cell) => drawn[cell])}
+          {view}
+        </div>
       </div>
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-b from-transparent to-surface @min-[640px]/fb:hidden"
+      />
     </div>
   );
 }

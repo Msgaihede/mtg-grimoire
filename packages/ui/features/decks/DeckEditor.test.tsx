@@ -4710,8 +4710,11 @@ describe("DeckEditor", () => {
     const setFilter = () => screen.getByRole("button", { name: "Set" });
     const filterOpen = () => screen.queryByRole("combobox", { name: "Search sets" });
 
-    // The format check, then the set filter: taking the caret out of the check closes it.
+    // The format check, then the set filter: taking the caret out of the check closes it. The
+    // press on the check is outside the bar, so it takes the Filters popup down too (the Filter
+    // bar board's rule) — reopened before the set filter is reached for.
     await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
+    await openFilterTray();
     await userEvent.click(setFilter());
 
     expect(filterOpen()).toBeInTheDocument();
@@ -4725,6 +4728,7 @@ describe("DeckEditor", () => {
 
     // And an overlay is the same both ways — it covers the panel, so the filter cannot even be
     // reached while one is up.
+    await openFilterTray();
     await userEvent.click(setFilter());
     expect(filterOpen()).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Categories" }));

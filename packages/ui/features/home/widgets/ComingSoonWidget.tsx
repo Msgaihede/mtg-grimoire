@@ -31,7 +31,7 @@
  *
  * `showSetInSearch(code)` is the view change and the hand-off in one store action, so no caller can
  * write them in the order that wipes the second — and the Search page answers it with
- * `useCardSearch`'s `showOnlySet`, which puts the format picker on `Any card`, so legality does not
+ * `useCardSearch`'s `showOnlySet`, which puts the format picker on `Tokens & extras`, so legality does not
  * hide a card that is not legal anywhere yet. **A row's `seen` is that search's own number** — the
  * set's paper printings, one per card, which is what `upcoming_sets` counts — so the row and the
  * page it opens say one figure. The live pass read `461 seen` over a search of `285 cards` for one

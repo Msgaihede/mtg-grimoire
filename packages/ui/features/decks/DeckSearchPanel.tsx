@@ -343,7 +343,7 @@ export interface DeckSearchPanelProps {
    * starts filtering for a format the editor is not showing.
    *
    * **A default, never a constraint.** It seeds `useCardSearch`'s `format` state and reaches
-   * nothing else: `Any format` stays in the list under the wider `Any card`, the reader may move
+   * nothing else: `Any format` stays in the list under the wider `Tokens & extras`, the reader may move
    * the select to any format including one this deck is not legal in, and the card they then
    * press Add on is added. Legality is `validation/engine.ts`'s `RULE BREAK` on the card once it
    * is in the deck, and why that is the only place it may be answered is the docked panel's

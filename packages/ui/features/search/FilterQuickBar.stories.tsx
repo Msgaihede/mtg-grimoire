@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
+import { STACK_PRINTINGS } from "./FilterBar";
 import { FilterQuickBar } from "./FilterQuickBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -22,7 +23,7 @@ const BOX_WIDTH_PX = 1232;
  * `FilterQuickBar` over the **real `useCardSearch`**, with a story's opening filters pressed
  * through the hook's own setters — `FilterBar.stories.tsx`'s `SearchFilters`, for its
  * reasons: a hand-built `FilterSurface` would be a second copy of the toggle rules and of the
- * count the Filters and Reset all badges print, and the two would drift from the app while every
+ * count the Filters and Reset pills print, and the two would drift from the app while every
  * story here stayed green. The preset runs once from an effect, so the docs page shows it too.
  *
  * `shown` is always on: the bar draws nothing at all while the page row is on screen, and there
@@ -88,7 +89,8 @@ const meta = {
           "wishlist and Tags, grid view only. It takes the page's own `search`, `labels`, " +
           "`sortRows` and `tray`, so every control is a second entrance to one of the row's: " +
           "Top, the text, the colours, the mana values, Filters (the page's own tray, hung " +
-          "under the bar), the sort and Reset all.\n\n" +
+          "under the bar), the sort, **Stack printings** and Reset — the page bar's own " +
+          "controls, count pills and all (the Filter bar board, 2026-11).\n\n" +
           "**Four rungs, from its own container width** (`@container/qb`): words at ≥ 1500, " +
           "icons with names below it, the mana values folded into one press below 1100 (1500 " +
           "for Tags), and the sort gone below 860. Every story here is 1192px of content, the " +
@@ -103,7 +105,11 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * A filtered search, docked: a word in the field, two colours and a mana value pressed, and the
- * two badges — Filters and Reset all — both reading the search's own count of kinds that are on.
+ * two count pills — Filters and Reset — both reading the search's own count of kinds that are on.
+ *
+ * **Stack printings rides the quick bar too**, pressed (one tile per card): a view mode, so
+ * neither pill counts it. Its word is drawn at the widest rung only; this 1192px box is the
+ * `wide` one, so it is the icon here, still named `Stack printings`.
  */
 export const Docked: Story = {
   args: {
@@ -114,11 +120,26 @@ export const Docked: Story = {
       search.toggleManaValue(1);
     },
   },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const reset = await canvas.findByRole("button", { name: "Reset all — 3 filters active" });
+    await expect(reset.querySelector("[data-count-pill]")).toHaveTextContent("3");
+    await expect(
+      canvas
+        .getByRole("button", { name: "Show filters — 3 active" })
+        .querySelector("[data-count-pill]"),
+    ).toHaveTextContent("3");
+    await expect(canvas.getByRole("button", { name: STACK_PRINTINGS })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  },
 };
 
 /**
  * The bar's own tray, open: the page's `FilterTray` with the same cells, hung 8px under the bar
- * with the bar's shadow. Its open state is the bar's own — the page row's tray is untouched.
+ * with the bar's shadow — Include and its **Tokens & extras** toggle last. Its open state is the
+ * bar's own — the page row's tray is untouched.
  */
 export const TrayOpen: Story = {
   play: async ({ canvasElement }) => {
@@ -126,6 +147,13 @@ export const TrayOpen: Story = {
     const filters = await canvas.findByRole("button", { name: /^Show filters/ });
     await userEvent.click(filters);
     await expect(filters).toHaveAttribute("aria-expanded", "true");
+    await expect(canvas.getByText("Include")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Tokens & extras\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // No printings cell — Stack printings is on the bar.
+    await expect(canvas.queryByText("Printings")).toBeNull();
   },
 };
 

@@ -13533,7 +13533,7 @@ export function readHandlers(db: FakeDb) {
      * that are not paper never make a set coming soon.
      *
      * **`previewed` is not asked of the window**: it is what {@link readHandlers.search_cards}
-     * draws for the set's chip on `Any card` — every paper printing in the set's code, one per
+     * draws for the set's chip on `Tokens & extras` — every paper printing in the set's code, one per
      * {@link collapseKey}, whatever its layout or date — because a press on the row opens exactly
      * that search, and the crate's correlated count is the same question.
      *
@@ -13563,7 +13563,7 @@ export function readHandlers(db: FakeDb) {
       }
       // The released-set rule's subject: every set that already has a paper card out, whatever
       // its layout and however far outside the window. And `previewed`'s: what the search draws
-      // for each set's chip on `Any card` — every paper printing in the code, one per
+      // for each set's chip on `Tokens & extras` — every paper printing in the code, one per
       // {@link collapseKey}, whatever its layout and date.
       const released = new Set<string>();
       const searched = new Map<string, Set<string>>();

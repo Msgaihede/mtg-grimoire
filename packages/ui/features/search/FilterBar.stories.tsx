@@ -2,8 +2,9 @@ import { useEffect, useRef } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
-import { openDropdown } from "@/test-dropdown";
-import { FilterBar } from "./FilterBar";
+import { openDropdown, pickOption } from "@/test-dropdown";
+import { FilterBar, STACK_PRINTINGS } from "./FilterBar";
+import { TOKENS_AND_EXTRAS } from "./filterOptions";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
 /** What a story switches on before the row is first drawn. Applied once; see {@link SearchFilters}. */
@@ -28,9 +29,9 @@ const AT_MIN_WIDTH = "w-[776px]";
  * `FilterChips.stories.tsx`'s rule, one level up. What is different here is *whose* state:
  * `FilterBar`'s single prop is a `CardSearch`, and a hand-built one would be a second copy of
  * six toggle rules and the arithmetic (`activeFilterCount`, `useCardSearch.ts:93`) that the
- * Reset all badge prints. Two of those rules are not obvious and would be copied wrong —
+ * Reset pill prints. Two of those rules are not obvious and would be copied wrong —
  * `toggleColor` makes colourless exclusive both ways (`useCardSearch.ts:125-129`), and
- * `toggleOwned` is a three-state cycle through one boolean — so the badge and the chips would
+ * `toggleOwned` is a three-state cycle through one boolean — so the pills and the chips would
  * drift from the app while every story here stayed green. The hook is cheap: it queries the
  * seeded fake backend, and the 52-printing corpus answers at once.
  *
@@ -46,6 +47,7 @@ function SearchFilters({
   preset,
   layoutToggle,
   width = AT_1280,
+  px,
 }: {
   preset?: Preset;
   /** `FilterBar`'s own prop, passed straight through. */
@@ -53,6 +55,11 @@ function SearchFilters({
   /** A Tailwind width class for the box the row has to fit in — the whole subject of the
    *  wrapping stories, and a live control on every other one. */
   width?: string;
+  /**
+   * A width in pixels instead, for the band stories — set as a style and stated on the box as
+   * `data-story-width`, which is what {@link reportStoryWidth} reads where nothing lays out.
+   */
+  px?: number;
 }) {
   const search = useCardSearch();
   const applied = useRef(false);
@@ -62,16 +69,20 @@ function SearchFilters({
     preset(search);
   });
   return (
-    <div className={width}>
+    <div
+      className={px === undefined ? width : undefined}
+      style={px === undefined ? undefined : { width: px }}
+      data-story-width={px}
+    >
       <FilterBar search={search} layoutToggle={layoutToggle} />
     </div>
   );
 }
 
 /**
- * Every filter the search offers, on at once — six *kinds*, which is what the badge counts.
+ * Every filter the search offers, on at once — six *kinds*, which is what the count pills say.
  *
- * Three colours rather than one, because the badge's whole subject is that they are one thing
+ * Three colours rather than one, because the pill's whole subject is that they are one thing
  * that is on and not three. All three are coloured: `toggleColor` refuses to mix `C` with a
  * colour, so a preset that reached for colourless would silently drop the other two.
  */
@@ -85,8 +96,9 @@ const everything: Preset = (search) => {
 };
 
 /**
- * Open the filter tray — Set, Format, Owned, Rarity, Price and Printings, which the row keeps
- * behind one disclosure at every width.
+ * Open the Filters popup — Set, Format, Universe, Type, Rarity, Price, Finish, Border, Owned and
+ * Include, which the bar keeps behind one button at every width (and the View cell, when the bar's
+ * band moved the sort or the Grid/List pair into it).
  *
  * **Not something a `preset` can do**, and that is the tray working as designed: `trayOpen` is
  * `FilterBar`'s own state rather than the hook's, because the two surfaces that draw this row are
@@ -111,20 +123,24 @@ const meta = {
     docs: {
       description: {
         component:
-          "Every filter the search view offers, in one wrapping row. The controls are " +
-          "`FilterChips`' — the collection's row is built from the same five, so the two are " +
-          "the *same* row rather than lookalikes — and what this file owns is the layout and " +
-          "which filters the search offers.\n\n" +
-          "**The wrapping lives here.** `flex-wrap` is on this component's own container " +
-          "(`FilterBar.tsx:45`) and on nothing `FilterChips` exports, so how a full row breaks " +
-          "across lines is a question only these stories can answer. Every width below is a " +
-          "window the app can really be: 1032px is the 1280 default, 776px is the 1024 floor " +
-          "`tauri.conf.json` enforces, and 371px is the deck editor's docked panel.\n\n" +
+          "Every filter the search view offers: the search box, the colours and the mana " +
+          "values on the bar, then Filters, the sort, **Stack printings**, Grid/List and Reset, " +
+          "and everything else in the Filters popup that drops over the results (the Filter " +
+          "bar board, 2026-11). The controls are `FilterChips`' — the collection's row is built " +
+          "from the same ones, so the two are the *same* row rather than lookalikes — and what " +
+          "this file owns is the layout and which filters the search offers.\n\n" +
+          "**The bar lays out by its own measured width** (`barBand`): `widest` ≥ 1500 puts " +
+          "every word on its control; `roomy` 1100–1499 keeps the controls and names the icons " +
+          "by tooltip; `normal` 980–1099 moves Grid/List into the popup's View cell; `tight` " +
+          "800–979 moves the sort there too; `panel` < 800 is four lines. The `Band…` stories " +
+          "draw each one. Every other width below is a window the app can really be: 1032px is " +
+          "the 1280 default, 776px is the 1024 floor `tauri.conf.json` enforces, and 371px is " +
+          "the deck editor's docked panel.\n\n" +
           "**Nothing on this page is a hand-written filter state.** Each story presses its own " +
-          "opening filters through the real `useCardSearch`, so the Reset all badge is the " +
-          "real `activeFilterCount` and the colour chips obey the real `toggleColor`. The " +
-          "colour chips are the app's one deliberate splash of colour, which is why every " +
-          "other control on the row is grey.",
+          "opening filters through the real `useCardSearch`, so the count pills on Filters and " +
+          "Reset are the real `activeFilterCount` and the colour chips obey the real " +
+          "`toggleColor`. The colour chips are the app's one deliberate splash of colour, " +
+          "which is why every other control on the row is grey.",
       },
     },
   },
@@ -136,7 +152,7 @@ type Story = StoryObj<typeof meta>;
 /**
  * Nothing on: the row a reader opens the app to.
  *
- * Six grey controls and a splash of colour, with a **greyed Reset all** already holding its
+ * Grey controls and a splash of colour, with a **greyed Reset** already holding its
  * place at the end of them — the rule lives in the control rather than in this row, so every
  * view that offers a reset offers the same one. It is drawn here and dead because the search
  * box is `flex-1`: a Reset that arrived on the first press would take its width out of the box
@@ -153,10 +169,15 @@ export const Default: Story = {
       "placeholder",
       "Search cards…",
     );
-    // The badge is drawn only when there is something to count, so a quiet row's Filters button
-    // is an icon and a word and nothing else.
-    await expect(canvas.getByRole("button", { name: "Show filters — 0 active" })).toHaveTextContent(
-      "Filters",
+    // **The count pill is drawn at 0** (the Filter bar board: a button never changes width when
+    // it is used), grey until something is on — so a quiet row's Filters reads `Filters 0`.
+    const filters = canvas.getByRole("button", { name: "Show filters — 0 active" });
+    await expect(filters).toHaveTextContent("Filters");
+    await expect(filters.querySelector("[data-count-pill]")).toHaveTextContent("0");
+    // Stack printings is on the bar and pressed — one tile per card is the default wall.
+    await expect(canvas.getByRole("button", { name: STACK_PRINTINGS })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
     await openTray(canvas);
     await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
@@ -170,7 +191,7 @@ export const Default: Story = {
 /**
  * Three kinds on — a word, two colours and a mana value.
  *
- * Gold border and gold text mark the controls that are doing something, and the badge counts
+ * Gold border and gold text mark the controls that are doing something, and the pill counts
  * *kinds*: two colours are one thing that is on. The set picker and the format select are
  * untouched and stay grey, which is what makes the gold legible as a state rather than as
  * decoration.
@@ -189,12 +210,12 @@ export const ActiveFilters: Story = {
 /**
  * All six kinds at once, which is also the widest this row gets.
  *
- * The badge is the claim: **six**, with three colour chips pressed, one mana value, one set and
+ * The count pill is the claim: **six**, with three colour chips pressed, one mana value, one set and
  * one format. Kinds and not values, because the number captions a button that is about to clear
  * all of it and its job is to say how much is about to change.
  *
- * The Owned chip is last on the row, and last for a reason — everything left of it describes
- * cardboard, and it describes the reader's relationship to it.
+ * The Owned pair is the popup's last filter before Include, and last for a reason — everything
+ * before it describes cardboard, and it describes the reader's relationship to it.
  *
  * **One thing this story found rather than showed, and it has since been fixed:** the Reset all
  * button's accessible name was `"Reset all6"`, with no separator between the label and the
@@ -202,8 +223,8 @@ export const ActiveFilters: Story = {
  * resolver Testing Library's `name` option uses. The badge is an inline `<span>` and the accname
  * algorithm inserts nothing between inline boxes. Reported rather than patched at the time
  * because that task edited no component source; patched when the button became always-drawn,
- * which would have made the sentence `"Reset all0"` on every quiet row in the app. The badge is
- * `aria-hidden` now and the count is spelled into the button's own name.
+ * which would have made the sentence `"Reset all0"` on every quiet row in the app. The pill
+ * (`CountPill`) is `aria-hidden` now and the count is spelled into the button's own name.
  */
 export const AllFiltersActive: Story = {
   args: { preset: everything },
@@ -212,11 +233,11 @@ export const AllFiltersActive: Story = {
     // `findBy`, because the preset lands in an effect: the first query on this page has to wait
     // for the render it caused — **and it waits on the count in the name.** The button is drawn
     // from the first render now, so a bare `/^Reset all/` would resolve against the row *before*
-    // the preset and every assertion below would read a state this story is not about. The badge
+    // the preset and every assertion below would read a state this story is not about. The pill
     // is drawn rather than spoken; the visible label still leads the name (WCAG 2.5.3).
     const reset = await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
     await expect(reset).toHaveTextContent("6");
-    // Three chips pressed against a badge reading 6: this is the whole of "kinds, not values",
+    // Three chips pressed against a pill reading 6: this is the whole of "kinds, not values",
     // and it is invisible in a screenshot of a row full of gold.
     //
     // **Matched on a prefix**, because the fake answers `facet_cards` and a chip's accessible
@@ -255,14 +276,14 @@ export const AllFiltersActive: Story = {
 };
 
 /**
- * The row after Reset all — which is **byte-for-byte {@link Default}**, and that is why this is
+ * The row after Reset — which is **byte-for-byte {@link Default}**, and that is why this is
  * an interaction rather than a sixth static story.
  *
  * `resetAll` writes every filter back to the value it was created with (`useCardSearch.ts:283`),
  * so a story that rendered the end state would be a duplicate of the first one on this page
  * under a different name. What is worth showing is the press, and what is worth asserting is
  * that the reset is *total*: it is six separate setters, and a filter left off that list would
- * still be on here while the badge that counted it had vanished.
+ * still be on here while the pill that counted it had vanished.
  *
  * On the docs page this renders in its opening state — six filters on — because Storybook does
  * not autoplay there. The canvas is where the press happens.
@@ -317,13 +338,15 @@ export const Cleared: Story = {
  * are castable in red; none of them costs 4, 5, 6 or 7, so those four chips are drawn dim and
  * ignore a press. Standard goes with them in the format select — and **falls to the bottom of
  * it**, which is the second rule this row reads plainly: everything still pickable is listed
- * above everything that is not, each half alphabetical by the word on screen, under the two
- * pinned rows "Any card" and "Any format". `FORMATS` writes Standard *first*; that order is a
- * fact about the keys and reaches the screen nowhere.
+ * above everything that is not, each half alphabetical by the word on screen, under the one
+ * pinned row "Any format". `FORMATS` writes Standard *first*; that order is a fact about the keys
+ * and reaches the screen nowhere.
  *
- * 42 rather than the corpus' 45 paper printings, because `playableOnly` is on: the art card,
- * `Kozilek, Compleated` and `Little Girl` are legal in no format, and every row of that select
- * but its first — "Any card" — hides them.
+ * Fewer than the corpus' paper printings, because `playableOnly` is on: the art card, `Kozilek,
+ * Compleated`, `Little Girl` and the tokens are legal in no format, and every row of that select
+ * hides them. The way back to them is not a row of it any more — it was `Any card` until the
+ * Filter bar board (2026-11) — but the Include cell's **Tokens & extras** toggle, the same
+ * `format` sentinel ({@link TokensAndExtras}).
  *
  * **The colour chips all stay live, and that is the interesting half.** `colors` is *subset*
  * semantics, so pressing White with Red already on asks for "castable in RW" — a **superset**,
@@ -391,11 +414,9 @@ export const SomeUnavailable: Story = {
     // format this search has nothing legal in belongs under the six that would return cards.
     // Asserted as the whole sequence, because an ordering bug that swapped two rows past each
     // other satisfies every assertion about one row's position.
-    // The two pinned rows lead, widest first — they are the ladder out of the alphabet below
-    // them, and `Any card` is the row that can widen a search this narrow rather than merely
-    // unnarrow it.
+    // The one pinned row leads — the way out of the alphabet below it. `Any card` is gone from
+    // the list: widening past every format is the Include cell's toggle now.
     await expect(options.map((o) => o.textContent)).toEqual([
-      "Any card",
       "Any format",
       "Commander",
       "Legacy",
@@ -421,7 +442,7 @@ export const SomeUnavailable: Story = {
  * chip greys even though it returns something.
  *
  * The last assertion is the one that keeps this from being a trap. When a search greys most
- * of the row, `Reset all` is the escape, and it is **live** because the text filter is on —
+ * of the row, `Reset` is the escape, and it is **live** because the text filter is on —
  * which is the assertion, now that the button is drawn on every row whether or not it can do
  * anything. A greyed row whose reset is also greyed is the failure mode the "a selected option
  * is never greyed" rule exists to prevent, and it is what an *unfiltered* empty corpus would
@@ -465,9 +486,13 @@ export const MostlyUnavailable: Story = {
       .getAllByRole("option")
       .filter((o) => o.getAttribute("aria-disabled") !== "true")
       .map((o) => o.textContent);
-    // Neither pinned row is ever greyed: "Any format" is how a format filter is taken off, and
-    // "Any card" is the one row that can *widen* a search greyed into a corner.
-    await expect(live).toEqual(["Any card", "Any format", "Vintage"]);
+    // The pinned row is never greyed: "Any format" is how a format filter is taken off.
+    await expect(live).toEqual(["Any format", "Vintage"]);
+    // …and the one control that can *widen* a search greyed into a corner — the format picker's
+    // old `Any card` row, the Include cell's toggle since the Filter bar board — stays live too.
+    await expect(
+      canvas.getByRole("button", { name: new RegExp(`^${TOKENS_AND_EXTRAS}\\b`) }),
+    ).not.toHaveAttribute("aria-disabled");
 
     // The escape, and the whole reason this row is allowed to look like this. Presence is no
     // longer the claim — the button is on every row — so the claim is that it is *pressable*.
@@ -542,7 +567,7 @@ export const IndexCold: Story = {
  *
  * **Never gold**, unlike the format select two controls back. A list is always in *some* order,
  * so a sort cannot be inactive, and accent on this row means "a filter is on" — which is exactly
- * what the greyed Reset all beside it is here to contradict: the badge reads 0 while the picker
+ * what the greyed Reset beside it is here to contradict: its pill reads 0 while the picker
  * is plainly doing something.
  *
  * The arrow is one `ArrowUp` turned half a turn and never `ArrowDown` swapped in — two components
@@ -582,7 +607,7 @@ export const SortedDescending: Story = {
     const sort = canvas.getByRole("button", { name: "Sort results" });
     await expect(sort).toHaveTextContent("Released");
 
-    // A sort is not a filter: the badge does not count it and Reset all does not clear it.
+    // A sort is not a filter: the pills do not count it and Reset does not clear it.
     await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -593,9 +618,11 @@ export const SortedDescending: Story = {
 /**
  * The narrowest window the app can be put in: 1024 wide, leaving this row 776px.
  *
- * This is the story the wrapping exists for. Nothing here is a media query — one `flex-wrap`
- * container and a search box that is `min-w-56 flex-1`, so the box takes what is left of the
- * first line and the rest of the row breaks where it runs out.
+ * **Under `tight`'s 800, so this is the `panel` band** — the deck editor's four lines: the search
+ * box, the colours spread across theirs, the mana values stretched across theirs, then Filters,
+ * the sort, Stack printings and Reset, with Grid/List in the Filters popup's View cell. Nothing
+ * here is a media query: the band is read from the bar's own measured width (`barBand`), so the
+ * same 776px reads the same way wherever the bar is mounted.
  */
 export const NarrowestWindow: Story = {
   args: { preset: everything, width: AT_MIN_WIDTH },
@@ -611,7 +638,8 @@ export const NarrowestWindow: Story = {
  * row is a statement about which cards to show and means the same thing in both places.
  *
  * 371px is the panel's own content box — `PANEL_WIDTH_PX = 384` (`DeckSearchPanel.tsx:39`) less
- * the `border-l` and `pl-3` it is drawn with (`DeckSearchPanel.tsx:259`).
+ * the `border-l` and `pl-3` it is drawn with (`DeckSearchPanel.tsx:259`) — and so the `panel`
+ * band: see {@link BandPanel} for the four lines drawn with the popup open.
  */
 export const DockedPanel: Story = {
   args: { layoutToggle: false, preset: everything, width: "w-[371px]" },
@@ -739,7 +767,7 @@ export const TagBesideFreeText: Story = {
  * (AND) pressed, `squares-unite` (OR) not — so it reads as the same control without
  * reading as a seventh colour.
  *
- * **The badge still reads 1.** Strict modifies the colour filter rather than being one, so
+ * **The pill still reads 1.** Strict modifies the colour filter rather than being one, so
  * `activeFilterCount` does not count it; what says it is on is the word inside the chip under the
  * rule — `Colour: exactly White, Blue` — and pressing that chip's × takes the flag off with the
  * colours it was about, because that chip is the one thing on screen that *names* the reading.
@@ -881,13 +909,16 @@ export const BorderAndFinish: Story = {
 };
 
 /**
- * **The tray, open — every filter that is not on the bar.**
+ * **The Filters popup, open — every filter that is not on the bar.**
  *
- * Nine fields in three columns: the set picker, the format ladder, the owned pair, the four
- * rarities, the eight card types, the three borders, the three finishes a printing can be
- * published in, the price band and the printings mode. Four controls stay on
- * the bar above it at every width — the box you type in, the colours, the mana values and the
- * order the results come in — because those are the four a reader reaches for without looking.
+ * Ten cells in three columns, in the Filter bar board's order (2026-11): the set picker, the
+ * format picker, the Universe pair, the eight card types, the four rarities, the price band, the
+ * three finishes a printing can be published in, the three borders, the Owned pair and — last —
+ * Include, the **Tokens & extras** toggle. Universe, Finish, Border and Owned are joined button
+ * groups (`JoinedChoices`); the longer lists stay chips. The popup drops over the results rather
+ * than pushing them down, and what is on is stated under the bar once it closes.
+ *
+ * **No `Printings` cell any more**: `Stack printings` is on the bar at every width.
  *
  * The counts are the fake's own `facet_cards`, so the rarity chips grey exactly as the mana chips
  * beside them do and by the same rule: an option greys when turning it on would not change the
@@ -899,25 +930,35 @@ export const TrayOpen: Story = {
     const canvas = within(canvasElement);
     await openTray(canvas);
 
-    // The nine fields, by their captions — the tray's own vocabulary, which is the only place
+    // The ten cells, by their captions — the popup's own vocabulary, which is the only place
     // in the app a label sits above its control.
     //
-    // `getAllByText`, because two of the nine are said twice on purpose: `SetCombobox` and the
+    // `getAllByText`, because several are said twice on purpose: `SetCombobox` and the
     // format select each carry a name of their own for assistive tech (an `sr-only` span and a
     // `<label>`), and the tray's caption is the *visible* one above it. One control, two
     // spellings of one word, and the caption is the half a sighted reader reads.
     for (const label of [
       "Set",
       "Format",
-      "Owned",
-      "Rarity",
+      "Universe",
       "Type",
-      "Border",
-      "Finish",
+      "Rarity",
       "Price (USD)",
-      "Printings",
+      "Finish",
+      "Border",
+      "Owned",
+      "Include",
     ]) {
       await expect(canvas.getAllByText(label).length).toBeGreaterThan(0);
+    }
+    // The printings switch is the bar's, never a cell here.
+    await expect(canvas.queryByText("Printings")).toBeNull();
+    await expect(canvas.getAllByRole("button", { name: STACK_PRINTINGS })).toHaveLength(1);
+    // The four short choices are joined groups, each segment its own `aria-pressed` button.
+    for (const group of ["Universe", "Finish", "Border", "Owned"]) {
+      const buttons = within(canvas.getByRole("group", { name: group })).getAllByRole("button");
+      await expect(buttons.length).toBeGreaterThan(1);
+      for (const b of buttons) await expect(b).toHaveAttribute("aria-pressed");
     }
     // The money is the marketplace's, never a bare dollar: the caption reads `Price (USD)` on
     // TCGplayer and `Price (EUR)` on Cardmarket, over prices from two different tables.
@@ -959,13 +1000,20 @@ export const PriceBand: Story = {
       "$2.00",
     );
 
-    // Pressing the chip takes the whole band off — one press, one fewer on the badge.
+    // Pressing the chip takes the whole band off — one press, one fewer on the pill. The popup
+    // drops over the stated line now, so the chip is a press *outside* it: shut it first, the
+    // way a reader has to, and look again.
+    await userEvent.click(canvas.getByRole("button", { name: /^Hide filters/ }));
     await userEvent.click(
       canvas.getByRole("button", { name: "Remove filter — Price: $2.00 – $40.00" }),
     );
     await waitFor(async () => {
-      await expect(canvas.getByLabelText("Lowest price")).toHaveValue("");
+      await expect(
+        canvas.queryByRole("button", { name: /^Remove filter — Price/ }),
+      ).not.toBeInTheDocument();
     });
+    await openTray(canvas);
+    await expect(canvas.getByLabelText("Lowest price")).toHaveValue("");
   },
 };
 
@@ -974,8 +1022,8 @@ export const PriceBand: Story = {
  *
  * This row is what the tray is paid for. Four of the six filters behind it have no control on
  * screen once it is shut, so without these chips a reader could be looking at a narrowed wall
- * with nothing to say why. One chip per *kind*, which is the same arithmetic the Reset all badge
- * prints: three colours are one chip, because a reader looking at `Reset all 3` over six chips
+ * with nothing to say why. One chip per *kind*, which is the same arithmetic the Reset pill
+ * prints: three colours are one chip, because a reader looking at `Reset 3` over six chips
  * has been told two different things about one search.
  */
 export const StatedFilters: Story = {
@@ -989,7 +1037,7 @@ export const StatedFilters: Story = {
         .queryAllByRole("button", { name: /^Remove filter — / })
         .map((b) => b.getAttribute("aria-label")!.replace("Remove filter — ", ""));
 
-    // Five chips against a badge of six: the sixth kind is the text in the box, which is on
+    // Five chips against a pill of six: the sixth kind is the text in the box, which is on
     // screen with the words still in it and is the one filter a chip would only repeat.
     await expect(labels()).toEqual([
       "Color: White, Blue, Black",
@@ -1003,7 +1051,7 @@ export const StatedFilters: Story = {
       canvas.getByRole("button", { name: "Remove filter — Color: White, Blue, Black" }),
     );
 
-    // The whole kind went, not one colour of it — and the badge followed.
+    // The whole kind went, not one colour of it — and the pill followed.
     await waitFor(async () => {
       await expect(labels()).toEqual([
         "Mana value: 1",
@@ -1019,20 +1067,279 @@ export const StatedFilters: Story = {
 };
 
 /**
- * **`Show all printings` beside Filters**, on a row wide enough to hold it (issue #911).
+ * **`Stack printings` — pressed, the default, is one tile per card.**
  *
- * 1200px of row, inside the two-line band `printingsOnBar` opens from 1040: the switch is the
- * first line's, just ahead of Filters, and the tray leaves its `Printings` cell out rather than
- * drawing the switch a second time. Narrow this box under 1040 — or into the one-line layout's
- * 1500–1623, where the fold spends its room — and it goes back into the tray.
+ * It was `Show all printings` until the Filter bar board (2026-11), with the opposite meaning: a
+ * switch that is *on* for the ordinary wall reads more plainly than one that has to be turned on to
+ * leave it. The state underneath is unchanged — the hook's `allPrintings`, inverted by the control
+ * — and it is **on the bar at every width** now, where it was a tray cell below 1040.
  *
- * **No `play`, deliberately** — `DeckStats`' `ThreeColumns` and its reason. The placement is read
- * from the row's `ResizeObserver`, and `stories.test.tsx` plays every story under jsdom, whose
- * observer never reports: the row stays unmeasured there and the switch stays in the tray, so a
- * play asserting the bar would fail for a reason that is not a bug. The wiring is pinned in
- * `FilterBar.test.tsx` ("the printings switch"), with the width reported by hand; this story is
- * where the drawn result is looked at.
+ * A view mode rather than a filter, so neither pill counts it and Reset leaves it where it is:
+ * the `play` un-stacks the wall, sets a word, presses Reset and finds the switch still off.
  */
-export const PrintingsBesideFilters: Story = {
-  args: { width: "w-[1200px]" },
+export const StackPrintings: Story = {
+  args: { preset: (search) => search.setText("bolt") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const reset = await canvas.findByRole("button", { name: "Reset all — 1 filter active" });
+    const stack = canvas.getByRole("button", { name: STACK_PRINTINGS });
+    await expect(stack).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(stack);
+    await expect(stack).toHaveAttribute("aria-pressed", "false");
+    // Not counted: the pills still read the one filter the text is.
+    await expect(reset).toHaveAccessibleName("Reset all — 1 filter active");
+    await expect(
+      canvas.getByRole("button", { name: "Show filters — 1 active" }),
+    ).toBeInTheDocument();
+
+    // And not cleared: Reset takes the word and leaves the wall un-stacked.
+    await userEvent.click(reset);
+    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+    await expect(stack).toHaveAttribute("aria-pressed", "false");
+
+    // No second copy in the popup — the switch has no cell there at any width.
+    await openTray(canvas);
+    await expect(canvas.getAllByRole("button", { name: STACK_PRINTINGS })).toHaveLength(1);
+    await expect(canvas.queryByText("Printings")).toBeNull();
+  },
+};
+
+/**
+ * **Tokens & extras — the Include cell, and the printings no format allows.**
+ *
+ * The format picker's `Any card` row until the Filter bar board (2026-11), and the **same `format`
+ * sentinel** (`ANY_CARD`) as a toggle of its own at the end of the popup. So it cannot stand beside
+ * a named format: this story opens on Modern, turns the toggle on and watches the picker go back
+ * to `Any format`; then picks Modern again and watches the toggle go off. "Modern, plus the
+ * tokens" is a union the backend's `format` and `playableOnly` cannot spell, and a toggle that
+ * stayed on under Modern while changing nothing would be a control that lies.
+ *
+ * It is a filter — it widens the wall — so it is counted and Reset clears it, and the stated line
+ * says it as what it is, a corpus: `Showing: Tokens & extras`, never `Format:`.
+ */
+export const TokensAndExtras: Story = {
+  args: { preset: (search) => search.setFormat("modern") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: "Remove filter — Format: Modern" });
+    await openTray(canvas);
+
+    const format = canvas.getByRole("button", { name: "Format" });
+    await expect(format).toHaveTextContent("Modern");
+    const extras = canvas.getByRole("button", { name: new RegExp(`^${TOKENS_AND_EXTRAS}\\b`) });
+    await expect(extras).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(extras);
+    await expect(extras).toHaveAttribute("aria-pressed", "true");
+    // The format went back to `Any format` with the press — the two never stand on at once.
+    await expect(format).toHaveTextContent("Any format");
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Showing: Tokens & extras" }),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /^Remove filter — Format:/ })).toBeNull();
+    // One filter for one filter: the format's place in the count, not a second one beside it.
+    await expect(
+      canvas.getByRole("button", { name: "Reset all — 1 filter active" }),
+    ).toBeInTheDocument();
+
+    // The picker has no row for it, and picking a format turns it off.
+    await pickOption(userEvent.setup(), "Format", /^Modern\b/);
+    await waitFor(() => expect(extras).toHaveAttribute("aria-pressed", "false"));
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Format: Modern" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * **The bar's measured width, reported where nothing lays out** — for the `Band…` stories alone.
+ *
+ * `FilterBar` places its controls by `barBand(width)`, read from its own box's `ResizeObserver`.
+ * In Storybook that is the browser's, and this does nothing. Under `stories.test.tsx` the page is
+ * jsdom, whose observer `test-setup.ts` stubs to a no-op: the bar would stay unmeasured and draw
+ * the `widest` band at every one of these widths, and a `play` about bands would assert nothing.
+ * So where `document.body` has no width — no layout at all — this stands an observer in that
+ * reports the nearest `data-story-width` ancestor's number to whatever it is asked to watch, the
+ * way `FilterBar.test.tsx` reports a width by hand. Elements outside such a box are never
+ * answered, so it cannot reach another story's tree; the returned cleanup puts the stub back.
+ */
+function reportStoryWidth(): () => void {
+  if (document.body.getBoundingClientRect().width > 0) return () => {};
+  const standing = globalThis.ResizeObserver;
+  class Reporting {
+    readonly #callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+      this.#callback = callback;
+    }
+    observe(target: Element) {
+      const host = target.closest<HTMLElement>("[data-story-width]");
+      if (host === null) return;
+      const width = Number(host.dataset.storyWidth);
+      queueMicrotask(() =>
+        this.#callback(
+          [{ target, contentRect: { width, height: 0 } } as unknown as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        ),
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = Reporting as unknown as typeof ResizeObserver;
+  return () => {
+    globalThis.ResizeObserver = standing;
+  };
+}
+
+/** The popup the Filters button controls, or `null` while it is shut. */
+function popupOf(canvas: ReturnType<typeof within>): HTMLElement | null {
+  const filters = canvas.getByRole("button", { name: /^(Show|Hide) filters/ });
+  const id = filters.getAttribute("aria-controls");
+  return id === null ? null : filters.ownerDocument.getElementById(id);
+}
+
+/** Whether a control's visible word is drawn (the bands below `widest` hide it by class). */
+async function expectWord(button: HTMLElement, word: string, drawn: boolean): Promise<void> {
+  const span = within(button).getByText(word);
+  if (drawn) await expect(span).not.toHaveClass("hidden");
+  else await expect(span).toHaveClass("hidden");
+}
+
+/** One colour on, so the pills read gold and the stated line has a chip to draw. */
+const oneColour: Preset = (search) => search.toggleColor("R");
+
+/**
+ * **Band: widest (≥ 1500), 1520px of bar — the Filters popup open.**
+ *
+ * One line with every word on its control — Filters, Stack printings, Reset — and hairlines
+ * either side of the sort; Grid/List on the bar too. The popup drops from the bar over the
+ * results (it does not push them down), three columns, with no View cell: nothing left the bar.
+ */
+export const BandWidest: Story = {
+  args: { px: 1520, preset: oneColour },
+  beforeEach: reportStoryWidth,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const filters = await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    await expectWord(filters, "Filters", true);
+    await expectWord(canvas.getByRole("button", { name: STACK_PRINTINGS }), STACK_PRINTINGS, true);
+    await expectWord(canvas.getByRole("button", { name: /^Reset all/ }), "Reset", true);
+    await expect(canvas.getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+
+    await userEvent.click(filters);
+    const popup = popupOf(canvas);
+    await expect(popup).not.toBeNull();
+    // Nothing moved into the popup at this width, so it has no View cell and holds no sort.
+    await expect(within(popup!).queryByText("View")).toBeNull();
+    await expect(within(popup!).queryByRole("button", { name: "Sort results" })).toBeNull();
+    await expect(within(popup!).getByText("Include")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Band: roomy (1100–1499), 1200px of bar.**
+ *
+ * The same controls on the same line, the words gone: Filters, Stack printings and Reset are an
+ * icon and a pill each, named by tooltip and by their accessible names, which do not change. The
+ * popup is shut — this is the bar a reader sees most at a maximised 1440 window.
+ */
+export const BandRoomy: Story = {
+  args: { px: 1200, preset: oneColour },
+  beforeEach: reportStoryWidth,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const filters = await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    // Waited on: the band arrives with the first measurement, after the first render.
+    await waitFor(() => expectWord(filters, "Filters", false));
+    await expectWord(canvas.getByRole("button", { name: STACK_PRINTINGS }), STACK_PRINTINGS, false);
+    await expectWord(canvas.getByRole("button", { name: /^Reset all/ }), "Reset", false);
+    // Sort and Grid/List are still the bar's.
+    await expect(canvas.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+    await expect(canvas.getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+    await expect(popupOf(canvas)).toBeNull();
+  },
+};
+
+/**
+ * **Band: normal (980–1099), 1040px of bar — the Filters popup open.**
+ *
+ * Grid/List leave the bar for the popup's **View** cell, drawn last, after Include. Drawn once,
+ * never twice with one hidden — so there is one `Result layout` group on the page, in the popup.
+ */
+export const BandNormal: Story = {
+  args: { px: 1040, preset: oneColour },
+  beforeEach: reportStoryWidth,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    await waitFor(() => expect(canvas.queryByRole("group", { name: "Result layout" })).toBeNull());
+    await expect(canvas.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+
+    await openTray(canvas);
+    const popup = popupOf(canvas)!;
+    await expect(within(popup).getByText("View")).toBeInTheDocument();
+    await expect(within(popup).getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+    await expect(canvas.getAllByRole("group", { name: "Result layout" })).toHaveLength(1);
+    // The sort is still on the bar at this band.
+    await expect(within(popup).queryByRole("button", { name: "Sort results" })).toBeNull();
+  },
+};
+
+/**
+ * **Band: tight (800–979), 840px of bar — the Filters popup open.**
+ *
+ * The sort leaves too, into the same View cell beside Grid/List, and the mana values tighten to
+ * 24px chips. The bar keeps the search box, the colours, the mana values, Filters, Stack
+ * printings and Reset.
+ */
+export const BandTight: Story = {
+  args: { px: 840, preset: oneColour },
+  beforeEach: reportStoryWidth,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    await waitFor(() => expect(canvas.queryByRole("button", { name: "Sort results" })).toBeNull());
+    await expect(canvas.getByRole("button", { name: STACK_PRINTINGS })).toBeInTheDocument();
+
+    await openTray(canvas);
+    const popup = popupOf(canvas)!;
+    await expect(within(popup).getByText("View")).toBeInTheDocument();
+    await expect(within(popup).getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+    await expect(within(popup).getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+    await expect(canvas.getAllByRole("button", { name: "Sort results" })).toHaveLength(1);
+  },
+};
+
+/**
+ * **Band: panel (< 800), 384px — the deck editor's docked column — the Filters popup open.**
+ *
+ * Four lines: the search box; the six colours and Exact spread across theirs at 34px; the mana
+ * values stretched across theirs; then Filters, the sort (filling the line), Stack printings and
+ * Reset. `layoutToggle={false}`, as the docked panel passes it — there is no table to switch to —
+ * so the popup has no View cell either. The popup's cells are one column here and scroll inside a
+ * frame that fades out above its foot.
+ */
+export const BandPanel: Story = {
+  args: { px: 384, layoutToggle: false, preset: oneColour },
+  beforeEach: reportStoryWidth,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    // The colour line is the panel's own arrangement: spread edge to edge.
+    await waitFor(() =>
+      expect(canvas.getByRole("group", { name: "Color identity" })).toHaveClass("justify-between"),
+    );
+    // Every one of the fourth line's controls is still on the bar.
+    await expect(canvas.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: STACK_PRINTINGS })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+    await expect(canvas.queryByRole("group", { name: "Result layout" })).toBeNull();
+
+    await openTray(canvas);
+    const popup = popupOf(canvas)!;
+    await expect(within(popup).getByText("Include")).toBeInTheDocument();
+    await expect(within(popup).queryByText("View")).toBeNull();
+  },
 };

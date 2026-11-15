@@ -181,7 +181,7 @@ export interface SearchRequest {
    *
    * **Omitted means false**, the opposite of {@link paperOnly}: absent is what this command
    * has always answered, so nothing changes for a caller that has not heard of it. The search
-   * view sends `true` on every row of its format select but the first, `Any card` — the one
+   * view sends `true` on every row of its format select but the first, `Tokens & extras` — the one
    * control that decides this flag and {@link format} together (`formatParams`).
    */
   playableOnly?: boolean;
