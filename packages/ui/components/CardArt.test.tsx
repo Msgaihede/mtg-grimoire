@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TOOLTIP_OPEN_MS,
   TOOLTIP_PANEL_ID,
@@ -124,6 +124,110 @@ describe("CardArt", () => {
   it("draws no marks at all for a card with nothing to mark", () => {
     const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
     expect(container.querySelector("[data-card-marks]")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Each kind of foil is its own drawing** (2026-11-15). Scryfall photographs a printing sold
+   * plain and in surge foil as the plain card, so a Surge Foil copy that drew the one shared
+   * sheen looked like any other foil — the owner's report. The kind comes from the treatments the
+   * caller already passes for the chip.
+   */
+  describe("the foil's drawing", () => {
+    const surge = [{ id: "surgefoil", label: "Surge Foil", foil: true }];
+    const overlayOf = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-foil]");
+
+    it("draws a Surge Foil copy as surge, with its own pattern", () => {
+      const { container } = render(
+        <CardArt cardId="fic" name="Swords to Plowshares" finish="foil" treatments={surge} />,
+      );
+      const overlay = overlayOf(container);
+      expect(overlay).toHaveAttribute("data-foil", "surge");
+      expect(overlay?.querySelectorAll(".foil-pattern, .foil-pattern-2")).toHaveLength(2);
+      // The blotches arrive as a property the stylesheet masks with, addressed by the bundler.
+      expect(overlay?.style.getPropertyValue("--foil-tex-1")).toMatch(/^url\(/);
+    });
+
+    it("draws an etched copy as etched", () => {
+      const { container } = render(<CardArt cardId="mh2" name="Angelic Curator" finish="etched" />);
+      expect(overlayOf(container)).toHaveAttribute("data-foil", "etched");
+    });
+
+    /** Traditional foil is the sheen and the glare alone: two spans, and no picture to fetch. */
+    it("draws an ordinary foil with no pattern layers and no texture", () => {
+      const { container } = render(<CardArt cardId="dmr" name="Counterspell" finish="foil" />);
+      const overlay = overlayOf(container);
+      expect(overlay).toHaveAttribute("data-foil", "foil");
+      expect(overlay?.querySelector(".foil-pattern")).toBeNull();
+      expect(overlay?.style.getPropertyValue("--foil-tex-1")).toBe("");
+    });
+
+    /** A crown with no foil has no light to move, so the overlay is no `[data-foil]`. */
+    it("draws no drawing for a game changer that is not foil", () => {
+      const { container } = render(<CardArt cardId="pcy" name="Rhystic Study" gameChanger />);
+      expect(overlayOf(container)).toBeNull();
+    });
+  });
+
+  /**
+   * **The light follows the pointer, and the card never moves** — the owner's call: "no tilt, but
+   * keep the motion follows cursor". The overlay is `pointer-events-none`, so it listens on the
+   * frame; jsdom lays nothing out, so the frame's box is given here.
+   */
+  describe("the foil's light", () => {
+    // The suite restores nothing by itself, and a reduced-motion `matchMedia` left behind would
+    // quietly hold every later light still.
+    afterEach(() => vi.restoreAllMocks());
+    const BOX = { left: 0, top: 0, width: 100, height: 140, right: 100, bottom: 140, x: 0, y: 0 };
+    const mountFoil = () => {
+      const { container } = render(<CardArt cardId="dmr" name="Counterspell" finish="foil" />);
+      const overlay = container.querySelector<HTMLElement>("[data-foil]");
+      if (!overlay?.parentElement) throw new Error("no foil overlay");
+      const frame = overlay.parentElement;
+      vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({ ...BOX, toJSON: () => BOX });
+      return { overlay, frame };
+    };
+    // A `MouseEvent` named `pointermove`, so `clientX` is set whatever jsdom's `PointerEvent` is.
+    const pointer = (frame: HTMLElement, x: number, y: number, pointerType = "mouse") => {
+      const event = new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y });
+      Object.defineProperty(event, "pointerType", { value: pointerType });
+      act(() => void frame.dispatchEvent(event));
+    };
+    const light = (overlay: HTMLElement) => ({
+      mx: overlay.style.getPropertyValue("--foil-mx"),
+      on: overlay.style.getPropertyValue("--foil-on"),
+    });
+
+    it("moves the light with a mouse over the frame, and rests it when the mouse leaves", () => {
+      const { overlay, frame } = mountFoil();
+      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+      pointer(frame, 75, 70);
+      expect(light(overlay)).toEqual({ mx: "75.0%", on: "1" });
+      act(() => void frame.dispatchEvent(new MouseEvent("pointerleave")));
+      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+    });
+
+    /** A touch has no hover, and a light that jumped to wherever a scroll began would be noise. */
+    it("leaves the light at rest under a finger", () => {
+      const { overlay, frame } = mountFoil();
+      pointer(frame, 75, 70, "touch");
+      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+    });
+
+    /** WCAG 2.3.3: a reader who asked the OS for less motion gets a still light. */
+    it("leaves the light at rest for a reader who asked for less motion", () => {
+      vi.spyOn(window, "matchMedia").mockImplementation(
+        (query: string) =>
+          ({
+            matches: query.includes("reduce"),
+            media: query,
+            addEventListener() {},
+            removeEventListener() {},
+          }) as unknown as MediaQueryList,
+      );
+      const { overlay, frame } = mountFoil();
+      pointer(frame, 75, 70);
+      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+    });
   });
 
   /**

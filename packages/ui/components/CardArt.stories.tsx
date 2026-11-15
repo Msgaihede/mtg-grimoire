@@ -3,6 +3,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { printing } from "@grimoire/fake/fixtures";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { soleFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { CardArt } from "./CardArt";
 
 const meta = {
@@ -35,13 +36,16 @@ const meta = {
           "12,366 foil-only and 892 etched-only paper printings, measured 2026-08-11 over the " +
           "live corpus. The 53,224 printings that merely *have* a foil version are unmarked: a " +
           "sheen on 61% of every wall would be decoration rather than information.\n\n" +
-          "**The sheen tints and never covers.** A `linear-gradient` in " +
-          "`mix-blend-mode: screen`, where the gradient's own alphas are the strength — 0.10 " +
-          "to 0.13 on the rainbow stops and 0.34 on the one bright band — because a real foil " +
-          "is a diffraction grating throwing a different hue at every angle and Scryfall's " +
-          "photography has none of it: the art of a foil-only printing is byte-identical to a " +
-          "nonfoil one. (`overlay` at 12% was the first attempt and it was *invisible*, " +
-          "measured over CDP 2026-08-11.) Legibility is a screenshot question rather than an " +
+          "**Each kind of foil is its own drawing** (2026-11-15) — traditional, etched, surge, " +
+          "silver, ripple, galaxy, rainbow, double rainbow, halo, textured, confetti and " +
+          "fracture, chosen by `lib/foilEffect.ts` from the treatments the chip already reads, " +
+          "drawn by the \"Foil\" section of `index.css` with patterns from " +
+          "`scripts/foil-textures.ts`. Scryfall photographs a printing sold plain and special as " +
+          "the plain card, so without these a Surge Foil copy looked like any other foil. Each " +
+          "drawing was tuned against photographs of real cards and signed off by the owner. " +
+          "**The light follows the pointer and the card never moves** (no tilt, the owner's " +
+          "call); a finger, or a reader who asked for less motion, gets the resting light. See " +
+          "*Foil Kinds* below, and hover. Legibility is a screenshot question rather than an " +
           "assertion, so the live CDP pass is what proves it; what a story can prove is that " +
           "the whole overlay is `aria-hidden` and that the chip is still hoverable.\n\n" +
           "**The chip holds two facts, and they are different kinds of fact.** A finish " +
@@ -139,6 +143,65 @@ export const EtchedOnly: Story = {
     // than in the accessibility tree — and what matters is that it is *a different one*.
     await expect(canvasElement.querySelector("[data-foil-sheen]")).not.toBeNull();
     await expect(canvasElement.querySelector("svg")).not.toBeNull();
+  },
+};
+
+/** Every drawing, on one card so only the foil differs: the copy's finish and its `promo_types`. */
+const FOIL_KINDS = [
+  ["Foil", "foil", []],
+  ["Etched", "etched", []],
+  ["Surge Foil", "foil", ["surgefoil"]],
+  ["Silver Foil", "foil", ["silverfoil"]],
+  ["Ripple Foil", "foil", ["ripplefoil"]],
+  ["Galaxy Foil", "foil", ["galaxyfoil"]],
+  ["Rainbow Foil", "foil", ["rainbowfoil"]],
+  ["Double Rainbow", "foil", ["doublerainbow"]],
+  ["Halo Foil", "foil", ["halofoil"]],
+  ["Textured Foil", "foil", ["textured"]],
+  ["Confetti Foil", "foil", ["confettifoil"]],
+  ["Fracture Foil", "foil", ["fracturefoil"]],
+] as const;
+
+/**
+ * **Every kind of foil the app draws.** Hover a card: the light follows the pointer and the card
+ * stays put. Synthetic art shows the drawings less well than a real picture does — switch Live
+ * on, or look in the app.
+ */
+export const FoilKinds: Story = {
+  args: { cardId: printing("lea", "161").id, name: "Lightning Bolt" },
+  render: (args) => (
+    <div className="grid w-[48rem] grid-cols-6 gap-3">
+      {FOIL_KINDS.map(([label, finish, promo]) => (
+        <figure key={label} className="m-0 flex flex-col gap-1">
+          <CardArt
+            cardId={args.cardId}
+            name={args.name}
+            finish={finish}
+            treatments={finishTreatments(JSON.stringify(promo), finish)}
+          />
+          <figcaption className="text-xs text-dim">{label}</figcaption>
+        </figure>
+      ))}
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const drawn = [...canvasElement.querySelectorAll("[data-foil]")].map((el) =>
+      el.getAttribute("data-foil"),
+    );
+    await expect(drawn).toEqual([
+      "foil",
+      "etched",
+      "surge",
+      "silver",
+      "ripple",
+      "galaxy",
+      "rainbow",
+      "doublerainbow",
+      "halo",
+      "textured",
+      "confetti",
+      "fracture",
+    ]);
   },
 };
 

@@ -71,6 +71,7 @@ import {
   type InheritedRules,
 } from "@/lib/folderRules";
 import { FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
+import { finishTreatments, type Treatment } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, folderDescendants, folderLevel, trailOf } from "@/lib/folderTree";
 import {
@@ -219,6 +220,17 @@ type Panel =
  */
 function finishMarkOf(tile: CollectionTile): Finish | null {
   return tile.finish === "nonfoil" ? null : tile.finish;
+}
+
+/**
+ * What this copy is called — a Surge Foil copy's chip says "Surge Foil", and its art is drawn as
+ * surge rather than as plain foil (`lib/foilEffect.ts`). The wall passed no treatments until
+ * 2026-11-15, so a Surge Foil copy here read "Foil" and wore the one shared sheen; the live check
+ * of the per-kind foil drawings is what found it. Module scope for the same reason as
+ * {@link finishMarkOf}: `CardGrid`'s slots want a stable function.
+ */
+function treatmentsOf(tile: CollectionTile): Treatment[] {
+  return finishTreatments(tile.promoTypes, finishMarkOf(tile));
 }
 
 /**
@@ -3410,6 +3422,8 @@ export function CollectionPage() {
                 // expression this slot held until the stepper below started announcing the same fact
                 // in words.
                 finish={finishMarkOf}
+                // Which kind of foil it is, for the chip's word and the foil's drawing.
+                treatment={treatmentsOf}
                 // The printing, and a lock after it on a tile whose drawer is set aside (issue #436)
                 // — see {@link lockedCaption}. The heading above says which drawer.
                 caption={caption}
