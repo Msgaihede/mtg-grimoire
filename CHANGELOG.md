@@ -30,6 +30,35 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.69.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.68.0...v0.69.0) (2026-11-15)
+
+
+### Features
+
+* **card:** a View as / Set as button for every finish a card has ([f25fae7](https://github.com/Msgaihede/mtg-grimoire/commit/f25fae7fd416cd83fcb43714fbb3e80827a11a04))
+* **card:** a View as / Set as button for every finish a card has ([5aa9a1f](https://github.com/Msgaihede/mtg-grimoire/commit/5aa9a1f3f4aac9a93c34f27b8bd32bf20d732ba3)), closes [#1679](https://github.com/Msgaihede/mtg-grimoire/issues/1679)
+* **card:** finish rows in the card popup's right-click menu ([1d59d17](https://github.com/Msgaihede/mtg-grimoire/commit/1d59d173b4cbe040ff1513cf354aa4c4080f56be))
+* **card:** finish rows in the card popup's right-click menu ([5be5279](https://github.com/Msgaihede/mtg-grimoire/commit/5be5279a78a511583e9073a07019ff96b5c8f354)), closes [#1679](https://github.com/Msgaihede/mtg-grimoire/issues/1679)
+* **cards:** draw each kind of foil as itself ([efda75f](https://github.com/Msgaihede/mtg-grimoire/commit/efda75f7a483697b1691de833704eae1ddc9f3ee))
+* **cards:** draw each kind of foil as itself ([1f10af4](https://github.com/Msgaihede/mtg-grimoire/commit/1f10af478bb2ad25c1353763de6e4f37cb54c9c3))
+* **decks:** arrow-key walk and deck-membership marks in the deck search column ([7061962](https://github.com/Msgaihede/mtg-grimoire/commit/706196279c3a244bdf4fb8c92725c8bb02290408))
+* **decks:** show a THEORY ONLY deck's plan on its gallery tile ([24415d8](https://github.com/Msgaihede/mtg-grimoire/commit/24415d8fb1662b2796fd923dd7e0b7cf85d7dd1e))
+* **decks:** show a THEORY ONLY deck's plan on its gallery tile ([7950188](https://github.com/Msgaihede/mtg-grimoire/commit/79501887b3b7c9d33052651e355e3b18f1d92581)), closes [#1673](https://github.com/Msgaihede/mtg-grimoire/issues/1673)
+* **decks:** walk the deck search column with the arrow keys and mark cards already in the deck ([32d2c32](https://github.com/Msgaihede/mtg-grimoire/commit/32d2c32538b5405ff3fa7d140640e86a244e2e02)), closes [#1672](https://github.com/Msgaihede/mtg-grimoire/issues/1672)
+* **search:** the Filter bar redesign — bands, a Filters popup, Stack printings, Tokens & extras ([c2fbe7b](https://github.com/Msgaihede/mtg-grimoire/commit/c2fbe7ba695cf1659e83592e65ac679ba6c6d1a9))
+* **search:** the Filter bar redesign — one line per band, a Filters popup, Stack printings and Tokens & extras ([fe20126](https://github.com/Msgaihede/mtg-grimoire/commit/fe2012627089527c8e9bcbc7d30f8c92afe2c5ab))
+
+
+### Bug Fixes
+
+* **ci:** install the emulator and its system image with retries ([d5c2f49](https://github.com/Msgaihede/mtg-grimoire/commit/d5c2f4941d3863453e793cfe716a9d1cb8b3f25c))
+* **ci:** make the Android emulator first-run measurement survive two emulator flakes ([959667b](https://github.com/Msgaihede/mtg-grimoire/commit/959667b9ffff459ee4303b19c8c6edbd1d182d13))
+* **ci:** stop the emulator's cellular link from holding the first-run measurement ([bf71a60](https://github.com/Msgaihede/mtg-grimoire/commit/bf71a60a7c0365cf3abf974f4a2d090bf43ff97e))
+* **home:** let a Price movers card be followed as foil ([b7503c2](https://github.com/Msgaihede/mtg-grimoire/commit/b7503c23481fde754b4635f78c56547dfdf98375))
+* **home:** let a Price movers card be followed as foil ([13402c3](https://github.com/Msgaihede/mtg-grimoire/commit/13402c3d0eac22f7e690e113660c7baeb3169347)), closes [#1675](https://github.com/Msgaihede/mtg-grimoire/issues/1675)
+* **ui:** shorter, plainer wording across the app ([908d1b3](https://github.com/Msgaihede/mtg-grimoire/commit/908d1b39f7602d812223d49fdbf97041be6abd79))
+* **ui:** shorter, plainer wording across the app ([f51df19](https://github.com/Msgaihede/mtg-grimoire/commit/f51df1969d7cdb5e8188610b5a3d687916667525))
+
 ## [0.68.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.67.0...v0.68.0) (2026-11-10)
 
 
