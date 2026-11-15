@@ -30,6 +30,14 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.70.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.69.0...v0.70.0) (2026-11-15)
+
+
+### Features
+
+* **cards:** draw every wall's special foils as themselves ([#1685](https://github.com/Msgaihede/mtg-grimoire/issues/1685)) ([f13933a](https://github.com/Msgaihede/mtg-grimoire/commit/f13933a52cce030171f6b7d26e2bbf4ae122201c))
+* **cards:** light every foil from the pointer anywhere in the window ([#1687](https://github.com/Msgaihede/mtg-grimoire/issues/1687)) ([300e2ce](https://github.com/Msgaihede/mtg-grimoire/commit/300e2ce644e772f2edccd0e3e546866760b0188e))
+
 ## [0.69.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.68.0...v0.69.0) (2026-11-15)
 
 
