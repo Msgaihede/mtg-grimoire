@@ -754,7 +754,7 @@ export function DeckEditorLayers({
           reader sees a press that did nothing. */}
       <Dialog
         open={layer?.kind === "clearCategory"}
-        title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
+        title={clearedCategory === null ? "Clear category" : `Clear “${clearedCategory.name}”`}
         closeLabel="Close"
         size="w-[28rem]"
         onDismiss={dismiss}
@@ -767,7 +767,7 @@ export function DeckEditorLayers({
                 role="alert"
                 className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
               >
-                Couldn't clear that stack — {ipcError(deck.clearCategory.error)}
+                Couldn't clear that category — {ipcError(deck.clearCategory.error)}
               </p>
             )}
             <ClearCategory
@@ -928,7 +928,7 @@ export function DeckEditorLayers({
                 dismiss();
               },
               onError: (error) =>
-                notifyRefusal(`Couldn't add “${card.name}” to the collection`, error),
+                notifyRefusal(`Couldn't add “${card.name}” to your collection`, error),
             },
           );
         }}

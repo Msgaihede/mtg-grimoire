@@ -219,7 +219,7 @@ function OpenShareForm({
       )}
 
       <p className="text-sm text-dim">
-        See which of these cards you already own or want. Nothing in either collection changes.
+        See which of these cards you own or want. Nothing changes in either collection.
       </p>
 
       <div className="flex justify-end gap-2">

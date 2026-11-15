@@ -296,7 +296,7 @@ export const EverythingFiled: Story = {
       SETTLED,
     );
     await expect(follows(binder, copy)).toBe(true);
-    await expect(canvas.queryByText(/Nothing here yet/)).toBeNull();
+    await expect(canvas.queryByText(/Your collection is empty/)).toBeNull();
   },
 };
 
@@ -599,7 +599,7 @@ export const DeckCopiesAreNotStepped: Story = {
 /**
  * A collection nobody has put anything in yet.
  *
- * "Nothing here yet. Add cards from search, or import a collection file." — a statement about the
+ * "Your collection is empty. Add cards from search or import a file." — a statement about the
  * collection, with somewhere to go. `statusOf` chooses it on `activeCount === 0`; with a filter
  * on, the same empty list says "No cards in your collection match these filters", which is a
  * statement about the filters instead. Blaming the reader for a table nobody has filled would be
@@ -618,7 +618,7 @@ export const Empty: Story = {
     const canvas = within(canvasElement);
     await expect(
       await canvas.findByText(
-        "Nothing here yet. Add cards from search, or import a collection file.",
+        "Your collection is empty. Add cards from search or import a file.",
         undefined,
         SETTLED,
       ),
@@ -638,7 +638,7 @@ export const EmptyCabinet: Story = {
     // The census first: with no folder list the page cannot yet say there is no trail, so the
     // breadcrumb's absence below would be read off a page that had not answered.
     await canvas.findByText(
-      "Nothing here yet. Add cards from search, or import a collection file.",
+      "Your collection is empty. Add cards from search or import a file.",
       undefined,
       SETTLED,
     );
@@ -1130,7 +1130,7 @@ export const ExportFolder: Story = {
     );
     const body = within(canvasElement.ownerDocument.body);
     await userEvent.click(await body.findByRole("menuitem", { name: "Export…" }));
-    const dialog = within(await body.findByRole("dialog", { name: 'Export "Binder"' }));
+    const dialog = within(await body.findByRole("dialog", { name: "Export “Binder”" }));
     await expect(dialog.queryByRole("checkbox", { name: /Export everything/ })).toBeNull();
     await waitFor(() =>
       expect(dialog.getByRole("button", { name: "Copy" })).not.toHaveAttribute("aria-disabled"),

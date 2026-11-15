@@ -377,8 +377,8 @@ function Aside({
     return (
       <p className={line}>
         {scope === "collection"
-          ? "Type a card's name to find it in your collection."
-          : "Type a card's name."}
+          ? "Type a card name to search your collection."
+          : "Type a card name."}
       </p>
     );
   }

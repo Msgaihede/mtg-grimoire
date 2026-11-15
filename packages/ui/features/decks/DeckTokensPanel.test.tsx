@@ -362,7 +362,7 @@ describe("DeckTokensPanel", () => {
   it("keeps the header on a deck that makes no tokens, and offers Add printing there", async () => {
     const { onAddPrinting } = band({ tokens: tokensOf([]), open: false });
 
-    expect(screen.getByText("Nothing in this deck makes a token or an emblem.")).toBeInTheDocument();
+    expect(screen.getByText("This deck makes no tokens or emblems.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
     expect(screen.queryByRole("group", { name: "Tokens" })).toBeNull();
 
@@ -530,7 +530,7 @@ describe("DeckTokensPanel", () => {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Nothing in this deck makes Oko, Shadowmoor Scion Emblem. It was added by hand, or kept after the card that made it was cut.",
+      "Nothing in this deck makes Oko, Shadowmoor Scion Emblem. Added by hand, or left over from a cut card.",
     );
   });
 

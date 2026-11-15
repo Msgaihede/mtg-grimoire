@@ -320,7 +320,7 @@ describe("TradeScanDialog", () => {
     await userEvent.click(await add("Add 1 to their side"));
     await waitFor(() => expect(ipc.tradeAddLines).toHaveBeenCalledTimes(1));
     await userEvent.keyboard("{Escape}");
-    await userEvent.click(screen.getByRole("button", { name: "Close the scanner" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close scanner" }));
     expect(onClose).not.toHaveBeenCalled();
     answer();
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
@@ -330,7 +330,7 @@ describe("TradeScanDialog", () => {
     mount({ tray: RESOLVED });
     const tray = await screen.findByRole("region", { name: "Scanned for their side" });
     expect(await within(tray).findByRole("note")).toHaveTextContent(
-      "5 cards were already in the scanner's tray. They are in this list and go onto their side with the rest.",
+      "5 cards were already in the tray. They are in this list and go onto their side with the rest.",
     );
     // The reader's way out is on the page with it, in the tray's `⋯`.
     await userEvent.click(within(tray).getByRole("button", { name: "Tray actions" }));

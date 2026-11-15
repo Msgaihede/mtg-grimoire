@@ -171,7 +171,7 @@ describe("naming cards in a note", () => {
 
     expect(
       screen.getByText(
-        "Linked cards remain associated with this note even if removed from the deck.",
+        "Linked cards stay on this note even after they leave the deck.",
       ),
     ).toBeInTheDocument();
 

@@ -129,7 +129,7 @@ export const AnOlderBuild: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const other = await canvas.findByRole("button", {
-      name: "Other, changes this version of the app has no name for",
+      name: "Other, changes this app version doesn't recognize",
     });
     await expect(other).toHaveAttribute("aria-pressed", "true");
     await expect(canvas.getByText("Changed the deck")).toBeInTheDocument();
@@ -154,7 +154,7 @@ export const NothingYet: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("No changes recorded yet.")).toBeInTheDocument();
+    await expect(await canvas.findByText("No changes yet.")).toBeInTheDocument();
     await expect(canvas.queryByText(/changes since/)).toBeNull();
   },
 };
@@ -177,7 +177,7 @@ export const HistoryUnavailable: Story = {
     await expect(
       await canvas.findByText("Couldn't load this deck's history."),
     ).toBeInTheDocument();
-    await expect(canvas.queryByText("No changes recorded yet.")).toBeNull();
+    await expect(canvas.queryByText("No changes yet.")).toBeNull();
   },
 };
 

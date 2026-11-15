@@ -33,8 +33,8 @@ describe("CachePanel", () => {
   it("says up front that cached files are re-downloaded when needed", () => {
     render(<CachePanel cache={cache()} />);
 
-    expect(panel()).toHaveTextContent("Cached card images");
-    expect(panel()).toHaveTextContent("re-downloaded when needed");
+    expect(panel()).toHaveTextContent("Card images and temporary downloads");
+    expect(panel()).toHaveTextContent("download again when needed");
   });
 
   /**

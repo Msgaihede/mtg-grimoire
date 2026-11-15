@@ -483,7 +483,7 @@ export function SettingsPage({ update }: { update: Update }) {
           {shown("data-folder") && (
             <SettingsSection id="data-folder" title="Data folder">
               <p className="text-sm text-dim">
-                Where the app stores your card database, collection, decks and cached images.
+                Where the app stores your collection, decks, card data and images.
               </p>
               {/* `break-all` because a Windows path has nothing to break at and this pane is ~632px
                   on a desk and ~350px on a phone — the surface this whole plan is for. */}

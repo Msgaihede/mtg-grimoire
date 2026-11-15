@@ -278,7 +278,7 @@ export const NOTE_EXTENSIONS = [
  * What an empty to-do list says. It teaches both halves of the document — text is written, a
  * to-do is added — and the two keys, because nesting is a keystroke nothing on screen draws.
  */
-export const TODO_PLACEHOLDER = "Write, or add a to-do — Enter for the next, Tab to nest.";
+export const TODO_PLACEHOLDER = "Write, or add a to-do. Enter adds the next, Tab nests.";
 
 /**
  * A **to-do document**: paragraphs and headings beside any number of task lists (issue #688).

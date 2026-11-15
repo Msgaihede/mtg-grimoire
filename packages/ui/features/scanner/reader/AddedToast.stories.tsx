@@ -114,7 +114,7 @@ export const PickAPrinting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Pick a printing")).toBeInTheDocument();
-    await expect(canvas.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+    await expect(canvas.getByText("3 printings match. Pick one in the tray")).toBeInTheDocument();
     await expect(canvas.getByText("$0.89 – $4.20")).toBeInTheDocument();
   },
 };

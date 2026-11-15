@@ -129,7 +129,7 @@ export function TradeLineCard({ trade, line }: { trade: Trade; line: TradeLine }
   const remove = () => {
     setFailure(null);
     writes.removeLine(trade.id, line.id).catch((e: unknown) => {
-      setFailure(`Couldn't remove it — ${ipcError(e)}`);
+      setFailure(`Couldn't remove the card — ${ipcError(e)}`);
     });
   };
 
@@ -350,7 +350,7 @@ function PrintingPicker({
       searchable={options.length > 10}
       searchPlaceholder="Set code"
       searchLabel="Search printings"
-      emptyLine={printings.isError ? "Couldn't read the printings." : "No printing matches."}
+      emptyLine={printings.isError ? "Couldn't load printings." : "No matching printings."}
       onOpen={() => setOpened(true)}
       onChange={(cardId) => {
         if (cardId !== line.cardId) onPick(cardId);

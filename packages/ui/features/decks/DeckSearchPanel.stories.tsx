@@ -595,7 +595,7 @@ export const Empty: Story = {
     await showAllCards(panel);
     await expect(
       await within(panel).findByText(
-        "Card database is empty. Waiting for the first sync.",
+        "No card data yet. Waiting for the first update.",
       ),
     ).toBeInTheDocument();
     await expect(within(panel).queryByRole("group", { name: "Search results" })).toBeNull();

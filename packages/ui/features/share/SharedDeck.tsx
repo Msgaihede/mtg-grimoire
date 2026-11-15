@@ -141,8 +141,7 @@ export const SharedDeck = memo(function SharedDeck({
               onClick={onClose}
               className={cn(BUTTON, "border-border text-dim hover:text-text")}
             >
-              <X className="size-4" aria-hidden />
-              Close this deck
+              <X className="size-4" aria-hidden />Close deck
             </button>
           </div>
         </div>

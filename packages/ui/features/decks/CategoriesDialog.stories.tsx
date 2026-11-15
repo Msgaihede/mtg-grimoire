@@ -189,7 +189,7 @@ export const DeletingACategoryAndItsCards: Story = {
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
     await pickOption(userEvent.setup(), "Its 2 cards", "go with it");
     await expect(
-      within(dialog).getByText(/Any copies you own go back to Recently removed/),
+      within(dialog).getByText(/Copies you own go back to Recently removed/),
     ).toHaveTextContent("Its 2 cards will be removed");
     await expect(within(dialog).getByRole("button", { name: "Delete “Ramp”" })).toBeInTheDocument();
   },

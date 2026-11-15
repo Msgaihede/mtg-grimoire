@@ -253,7 +253,7 @@ export const NotInTheDeck: Story = {
     await expect(await canvas.findByRole("button", { name: "Black Lotus" })).toBeInTheDocument();
 
     const add = await canvas.findByRole("button", {
-      name: /^Black Lotus is not in this deck .* add it from the Card search tab first$/,
+      name: /^Black Lotus isn't in this deck\. Add it from All cards first\.$/,
     });
     await expect(add).toHaveAttribute("aria-disabled", "true");
   },

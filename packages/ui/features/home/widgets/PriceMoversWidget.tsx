@@ -143,7 +143,7 @@ export function chosenNoHistory(range: PriceMoverWindow): string {
       : range === "30d"
         ? "Moves over thirty days show up thirty days after that."
         : "Moves show up from the next day on.";
-  return `No price history for your chosen cards yet. Their prices are remembered from the day you choose them. ${when}`;
+  return `Prices for your chosen cards are recorded from the day you choose them. ${when}`;
 }
 
 /** How many matches the card search offers at once — a list under a field, not a results page. */
@@ -351,7 +351,7 @@ function MoverRow({
      * resized — and then what the press does.
      */
     pressLabel:
-      onPress === undefined ? undefined : `${mover.name} · ${caption} · ${money} — price history`,
+      onPress === undefined ? undefined : `${mover.name} · ${caption} · ${money} · price history`,
   };
   // At two cells the move goes under the name, `WidgetRow`'s rule for a tile.
   return tile ? (
@@ -448,7 +448,7 @@ export function PriceMoversWidgetSettings({ widget, onConfig }: WidgetSettingsPr
     const words = scopeWords();
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.chosen} under {words.row} to pick the folders and cards this widget follows.
+        Set {words.row} to {words.chosen} to pick folders and cards.
       </p>
     );
   }
@@ -521,7 +521,7 @@ export function PriceMoversWidgetSettings({ widget, onConfig }: WidgetSettingsPr
             cards: config.cards.map((each) => (each.id === id ? withFinish(each, finish) : each)),
           })
         }
-        note="Prices of cards you don't own are remembered from the day you choose them."
+        note="Prices of cards you don't own are recorded from the day you choose them."
       />
     </div>
   );
@@ -659,7 +659,7 @@ export function CardPicker({
       />
       {full && (
         <p className="m-0 text-xs text-dim">
-          This widget follows {max} cards, its most. Remove one to add another.
+          This widget follows up to {max} cards. Remove one to add another.
         </p>
       )}
       {search.isError && text.trim().length > 0 && (

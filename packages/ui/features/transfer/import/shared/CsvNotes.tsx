@@ -27,7 +27,7 @@ export function CsvNotes({ list }: { list: ParsedList }): JSX.Element | null {
         {ignored.length > 0 && ` Ignored columns: ${ignored.join(", ")}.`}
       </p>
       {!csv.hasQuantity && (
-        <p>No quantity column found, so each row counts as one copy.</p>
+        <p>No quantity column, so each row counts as one copy.</p>
       )}
     </div>
   );

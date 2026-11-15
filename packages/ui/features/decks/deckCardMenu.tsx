@@ -1140,7 +1140,7 @@ function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
             onSelect: () =>
               pressRows(deps, [card], [cover.set(card)], {
                 done: (what) => `Set ${what} as the deck image`,
-                failed: () => "Couldn't change the deck image",
+                failed: () => "Couldn't set the deck image",
               }),
           }),
     },

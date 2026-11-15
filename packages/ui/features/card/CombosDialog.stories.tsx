@@ -413,7 +413,7 @@ export const Combos: Story = {
     // caveat all belong to a row nobody has pressed.
     await expect(canvas.queryByText("Spitemare")).toBeNull();
     await expect(canvas.queryByRole("list", { name: "Steps" })).toBeNull();
-    await expect(canvas.queryByText(/can't be matched to a specific card/i)).toBeNull();
+    await expect(canvas.queryByText(/not tied to a specific card/i)).toBeNull();
   },
 };
 
@@ -462,7 +462,7 @@ export const WalkTheRail: Story = {
     await expect(canvas.getByRole("list", { name: "Notable prerequisites" })).toBeInTheDocument();
     await expect(canvas.getByRole("list", { name: "Steps" })).toBeInTheDocument();
     await expect(canvas.getByText("Mana needed")).toBeInTheDocument();
-    await expect(canvas.getByText(/can't be matched to a specific card/i)).toBeVisible();
+    await expect(canvas.getByText(/not tied to a specific card/i)).toBeVisible();
 
     // **The unsynced piece names its card twice, on purpose.** `CardArt` prints the name inside
     // the empty frame it draws for a null `cardId`, and the pane prints it again as the caption.

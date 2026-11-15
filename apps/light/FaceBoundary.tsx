@@ -53,7 +53,7 @@ function FaceFailure() {
     <div className="flex h-dvh flex-col items-center justify-center gap-4 bg-bg px-6 text-text">
       <GrimoireMark size={48} className="text-accent" />
       <p role="alert" className="max-w-prose text-center text-sm text-destructive">
-        This page could not be drawn.
+        Couldn't show this page.
       </p>
       {update ? (
         <>

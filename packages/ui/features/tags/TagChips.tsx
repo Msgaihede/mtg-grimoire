@@ -37,10 +37,10 @@ export const HIDE_BACKGROUND_LABEL = "Hide background details";
 
 /** What the control does, for its tooltip — Scryfall's own definition of the rows it drops. */
 const HIDE_BACKGROUND_HINT =
-  "drops taggings Scryfall marked as a minor detail or background element";
+  "skips cards where Scryfall marked the tag as a minor or background detail";
 
 /** Why it cannot be pressed, with it off. See {@link TagChipsProps.onFloorChange}. */
-const HIDE_BACKGROUND_IDLE = "nothing to hide until an art tag is picked";
+const HIDE_BACKGROUND_IDLE = "pick an art tag first";
 
 /**
  * Why it cannot be pressed, with it **on** — the state the row can genuinely be handed.
@@ -52,7 +52,7 @@ const HIDE_BACKGROUND_IDLE = "nothing to hide until an art tag is picked";
  * {@link HIDE_BACKGROUND_IDLE} while lit would be telling the reader their setting was off.
  * The page owns whether the state can arise; the chip owns being honest about the one it is given.
  */
-const HIDE_BACKGROUND_LATENT = "on, and narrowing nothing until an art tag is picked";
+const HIDE_BACKGROUND_LATENT = "on, but has no effect until an art tag is picked";
 
 export interface TagChipsProps {
   selection: TagSelection;
@@ -115,7 +115,7 @@ export function TagChips({
   onToggleMode,
   onFloorChange,
   ariaLabel = "Picked tags",
-  emptyMessage = "No tags selected. Pick one from the list to filter cards.",
+  emptyMessage = "No tags picked. Pick one from the list to filter cards.",
   singleLine = false,
 }: TagChipsProps) {
   const row = useRef<HTMLDivElement>(null);
@@ -254,13 +254,11 @@ export function TagChips({
           // lead it (WCAG 2.5.3) — and neither out-of-reach state leaves a dim chip with no
           // explanation anywhere. Three sentences rather than two, because on-and-greyed is a
           // state the row can really be handed: see {@link HIDE_BACKGROUND_LATENT}.
-          title={`${HIDE_BACKGROUND_LABEL} — ${
-            canFloor
+          title={`${HIDE_BACKGROUND_LABEL}: ${canFloor
               ? HIDE_BACKGROUND_HINT
               : floorOn
                 ? HIDE_BACKGROUND_LATENT
-                : HIDE_BACKGROUND_IDLE
-          }`}
+                : HIDE_BACKGROUND_IDLE}`}
           onClick={() => onFloorChange(floorOn ? "any" : "strong")}
         />
       )}

@@ -201,7 +201,7 @@ export const Legal: Story = {
     const panel = canvas.getByRole("dialog", { name: "Modern check" });
     await expect(panel).not.toHaveAttribute("aria-modal");
     await expect(panel).toHaveTextContent(
-      "No issues. This deck passes every Modern rule we check.",
+      "No issues. This deck passes every Modern check.",
     );
   },
 };
@@ -485,7 +485,7 @@ export const NotLegal: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("dialog", { name: "Old School check" });
-    await expect(panel).toHaveTextContent("Lightning Bolt is not legal in Old School.");
+    await expect(panel).toHaveTextContent("Lightning Bolt isn't legal in Old School.");
     // **One button, and it opens the printing that is actually illegal.** Both rows are called
     // Lightning Bolt, so the visible sentence looks identical whichever row produced it; the
     // issue's `cardIds` is what makes the difference, and it holds the 2x2 printing alone. This

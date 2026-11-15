@@ -268,7 +268,7 @@ describe("round two's rows, through the settings readers", () => {
     expect(chipLabel(widget("deckCompletion"))).toBe("Collection");
     expect(chipLabel(widget("deckCompletion", { compare: "theory" }))).toBe("Theory");
     expect(chipLabel(widget("comingSoon"))).toBe("90 days");
-    expect(chipLabel(widget("comingSoon", { window: 365 }))).toBe("A year");
+    expect(chipLabel(widget("comingSoon", { window: 365 }))).toBe("1 year");
     expect(chipLabel(widget("toReview"))).toBe("");
     expect(chipLabel(widget("wishlistSavings"))).toBe("");
   });

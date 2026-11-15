@@ -110,7 +110,7 @@ export function HistorySheet({
 function BatchList({ onPick }: { onPick: (id: number) => void }) {
   const list = useScanHistoryList();
   if (list.isPending) {
-    return <p className="px-4 py-4 text-sm text-dim">Loading your scans…</p>;
+    return <p className="px-4 py-4 text-sm text-dim">Loading scans…</p>;
   }
   if (list.isError) {
     return (
@@ -366,7 +366,7 @@ function RenamePage({ summary, onDone }: { summary: ScanBatchSummary; onDone: ()
         )}
       />
       <p className="text-xs leading-snug text-dim">
-        Leave it blank to go back to “Scan {summary.id}”.
+        Leave blank to use “Scan {summary.id}”.
       </p>
       <Refusal>{failure}</Refusal>
       <button

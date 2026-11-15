@@ -784,7 +784,7 @@ describe("CollectionSearchTab", () => {
     // The tile itself is drawn — `CardGrid` names a tile's own button after the card.
     expect(await screen.findByRole("button", { name: "Sol Ring" })).toBeInTheDocument();
     const add = screen.getByRole("button", {
-      name: "Sol Ring is not in this deck — add it from the Card search tab first",
+      name: "Sol Ring isn't in this deck. Add it from All cards first.",
     });
     expect(add).toHaveAttribute("aria-disabled", "true");
 
@@ -833,7 +833,7 @@ describe("CollectionSearchTab", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "Reanimate is not in this deck — add it from the Card search tab first",
+        name: "Reanimate isn't in this deck. Add it from All cards first.",
       }),
     ).toHaveAttribute("aria-disabled", "true");
   });
@@ -855,7 +855,7 @@ describe("CollectionSearchTab", () => {
     tab();
 
     const add = await screen.findByRole("button", {
-      name: "Lightning Bolt — checking deck…",
+      name: "Lightning Bolt: checking the deck…",
     });
     expect(add).toHaveAttribute("aria-disabled", "true");
 
@@ -876,7 +876,7 @@ describe("CollectionSearchTab", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "Lightning Bolt — couldn't check the deck",
+        name: "Lightning Bolt: couldn't check the deck",
       }),
     ).toHaveAttribute("aria-disabled", "true");
   });
@@ -907,7 +907,7 @@ describe("CollectionSearchTab", () => {
       name: "Add Treasure (TC21 14, Nonfoil, Near mint) to Tokens & Emblems",
     });
     expect(add).not.toHaveAttribute("aria-disabled");
-    expect(screen.queryByRole("button", { name: /is not in this deck/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /isn't in this deck/ })).toBeNull();
 
     await userEvent.click(add);
 
@@ -990,7 +990,7 @@ describe("CollectionSearchTab", () => {
   it("lets a card this deck does not play be dragged into it", async () => {
     collectionList.mockResolvedValue({ items: [UNPLAYED], total: 1 });
     const { container } = tab();
-    await screen.findByRole("button", { name: /^Sol Ring is not in this deck/ });
+    await screen.findByRole("button", { name: /^Sol Ring isn't in this deck/ });
 
     const drags = recordDrags();
     const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`);

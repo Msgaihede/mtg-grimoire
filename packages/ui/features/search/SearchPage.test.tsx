@@ -372,7 +372,7 @@ describe("SearchPage", () => {
     );
 
     await userEvent.type(screen.getByPlaceholderText("Search cards…"), "bolt");
-    const reset = await screen.findByRole("button", { name: "Reset all — 1 filter active" });
+    const reset = await screen.findByRole("button", { name: "Reset all: 1 filter active" });
     await userEvent.click(reset);
 
     expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
@@ -639,7 +639,7 @@ describe("SearchPage", () => {
     await userEvent.hover(button);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(
-      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price (Shift-click to add a secondary sort)`,
+      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price. Shift-click to add a second sort.`,
       { normalizeWhitespace: false },
     );
     // And bound to the button rather than to the header cell — `aria-describedby` is what
@@ -755,7 +755,7 @@ describe("SearchPage", () => {
     searchCards.mockResolvedValue(page([], 0));
     wrap(<SearchPage />);
 
-    expect(await screen.findByText(/card database is empty/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no card data yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/no cards match/i)).not.toBeInTheDocument();
   });
 
@@ -766,7 +766,7 @@ describe("SearchPage", () => {
     await userEvent.type(screen.getByPlaceholderText(/search cards/i), "bolt");
 
     expect(await screen.findByText(/no cards match/i)).toBeInTheDocument();
-    expect(screen.queryByText(/card database is empty/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no card data yet/i)).not.toBeInTheDocument();
   });
 
   it("reports a rejected search", async () => {
@@ -1041,7 +1041,7 @@ describe("SearchPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Owned" }));
 
-    const reset = await screen.findByRole("button", { name: "Reset all — 1 filter active" });
+    const reset = await screen.findByRole("button", { name: "Reset all: 1 filter active" });
     expect(reset).toHaveTextContent("1");
 
     await userEvent.click(reset);
@@ -1216,7 +1216,7 @@ describe("the result layout toggle", () => {
     const tooltip = await screen.findByRole("tooltip", undefined, {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    expect(tooltip).toHaveTextContent("132 printings matched these filters");
+    expect(tooltip).toHaveTextContent("132 printings match these filters");
     await userEvent.unhover(mark);
     // The wall's own chip, 4px in from the card's top-left corner at 100% zoom. That inset scales
     // with the card: fixed, it climbed out of the printed nameplate it is meant to sit on and into
@@ -1376,11 +1376,11 @@ describe("the result layout toggle", () => {
     searchCards.mockResolvedValue(page([], 0));
     wrap(<SearchPage />);
 
-    expect(await screen.findByText(/card database is empty/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no card data yet/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Table view" }));
 
-    expect(screen.getByText(/card database is empty/i)).toBeInTheDocument();
+    expect(screen.getByText(/no card data yet/i)).toBeInTheDocument();
   });
 });
 

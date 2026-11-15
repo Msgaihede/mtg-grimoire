@@ -105,7 +105,7 @@ export function checkSpec(value: unknown): CheckedSpec {
   if (!result.success) {
     const issue = result.error?.issues[0];
     if (issue === undefined)
-      return { ok: false, problem: "The spec is not one this app can draw." };
+      return { ok: false, problem: "This app can't draw this spec." };
     const where = issue.path.length > 0 ? ` (at ${issue.path.join(".")})` : "";
     return { ok: false, problem: `${issue.message}${where}` };
   }
@@ -117,12 +117,12 @@ export function checkSpec(value: unknown): CheckedSpec {
     return { ok: true, spec, settingsRoot: null };
   }
   if (typeof settingsRoot !== "string" || !(settingsRoot in spec.elements)) {
-    return { ok: false, problem: "The spec's settingsRoot names no element of the spec." };
+    return { ok: false, problem: "settingsRoot names no element in the spec." };
   }
   if (settingsRoot === spec.root) {
     return {
       ok: false,
-      problem: "The spec's settingsRoot is its root; settings go in the popover.",
+      problem: "settingsRoot can't be the root. Settings go in the popover.",
     };
   }
   return { ok: true, spec, settingsRoot };

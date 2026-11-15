@@ -128,7 +128,7 @@ export function ClearDeck({
         {virtual
           ? "This deck doesn't use your collection, so no cards are moved."
           : variant === "live"
-            ? "Any copies you own go back to Recently removed."
+            ? "Copies you own go back to Recently removed."
             : "The theory list doesn't use your collection, so no cards are moved."}
       </p>
       {otherCount > 0 && (

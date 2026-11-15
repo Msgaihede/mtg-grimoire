@@ -268,7 +268,7 @@ describe("PackOpener", () => {
     const wall = screen.getByRole("list", { name: "Opened cards" });
     // Five boosters of seven, and the bundle's promo.
     expect(within(wall).getAllByRole("listitem")).toHaveLength(36);
-    expect(screen.getByText(/3 items in it could not be opened/)).toBeInTheDocument();
+    expect(screen.getByText(/3 items couldn't be opened/)).toBeInTheDocument();
   });
 
   /** Issue #1496: nobody picks a product and does not want to open it. */
@@ -295,7 +295,7 @@ describe("PackOpener", () => {
 
       // Another product is another open, onto the same session's tally.
       await pickOption(user, "Product", /Test Play Booster Box/);
-      expect(screen.getByText(/3 items in it could not be opened/)).toBeInTheDocument();
+      expect(screen.getByText(/3 items couldn't be opened/)).toBeInTheDocument();
       expect(openedCount()).toHaveTextContent("2");
     });
 
@@ -357,7 +357,7 @@ describe("PackOpener", () => {
     expect(screen.getByRole("button", { name: "Product" })).toHaveTextContent("Test Bundle");
     await openDropdown(user, "Product");
     await user.type(screen.getByRole("combobox", { name: "Search products" }), "nothing like it");
-    expect(screen.getByText("No product matches.")).toBeInTheDocument();
+    expect(screen.getByText("No matching products.")).toBeInTheDocument();
   });
 
   it("says the host's refusal and retries", async () => {
@@ -365,7 +365,7 @@ describe("PackOpener", () => {
     packsBoosterSet.mockRejectedValueOnce("MTGJSON could not be reached.");
     await user.click(await screen.findByRole("button", { name: /Test Set/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("MTGJSON could not be reached.");
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument());
   });
 
@@ -380,11 +380,11 @@ describe("PackOpener", () => {
     packsBoosterSet.mockRejectedValueOnce("MTGJSON could not be reached.");
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Refresh failed: MTGJSON could not be reached.",
+      "Couldn't refresh — MTGJSON could not be reached.",
     );
     expect(packsBoosterSet).toHaveBeenLastCalledWith("tst", true);
     expect(screen.getByRole("list", { name: "Opened cards" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
 
     // A Refresh that goes through clears the sentence.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
@@ -396,7 +396,7 @@ describe("PackOpener", () => {
     packsBoosterSets.mockClear().mockRejectedValueOnce("MTGJSON could not be reached.");
     const { user } = setup();
     expect(await screen.findByRole("alert")).toHaveTextContent("MTGJSON could not be reached.");
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("button", { name: /Test Set/ })).toBeInTheDocument();
     expect(packsBoosterSets).toHaveBeenCalledTimes(2);
   });
@@ -427,7 +427,7 @@ describe("PackOpener", () => {
     };
 
     const chips = () =>
-      within(screen.getByRole("list", { name: "Marketplaces priced at" }))
+      within(screen.getByRole("list", { name: "Selected marketplaces" }))
         .getAllByRole("listitem")
         .map((li) => li.textContent);
 
@@ -476,7 +476,7 @@ describe("PackOpener", () => {
       await user.type(box, "eur");
       expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
         "CardmarketEUR",
-        "Card traderEUR",
+        "CardTraderEUR",
       ]);
       await user.clear(box);
       await user.type(box, "zzz");
@@ -487,12 +487,12 @@ describe("PackOpener", () => {
       const { user } = setup();
       const box = await openStage(user);
       await user.click(box);
-      // TCGplayer, Cardmarket, Card Kingdom, Mana Pool — and up from the first, Card trader is
+      // TCGplayer, Cardmarket, Card Kingdom, Mana Pool — and up from the first, CardTrader is
       // passed over for Mana Pool.
       await user.keyboard("{ArrowUp}");
       const active = box.getAttribute("aria-activedescendant");
       expect(document.getElementById(active!)).toHaveTextContent("Mana Pool");
-      expect(screen.getByRole("option", { name: /Card trader/ })).toHaveAttribute(
+      expect(screen.getByRole("option", { name: /CardTrader/ })).toHaveAttribute(
         "aria-disabled",
         "true",
       );
@@ -526,7 +526,7 @@ describe("PackOpener", () => {
 
       expect(chips()).toEqual(["TCGplayer", "Cardmarket"]);
       expect(
-        await screen.findByText(/^Cardmarket left out: the exchange rate could not be fetched/),
+        await screen.findByText(/^Cardmarket left out: couldn't fetch the exchange rate/),
       ).toBeInTheDocument();
       expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(tcg, "usd"));
       expect(printingPrices).not.toHaveBeenCalledWith(expect.any(Array), "cardmarket");
@@ -536,7 +536,11 @@ describe("PackOpener", () => {
       const { user } = setup();
       const box = await openStage(user);
       // The one picked has no ✕, and pressing its row keeps it.
-      expect(screen.queryByRole("button", { name: /Stop pricing at/ })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", {
+          name: /^Remove (TCGplayer|Cardmarket|Card Kingdom|CardTrader|Mana Pool)$/,
+        }),
+      ).not.toBeInTheDocument();
       await user.click(box);
       await user.click(screen.getByRole("option", { name: /TCGplayer/ }));
       expect(chips()).toEqual(["TCGplayer"]);
@@ -544,7 +548,7 @@ describe("PackOpener", () => {
       await user.click(screen.getByRole("option", { name: /Card Kingdom/ }));
       await user.click(screen.getByRole("option", { name: /Mana Pool/ }));
       expect(chips()).toEqual(["TCGplayer", "Card Kingdom", "Mana Pool"]);
-      await user.click(screen.getByRole("button", { name: "Stop pricing at Card Kingdom" }));
+      await user.click(screen.getByRole("button", { name: "Remove Card Kingdom" }));
       expect(chips()).toEqual(["TCGplayer", "Mana Pool"]);
       await user.keyboard("{Backspace}");
       expect(chips()).toEqual(["TCGplayer"]);
@@ -692,7 +696,7 @@ describe("PackOpener", () => {
       await user.type(await screen.findByLabelText("Minimum"), "1{Enter}");
       await user.type(screen.getByLabelText("Bulk"), "cheap");
       await user.tab();
-      expect(screen.getByText("Bulk has to be a price of zero or more.")).toBeInTheDocument();
+      expect(screen.getByText("Bulk must be zero or more.")).toBeInTheDocument();
       expect(usePackReducedStore.getState().settings.bulkPrice).toBe(0);
     });
 
@@ -738,7 +742,7 @@ describe("PackOpener", () => {
       await user.click(await screen.findByRole("button", { name: /Test Set/ }));
       await user.type(await screen.findByLabelText("Sell at"), "150");
       await user.tab();
-      expect(screen.getByText("Sell at has to be above 0 and at most 100%.")).toBeInTheDocument();
+      expect(screen.getByText("Sell at must be above 0 and at most 100%.")).toBeInTheDocument();
       expect(window.localStorage.getItem(REDUCED_KEY)).toBeNull();
       expect(usePackReducedStore.getState().settings.sellPercent).toBe(100);
     });

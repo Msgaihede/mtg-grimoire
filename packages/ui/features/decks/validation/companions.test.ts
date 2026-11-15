@@ -367,7 +367,7 @@ describe("the companion zone", () => {
       {
         severity: "error",
         code: "companion-eligibility",
-        message: "Lightning Bolt has no companion ability, so it cannot be your companion.",
+        message: "Lightning Bolt has no companion ability, so it can't be your companion.",
         cardIds: ["c-Lightning Bolt"],
       },
     ]);
@@ -434,7 +434,7 @@ describe("the companion zone", () => {
         severity: "error",
         code: "companion-eligibility",
         message:
-          "The Companion of the Wilds has no companion ability, so it cannot be your companion.",
+          "The Companion of the Wilds has no companion ability, so it can't be your companion.",
         cardIds: ["c-The Companion of the Wilds"],
       },
     ]);

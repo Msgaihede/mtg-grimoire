@@ -100,7 +100,7 @@ export function NextPageRefused({ query }: { query: Paged }) {
   if (!query.isFetchNextPageError) return null;
   return (
     <div role="status" className="flex items-center gap-3 pt-4 pb-1">
-      <p className="min-w-0 flex-1 text-sm text-dim">The next cards could not be read.</p>
+      <p className="min-w-0 flex-1 text-sm text-dim">Couldn't load more cards.</p>
       <button
         type="button"
         onClick={() => void query.fetchNextPage()}

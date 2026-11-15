@@ -241,9 +241,9 @@ describe("finishing", () => {
       "3 cards. 1 of them is in your collection; the rest are left alone.",
     );
     expect(givenNote([fl("mine", 2)])).toBe(
-      "2 cards. None of them are in your collection, so nothing is taken.",
+      "2 cards. None are in your collection, so nothing is removed.",
     );
-    expect(givenNote([fl("theirs", 2)])).toBe("There is nothing on your side.");
+    expect(givenNote([fl("theirs", 2)])).toBe("Nothing on your side.");
   });
 
   it("counts what was received and names what was wished for", () => {
@@ -255,7 +255,7 @@ describe("finishing", () => {
     ];
     expect(receivedNote(lines)).toBe("4 cards, in the printing and finish shown in the trade.");
     expect(unwishNote(lines)).toBe("2 of them are on it: Urza's Saga, Tarmogoyf.");
-    expect(unwishNote([fl("theirs", 1)])).toBe("None of them are on your wishlist.");
+    expect(unwishNote([fl("theirs", 1)])).toBe("None are on your wishlist.");
   });
 
   it("says what a finish did, and nothing when it did nothing", () => {
@@ -268,7 +268,7 @@ describe("finishing", () => {
         addedToWishlist: 0,
       }),
     ).toBe(
-      "Finishing it took 3 cards out of your collection, added 3 cards to your collection and took 1 card off your wishlist.",
+      "Finishing it removed 3 cards from your collection, added 3 cards to your collection and removed 1 card from your wishlist.",
     );
     expect(
       outcomeSentence({
@@ -347,6 +347,6 @@ describe("finishing", () => {
         removedFromWishlist: 0,
         addedToWishlist: 0,
       }),
-    ).toBe("Finishing it took 3 cards out of your collection (1 from a deck).");
+    ).toBe("Finishing it removed 3 cards from your collection (1 from a deck).");
   });
 });

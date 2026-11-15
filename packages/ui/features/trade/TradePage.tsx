@@ -202,9 +202,9 @@ export function TradePage(): JSX.Element {
   };
 
   const failure = list.isError
-    ? `Couldn't read your trades — ${ipcError(list.error)}`
+    ? `Couldn't load your trades — ${ipcError(list.error)}`
     : unread
-      ? `Couldn't read this trade — ${ipcError(trade.error)}`
+      ? `Couldn't load this trade — ${ipcError(trade.error)}`
       : null;
   const status = list.isPending
     ? "Loading trades…"
@@ -305,9 +305,7 @@ export function TradePage(): JSX.Element {
               <>
                 <p className="font-heading text-xl font-semibold">No trades yet</p>
                 <p className="text-sm leading-relaxed text-dim">
-                  A trade is two piles of cards and the difference between them. Put what you give
-                  on one side and what they give on the other, and the page keeps the balance in the
-                  prices you choose.
+                  Put what you give on one side and what they give on the other. The page keeps the balance.
                 </p>
                 <button
                   ref={newRef}

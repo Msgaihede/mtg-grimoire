@@ -39,7 +39,7 @@ export function PackOpener({ onBack }: { onBack: () => void }): JSX.Element {
         <div className="min-h-0 flex-1 overflow-y-auto pb-6 pr-6 pt-3">
           {loading ? (
             <p role="status" className="m-0 text-sm text-dim">
-              Fetching the sets from MTGJSON…
+              Fetching sets from MTGJSON…
             </p>
           ) : error !== null ? (
             <div className="flex flex-col items-start gap-3">
@@ -47,7 +47,7 @@ export function PackOpener({ onBack }: { onBack: () => void }): JSX.Element {
                 {error}
               </p>
               <button type="button" onClick={retry} className={SECONDARY}>
-                Retry
+                Try again
               </button>
             </div>
           ) : (
@@ -118,7 +118,7 @@ function SetStage({
             <SetSwitcher sets={sets} value={summary.code} onPick={onPick} />
             {set !== undefined && refreshError !== null && !booster.refreshing && (
               <span role="alert" className="text-xs text-destructive">
-                Refresh failed: {refreshError}
+                Couldn't refresh — {refreshError}
               </span>
             )}
             {set !== undefined && (
@@ -157,7 +157,7 @@ function SetStage({
               {booster.error}
             </p>
             <button type="button" onClick={booster.retry} className={SECONDARY}>
-              Retry
+              Try again
             </button>
           </div>
         ) : null}

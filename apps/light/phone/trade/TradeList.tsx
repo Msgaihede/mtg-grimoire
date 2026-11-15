@@ -65,7 +65,7 @@ export function TradeList() {
         </div>
 
         {list.isLoadingError ? (
-          <ReadError>Your trades could not be read.</ReadError>
+          <ReadError>Couldn't load your trades.</ReadError>
         ) : list.data === undefined ? (
           <DimNote>Loading trades…</DimNote>
         ) : trades.length === 0 ? (

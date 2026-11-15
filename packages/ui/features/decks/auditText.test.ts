@@ -303,7 +303,7 @@ describe("auditSentence", () => {
     );
 
     expect(recorded).toEqual({
-      text: "Recorded 4 copies for this deck",
+      text: "Quick-added 4 copies for this deck",
       detail: "1 copy off your wishlist",
     });
     // The wrong-but-plausible answers, asserted the way the pull's are: every `default` arm in
@@ -317,7 +317,7 @@ describe("auditSentence", () => {
   it("says one copy and not 1 copys, in both halves", () => {
     expect(
       auditSentence(entry("move", { quickAdd: { copies: 1, wishes: 1 } }, { cardId: null })),
-    ).toEqual({ text: "Recorded 1 copy for this deck", detail: "1 copy off your wishlist" });
+    ).toEqual({ text: "Quick-added 1 copy for this deck", detail: "1 copy off your wishlist" });
 
     expect(
       auditSentence(entry("move", { quickAdd: { copies: 3, wishes: 2 } }, { cardId: null })).detail,
@@ -640,13 +640,13 @@ describe("auditSentence", () => {
       detail: "was Arena",
     });
     expect(deck({ field: "cover", from: null, to: "abc" })).toEqual({
-      text: "Set the deck cover",
+      text: "Set the deck image",
       detail: null,
     });
     // `"custom"` is the literal the backend writes for an uploaded image, and it is the
     // difference between a cover the reader chose off a card and one they made.
     expect(deck({ field: "cover", from: "abc", to: "custom" })).toEqual({
-      text: "Set a custom deck cover",
+      text: "Set a custom deck image",
       detail: null,
     });
     // ⚠️ **A test of how *old* history reads, and it stays for good.** `decks.notes` was
@@ -879,7 +879,7 @@ describe("auditSentence", () => {
       detail: null,
     });
     expect(deck({ field: "managedWishlist", from: "all", to: "other" }).text).toBe(
-      "Set the managed wishlist to Different Printing",
+      "Set the managed wishlist to Different printing",
     );
     expect(deck({ field: "managedWishlist", from: "missing", to: "off" })).toEqual({
       text: "Turned the managed wishlist off",
@@ -936,7 +936,7 @@ describe("auditSentence", () => {
       auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
 
     expect(deck({ field: "bracket", from: 0, to: 4 })).toEqual({
-      text: "Set the deck to bracket 4",
+      text: "Set the bracket to 4",
       detail: "was Auto",
     });
     // Back to Auto is the half a `text()` reader loses: `0` prints as nothing.
@@ -946,13 +946,13 @@ describe("auditSentence", () => {
     });
     // One set answer to another names both, because neither is the default.
     expect(deck({ field: "bracket", from: 2, to: 5 })).toEqual({
-      text: "Set the deck to bracket 5",
+      text: "Set the bracket to 5",
       detail: "was bracket 2",
     });
     // A row a newer build wrote with a spelling this one does not know still says something
     // true, rather than throwing on a missing `from`.
     expect(deck({ field: "bracket", to: 3 })).toEqual({
-      text: "Set the deck to bracket 3",
+      text: "Set the bracket to 3",
       detail: "was Auto",
     });
   });

@@ -25,7 +25,7 @@ export function useScannedDeck(rows: readonly ScannerTrayRow[]) {
       if (rows.length === 0) throw new Error("Scan at least one card before creating a deck.");
       const snapshot = rows.map((row) => {
         if (!row.cardId || row.choices.length > 0) {
-          throw new Error(`${row.name} is still waiting for a printing to be picked.`);
+          throw new Error(`${row.name} is still waiting for a printing.`);
         }
         if (!isKnownFinish(row.finish)) {
           throw new Error(`${row.name} has no finish yet. Pick one before creating a deck.`);
@@ -46,7 +46,7 @@ export function useScannedDeck(rows: readonly ScannerTrayRow[]) {
       const types = new Map<string, string | null>();
       cards.forEach((card, index) => {
         if (card === null) {
-          throw new Error("A scanned printing is no longer in the card database. Pick it again.");
+          throw new Error("A scanned printing is no longer in the card data. Pick it again.");
         }
         types.set(ids[index], card.typeLine);
       });

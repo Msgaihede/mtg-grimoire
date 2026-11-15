@@ -268,7 +268,7 @@ export function CardSearchBody({
               <span className="min-w-0">
                 {query.isFetchNextPageError
                   ? "Couldn't load more cards"
-                  : "Couldn't refresh these"}{" "}
+                  : "Couldn't refresh the list"}{" "}
                 — {failure}
               </span>
               {query.isFetchNextPageError && (

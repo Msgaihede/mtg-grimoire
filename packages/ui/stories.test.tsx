@@ -396,7 +396,7 @@ describe.runIf(FIRST_PART)("two stories with different seeds, mounted together",
     // …and the `empty` one is still setting up, which is the whole of what a `cardCount` of
     // exactly 0 means.
     await waitFor(async () => {
-      await expect(empty.getByRole("dialog")).toHaveTextContent("Setting up your card database");
+      await expect(empty.getByRole("dialog")).toHaveTextContent("Setting up card data");
     });
     await expect(starter.queryByRole("dialog")).toBeNull();
     await expect(empty.queryByText(new RegExp(`${STARTER_CARDS} cards`))).toBeNull();

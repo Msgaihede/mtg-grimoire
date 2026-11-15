@@ -261,7 +261,7 @@ export const WithHintExplaining: Story = {
   args: {
     label: "Other",
     pressed: true,
-    hint: "changes this version of the app has no name for",
+    hint: "changes this app version doesn't recognize",
   },
 };
 
@@ -335,7 +335,7 @@ export const ColoursExact: Story = {
     await expect(exact.querySelector("svg.lucide-squares-unite")).not.toBeNull();
     await expect(exact.querySelector("svg.lucide-squares-intersect")).toBeNull();
     await expect(exact).toHaveAccessibleName(
-      "Within — cards whose color identity fits within these colors",
+      "Within: color identity fits within these colors",
     );
   },
 };
@@ -438,7 +438,7 @@ export const NothingToReset: Story = {
     const canvas = within(canvasElement);
     const reset = canvas.getByRole("button", { name: /^Reset all/ });
     await expect(reset).toHaveAttribute("aria-disabled", "true");
-    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+    await expect(reset).toHaveAccessibleName("Reset all: 0 filters active");
 
     // Still a tab stop: `aria-disabled` says "cannot be pressed" without taking the control
     // out from under a keyboard reader mid-row. That the press is refused is
@@ -510,7 +510,7 @@ export const Disclosures: Story = {
     await userEvent.click(quiet);
     await expect(quiet).toHaveClass("bg-surface", ...off);
     await expect(quiet).not.toHaveClass("border-accent", "text-accent");
-    await expect(quiet).toHaveAccessibleName("Hide filters — 0 active");
+    await expect(quiet).toHaveAccessibleName("Hide filters, 0 active");
   },
 };
 

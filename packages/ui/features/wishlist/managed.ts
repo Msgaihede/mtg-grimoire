@@ -18,7 +18,7 @@ import type { ManagedWishlistMode, WishlistFolder } from "@/lib/ipc";
 
 /** The backend's refusal for every hand edit of a managed folder, verbatim — the fake answers it
  *  too, so a story cannot stand up a write the app refuses. */
-export const MANAGED_REFUSAL = "A managed wishlist follows its deck, so it can't be edited by hand.";
+export const MANAGED_REFUSAL = "A managed wishlist follows its deck and can't be edited.";
 
 /** Whether this folder is a deck's managed wishlist. `!= null` rather than `!== null`, so a fixture
  *  written before v48 that leaves the field out reads as the reader's own folder. */
@@ -86,7 +86,7 @@ export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> 
  * page cannot find (another window deleted it between the two reads). It claims nothing about any
  * view, only what every managed folder is.
  */
-export const MANAGED_EMPTY_UNKNOWN = "Empty. This folder updates automatically with its deck.";
+export const MANAGED_EMPTY_UNKNOWN = "Empty. This folder follows its deck.";
 
 /**
  * What an empty **Tokens child** says (user schema v55) — one sentence whichever view its parent

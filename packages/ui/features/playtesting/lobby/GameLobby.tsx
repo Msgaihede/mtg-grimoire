@@ -82,11 +82,11 @@ export function FriendsDoor({
         <p role="status" className="m-0 text-sm">
           {draft.kind === "trade"
             ? draft.role === "guest"
-              ? "That code is a trade’s lobby — join it from Trade."
-              : `Your lobby ${draft.code} is a trade’s, on Trade. Close it there to open one for a game.`
+              ? "That code is for a trade. Join it from Trade."
+              : `Your lobby ${draft.code} is for a trade. Close it on Trade to host a game.`
             : draft.role === "guest"
-              ? "That code is a draft’s lobby — join it from Draft & Packs."
-              : `Your lobby ${draft.code} is a draft’s, on Draft & Packs. Close it there to open one for a game.`}
+              ? "That code is for a draft. Join it from Draft & Packs."
+              : `Your lobby ${draft.code} is for a draft. Close it on Draft & Packs to host a game.`}
         </p>
         <LeaveLobby host={draft.role === "host"} className="self-start" />
       </section>
@@ -101,7 +101,7 @@ export function FriendsDoor({
           role="status"
           className="m-0 rounded-lg border border-border bg-surface px-3 py-2 text-xs"
         >
-          The lobby {closed.code} closed{closed.closedReason ? `: ${closed.closedReason}` : "."}
+          Lobby {closed.code} closed{closed.closedReason ? `: ${closed.closedReason}` : "."}
         </p>
       )}
       <div className="flex flex-col gap-1.5">
@@ -132,8 +132,8 @@ export function FriendsDoor({
         </button>
         <p className="m-0 text-xs text-dim">
           {mayHost
-            ? "Host a game: share the code, and your friends bring their own decks."
-            : "Hosting a game is for supporters; anybody can join one."}
+            ? "Share the code. Friends bring their own decks."
+            : "Hosting is for supporters. Anyone can join."}
         </p>
       </div>
       <div className="flex flex-col gap-1.5">
@@ -169,7 +169,7 @@ export function FriendsDoor({
           </button>
         </div>
       </div>
-      {!named && <p className="m-0 text-xs text-dim">Give yourself a name to host or join.</p>}
+      {!named && <p className="m-0 text-xs text-dim">Enter a name to host or join.</p>}
       <InlineError message={error} />
     </section>
   );
@@ -267,13 +267,13 @@ export function GuestRoomHeader({ lobby }: { lobby: LobbyState }): JSX.Element {
   return (
     <div className={cn(PANEL, "flex flex-col gap-1.5 p-4")}>
       <h3 className={LABEL}>
-        Lobby {lobby.code} — hosted by {lobby.hostName}
+        Lobby {lobby.code} · hosted by {lobby.hostName}
       </h3>
       <p role="status" className="m-0 text-sm">
         {lobby.phase === "connecting"
           ? "Connecting to the lobby…"
           : !lobby.hostOnline
-            ? `${lobby.hostName} has dropped — waiting for them to come back.`
+            ? `${lobby.hostName} disconnected. Waiting for them to return.`
             : lobby.phase === "playing"
               ? `${lobby.hostName} is dealing the game…`
               : `Waiting for ${lobby.hostName} to start the game.`}

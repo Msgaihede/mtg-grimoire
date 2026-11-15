@@ -48,7 +48,7 @@ describe("CsvNotes", () => {
     );
     expect(
       screen.getByText(
-        "No quantity column found, so each row counts as one copy.",
+        "No quantity column, so each row counts as one copy.",
       ),
     ).toBeInTheDocument();
   });

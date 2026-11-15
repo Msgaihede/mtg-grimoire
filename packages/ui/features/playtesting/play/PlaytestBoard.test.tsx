@@ -546,7 +546,7 @@ describe("PlaytestBoard's tracker", () => {
   it("lights the phase the game is in, named in one sentence", () => {
     setup(combatArrowsView().view);
     const tracker = screen.getByRole("group", {
-      name: "Turn 5 · Your declare blockers step — you may respond",
+      name: "Turn 5 · Your declare blockers step · you may respond",
     });
     expect(tracker.querySelector("[data-lit]")).toHaveTextContent("Combat");
   });
@@ -923,18 +923,18 @@ describe("PlaytestBoard against the goldfish", () => {
       opponentNames: GOLDFISH,
       returnTo: "deck",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Back to the Simic Tempo deck" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to Simic Tempo" }));
     expect(onBack).toHaveBeenCalled();
     fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     expect(onAct).toHaveBeenLastCalledWith({ type: "undo" });
     fireEvent.click(screen.getByRole("button", { name: "Game menu" }));
-    expect(await screen.findByRole("menuitem", { name: "Back to the deck" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Back to deck" })).toBeInTheDocument();
   });
 
   it("names the result banner's way back by where the board came from", () => {
     setup(gameOver().view, { returnTo: "deck" });
     const over = screen.getByRole("region", { name: "Game over" });
-    expect(within(over).getByRole("button", { name: "Back to the deck" })).toBeInTheDocument();
+    expect(within(over).getByRole("button", { name: "Back to deck" })).toBeInTheDocument();
   });
 
   it("draws the felt the board was opened on", () => {

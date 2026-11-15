@@ -29,10 +29,10 @@ describe("PictureNotes", () => {
   it("says how the picture is held, in full and compact", () => {
     const { rerender } = render(<HoldPrompt />);
     expect(screen.getByText("Hold the picture to scan")).toBeInTheDocument();
-    expect(screen.getByText("Scanning pauses the moment you let go.")).toBeInTheDocument();
+    expect(screen.getByText("Scanning pauses when you let go.")).toBeInTheDocument();
     rerender(<HoldPrompt compact />);
     expect(screen.getByText("Hold the picture to scan")).toBeInTheDocument();
-    expect(screen.getByText("Scanning pauses the moment you let go.")).toBeInTheDocument();
+    expect(screen.getByText("Scanning pauses when you let go.")).toBeInTheDocument();
   });
 
   it("says a held picture is scanning", () => {

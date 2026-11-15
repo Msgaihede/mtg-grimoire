@@ -164,14 +164,14 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      canvas.getByText("No tags selected. Pick one from the list to filter cards."),
+      canvas.getByText("No tags picked. Pick one from the list to filter cards."),
     ).toBeInTheDocument();
     const floor = canvas.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
     // `aria-disabled` and not `disabled`: the chip keeps its tab stop, so a reader sweeping the
     // row still hears the option and the reason it cannot be pressed.
     await expect(floor).toHaveAttribute("aria-disabled", "true");
     await expect(floor).toHaveAccessibleName(
-      `${HIDE_BACKGROUND_LABEL} — nothing to hide until an art tag is picked`,
+      `${HIDE_BACKGROUND_LABEL}: pick an art tag first`,
     );
   },
 };
@@ -217,8 +217,8 @@ export const FloorOn: Story = {
     await expect(floor).toHaveAttribute("aria-pressed", "true");
     await expect(floor).not.toHaveAttribute("aria-disabled");
     await expect(floor).toHaveAccessibleName(
-      `${HIDE_BACKGROUND_LABEL} — drops taggings Scryfall marked as a minor detail or ` +
-        "background element",
+      `${HIDE_BACKGROUND_LABEL}: skips cards where Scryfall marked the tag as a minor or ` +
+        "background detail",
     );
   },
 };
@@ -228,8 +228,8 @@ export const FloorOn: Story = {
  * because the row can really be handed it.
  *
  * Pick an art tag, press the control, then remove that chip: the floor is still `strong` while
- * there is no longer an art include for it to narrow. A chip reading *“nothing to hide until an
- * art tag is picked”* while lit would be telling the reader their setting was off, so there is a
+ * there is no longer an art include for it to narrow. A chip reading *“pick an art tag first”* while
+ * lit would be telling the reader their setting was off, so there is a
  * third sentence for exactly this state.
  *
  * **The page it ships inside never produces it** — `useTagSelection`'s `settleFloor` drops the floor on
@@ -244,7 +244,7 @@ export const FloorOnWithNothingToNarrow: Story = {
     await expect(floor).toHaveAttribute("aria-pressed", "true");
     await expect(floor).toHaveAttribute("aria-disabled", "true");
     await expect(floor).toHaveAccessibleName(
-      `${HIDE_BACKGROUND_LABEL} — on, and narrowing nothing until an art tag is picked`,
+      `${HIDE_BACKGROUND_LABEL}: on, but has no effect until an art tag is picked`,
     );
   },
 };

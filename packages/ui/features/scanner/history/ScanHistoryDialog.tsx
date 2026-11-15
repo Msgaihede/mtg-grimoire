@@ -151,7 +151,7 @@ function HistoryBody({
   const batch = useScanBatch(shownId);
 
   if (list.isPending) {
-    return <p className="px-5 py-4 text-sm text-dim">Loading your scans…</p>;
+    return <p className="px-5 py-4 text-sm text-dim">Loading scans…</p>;
   }
   if (list.isError) {
     return (

@@ -1066,7 +1066,7 @@ describe("bracketWarning", () => {
 
     expect(message).toBe(
       "Set to bracket 1, but the cards suggest bracket 2+ " +
-        "(1 extra-turn card: Time Warp). Worth mentioning to your playgroup.",
+        "(1 extra-turn card: Time Warp). Mention it to your playgroup.",
     );
   });
 
@@ -1075,7 +1075,7 @@ describe("bracketWarning", () => {
 
     expect(message).toBe(
       "Set to bracket 2, but the cards suggest bracket 4+ " +
-        "(mass land denial: Armageddon). Worth mentioning to your playgroup.",
+        "(mass land denial: Armageddon). Mention it to your playgroup.",
     );
   });
 
@@ -1107,7 +1107,7 @@ describe("bracketWarning", () => {
     const message = bracketWarning(2, armageddonDeck()) ?? "";
 
     expect(message).not.toMatch(/illegal|invalid|error|must not|not allowed|violat/i);
-    expect(message).toContain("Worth mentioning to your playgroup");
+    expect(message).toContain("Mention it to your playgroup");
   });
 });
 

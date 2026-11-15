@@ -233,7 +233,7 @@ export function TagTree({
             it grows the gap above it by a phantom row. */}
         <p role="status" className={hidSomething ? "px-1 text-[0.6875rem] text-dim" : "sr-only"}>
           {hidSomething
-            ? "Unhide tags in Settings."
+            ? "Unhide tags in Settings › Tags."
             : ""}
         </p>
       </div>
@@ -402,7 +402,7 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
         // **The row runs the same toggle the press does, so it has to name the half it will
         // do.** A row that said "Add" over a picked tag and then removed it would be the worse
         // reading of issue #181 rather than the fix for it.
-        label: isPicked ? "Remove this tag from the filter" : "Add this tag to the filter",
+        label: isPicked ? "Remove from filter" : "Add to filter",
         Icon: isPicked ? Minus : Plus,
         onSelect: () => onToggle(hit),
       },
@@ -410,7 +410,7 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
       {
         kind: "action",
         id: "hide",
-        label: hit.childCount > 0 ? "Hide this tag and the tags under it" : "Hide this tag",
+        label: hit.childCount > 0 ? "Hide tag and subtags" : "Hide tag",
         Icon: EyeOff,
         // A blank `id` is a real value: `oracle_tags.id` arrived by an `ALTER TABLE` that could
         // not add a `NOT NULL` column without a default, so every row predating a refresh new
@@ -418,7 +418,7 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
         // id would equal every such row and take the whole taxonomy off the page — so the row
         // greys with the reason rather than failing on the press.
         disabled: unmutable,
-        reason: unmutable ? "not until the next tag refresh" : undefined,
+        reason: unmutable ? "after the next tag refresh" : undefined,
         onSelect: () => hide(hit),
       },
     ];

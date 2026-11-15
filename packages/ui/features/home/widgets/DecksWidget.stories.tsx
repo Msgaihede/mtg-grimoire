@@ -180,7 +180,7 @@ export const NoDecksYet: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "Decks" }));
     await expect(
-      await card.findByText("No decks found. Build a deck on the Decks page to see it here."),
+      await card.findByText("No decks yet. Build one on the Decks page."),
     ).toBeInTheDocument();
   },
 };

@@ -119,7 +119,7 @@ export const WishFolderPanel = memo(function WishFolderPanel({
             // cycle is a graph SQLite would walk forever the day the folder is deleted — and
             // that refusal is a fence rather than the affordance.
             forbidden={new Set([panel.folderId, ...folderDescendants(census, panel.folderId)])}
-            forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
+            forbiddenReason="A folder can't go inside itself or its own subfolders."
             // Drawn **into** the strip rather than as a popup of its own: the strip is the
             // layer, and a second box with its own shadow and its own z-index over it would
             // be a second Escape rung for one decision.

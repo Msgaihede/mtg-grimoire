@@ -31,12 +31,12 @@ export function PackOrder({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className={LABEL}>Pack order</h3>
         <span className="text-xs text-dim">
-          {plural(chosen.length, "pack")} chosen — {chosen.length >= max ? "all" : "up to"} {max}
+          {plural(chosen.length, "pack")} chosen · {chosen.length >= max ? "all" : "up to"} {max}
         </span>
       </div>
       {chosen.length === 0 ? (
         <p className="m-0 rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-dim">
-          Pick a set for each pack from the wall.
+          Choose a set for each pack.
         </p>
       ) : (
         <ol aria-label="Pack order" className="m-0 flex list-none flex-col gap-1.5 p-0">
@@ -111,12 +111,12 @@ export function AddPackWall({
       <div className="flex items-baseline gap-3">
         <h3 className={LABEL}>Add a pack</h3>
         {full && (
-          <span className="text-xs text-dim">Every pack is chosen — remove one to change it.</span>
+          <span className="text-xs text-dim">All packs chosen. Remove one to change it.</span>
         )}
       </div>
       {loading ? (
         <p role="status" className="m-0 text-sm text-dim">
-          Fetching the sets from MTGJSON…
+          Fetching sets from MTGJSON…
         </p>
       ) : error !== null ? (
         <div className="flex flex-col items-start gap-3">
@@ -124,7 +124,7 @@ export function AddPackWall({
             {error}
           </p>
           <button type="button" onClick={retry} className={QUIET_BUTTON}>
-            Retry
+            Try again
           </button>
         </div>
       ) : (

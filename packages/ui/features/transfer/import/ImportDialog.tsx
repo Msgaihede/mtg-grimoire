@@ -25,8 +25,7 @@ import { useImportSource } from "./useImportSource";
  * readings were told rather than guessed and are right by construction.
  */
 export const LEGACY_ENCODING_NOTICE =
-  "This file isn't UTF-8, so it was read as Windows-1252 (Western European). If accented " +
-  "names look wrong, save it as UTF-8 and try again.";
+  "Read as Windows-1252, not UTF-8. If accented names look wrong, save the file as UTF-8 and try again.";
 
 export interface ImportDialogProps {
   /**
@@ -218,7 +217,7 @@ function ImportBody({
    *  "that file is over 8 MB" behind a broken picker or the reverse, which is what the two calls
    *  were for. */
   const fileFailure = readFile.isError
-    ? `Couldn't read a card list from a file — ${ipcError(readFile.error)}`
+    ? `Couldn't import the file — ${ipcError(readFile.error)}`
     : null;
 
   /** Nothing was read and the parser said why — `SourceRefusal`'s own condition, held here only

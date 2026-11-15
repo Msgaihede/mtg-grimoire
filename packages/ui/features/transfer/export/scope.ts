@@ -283,7 +283,7 @@ export function scopeLabel(total: number, everything: boolean, filing?: ExportFi
  * it is how the half about folders came to be missing from only one of them.
  */
 export function everythingLabel(filing?: ExportFiling): string {
-  return `Export everything, ignoring the filters${andFolders(filing)}`;
+  return `Export everything, ignoring your filters${andFolders(filing)}`;
 }
 
 /** The clause both sentences add where the reader's filing is part of what is being set aside. */

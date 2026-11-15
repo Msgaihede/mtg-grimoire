@@ -25,9 +25,7 @@ export const MCP_HEADING = "AI agents on this computer (MCP)";
  * free**. Exported so the tests and the stories assert the sentence the panel draws.
  */
 export const MCP_SENTENCE =
-  "Lets an AI agent on this computer — Claude Code, Claude Desktop, Codex, Gemini CLI and " +
-  "others — read your collection, wishlist and decks and build home widgets while this app is open. " +
-  "Nothing leaves this computer, and it's free.";
+  "Lets AI agents on this computer, such as Claude Code or Codex, read your collection, wishlist and decks and build Home widgets while the app is open. Free, and nothing leaves this computer.";
 
 /** The note beside a switch that is off. */
 export const MCP_OFF = "Off.";
@@ -43,7 +41,7 @@ export function listeningLine(url: string): string {
  * the bind's own sentence, and moving the port starts the server.) The way on is the switch, so
  * the line names it.
  */
-export const NOT_RUNNING = "Not listening. Switch it off and on again to start it.";
+export const NOT_RUNNING = "Not listening. Turn it off and on again.";
 
 /** The ports `mcp_set_port` accepts — a `u16` above the privileged range. */
 export const PORT_MIN = 1024;
@@ -87,23 +85,21 @@ export type McpClient = (typeof CLIENTS)[number];
 export const CLIENT_META: Record<McpClient, { label: string; where: string }> = {
   "claude-code": {
     label: "Claude Code",
-    where: "Run this in a terminal. It adds the server for every project, not only this folder.",
+    where: "Run this in a terminal. It adds the server for every project.",
   },
   "claude-desktop": {
     label: "Claude Desktop",
     where:
-      "Or add this to Claude Desktop's config file (Settings → Developer → Edit Config), then " +
-      "restart Claude Desktop. It needs Node.js, for npx.",
+      "Or add this to Claude Desktop's config file (Settings › Developer › Edit Config), then restart it. Needs Node.js for npx.",
   },
   codex: {
     label: "Codex",
     where:
-      "Add this to .codex\\config.toml in your user folder — create it if it isn't there. The " +
-      "Codex CLI, its IDE extension and the ChatGPT desktop app all read it.",
+      "Add this to .codex\\config.toml in your user folder, creating it if needed. The Codex CLI, its IDE extension and the ChatGPT desktop app all read it.",
   },
   gemini: {
     label: "Gemini CLI",
-    where: "Run this in a terminal. It adds the server for every project, not only this folder.",
+    where: "Run this in a terminal. It adds the server for every project.",
   },
   antigravity: {
     label: "Antigravity",
@@ -121,17 +117,15 @@ export const CLIENT_META: Record<McpClient, { label: string; where: string }> = 
 
 /** What the install says under its buttons, before a press. */
 export const EXTENSION_LINE =
-  "Installs MTG Grimoire as a Claude Desktop extension — Claude Desktop asks before it adds it. " +
-  "Install it again after a new token or a port change.";
+  "Installs MTG Grimoire as a Claude Desktop extension. Install it again after a new token or port change.";
 
 /** What a press on Install says once the desktop has handed the file over. */
 export const EXTENSION_OPENED =
-  "Opened in Claude Desktop — finish in its install dialog. If nothing opened, save the " +
-  "extension and open it from Claude Desktop's Settings → Extensions.";
+  "Opened in Claude Desktop. Finish in its install dialog. If nothing opened, save the extension and open it from Claude Desktop's Settings › Extensions.";
 
 /** What Save says once the file is written. */
 export const EXTENSION_SAVED =
-  "Saved. Open it with Claude Desktop, or drag it onto Settings → Extensions there.";
+  "Saved. Open it with Claude Desktop, or drag it onto its Settings › Extensions.";
 
 /** The name every snippet registers the server under — the one a reader sees in their agent. */
 const SERVER_NAME = "mtg-grimoire";
@@ -330,7 +324,7 @@ export function LocalMcpSection(): JSX.Element {
     copyText(text).then(
       () => true,
       (e: unknown) => {
-        refuse(`Couldn't copy: ${ipcError(e)}`);
+        refuse(`Couldn't copy — ${ipcError(e)}`);
         return false;
       },
     );
@@ -407,7 +401,7 @@ export function LocalMcpSection(): JSX.Element {
         <div className="space-y-4">
           <Field label="Address">
             <code className="min-w-0 flex-1 break-all font-mono text-xs">{status.url}</code>
-            <CopyButton subject="the address" onCopy={() => copy(status.url)} />
+            <CopyButton subject="address" onCopy={() => copy(status.url)} />
           </Field>
 
           <Field label="Token">
@@ -424,13 +418,13 @@ export function LocalMcpSection(): JSX.Element {
             <button
               type="button"
               aria-controls={`${ID}-token`}
-              aria-label={revealed ? "Hide the token" : "Show the token"}
+              aria-label={revealed ? "Hide token" : "Show token"}
               onClick={() => setRevealed((r) => !r)}
               className={cn(PANEL_BUTTON, "h-8 border-border px-2.5 text-xs")}
             >
               {revealed ? "Hide" : "Show"}
             </button>
-            <CopyButton subject="the token" onCopy={() => copy(status.token)} />
+            <CopyButton subject="token" onCopy={() => copy(status.token)} />
             <button
               ref={rotateRef}
               type="button"
@@ -449,8 +443,7 @@ export function LocalMcpSection(): JSX.Element {
             </button>
           </Field>
           <p className="text-xs leading-snug text-dim">
-            Agents send the token with every request. Anyone with it can change your collection
-            while the app is open, so keep it to your own agents.
+            Anyone with the token can change your collection while the app is open. Share it only with your own agents.
           </p>
 
           <Snippets
@@ -492,7 +485,7 @@ export function LocalMcpSection(): JSX.Element {
 
       <ConfirmDialog
         open={asking}
-        title="Replace the token"
+        title="Replace the token?"
         confirmLabel="Replace token"
         typeToConfirm={false}
         pending={rotate.isPending}
@@ -500,7 +493,7 @@ export function LocalMcpSection(): JSX.Element {
         onDismiss={dismiss}
         onClose={() => setAsking(false)}
       >
-        Agents set up with the current token stop working at once, until you give them the new one.
+        Agents using the current token stop working until you give them the new one.
       </ConfirmDialog>
     </div>
   );
@@ -615,7 +608,7 @@ function Snippets({
           {clientSnippet(target, status.url, revealed ? status.token : MASK)}
         </pre>
         <CopyButton
-          subject={`the ${CLIENT_META[target].label} configuration`}
+          subject={`${CLIENT_META[target].label} configuration`}
           onCopy={() => onCopy(clientSnippet(target, status.url, status.token))}
         />
       </div>

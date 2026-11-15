@@ -102,7 +102,7 @@ describe("zoneClaims", () => {
       quantity: 1,
     });
     expect(zoneClaims(kenrith, PILES, [], spec("oathbreaker"))[0].refusal).toBe(
-      "Kenrith, the Returned King is not a legal oathbreaker in Oathbreaker: an oathbreaker " +
+      "Kenrith, the Returned King isn't a legal oathbreaker in Oathbreaker: an oathbreaker " +
         "must be a planeswalker.",
     );
   });

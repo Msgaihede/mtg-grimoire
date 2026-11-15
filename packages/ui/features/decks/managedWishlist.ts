@@ -37,7 +37,7 @@ export const MANAGED_WISHLIST_LABEL: Record<ManagedWishlistMode, string> = {
   off: "Off",
   all: "All",
   missing: "Missing",
-  other: "Different Printing",
+  other: "Different printing",
 };
 
 /** One line for the caption under the row — the selected choice's, and only it. */
@@ -47,7 +47,7 @@ export const MANAGED_WISHLIST_HINT: Record<ManagedWishlistMode, string> = {
   missing:
     "Wishlist folder for cards this deck doesn't have in any printing. Updates automatically; can't be edited.",
   other:
-    "Wishlist folder for the theory list's printings of cards you play in a different printing. Updates automatically; can't be edited.",
+    "Wishlist folder for theory-list printings you play in a different printing. Updates automatically; can't be edited.",
 };
 
 /** The tokens switch's word — the Compare dialog's own tab word for the view it files, and the

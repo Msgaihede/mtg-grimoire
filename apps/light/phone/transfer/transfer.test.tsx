@@ -163,7 +163,7 @@ describe("a deck's import, on the phone", () => {
     );
     await waitFor(() => expect(box).toHaveValue("1 Sol Ring\n3 Counterspell\n"), SETTLE);
     expect(within(sheet).getByText("2 lines · 4 cards")).toBeInTheDocument();
-    expect(within(sheet).queryByText(/read as Windows-1252/)).toBeNull();
+    expect(within(sheet).queryByText(/Read as Windows-1252/)).toBeNull();
 
     // A Western European spreadsheet's bytes: `Æ` as 0xC6, which is not UTF-8.
     const legacy = new Uint8Array([
@@ -174,10 +174,10 @@ describe("a deck's import, on the phone", () => {
       new File([legacy], "legacy.txt", { type: "text/plain" }),
     );
     await waitFor(() => expect(box).toHaveValue("1 Æther Vial"), SETTLE);
-    expect(within(sheet).getByText(/read as Windows-1252/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/Read as Windows-1252/)).toBeInTheDocument();
     // The reader's own edit makes it their text, and the note about the file goes.
     await user.type(box, "!");
-    expect(within(sheet).queryByText(/read as Windows-1252/)).toBeNull();
+    expect(within(sheet).queryByText(/Read as Windows-1252/)).toBeNull();
   });
   /** Issue #1552: with nothing read Preview is shut, so the parser's sentence is said here. */
   it("says why a refused file has nothing to preview", async () => {
@@ -218,7 +218,7 @@ describe("a deck's export, on the phone", () => {
     const user = userEvent.setup();
     renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
     await user.click(await screen.findByRole("button", { name: "Export this deck" }, SETTLE));
-    const sheet = await screen.findByRole("dialog", { name: /^Export "/ }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: /^Export “/ }, SETTLE);
 
     // Plain text is what a deck opens on — the desktop's own default.
     expect(within(sheet).getByRole("radio", { name: "Plain text" })).toHaveAttribute(
@@ -248,7 +248,7 @@ describe("a deck's export, on the phone", () => {
     const user = userEvent.setup();
     renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
     await user.click(await screen.findByRole("button", { name: "Export this deck" }, SETTLE));
-    const sheet = await screen.findByRole("dialog", { name: /^Export "/ }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: /^Export “/ }, SETTLE);
 
     await user.click(within(sheet).getByRole("button", { name: "Save file" }));
 
@@ -265,7 +265,7 @@ describe("a deck's export, on the phone", () => {
     const user = userEvent.setup();
     renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
     await user.click(await screen.findByRole("button", { name: "Export this deck" }, SETTLE));
-    const sheet = await screen.findByRole("dialog", { name: /^Export "/ }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: /^Export “/ }, SETTLE);
     const deck = await ipc.deckGet(MODERN, "live", DEFAULT_MARKETPLACE);
     const name = `${exportFileName(deck?.deck.name ?? "", "")}.txt`;
 
@@ -340,7 +340,7 @@ describe("CollectionTransfer", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Export your collection" }));
-    const sheet = await screen.findByRole("dialog", { name: 'Export "your collection"' }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: "Export “your collection”" }, SETTLE);
     // The sweep's own count line, drawn once it has answered — the whole collection, so no
     // "matching your filters" and no box to widen what is already everything.
     expect(
@@ -369,7 +369,7 @@ describe("CollectionTransfer", () => {
     expect(rows.length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Export your collection" }));
-    const sheet = await screen.findByRole("dialog", { name: 'Export "your collection"' }, SETTLE);
+    const sheet = await screen.findByRole("dialog", { name: "Export “your collection”" }, SETTLE);
     expect(
       await within(sheet).findByText(
         `${rows.length} ${rows.length === 1 ? "card" : "cards"} matching your filters`,
@@ -378,7 +378,7 @@ describe("CollectionTransfer", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      within(sheet).getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+      within(sheet).getByRole("checkbox", { name: "Export everything, ignoring your filters" }),
     ).not.toBeChecked();
 
     await user.click(within(sheet).getByRole("button", { name: "Copy" }));

@@ -191,7 +191,7 @@ export function FilterQuickBar<SortKey extends string>({
   if (search.manaX) picked.push("X");
   const mvSummary = picked.join(", ");
   // `ResetAll`'s own sentence, so the bar's and the row's Reset all answer to one name.
-  const resetName = `Reset all — ${count} filter${count === 1 ? "" : "s"} active`;
+  const resetName = `Reset all: ${count} filter${count === 1 ? "" : "s"} active`;
 
   /**
    * **A pointer press outside the bar closes its tray**, and the listener is in the **capture**
@@ -392,7 +392,7 @@ export function FilterQuickBar<SortKey extends string>({
               </div>
               <div className={cn("shrink-0", MV_FOLDED[manaValuesFrom])}>
                 <AnchoredPopup
-                  label={`Mana value — ${mvSummary || "any"}`}
+                  label={`Mana value: ${mvSummary || "any"}`}
                   panelLabel="Mana value"
                   align="start"
                   triggerContent={

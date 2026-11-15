@@ -184,7 +184,7 @@ export function useSidebarDrops() {
   const writeWish = addWish.mutateAsync;
   const dropOnWishlist = useCallback(
     (payloads: readonly DragPayload[]) =>
-      void writeAndReport(payloads, (payload) => writeWish(payload.cardId), "the wishlist"),
+      void writeAndReport(payloads, (payload) => writeWish(payload.cardId), "your wishlist"),
     [writeWish],
   );
 

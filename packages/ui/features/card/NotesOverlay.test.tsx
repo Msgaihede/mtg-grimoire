@@ -179,7 +179,7 @@ it("says the read failed rather than showing the same emptiness", async () => {
   renderWithCard({ oracleId: "o1" });
 
   const alert = await screen.findByRole("alert");
-  expect(alert).toHaveTextContent("Couldn't read the notes — database is busy.");
+  expect(alert).toHaveTextContent("Couldn't read the notes — database is busy");
   // The half that would still pass with the failure drawn as an empty list: the empty state's
   // own sentence must be nowhere on screen.
   expect(screen.queryByText(/add one from a deck that uses this card/i)).not.toBeInTheDocument();

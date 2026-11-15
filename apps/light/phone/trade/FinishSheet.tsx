@@ -147,7 +147,7 @@ export function FinishSheet({
                 label={folder.name}
                 current={folder.id === options.folderId}
                 indent={depth}
-                note={folder.locked ? "set aside" : undefined}
+                note={folder.locked ? "locked" : undefined}
                 onPick={() => {
                   set({ folderId: folder.id });
                   setPage("main");
@@ -162,14 +162,13 @@ export function FinishSheet({
 
           {trade.finishedBefore && (
             <p className="text-[0.8125rem] leading-snug text-dim">
-              This trade was finished once already, and reopening it undid none of that. Everything
-              below is off so the same cards are not moved twice.
+              This trade was already finished once, and reopening didn't undo that. The options below are off so cards aren't moved twice.
             </p>
           )}
 
           <Group caption="Your collection">
             <Question
-              label="Take the cards you gave out of your collection"
+              label="Remove the cards you gave from your collection"
               note={givenNote(trade.lines)}
               warning={deckNote(trade.lines)}
               checked={options.removeGiven}
@@ -211,14 +210,14 @@ export function FinishSheet({
 
           <Group caption="Your wishlist">
             <Question
-              label="Take the cards you received off your wishlist"
+              label="Remove the cards you received from your wishlist"
               note={unwishNote(trade.lines)}
               checked={options.unwishReceived}
               onChange={(unwishReceived) => set({ unwishReceived })}
             />
             <Question
-              label="Put the cards you gave on your wishlist"
-              note="For the ones you want back one day."
+              label="Add the cards you gave to your wishlist"
+              note="For cards you want back."
               checked={options.wishGiven}
               onChange={(wishGiven) => set({ wishGiven })}
             />

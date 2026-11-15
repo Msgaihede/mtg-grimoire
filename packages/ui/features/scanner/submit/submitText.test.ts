@@ -80,23 +80,23 @@ describe("what Send scan says", () => {
    */
   it("says how many pictures are sent, to whom, and what is not", () => {
     expect(text.disclosure(18)).toBe(
-      "These 18 pictures — the last couple of seconds the scanner saw — and the card you choose, or that there is none, are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the app's version and which app it is, and kept to improve the scanner. Nothing from your collection is sent, and nothing is kept that says who you are. Look through them and check they show only what you mean to send.",
+      "Sent to MTG Grimoire's maker and kept to improve the scanner: these 18 pictures (the last couple of seconds the scanner saw), the card you choose or that there is none, what the scanner read, how it was set, the app's version and which app it is. Nothing from your collection is sent, and nothing kept says who you are. Check the pictures show only what you mean to send.",
     );
-    expect(text.disclosure(5)).toMatch(/^These 5 pictures — /);
+    expect(text.disclosure(5)).toMatch(/^Sent to MTG Grimoire's maker and kept to improve the scanner: these 5 pictures \(/);
     // Never "nothing else": the scanner's reading and the app's version go too. And never that
     // nothing is *sent* that says who they are — a request has an address; what is true, and
     // what the policy says, is that none is kept.
     for (const count of [5, 18, 20]) {
       expect(text.disclosure(count)).not.toMatch(/nothing else/i);
       expect(text.disclosure(count)).not.toMatch(/is sent, and nothing that says/i);
-      expect(text.disclosure(count)).toMatch(/nothing is kept that says who you are/);
+      expect(text.disclosure(count)).toMatch(/nothing kept says who you are/);
     }
   });
 
   /** A press too soon: what is missing, and the one thing there is to do about it. */
   it("says what to do when there is not enough of a scan to send", () => {
     expect(text.SCAN_TOO_SHORT).toBe(
-      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+      "Not enough scanned yet. Hold the card under the camera, then press again.",
     );
   });
 
@@ -108,7 +108,7 @@ describe("what Send scan says", () => {
   });
 
   it("thanks the reader and tells them what the reference is for", () => {
-    expect(text.SENT).toBe("Sent — thank you.");
+    expect(text.SENT).toBe("Sent. Thank you.");
     expect(text.KEEP_THE_REFERENCE).toBe(
       "Keep the reference if you ever want these pictures deleted.",
     );

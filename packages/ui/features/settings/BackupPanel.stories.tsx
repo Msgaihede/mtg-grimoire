@@ -51,7 +51,7 @@ type Story = StoryObj<typeof meta>;
 /**
  * A fresh install: on, writing beside the database, with no pass behind it.
  *
- * **"Not run yet" is the assertion worth having on the opening story.** `lastReport` is `null`
+ * **"No backup yet" is the assertion worth having on the opening story.** `lastReport` is `null`
  * here, and a panel that drew its zeroes instead would say *0 files written* — which is
  * indistinguishable, on the face of it, from a mirror that is already complete. So it says what
  * it knows and says what to press.
@@ -64,7 +64,7 @@ export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/Not run yet/)).toBeInTheDocument();
+    await expect(await canvas.findByText(/No backup yet/)).toBeInTheDocument();
     await expect(canvas.queryByText(/0 files written/)).not.toBeInTheDocument();
     await expect(canvas.getByRole("switch", { name: /back up/i })).toHaveAttribute(
       "aria-checked",
@@ -135,14 +135,14 @@ export const Rebuilt: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: /Rebuild now/ }));
 
     const alert = await canvas.findByRole("alert");
-    await expect(alert).toHaveTextContent(/^Rebuilt — \d+ files written, 0 unchanged\.$/);
+    await expect(alert).toHaveTextContent(/^Rebuilt: \d+ files written, 0 unchanged\.$/);
     await expect(await canvas.findByText(/Last backup just now/)).toBeInTheDocument();
 
     // Again, over a mirror that is now correct: nothing to write, everything unchanged.
     await userEvent.click(canvas.getByRole("button", { name: /Rebuild now/ }));
     await waitFor(async () => {
       await expect(canvas.getByRole("alert")).toHaveTextContent(
-        /^Rebuilt — 0 files written, \d+ unchanged\.$/,
+        /^Rebuilt: 0 files written, \d+ unchanged\.$/,
       );
     });
   },

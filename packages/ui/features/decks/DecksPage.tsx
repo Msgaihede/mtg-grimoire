@@ -955,7 +955,7 @@ export function DecksPage() {
       receipt(
         duplicateAsync(deckId),
         (copy) =>
-          notify.success(`Deck “${name}” duplicated`, { body: `The copy is “${copy.name}”` }),
+          notify.success(`Duplicated “${name}”`, { body: `The copy is “${copy.name}”` }),
         `Couldn't duplicate “${name}”`,
       );
     },
@@ -1022,7 +1022,7 @@ export function DecksPage() {
           openerRef.current = null;
           setPanel(null);
           newDeckRef.current?.focus();
-          notify.success(`Deck “${deck.name}” deleted`);
+          notify.success(`Deleted deck “${deck.name}”`);
         },
         `Couldn't delete “${deck.name}”`,
       );
@@ -1806,7 +1806,7 @@ export function DecksPage() {
                           openerRef.current = null;
                           setPanel(null);
                           setSelectedFolderId(folder.parentId);
-                          notify.success(`Folder “${folder.name}” deleted`, {
+                          notify.success(`Deleted folder “${folder.name}”`, {
                             ...(body !== "" && { body }),
                           });
                         },

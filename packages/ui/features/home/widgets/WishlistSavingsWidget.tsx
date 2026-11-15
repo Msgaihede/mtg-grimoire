@@ -138,7 +138,7 @@ const FIGURES_COMPACT_PX = 62;
 
 const PENDING = "Checking prices…";
 export const NO_WISHES =
-  "No wishlist items found. Pin a wishlist card to track cheaper printings.";
+  "No pinned wishlist cards. Pin one to track cheaper printings.";
 export const ALL_CHEAPEST =
   "All pinned cards are already on their cheapest printing.";
 /** `Chosen` with nothing chosen — `DecksWidget`'s `NOTHING_PINNED`, one widget over. */
@@ -530,7 +530,7 @@ export function WishlistSavingsWidgetSettings({
     const words = scopeWords();
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.chosen} under {words.row} to pick the wishlists this widget counts.
+        Set {words.row} to {words.chosen} to pick wishlists.
       </p>
     );
   }

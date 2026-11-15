@@ -667,7 +667,7 @@ describe("DeckSettingsDialog", () => {
     for (const kind of ["Regular", "Theory + Actual", "Virtual"]) {
       expect(within(group).getByRole("button", { name: kind })).toBeDisabled();
     }
-    expect(screen.getByText("A draft deck stays virtual until it is saved.")).toBeInTheDocument();
+    expect(screen.getByText("A draft deck stays virtual until it's saved.")).toBeInTheDocument();
     await userEvent.click(within(group).getByRole("button", { name: "Regular" }));
     expect(deckUpdate).not.toHaveBeenCalled();
   });
@@ -1388,7 +1388,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(screen.queryByText("Fill this deck from your collection")).toBeNull();
+    expect(screen.queryByText("Fill from your collection")).toBeNull();
     expect(screen.queryByRole("button", { name: /Pull owned cards/ })).toBeNull();
     expect(deckPullPlan).not.toHaveBeenCalled();
   });
@@ -1405,7 +1405,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(screen.getByText("Fill this deck from your collection")).toBeInTheDocument();
+    expect(screen.getByText("Fill from your collection")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /Pull owned cards/ })).toBeInTheDocument();
     await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
   });
@@ -1475,7 +1475,7 @@ describe("DeckSettingsDialog", () => {
       open();
       await loaded();
 
-      await userEvent.click(screen.getByRole("button", { name: "Remove the Budget tag" }));
+      await userEvent.click(screen.getByRole("button", { name: "Remove Budget" }));
 
       expect(deckUpdate).toHaveBeenCalledExactlyOnceWith(4, { tags: [] });
     });

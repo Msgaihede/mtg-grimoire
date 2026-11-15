@@ -30,7 +30,7 @@ describe("a host saying it has no scanner", () => {
       DB_BUSY,
       "no labels to filter by",
       "This build of MTG Grimoire was made without the card scanner's files.",
-      "The card scanner could not be loaded. Check your connection.",
+      "Couldn't load the card scanner. Check your connection.",
       "",
     ]) {
       expect(scannerUnavailable(sentence), sentence).toBe(false);
@@ -52,7 +52,7 @@ describe("a host that fetches the scanner's files into a store of its own", () =
   it("says the files did not load, in the host's words, with no path and no restart", () => {
     const failed = store({ error: "The card recognizer's files would not load: bad gallery" });
     expect(neuralSentence(failed)).toBe(
-      "The card recognizer did not load: The card recognizer's files would not load: bad gallery.",
+      "The Neural scanner didn't load: The card recognizer's files would not load: bad gallery.",
     );
     expect(neuralSentence(failed)).not.toMatch(/restart|\/scanner-neural/i);
   });

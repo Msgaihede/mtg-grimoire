@@ -125,7 +125,7 @@ describe("BackupPanel", () => {
     // A fresh app has run no pass; the panel must not print "0 files written" as if it had.
     render(<BackupPanel />, { wrapper: wrapperWithNoPassYet });
 
-    expect(await screen.findByText(/not run yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no backup yet/i)).toBeInTheDocument();
   });
 
   /**
@@ -161,7 +161,7 @@ describe("BackupPanel", () => {
    *
    * A TanStack mutation stays `isSuccess` for the life of the component, so a note ranked above
    * the backend's own state would be drawn from the first press until the reader navigated away
-   * — the panel showing "Rebuilt — 350 files written" while the mirror quietly stopped working.
+   * — the panel showing "Rebuilt: 350 files written" while the mirror quietly stopped working.
    * That shipped for one review round and is what `errorOutranks` exists for.
    *
    * Driven through {@link LiveWorld} rather than a seeded client, because the point is a
@@ -203,7 +203,7 @@ describe("BackupPanel", () => {
 
     await waitFor(() =>
       expect(within(panel()).getByRole("alert")).toHaveTextContent(
-        "Rebuilt — 350 files written, 0 unchanged, 2 removed.",
+        "Rebuilt: 350 files written, 0 unchanged, 2 removed.",
       ),
     );
   });
@@ -243,7 +243,7 @@ describe("BackupPanel", () => {
     try {
       mirrorStatus.mockResolvedValue(NO_PASS_YET);
       render(<BackupPanel />, { wrapper: LiveWorld });
-      expect(await screen.findByText(/Not run yet/)).toBeInTheDocument();
+      expect(await screen.findByText(/No backup yet/)).toBeInTheDocument();
 
       mirrorStatus.mockResolvedValue(RAN);
       await vi.advanceTimersByTimeAsync(6_000);
@@ -314,7 +314,7 @@ describe("BackupPanel", () => {
 
     expect(mirrorRebuild).toHaveBeenCalledOnce();
     expect(await within(panel()).findByRole("alert")).toHaveTextContent(
-      "Rebuilt — 350 files written, 0 unchanged, 2 removed.",
+      "Rebuilt: 350 files written, 0 unchanged, 2 removed.",
     );
   });
 
@@ -432,7 +432,7 @@ describe("lastPassLine", () => {
 
   it("dates the last pass and summarises it", () => {
     expect(lastPassLine(RAN, NOW_MS)).toBe(
-      "Last backup 2 hours ago — 142 files written, 208 unchanged.",
+      "Last backup 2 hours ago: 142 files written, 208 unchanged.",
     );
   });
 
@@ -440,7 +440,7 @@ describe("lastPassLine", () => {
    *  the face of it, from a mirror that is already complete. */
   it("says a pass has not run rather than reporting an empty one", () => {
     expect(lastPassLine(NO_PASS_YET, NOW_MS)).toBe(
-      "Not run yet. Click Rebuild now to create one.",
+      "No backup yet. Click Rebuild now to create one.",
     );
     expect(lastPassLine(NO_PASS_YET, NOW_MS)).not.toMatch(/0 files/);
   });
@@ -452,7 +452,7 @@ describe("lastPassLine", () => {
    */
   it("treats an unreadable stamp as no pass at all", () => {
     for (const junk of ["", "  ", "yesterday", "NaN"]) {
-      expect(lastPassLine({ ...RAN, lastRunAt: junk }, NOW_MS)).toMatch(/not run yet/i);
+      expect(lastPassLine({ ...RAN, lastRunAt: junk }, NOW_MS)).toMatch(/no backup yet/i);
     }
   });
 

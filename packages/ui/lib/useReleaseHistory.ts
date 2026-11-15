@@ -69,7 +69,7 @@ export function useBundledHistory(): ReleaseHistory {
     // A chunk that will not load is the page's own failure — an old tab across a deploy that
     // took the file away — and the cure is the reload every such failure asks for.
     error: query.error
-      ? "The version history could not be loaded. Reload the app to try again."
+      ? "Couldn't load the version history. Reload the app to try again."
       : null,
   };
 }

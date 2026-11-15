@@ -155,12 +155,12 @@ export function CardSheet({
           badges carry `sr-only` spans — an absolutely positioned caption with no positioned
           ancestor is laid out outside the scroller and grows a bar for text nobody can see. */}
       <div ref={scroller} className="relative min-h-0 flex-1 select-text overflow-y-auto p-4">
-        {detail.isPending && cardId !== null && <Note>Reading the card…</Note>}
+        {detail.isPending && cardId !== null && <Note>Loading card…</Note>}
         {/* `isLoadingError`, not `isError`: a refetch that fails keeps the card it had, and that
             card is still what the reader is looking at. `null` is the other way to have nothing —
             an id the card database has no row for. */}
         {(detail.isLoadingError || detail.data === null) && (
-          <Note tone="alert">That card could not be read.</Note>
+          <Note tone="alert">Couldn't load that card.</Note>
         )}
         {card !== null && (
           <CardBody

@@ -47,7 +47,7 @@ describe("FolderRulesBadge", () => {
 
     const badge = screen.getByRole("img", {
       name:
-        "This folder's rules: Price up to $1.00. From “Binder”: Colour: Blue. " +
+        "This folder's rules: Price up to $1.00. From “Binder”: Color: Blue. " +
         "3 cards don't match this folder's rules.",
     });
     expect(badge).toHaveTextContent("3");
@@ -58,7 +58,7 @@ describe("FolderRulesBadge", () => {
   it("draws no count when nothing conflicts, and names only what it has", () => {
     wrap(<FolderRulesBadge effective={{ own: [], inherited: BOTH.inherited }} conflicts={0} />);
 
-    const badge = screen.getByRole("img", { name: "From “Binder”: Colour: Blue." });
+    const badge = screen.getByRole("img", { name: "From “Binder”: Color: Blue." });
     expect(badge).toHaveTextContent("");
   });
 
@@ -77,7 +77,7 @@ describe("FolderRulesBadge", () => {
     expect(panel).toHaveTextContent("This folder's rules:");
     expect(panel).toHaveTextContent("Price up to $1.00");
     expect(panel).toHaveTextContent("From “Binder”:");
-    expect(panel).toHaveTextContent("Colour: Blue");
+    expect(panel).toHaveTextContent("Color: Blue");
     expect(panel).toHaveTextContent("1 card doesn't match this folder's rules");
   });
 
@@ -86,7 +86,7 @@ describe("FolderRulesBadge", () => {
     wrap(<FolderRulesBadge effective={BOTH} conflicts={2} onShow={onShow} />);
     const badge = screen.getByRole("button", {
       name:
-        "This folder's rules: Price up to $1.00. From “Binder”: Colour: Blue. " +
+        "This folder's rules: Price up to $1.00. From “Binder”: Color: Blue. " +
         "2 cards don't match this folder's rules. Press to show them.",
     });
     expect(screen.queryByRole("img")).toBeNull();

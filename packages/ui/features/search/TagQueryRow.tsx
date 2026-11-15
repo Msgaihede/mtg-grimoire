@@ -220,7 +220,7 @@ function TypedChip({
         onClick={onRemove}
         // The label rather than the visible ×, and the whole term with it: two chips differing
         // only in their operator would otherwise be two buttons with one name.
-        aria-label={`Remove ${chip.label}, search term`}
+        aria-label={`Remove search term ${chip.label}`}
         className={cn(
           "grid h-full w-7 flex-none place-items-center text-dim hover:text-text",
           PRESS,

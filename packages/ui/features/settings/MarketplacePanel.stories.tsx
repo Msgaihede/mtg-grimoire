@@ -134,7 +134,7 @@ export const TCGplayerToday: Story = {
     await expect(chosen).toHaveAttribute("aria-pressed", "true");
 
     // Out of reach, in the tab order, and explaining itself — the three halves of the rule.
-    const trader = canvas.getByRole("button", { name: "Card trader EUR" });
+    const trader = canvas.getByRole("button", { name: "CardTrader EUR" });
     await expect(trader).toHaveAttribute("aria-disabled", "true");
     await expect(trader).not.toBeDisabled();
     await expect(trader).toHaveAccessibleDescription(/No price feed\./);
@@ -281,7 +281,7 @@ export const OutOfReachInABrowser: Story = {
     await expect(manaPool).toHaveAttribute("aria-disabled", "true");
     await expect(manaPool).not.toBeDisabled();
     await expect(manaPool).toHaveAccessibleDescription(
-      /Not available in a browser\. Mana Pool's price list can't be read from a web page/,
+      /Not available in a browser\. Use the desktop or Android app for Mana Pool prices/,
     );
     await userEvent.click(manaPool);
     await expect(args.marketplace.select).not.toHaveBeenCalled();
@@ -315,7 +315,7 @@ export const StoredChoiceOutOfReach: Story = {
       "true",
     );
     await expect(canvas.getByRole("button", { name: "Mana Pool USD" })).toHaveAccessibleDescription(
-      /Your prices are set to Mana Pool, so prices here are TCGplayer's until you choose another\./,
+      /Your marketplace is Mana Pool\. Prices here are TCGplayer's until you choose another\./,
     );
   },
 };

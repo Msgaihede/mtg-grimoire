@@ -39,7 +39,7 @@ describe("the boundary around a view", () => {
     );
 
     expect(screen.getByText("the caption")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("This view could not be drawn.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't display this page.");
     expect(screen.getByRole("alert")).toHaveTextContent("a row it did not expect");
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
     // The boundary's own record: the error and the components it came through.

@@ -209,7 +209,7 @@ function Body({
       ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
       // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
       card === null ? (
-        <Note>This printing is no longer in the card database.</Note>
+        <Note>This printing is no longer in the card data.</Note>
       ) : oracleId === null ? (
         <Note>{NO_ORACLE_CARD}</Note>
       ) : notes.isError ? (
@@ -218,7 +218,7 @@ function Body({
         // `AllPrintingsDialog` gives at its own site: the press that produced it — a row on a
         // rail, in another dialog — has already been forgotten by the eye.
         <p role="alert" className="text-sm leading-relaxed text-destructive">
-          Couldn't read the notes — {ipcError(notes.error)}.
+          Couldn't read the notes — {ipcError(notes.error)}
         </p>
       ) : notes.isPending ? (
         <Note>Loading notes…</Note>

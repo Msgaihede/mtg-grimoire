@@ -58,7 +58,7 @@ export const TODOS_HEADING = "To-do";
 export const NEW_LIST_LABEL = "New to-do list";
 
 /** The empty band's sentence — it names the control that fills it. */
-export const NO_LISTS = "No to-do lists yet. New to-do list starts one.";
+export const NO_LISTS = "No to-do lists yet. Click New to-do list to add one.";
 
 export interface DeckTodosPanelProps {
   deckId: number;
@@ -104,7 +104,7 @@ export const DeckTodosPanel = memo(function DeckTodosPanel({
     todos.remove.mutate(id, {
       onSuccess: () =>
         notify.success(
-          gone ? `Deleted the to-do list “${listTitle(gone.title)}”` : "Deleted the to-do list",
+          gone ? `Deleted to-do list “${listTitle(gone.title)}”` : "Deleted to-do list",
         ),
     });
   };

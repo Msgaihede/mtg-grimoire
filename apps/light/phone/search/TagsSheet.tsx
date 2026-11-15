@@ -32,7 +32,7 @@ export function TagsButton({
       onClick={onClick}
       aria-haspopup="dialog"
       aria-expanded={expanded}
-      aria-label={picked > 0 ? `Tags — ${picked} picked` : "Tags"}
+      aria-label={picked > 0 ? `Tags, ${picked} picked` : "Tags"}
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,

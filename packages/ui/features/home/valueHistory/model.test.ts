@@ -230,7 +230,7 @@ describe("viewOf — the fold", () => {
     expect(keys(viewOf(h, "type", "90d").series)).toEqual(["creature", "land"]);
   });
 
-  it("names a set by its name, an orphan by its code, and folds the tail into Every other", () => {
+  it("names a set by its name, an orphan by its code, and folds the tail into Other sets", () => {
     const sets: Bucket[] = [
       { key: "mh3", name: "Modern Horizons 3" },
       { key: "cmm", name: "Commander Masters" },
@@ -248,7 +248,7 @@ describe("viewOf — the fold", () => {
       ["Double Masters 2022", CATEGORICAL[2], [5]],
       ["The Lord of the Rings: Tales of Middle-earth", CATEGORICAL[3], [4]],
       ["ZZZ", CATEGORICAL[4], [3]],
-      ["Every other set", OTHER_FILL, [3]],
+      ["Other sets", OTHER_FILL, [3]],
     ]);
   });
 

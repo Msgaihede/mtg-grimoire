@@ -332,10 +332,10 @@ describe("OptimizeWishlistDialog", () => {
       "Switched 2 cards to the cheapest printing, saving $11.00.",
     );
     expect(
-      within(body()).getByText(/merged with an existing entry in the same folder/),
+      within(body()).getByText(/merged into an existing entry with the same folder/),
     ).toBeInTheDocument();
     expect(
-      within(body()).getByText(/^Ancestral Recall — printing already changed/),
+      within(body()).getByText(/^Ancestral Recall: printing already changed/),
     ).toBeInTheDocument();
   });
 

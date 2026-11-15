@@ -575,8 +575,7 @@ export function TradeView({
         }}
         onClose={() => setDeleting(false)}
       >
-        “{trade.name}” and the cards listed on both of its sides will be deleted.{" "}
-        {settled
+        Deletes “{trade.name}” and the cards listed on both sides. {settled
           ? "What finishing it did to your collection and your wishlist stays done."
           : "Your collection and your wishlist are not touched."}
       </ConfirmDialog>

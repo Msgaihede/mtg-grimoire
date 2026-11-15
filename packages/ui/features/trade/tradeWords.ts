@@ -93,7 +93,7 @@ export function headerLine(
   const when = `${word} ${tradeDay(at, true)}`;
   return trade.status === "open"
     ? `${when} · ${marketplace.label} prices, ${money} · Saved as you go`
-    : `${when} · Prices kept from that day, in ${money}`;
+    : `${when} · Prices from that day, in ${money}`;
 }
 
 /**
@@ -108,12 +108,11 @@ export function closedBanner(trade: Pick<Trade, "status" | "outcome">): string {
   if (isSettled(trade.status)) {
     const did =
       outcomeSentence(trade.outcome) ??
-      "Finishing it changed nothing in your collection or your wishlist.";
-    return `Finished and archived, so nothing here can be edited. ${did}`;
+      "Nothing changed in your collection or wishlist.";
+    return `Finished and archived, so it can't be edited. ${did}`;
   }
   return (
-    "Archived without finishing, so nothing here can be edited. " +
-    "Archiving it changed nothing in your collection or your wishlist."
+    "Archived without finishing, so it can't be edited. Nothing changed in your collection or wishlist."
   );
 }
 
@@ -194,7 +193,7 @@ export const DECK_COPIES_HEADING = "In your decks";
  * line asks for more than the others can give, and the line's own mark says so when it does.
  */
 export const DECK_COPIES_WARNING =
-  "A finished trade takes these out of their decks, once your copies outside any deck have run out.";
+  "Finishing the trade takes these from their decks once your other copies run out.";
 
 /** A deck row's count, with the deck it is in: `1 in Serah`. */
 export function deckHolding(copies: number, deckName: string): string {
@@ -287,7 +286,7 @@ export function tradeMarketplaceOffers(current: Pick<Marketplace, "id">): TradeM
     marketplace,
     reason:
       marketplace.feed && marketplace.id !== current.id
-        ? `Switch the app to ${marketplace.label} in Settings to trade in its prices.`
+        ? `Switch to ${marketplace.label} in Settings to use its prices.`
         : null,
   }));
 }

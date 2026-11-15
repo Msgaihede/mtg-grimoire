@@ -620,7 +620,7 @@ export function failureOf(search: CardSearch): string | null {
   if (search.query.isError) return ipcError(search.query.error);
   return search.tagLookupFailure === null
     ? null
-    : "Search on hold — the tags in the search box could not be looked up.";
+    : "Search on hold. Couldn't look up the tags in the search box.";
 }
 
 export function summaryOf(search: CardSearch, failure: string | null): string {
@@ -634,7 +634,7 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
     // about the database, not about the query. Saying "no cards match" here would blame
     // the user for a sync that has not finished.
     return unfiltered
-      ? "Card database is empty. Waiting for the first sync."
+      ? "No card data yet. Waiting for the first update."
       : "No cards match these filters.";
   }
 
@@ -861,7 +861,7 @@ function Results({ search }: { search: CardSearch }) {
             topLeft={(card) =>
               card.printings > 1 ? (
                 <span
-                  {...tip(`${card.printings} printings matched these filters`)}
+                  {...tip(`${card.printings} printings match these filters`)}
                   className={cn(
                     "block whitespace-nowrap tabular-nums text-text",
                     "text-[calc(10px*var(--mark-scale,1))] leading-none",

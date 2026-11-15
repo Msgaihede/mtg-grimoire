@@ -42,7 +42,7 @@ export const ORACLE_TAG_PHASE_LABEL: Record<OracleTagPhase, string> = {
   // no number to print and the bar is indeterminate for the whole ingest.
   ingesting: "Importing card tags",
   done: "Card tags are up to date",
-  error: "Card tag refresh failed",
+  error: "Couldn't update card tags",
 };
 
 /** The taxonomy's state, and whether it is being replaced right now. */

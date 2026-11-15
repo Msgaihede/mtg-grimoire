@@ -124,7 +124,7 @@ export function StartViewPanel(): JSX.Element {
       />
 
       <p className="text-sm text-dim">
-        This setting is saved locally on this device.
+        Saved on this device only.
       </p>
     </SettingsSection>
   );

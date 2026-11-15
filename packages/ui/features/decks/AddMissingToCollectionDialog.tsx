@@ -122,7 +122,7 @@ const READING = "Finding missing cards…";
  * they knew about it.
  */
 const NOTHING_TO_RECORD = {
-  headline: "None of the missing cards are in the card database anymore.",
+  headline: "None of the missing cards are in your card data anymore.",
 } as const;
 
 /**
@@ -142,11 +142,10 @@ const NOTHING_TO_RECORD = {
  * is half a sentence.
  */
 const ADD_NOTE =
-  "Cards are added to this deck's folder in your collection. The list doesn't change, and " +
-  "this can't be undone.";
+  "Cards go to this deck's folder in your collection. The list stays the same. This can't be undone.";
 
 /** The footer's one control over the wishlist half, for the whole batch. */
-const CLEAR_WISHES_LABEL = "Also take these off my wishlist";
+const CLEAR_WISHES_LABEL = "Also remove these from your wishlist";
 
 /**
  * What this dialog needs of `useDeck().addMissingToCollection` — narrowed the way `PullWrite` and
@@ -399,8 +398,8 @@ function AddMissingBody({
   const done =
     !add.isSuccess || add.data === undefined
       ? ""
-      : `Recorded ${plural(add.data.copies, "copy", "copies")} of ` +
-        `${plural(add.data.cards, "card")} into ${deckName}.` +
+      : `Added ${plural(add.data.copies, "copy", "copies")} of ` +
+        `${plural(add.data.cards, "card")} to ${deckName}.` +
         (add.data.wishCopies > 0
           ? ` ${plural(add.data.wishCopies, "copy", "copies")} off your wishlist.`
           : "");
@@ -485,7 +484,7 @@ function AddMissingBody({
               role="alert"
               className="min-w-0 shrink overflow-hidden text-right text-[0.7rem] text-destructive"
             >
-              Couldn't record — {failure}
+              Couldn't add the cards — {failure}
             </motion.p>
           )}
         </AnimatePresence>
@@ -543,7 +542,7 @@ function AddMissingBody({
               {
                 onSuccess: notifyMissingAdded,
                 onError: (error) =>
-                  notifyRefusal("Couldn't add the missing copies to the collection", error),
+                  notifyRefusal("Couldn't add the missing copies to your collection", error),
               },
             );
           }}
@@ -553,7 +552,7 @@ function AddMissingBody({
               beside it. `Add 0 copies to collection` at nothing ticked rather than a bare `Add`:
               the count is what explains the greying, which is the difference between a control
               that is out of reach and one that looks broken. */}
-          {pending ? "Recording…" : `Add ${plural(plan.copies, "copy", "copies")} to collection`}
+          {pending ? "Adding…" : `Add ${plural(plan.copies, "copy", "copies")} to collection`}
         </button>
       </footer>
     </>

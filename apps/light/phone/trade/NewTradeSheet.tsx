@@ -88,7 +88,7 @@ export function NewTradeSheet({
     <ActionSheet
       open={open}
       title="New trade"
-      subtitle="It opens empty. Cards go on once it is open."
+      subtitle="Starts empty. Add cards once it's open."
       closeLabel="Close new trade"
       onClose={() => {
         clear();
@@ -154,7 +154,7 @@ export function NewTradeSheet({
             )}
           />
           <span id={`${id}-name-note`} className="text-xs text-dim">
-            Optional. Left empty, the trade is named by its number.
+            Optional. Unnamed trades are numbered.
           </span>
         </div>
 
@@ -180,7 +180,7 @@ export function NewTradeSheet({
             fill
           />
           {refused.length > 0 && (
-            <ul aria-label="Not offered" className="flex flex-col gap-0.5">
+            <ul aria-label="Marketplaces not offered" className="flex flex-col gap-0.5">
               {refused.map(({ marketplace: offered, reason }) => (
                 <li key={offered.id} className="text-xs leading-snug text-dim">
                   {reason}

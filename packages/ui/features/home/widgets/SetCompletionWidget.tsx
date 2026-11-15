@@ -57,11 +57,11 @@ function rowPx(caption: boolean, track: boolean): number {
 }
 
 const PENDING = "Loading sets…";
-export const EMPTY = "No sets found. Sets for cards in your collection will show up here.";
+export const EMPTY = "No sets yet. Sets you own cards from show up here.";
 /** Not "Scryfall publishes none": a corpus that has not synced since the column arrived reads
  *  `null` for every set, so the hint says what is true in both cases. */
 export const NO_SIZE_HINT =
-  "Set size unknown. Showing cards owned from this set.";
+  "Set size unknown. Showing cards you own.";
 
 /**
  * The sets in the order the reader picked.

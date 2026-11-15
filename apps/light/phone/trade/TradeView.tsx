@@ -78,7 +78,7 @@ export function TradeView({ tradeId }: { tradeId: number }) {
       {query.isLoadingError ? (
         // The read failed, which says nothing about the trade. "Gone" is the sentence below, for
         // a read that succeeded and answered no trade.
-        <ReadError>That trade could not be read.</ReadError>
+        <ReadError>Couldn't load that trade.</ReadError>
       ) : trade === null && !query.isFetching ? (
         <DimNote>That trade is gone.</DimNote>
       ) : null}

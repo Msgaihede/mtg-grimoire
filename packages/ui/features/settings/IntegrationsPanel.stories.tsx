@@ -142,9 +142,9 @@ export const TurningOff: Story = {
 
     await userEvent.click(toggle);
     // The dialog is portalled out of the canvas, so it is found on the document.
-    const dialog = within(document.body).getByRole("dialog", { name: "Turn off integrations" });
+    const dialog = within(document.body).getByRole("dialog", { name: "Turn off integrations?" });
     await expect(dialog).toHaveTextContent(/for every device in your sync group/);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete the copy" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete copy" }));
 
     await waitFor(async () => {
       await expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -322,7 +322,7 @@ export const LocalServerOn: Story = {
       "aria-checked",
       "true",
     );
-    await userEvent.click(canvas.getByRole("button", { name: "Show the token" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Show token" }));
     await expect(canvas.getByText(FAKE_MCP_TOKEN)).toBeInTheDocument();
   },
 };
@@ -347,7 +347,7 @@ export const LocalServerClaudeDesktop: Story = {
       await expect(local.getByRole("status")).toHaveTextContent(EXTENSION_OPENED);
     });
     await expect(
-      local.getByRole("button", { name: "Copy the Claude Desktop configuration" }),
+      local.getByRole("button", { name: "Copy Claude Desktop configuration" }),
     ).toBeInTheDocument();
   },
 };

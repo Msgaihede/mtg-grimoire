@@ -700,7 +700,7 @@ export function Commander({
       </h3>
       {candidates.length === 0 ? (
         <p className="text-sm text-dim">
-          No card in this list can be the commander. The deck will import without one.
+          No card in this list can be the commander. The deck imports without one.
         </p>
       ) : (
         <>
@@ -802,7 +802,7 @@ export function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boo
       // A plain paragraph and not a live region: it is drawn together with the step it belongs
       // to, and a live region mounted with its own text inside it announces nothing anyway.
       <p className="text-sm text-dim">
-        Card data is still syncing. Try again when it&apos;s finished.
+        Card data is still updating. Try again when it&apos;s finished.
       </p>
     );
   }
@@ -816,7 +816,7 @@ export function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boo
       {plan.unmatched.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unmatched.length, "line")} didn't match any card`}
-          lines={plan.unmatched.map((line) => `line ${line.lineNumber} · "${line.raw.trim()}"`)}
+          lines={plan.unmatched.map((line) => `line ${line.lineNumber} · “${line.raw.trim()}”`)}
         />
       )}
       {plan.hintMisses.length > 0 && (
@@ -831,7 +831,7 @@ export function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boo
         <ProblemList
           caption={`${plural(plan.parseIssues.length, "line")} couldn't be read`}
           lines={plan.parseIssues.map(
-            (issue) => `line ${issue.lineNumber} · "${issue.raw.trim()}" — ${issue.reason}`,
+            (issue) => `line ${issue.lineNumber} · “${issue.raw.trim()}” — ${issue.reason}`,
           )}
         />
       )}
@@ -905,8 +905,7 @@ function Mode({
           checked={value === "merge"}
           onChange={() => onChange("merge")}
           className="accent-accent"
-        />
-        Merge — add to existing cards
+        />Merge: add to existing cards
       </label>
       <label className="flex items-baseline gap-2 text-sm">
         <input
@@ -918,8 +917,8 @@ function Mode({
           className="accent-accent"
         />
         {cardsInVariant === 0
-          ? `Replace — ${where} is empty`
-          : `Replace — remove the ${plural(cardsInVariant, "card")} in ${where} first`}
+          ? `Replace: ${where} is empty`
+          : `Replace: remove the ${plural(cardsInVariant, "card")} in ${where} first`}
       </label>
       {/* Where the cardboard goes, which is not "nowhere" — `ClearDeck`'s own heading, and the
           same sentence word for word, because since issue #336 this press makes the same
@@ -950,7 +949,7 @@ function Mode({
           same word on a deck that tracks cardboard and a deck that never will. */}
       {value === "replace" && variant === "live" && !virtual && cardsInVariant > 0 && (
         <p className="text-[0.6875rem] leading-relaxed text-destructive">
-          Any copies you own go back to Recently removed.
+          Copies you own go back to Recently removed.
         </p>
       )}
     </fieldset>

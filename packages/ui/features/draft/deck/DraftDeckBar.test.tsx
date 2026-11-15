@@ -59,7 +59,7 @@ describe("DraftDeckBar", () => {
   it("says the deck is a draft deck and why the searches are gone", () => {
     draw();
     expect(screen.getByRole("region", { name: "Draft deck" })).toHaveTextContent(
-      "Draft deck — build from your Pool; the collection and card search are off.",
+      "Draft deck: build from your Pool. Your collection and card search are off.",
     );
   });
 
@@ -88,7 +88,7 @@ describe("DraftDeckBar", () => {
     draw({ commander: { cards: 41, commanders: 0 } });
     const check = screen.getByRole("group", { name: "Commander deck" });
     expect(check).toHaveTextContent("41/60 cards");
-    expect(check).toHaveTextContent("No commander yet — put one in the Commander pile");
+    expect(check).toHaveTextContent("No commander: put one in the Commander pile");
   });
 
   it("ticks a Commander draft's deck once it has 60 cards and its commander", () => {

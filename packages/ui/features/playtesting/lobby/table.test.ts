@@ -85,7 +85,7 @@ describe("the host's Start", () => {
   it("waits for somebody to join, and for the lobby to connect", () => {
     expect(ready(lobby([]))).toEqual({
       ready: false,
-      hint: "Share the code: a game needs someone to join it.",
+      hint: "Share the code. A game needs another player.",
     });
     expect(ready(lobby([peer("Bea")], { phase: "connecting" })).hint).toBe(
       "Connecting to the lobby…",

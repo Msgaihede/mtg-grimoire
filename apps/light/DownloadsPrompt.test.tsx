@@ -63,7 +63,7 @@ describe("the mobile-data prompt", () => {
     expect(dialog).toHaveTextContent("Card data from Scryfall");
     expect(dialog).toHaveTextContent("about 77 MB");
     expect(dialog).toHaveTextContent("about 28 MB");
-    expect(dialog).toHaveTextContent("About 105 MB in all");
+    expect(dialog).toHaveTextContent("About 105 MB total");
   });
 
   it("puts Not now first, and Not now sends nothing", async () => {

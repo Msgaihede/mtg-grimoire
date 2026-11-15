@@ -110,13 +110,13 @@ describe("headerLine", () => {
 
   it("says a closed trade's prices are the ones it closed with", () => {
     expect(headerLine(summary({ status: "finished", closedAt: day(2026, 9, 6) }))).toBe(
-      "Finished 6 Sep 2026 · Prices kept from that day, in USD",
+      "Finished 6 Sep 2026 · Prices from that day, in USD",
     );
     expect(
       headerLine(
         summary({ status: "archived", closedAt: day(2026, 8, 23), marketplace: "cardmarket" }),
       ),
-    ).toBe("Archived 23 Aug 2026 · Prices kept from that day, in EUR");
+    ).toBe("Archived 23 Aug 2026 · Prices from that day, in EUR");
   });
 });
 
@@ -138,8 +138,8 @@ describe("closedBanner", () => {
     };
 
     expect(closedBanner({ status: "finished", outcome })).toBe(
-      "Finished and archived, so nothing here can be edited. Finishing it took 3 cards out of " +
-        "your collection, added 3 cards to your collection and took 1 card off your wishlist.",
+      "Finished and archived, so it can't be edited. Finishing it removed 3 cards from " +
+        "your collection, added 3 cards to your collection and removed 1 card from your wishlist.",
     );
   });
 
@@ -152,8 +152,8 @@ describe("closedBanner", () => {
       addedToWishlist: 0,
     };
     const said =
-      "Finished and archived, so nothing here can be edited. " +
-      "Finishing it changed nothing in your collection or your wishlist.";
+      "Finished and archived, so it can't be edited. " +
+      "Nothing changed in your collection or wishlist.";
 
     expect(closedBanner({ status: "finished", outcome: nothing })).toBe(said);
     expect(closedBanner({ status: "finished", outcome: null })).toBe(said);
@@ -161,8 +161,8 @@ describe("closedBanner", () => {
 
   it("says an archived trade was put away and that doing so moved nothing", () => {
     expect(closedBanner({ status: "archived", outcome: null })).toBe(
-      "Archived without finishing, so nothing here can be edited. " +
-        "Archiving it changed nothing in your collection or your wishlist.",
+      "Archived without finishing, so it can't be edited. " +
+        "Nothing changed in your collection or wishlist.",
     );
   });
 });
@@ -356,8 +356,8 @@ describe("the add field's deck section", () => {
 
   it("is headed in words that do not need the colour, and says when a deck loses the card", () => {
     expect(DECK_COPIES_HEADING).toBe("In your decks");
-    expect(DECK_COPIES_WARNING).toMatch(/out of their decks/);
-    expect(DECK_COPIES_WARNING).toMatch(/once your copies outside any deck have run out/);
+    expect(DECK_COPIES_WARNING).toMatch(/takes these from their decks/);
+    expect(DECK_COPIES_WARNING).toMatch(/once your other copies run out/);
   });
 });
 
@@ -371,8 +371,8 @@ describe("tradeMarketplaceOffers", () => {
     tradeMarketplaceOffers(MARKETPLACES[current]).map(
       ({ marketplace, reason }) => [marketplace.id, reason] as const,
     );
-  const CK = "Switch the app to Card Kingdom in Settings to trade in its prices.";
-  const MP = "Switch the app to Mana Pool in Settings to trade in its prices.";
+  const CK = "Switch to Card Kingdom in Settings to use its prices.";
+  const MP = "Switch to Mana Pool in Settings to use its prices.";
 
   it("offers only the two that come with the card data while the app is on one of them", () => {
     const both = [

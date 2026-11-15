@@ -233,7 +233,7 @@ describe("carryPicks (issue #1591)", () => {
 describe("phaseLine when responding", () => {
   it("says the reader may respond", () => {
     expect(phaseLine(respondStep().view)).toBe(
-      "Turn 6 · Opponent's turn · Upkeep — you may respond",
+      "Turn 6 · Opponent's turn · Upkeep · you may respond",
     );
   });
 });

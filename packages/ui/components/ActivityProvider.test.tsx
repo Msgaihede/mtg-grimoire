@@ -15,7 +15,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 const job = (over: Partial<Activity> = {}): Activity => ({
   key: "sync",
   rank: RANK.sync,
-  label: "Syncing card data",
+  label: "Updating card data",
   detail: null,
   value: null,
   ...over,

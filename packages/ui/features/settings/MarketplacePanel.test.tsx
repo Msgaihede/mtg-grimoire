@@ -58,7 +58,7 @@ const row = (name: string) => within(panel()).getByRole("button", { name });
 
 /** The one with nothing to sync in this build: Card trader's API needs a per-user JWT and
  *  publishes no bulk price list. */
-const UNPRICED = ["Card trader EUR"];
+const UNPRICED = ["CardTrader EUR"];
 /** In picker order, which is the order a keyboard reader walks. */
 const ALL = ["TCGplayer USD", "Cardmarket EUR", "Card Kingdom USD", "Mana Pool USD", ...UNPRICED];
 /** The two whose prices are downloaded, and therefore the two with a state to draw. */
@@ -140,7 +140,7 @@ describe("MarketplacePanel", () => {
   it("has the unreachable row explain itself, by name", () => {
     render(<MarketplacePanel marketplace={state()} />);
 
-    expect(row("Card trader EUR")).toHaveAccessibleDescription(/No price feed\. Card trader doesn.t publish/);
+    expect(row("CardTrader EUR")).toHaveAccessibleDescription(/No price feed\. CardTrader doesn.t publish/);
     // A marketplace whose prices arrive with the card data describes nothing: there is nothing
     // to excuse and no feed to date.
     expect(row("TCGplayer USD")).not.toHaveAccessibleDescription();
@@ -267,7 +267,7 @@ describe("MarketplacePanel", () => {
 
     expect(new Set(reached).size).toBe(stops);
     // The last one walked to is the last one drawn, so nothing was skipped on the way.
-    expect(document.activeElement).toBe(row("Card trader EUR"));
+    expect(document.activeElement).toBe(row("CardTrader EUR"));
   });
 
   /**
@@ -302,8 +302,7 @@ describe("MarketplacePanel", () => {
       render(<MarketplacePanel marketplace={unreachable()} />);
 
       expect(row("Mana Pool USD")).toHaveAccessibleDescription(
-        "Not available in a browser. Mana Pool's price list can't be read from a web page — " +
-          "the desktop and Android apps can show it.",
+        "Not available in a browser. Use the desktop or Android app for Mana Pool prices.",
       );
     });
 
@@ -333,9 +332,8 @@ describe("MarketplacePanel", () => {
       expect(row("TCGplayer USD")).toHaveAttribute("aria-pressed", "true");
       expect(row("Mana Pool USD")).toHaveAttribute("aria-pressed", "false");
       expect(row("Mana Pool USD")).toHaveAccessibleDescription(
-        "Your prices are set to Mana Pool, so prices here are TCGplayer's until you choose " +
-          "another. Not available in a browser. Mana Pool's price list can't be read from a " +
-          "web page — the desktop and Android apps can show it.",
+        "Your marketplace is Mana Pool. Prices here are TCGplayer's until you choose another. " +
+          "Not available in a browser. Use the desktop or Android app for Mana Pool prices.",
       );
       // Said once, on the row it is about — the stand-in itself has nothing to excuse.
       expect(row("TCGplayer USD")).not.toHaveAccessibleDescription();
@@ -343,7 +341,7 @@ describe("MarketplacePanel", () => {
 
     it("says nothing about a stand-in when the reader's choice is one the host can ask", () => {
       render(<MarketplacePanel marketplace={unreachable()} />);
-      expect(row("Mana Pool USD")).not.toHaveAccessibleDescription(/Your prices are set to/);
+      expect(row("Mana Pool USD")).not.toHaveAccessibleDescription(/Your marketplace is/);
     });
   });
 

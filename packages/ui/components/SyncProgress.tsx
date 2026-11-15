@@ -236,11 +236,10 @@ function FirstRun({
 
       <div className="max-w-md space-y-2">
         <h2 id="first-run-title" className="font-heading text-2xl text-text">
-          Setting up your card database
+          Setting up card data
         </h2>
         <p className="text-sm text-dim">
-          Downloading every Magic card from Scryfall. This happens once and takes a few minutes —
-          after that the app works offline.
+          Downloading every Magic card from Scryfall. This takes a few minutes, once. After that the app works offline.
         </p>
       </div>
 
@@ -295,7 +294,7 @@ function FirstRun({
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
           )}
         >
-          Retry download
+          Try again
         </button>
       )}
     </motion.div>

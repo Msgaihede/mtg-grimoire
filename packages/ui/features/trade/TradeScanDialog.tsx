@@ -64,8 +64,8 @@ export function TradeScanDialog({
     <Dialog
       open={open}
       title="Scan cards"
-      subtitle="Hold each card up to the camera. It lands in the list, priced, ready to add to the trade."
-      closeLabel="Close the scanner"
+      subtitle="Hold each card up to the camera. Scanned cards are listed with prices, ready to add."
+      closeLabel="Close scanner"
       stackedOver={printingsOpen}
       // The canvas's 1120 × 700. A height and not content: the camera takes what the bar and the
       // strip leave, and has no height of its own to give the panel.

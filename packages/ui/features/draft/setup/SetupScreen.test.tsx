@@ -78,7 +78,7 @@ describe("SetupScreen", () => {
     await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
     // One pick and the rest filled with it — three of one set is a set's own draft.
     await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
-    expect(screen.getByText("3 packs chosen — all 3")).toBeInTheDocument();
+    expect(screen.getByText("3 packs chosen · all 3")).toBeInTheDocument();
     await userEvent.click(start());
 
     await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
@@ -274,7 +274,7 @@ describe("SetupScreen", () => {
       expect(dialog).toHaveTextContent("Bloomburrow (Quick Draft · Pack 2 of 3 · Pick 5)");
       expect(draftStart).not.toHaveBeenCalled();
       expect(packsBoosterSet).not.toHaveBeenCalled();
-      await userEvent.click(within(dialog).getByRole("button", { name: "Open the new pool" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Open new pool" }));
       await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
     });
 
@@ -304,7 +304,7 @@ describe("SetupScreen", () => {
       draftSaved.mockResolvedValue(SAVED);
       await chooseSealed();
       expect(await screen.findByRole("alert")).toHaveTextContent(
-        "You are hosting a pod draft. Finish it or leave its lobby before starting another draft.",
+        "You're hosting a pod draft. Finish it or close its lobby first.",
       );
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(draftStart).not.toHaveBeenCalled();

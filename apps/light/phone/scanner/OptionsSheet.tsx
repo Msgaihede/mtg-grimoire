@@ -29,7 +29,7 @@ const FINISH_PREFS: readonly ScannerFinishPref[] = [DETECT, ...FINISHES];
 /** What each default finish does, said under its name — the desktop Finish menu's two captions. */
 const finishNote = (pref: ScannerFinishPref): string =>
   pref === DETECT
-    ? "A card printed in one finish takes it. One printed in several waits in the tray for you to pick."
+    ? "Cards with one finish get it. Others wait in the tray for you to pick."
     : "Each new card starts in this finish.";
 
 /** A date field a thumb can hit and a phone does not zoom on: 44px tall, 16px type. */

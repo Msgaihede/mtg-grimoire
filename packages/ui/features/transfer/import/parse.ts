@@ -391,12 +391,12 @@ const MAX_COPIES = 9999;
  */
 function csvQuantity(cell: string): number | string {
   if (cell === "") return 1;
-  if (!/^\d+$/.test(cell)) return `\`${cell}\` is not a whole number of copies`;
+  if (!/^\d+$/.test(cell)) return `\`${cell}\` isn't a whole number of copies`;
   const quantity = Number(cell);
   // The per-line reader's own sentence, so one refusal reads one way whichever reader made it.
-  if (quantity === 0) return "Quantity can't be zero.";
+  if (quantity === 0) return "quantity can't be zero";
   if (quantity > MAX_COPIES) {
-    return `\`${cell}\` exceeds the maximum of ${MAX_COPIES} copies per row`;
+    return `\`${cell}\` is over the limit of ${MAX_COPIES} copies per row`;
   }
   return quantity;
 }
@@ -1011,7 +1011,7 @@ function parseCsvGrid(
       issues.push({
         lineNumber,
         raw,
-        reason: "a quote in this row is never closed — close it or remove it",
+        reason: "a quote in this row is never closed",
       });
       continue;
     }
@@ -1158,7 +1158,7 @@ function parseDek(text: string): ParsedList | null {
 
     const name = (attrs.get("name") ?? "").trim();
     if (name === "") {
-      issues.push({ lineNumber, raw, reason: "No card name on this line." });
+      issues.push({ lineNumber, raw, reason: "no card name on this line" });
       continue;
     }
     const quantity = csvQuantity((attrs.get("quantity") ?? "").trim());
@@ -1430,7 +1430,7 @@ export function parseDecklist(text: string): ParsedList {
       // it and `body` is already trimmed, so `stripDecorations` cannot empty a string — `*F*`
       // alone parses as a card named `*F*`, and `[Ramp]` alone as one named `[Ramp]`, both of
       // which resolution refuses. There is no path here through an empty name after a strip.
-      issues.push({ lineNumber, raw, reason: "No card name on this line." });
+      issues.push({ lineNumber, raw, reason: "no card name on this line" });
       continue;
     }
 
@@ -1440,7 +1440,7 @@ export function parseDecklist(text: string): ParsedList {
       // reading here defaults *towards* an import; `0 Shock` is the one where a default would
       // add a card the list explicitly counted to none. Quoted back instead, so the reader
       // decides.
-      issues.push({ lineNumber, raw, reason: "Quantity can't be zero." });
+      issues.push({ lineNumber, raw, reason: "quantity can't be zero" });
       continue;
     }
 

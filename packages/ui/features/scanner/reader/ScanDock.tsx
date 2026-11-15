@@ -336,7 +336,7 @@ function HowScanningRuns({
   return (
     <div
       role="group"
-      aria-label="How scanning runs"
+      aria-label="Scan mode"
       className="flex shrink-0 gap-0.5 rounded-md border border-border p-0.5"
     >
       {halves.map(({ on, label, hint }) => {
@@ -744,7 +744,7 @@ function FinishBody({
       <div aria-hidden="true" className="my-1 h-px bg-border" />
       <p className="px-2 pb-1.5 pt-1 text-xs leading-snug text-dim">
         {finish === DETECT
-          ? "A card printed in one finish takes it. One printed in several waits in the tray for you to pick."
+          ? "Cards with one finish get it. Others wait in the tray for you to pick."
           : "Each new card starts in this finish."}
       </p>
     </div>

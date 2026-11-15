@@ -46,7 +46,7 @@ export function OracleTagsSection({ oracleId }: { oracleId: string | null }) {
       {oracleId === null ? (
         <Note>{ORACLE_TAGS_NO_ORACLE_CARD}</Note>
       ) : tags.isError ? (
-        <Note tone="alert">{`Couldn't read the tags — ${ipcError(tags.error)}.`}</Note>
+        <Note tone="alert">{`Couldn't load the tags — ${ipcError(tags.error)}`}</Note>
       ) : tags.isPending || status.isPending ? (
         // Both reads, not just the tag one: the sentence an empty answer gets is *decided* by the
         // status row, so drawing before it lands would flash whichever of the two claims the

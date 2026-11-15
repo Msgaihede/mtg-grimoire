@@ -351,7 +351,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
               label: "Withdrawn",
               Icon: Link2Off,
               disabled: true,
-              reason: "the link is no longer active",
+              reason: "the link no longer works",
               onSelect: () => {},
             },
             { kind: "separator", id: "after-withdrawn" },
@@ -484,8 +484,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
         }}
         onClose={() => setWithdrawing(false)}
       >
-        The link will become inactive for everyone, and cannot be restored. Your local cards are
-        unaffected.
+        The link stops working for everyone and can't be restored. Your cards aren't affected.
       </ConfirmDialog>
 
     </div>
@@ -529,7 +528,7 @@ function PublishDialog({
     <Dialog
       open={open}
       title={shareNameOf(target)}
-      subtitle="Anyone with the link can view a read-only copy, kept up to date while this app is open. No account required."
+      subtitle="Anyone with the link sees a read-only copy, no account needed. It updates while this app is open."
       closeLabel="Close share"
       size="w-[32rem]"
       onDismiss={onClose}
@@ -625,7 +624,7 @@ function PublishForm({
       </div>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm text-dim">Also send</legend>
+        <legend className="text-sm text-dim">Also include</legend>
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
           {/* A wish has no condition, so a wishlist share offers no switch for one —
               `share::wishlist` drops it from the snapshot whatever is sent. Nor does a deck row
@@ -675,7 +674,7 @@ function PublishForm({
           }}
           className={cn(BUTTON, "border-accent/50 text-accent", !ready && "opacity-50")}
         >
-          {publish.isPending ? "Publishing…" : "Publish"}
+          {publish.isPending ? "Sharing…" : "Share"}
         </button>
       </div>
     </form>

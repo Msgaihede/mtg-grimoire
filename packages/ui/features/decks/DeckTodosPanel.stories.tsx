@@ -170,7 +170,7 @@ export const OpenWithLists: Story = {
     await expect(
       canvas.getByText("Aim for 36 with the MDFCs counted as spells."),
     ).toBeInTheDocument();
-    await userEvent.click(canvas.getByRole("checkbox", { name: 'Mark "Cut a land" done' }));
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Mark “Cut a land” done" }));
     await expect(args.onTick).toHaveBeenCalledWith(MANA, 2);
     await expect(canvas.getByRole("region", { name: TODOS_HEADING })).toHaveTextContent(
       "5 open · 3 done",
@@ -185,12 +185,12 @@ export const OpenWithLists: Story = {
 export const TickInFlight: Story = {
   args: { open: true, lists: [MANA, SLEEVES], ticking: MANA.id, counts: sum([MANA, SLEEVES]) },
   play: async ({ canvas }) => {
-    await expect(canvas.getByRole("checkbox", { name: 'Mark "Cut a land" done' })).toHaveAttribute(
+    await expect(canvas.getByRole("checkbox", { name: "Mark “Cut a land” done" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
     await expect(
-      canvas.getByRole("checkbox", { name: 'Mark "Print the token sheet" done' }),
+      canvas.getByRole("checkbox", { name: "Mark “Print the token sheet” done" }),
     ).not.toHaveAttribute("aria-disabled");
   },
 };

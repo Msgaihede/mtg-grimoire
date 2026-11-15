@@ -271,7 +271,7 @@ describe("a reader with no membership", () => {
     await user.click(await shareButton());
     await user.click(screen.getByRole("menuitem", { name: /Share your collection/ }));
     await user.type(screen.getByLabelText("Your name"), "Giradeli");
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await user.click(screen.getByRole("button", { name: "Share" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/Connect Patreon in Settings/);
   });
@@ -392,7 +392,7 @@ describe("a share the reader is not publishing to any more", () => {
     await user.click(await shareButton());
     const gone = await screen.findByRole("menuitem", { name: /Withdrawn/ });
     expect(gone).toHaveAttribute("aria-disabled", "true");
-    expect(gone).toHaveAccessibleName(/the link is no longer active/);
+    expect(gone).toHaveAccessibleName(/the link no longer works/);
 
     const again = screen.getByRole("menuitem", { name: /Share this folder/ });
     expect(again).not.toHaveAttribute("aria-disabled");
@@ -460,7 +460,7 @@ describe("publishing", () => {
     await user.click(await shareButton());
     await user.click(screen.getByRole("menuitem", { name: /Share your collection/ }));
     await user.type(screen.getByLabelText("Your name"), "Giradeli");
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await user.click(screen.getByRole("button", { name: "Share" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no address here/);
     expect(screen.getByLabelText("Your name")).toBeInTheDocument();
@@ -479,7 +479,7 @@ describe("publishing", () => {
     await user.type(screen.getByLabelText("Your name"), "Giradeli");
     await user.click(screen.getByLabelText("Condition"));
     await user.click(screen.getByLabelText("Value"));
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await user.click(screen.getByRole("button", { name: "Share" }));
 
     await waitFor(() =>
       expect(shareCreate).toHaveBeenCalledWith("u3", "Giradeli", {
@@ -498,7 +498,7 @@ describe("publishing", () => {
     await user.click(await shareButton());
     await user.click(screen.getByRole("menuitem", { name: /Share your collection/ }));
     await user.type(screen.getByLabelText("Your name"), "Giradeli");
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await user.click(screen.getByRole("button", { name: "Share" }));
 
     await waitFor(() =>
       expect(shareCreate).toHaveBeenCalledWith(null, "Giradeli", {

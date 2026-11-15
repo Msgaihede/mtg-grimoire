@@ -306,7 +306,7 @@ describe("pressing a mover", () => {
     seed(answer());
     draw();
     expect(screen.getByRole("button", { name: /^Black Lotus/ })).toHaveAccessibleName(
-      "Black Lotus · LEA · nonfoil · +$184.00 — price history",
+      "Black Lotus · LEA · nonfoil · +$184.00 · price history",
     );
   });
 
@@ -315,7 +315,7 @@ describe("pressing a mover", () => {
     seed(answer());
     draw(null, fitFor(2, 3));
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      "Lightning Bolt · SLD · foil · −$8.60 — price history",
+      "Lightning Bolt · SLD · foil · −$8.60 · price history",
     );
   });
 
@@ -423,7 +423,7 @@ describe("a widget narrowed to what the reader chose (issue #906)", () => {
     expect(chosenNoHistory("30d")).toContain("thirty days after");
     expect(chosenNoHistory("all")).toContain("from the next day on");
     for (const range of ["7d", "30d", "all"] as const) {
-      expect(chosenNoHistory(range)).toContain("remembered from the day you choose them");
+      expect(chosenNoHistory(range)).toContain("recorded from the day you choose them");
     }
   });
 });
@@ -448,7 +448,7 @@ describe("PriceMoversWidgetSettings", () => {
     settings(null);
     expect(
       screen.getByText(
-        "Choose Chosen under Which cards to pick the folders and cards this widget follows.",
+        "Set Which cards to Chosen to pick folders and cards.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("Cards")).toBeNull();
@@ -503,7 +503,7 @@ describe("PriceMoversWidgetSettings", () => {
     expect(screen.getByLabelText("Cards")).toBeDisabled();
     expect(
       screen.getByText(
-        `This widget follows ${MAX_CHOSEN_CARDS} cards, its most. Remove one to add another.`,
+        `This widget follows up to ${MAX_CHOSEN_CARDS} cards. Remove one to add another.`,
       ),
     ).toBeInTheDocument();
   });

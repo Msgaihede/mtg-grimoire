@@ -80,8 +80,8 @@ vi.mock("./SetCombobox", () => ({
 const bar = () => screen.getByRole("group", { name: "Filter quick bar" });
 
 /**
- * `FiltersButton`'s name, `Show filters — N active` or `Hide filters — N active`. Anchored, because a
- * bare `/filters/i` also matches Reset all's `Reset all — N filters active` on the same bar.
+ * `FiltersButton`'s name, `Show filters, N active` or `Hide filters, N active`. Anchored, because a
+ * bare `/filters/i` also matches Reset all's `Reset all: N filters active` on the same bar.
  */
 const FILTERS = /^(Show|Hide) filters/;
 
@@ -213,7 +213,7 @@ describe("FilterQuickBar", () => {
     const some = search({ activeCount: 2 });
     render(<FilterQuickBar search={some} shown />, { wrapper: TooltipProvider });
     await userEvent.click(
-      within(bar()).getByRole("button", { name: "Reset all — 2 filters active" }),
+      within(bar()).getByRole("button", { name: "Reset all: 2 filters active" }),
     );
     expect(some.resetAll).toHaveBeenCalled();
   });
@@ -261,7 +261,7 @@ describe("FilterQuickBar", () => {
     render(<FilterQuickBar search={search({ manaValues: [5, 4], manaX: true })} shown />, {
       wrapper: TooltipProvider,
     });
-    const press = within(bar()).getByRole("button", { name: "Mana value — 4, 5, X" });
+    const press = within(bar()).getByRole("button", { name: "Mana value: 4, 5, X" });
     // jsdom applies no stylesheet, so the inline group — hidden only by a container query — is
     // already in the tree. Counting before the press is what makes this a check on the popup
     // rather than one the inline chips pass on its behalf.

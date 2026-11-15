@@ -194,7 +194,7 @@ export const CreateDeckFromTray: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Tray actions" }));
     await userEvent.click(await canvas.findByRole("button", { name: "Create deck…" }));
     const dialog = await canvas.findByRole("dialog", { name: "New deck" });
-    await expect(within(dialog).getByText(/scans stay in the tray/)).toBeVisible();
+    await expect(within(dialog).getByText(/They stay in the tray, so you can add them/)).toBeVisible();
     await expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeVisible();
   },
 };
@@ -230,7 +230,7 @@ export const PointAndShoot: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
-    const runs = canvas.getByRole("group", { name: "How scanning runs" });
+    const runs = canvas.getByRole("group", { name: "Scan mode" });
     await expect(within(runs).getByRole("button", { name: "Point & shoot" })).toHaveAttribute(
       "aria-pressed",
       "true",

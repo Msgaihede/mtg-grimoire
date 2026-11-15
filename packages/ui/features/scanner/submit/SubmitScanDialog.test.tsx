@@ -604,7 +604,7 @@ describe("SubmitScanDialog", () => {
     expect(dialog()).toBeInTheDocument();
 
     land({ id: REFERENCE });
-    expect(await screen.findByText("Sent — thank you.")).toBeInTheDocument();
+    expect(await screen.findByText("Sent. Thank you.")).toBeInTheDocument();
     // …and now the way out is open again.
     await userEvent.keyboard("{Escape}");
     expect(onDismiss).toHaveBeenCalledTimes(1);
@@ -630,7 +630,7 @@ describe("SubmitScanDialog", () => {
     expect(vi.mocked(ipc.scannerSubmit).mock.calls[1]).toEqual(
       vi.mocked(ipc.scannerSubmit).mock.calls[0],
     );
-    expect(await screen.findByText("Sent — thank you.")).toBeInTheDocument();
+    expect(await screen.findByText("Sent. Thank you.")).toBeInTheDocument();
     // The refusal went with the press that answered it.
     expect(within(dialog()).queryByRole("alert")).toBeNull();
   });
@@ -645,7 +645,7 @@ describe("SubmitScanDialog", () => {
     await answer("Lightning Bolt — STA 105", "Foil");
     await userEvent.click(send());
 
-    await waitFor(() => expect(thanks).toHaveTextContent("Sent — thank you."));
+    await waitFor(() => expect(thanks).toHaveTextContent("Sent. Thank you."));
     expect(thanks).toHaveTextContent(`Reference: ${REFERENCE}`);
     expect(thanks).toHaveTextContent(KEEP_THE_REFERENCE);
     // The reference is text a reader can select whole, not a control.
@@ -669,7 +669,7 @@ describe("SubmitScanDialog", () => {
     const said = within(dialog()).getByText(disclosure(FRAMES.length));
     expect(said).toBeVisible();
     expect(said).toHaveTextContent(
-      /^These 6 pictures — the last couple of seconds the scanner saw — /,
+      /^Sent to MTG Grimoire's maker and kept to improve the scanner: these 6 pictures \(the last couple of seconds the scanner saw\), /,
     );
     expect(within(dialog()).getByRole("link", { name: "Privacy policy" })).toHaveAttribute(
       "href",
@@ -719,7 +719,7 @@ describe("the printings a reader chooses between", () => {
     vi.mocked(ipc.searchCards).mockRejectedValue("the card database is busy");
     open();
     expect(await within(dialog()).findByRole("alert")).toHaveTextContent(
-      "Couldn't search the cards — the card database is busy",
+      "Couldn't search cards — the card database is busy",
     );
     expect(screen.queryByText(/No printing found/)).toBeNull();
   });

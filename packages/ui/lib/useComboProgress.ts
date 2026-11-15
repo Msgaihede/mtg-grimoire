@@ -42,7 +42,7 @@ export const COMBO_PHASE_LABEL: Record<ComboPhase, string> = {
   // is no number to print and the bar is indeterminate for the whole 639 MB parse.
   ingesting: "Importing combos",
   done: "Combos are up to date",
-  error: "Combo refresh failed",
+  error: "Couldn't update combos",
 };
 
 /** The combo table's state, and whether it is being replaced right now. */

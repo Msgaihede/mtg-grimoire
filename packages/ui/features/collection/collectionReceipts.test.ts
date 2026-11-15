@@ -8,10 +8,10 @@ import { addedReceipt, movedReceipt, removedReceipt, report } from "./collection
 
 describe("the receipts' words", () => {
   it("names one card and counts several, in entries", () => {
-    expect(removedReceipt(1, "Sol Ring")).toBe("Removed “Sol Ring” from the collection");
-    expect(removedReceipt(3, "Sol Ring")).toBe("Removed 3 cards from the collection");
+    expect(removedReceipt(1, "Sol Ring")).toBe("Removed “Sol Ring” from your collection");
+    expect(removedReceipt(3, "Sol Ring")).toBe("Removed 3 cards from your collection");
     // A copy the list could not name is counted rather than drawn as empty quotes.
-    expect(removedReceipt(1, null)).toBe("Removed 1 card from the collection");
+    expect(removedReceipt(1, null)).toBe("Removed 1 card from your collection");
     expect(movedReceipt(1, "Sol Ring", "Trade binder")).toBe("Moved “Sol Ring” to “Trade binder”");
     expect(movedReceipt(50, "Sol Ring", "Trade binder")).toBe("Moved 50 cards to “Trade binder”");
     expect(addedReceipt("Black Lotus", "Collection")).toBe("Added “Black Lotus” to “Collection”");

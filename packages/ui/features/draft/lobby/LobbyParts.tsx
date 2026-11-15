@@ -63,7 +63,7 @@ export function CodePlate({
         </button>
       </div>
       <p className="m-0 text-xs text-dim">
-        Anyone with the code can join — no membership needed. The lobby lasts six hours.
+        Anyone with the code can join, no membership needed. The lobby lasts six hours.
       </p>
       <InlineError message={error} />
     </div>

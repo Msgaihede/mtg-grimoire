@@ -56,8 +56,8 @@ describe("PromptPanel", () => {
   it("says what an order of triggers decides, and each answer's order with its pictures", () => {
     const prompt = orderTriggersPrompt().view.prompt!;
     const { onAct } = setup(prompt);
-    expect(screen.getByRole("heading", { name: "Put your triggers in order" })).toBeInTheDocument();
-    expect(screen.getByText("Pick which one resolves first")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Order your triggers" })).toBeInTheDocument();
+    expect(screen.getByText("Pick which resolves first")).toBeInTheDocument();
     // Two Delvers' upkeep triggers read alike either way round: one answer, not two the same
     // (issue #1076).
     const answers = screen.getAllByRole("button", { name: /resolves first/ });

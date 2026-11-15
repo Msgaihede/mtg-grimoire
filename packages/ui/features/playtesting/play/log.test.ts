@@ -146,7 +146,7 @@ const CASES: [PlaytestHappened, string | null, string][] = [
   ],
   [
     { type: "put", seat: "you", name: "Swords to Plowshares", from: "hand", to: "graveyard" },
-    "Cast Swords to Plowshares · not paid for",
+    "Cast Swords to Plowshares · unpaid",
     "cast",
   ],
   [
@@ -221,7 +221,7 @@ const CASES: [PlaytestHappened, string | null, string][] = [
   [{ type: "lifeSet", seat: "opponent", life: 0, was: 4 }, "The opponent is dead", "life"],
   [
     { type: "chose", what: "TargetSelection" },
-    "The rules engine chose for you: Choose a target",
+    "The engine chose for you: Choose a target",
     "engine",
   ],
   [{ type: "eliminated", seat: "you" }, "You are out", "end"],

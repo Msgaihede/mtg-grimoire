@@ -63,7 +63,7 @@ describe("ClearDeck", () => {
 
     expect(outcome()).toHaveTextContent(
       "12 cards will be removed from the deck. Categories stay. " +
-        "Any copies you own go back to Recently removed.",
+        "Copies you own go back to Recently removed.",
     );
   });
 
@@ -151,7 +151,7 @@ describe("ClearDeck", () => {
 
     expect(outcome()).toHaveTextContent(
       "1 card will be removed from the deck. Categories stay. " +
-        "Any copies you own go back to Recently removed.",
+        "Copies you own go back to Recently removed.",
     );
     expect(screen.getByText("The 1 card in the other list is untouched.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove 1 card" })).toBeInTheDocument();

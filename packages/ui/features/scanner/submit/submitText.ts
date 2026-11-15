@@ -24,7 +24,7 @@ export const SEND_TITLE = "Send this scan";
  * a refused reset is, and it says what to do, which is all there is to do.
  */
 export const SCAN_TOO_SHORT =
-  "Not enough of the scan yet. Hold the card under the camera a moment and press again.";
+  "Not enough scanned yet. Hold the card under the camera, then press again.";
 
 /**
  * {@link SCAN_TOO_SHORT}'s other half, for point and shoot between two shots: the scan on offer
@@ -86,13 +86,13 @@ export const NO_CARD = "No card in the picture";
 
 /** Under the switch while it is on: what the answer is for, so it is not mistaken for a skip. */
 export const NO_CARD_NOTE =
-  "Sent as a scan with nothing to find, so the scanner can learn what is not a card.";
+  "Sent as an empty scan, to teach the scanner what isn't a card.";
 
 /** The printings' radio group, by name. */
 export const PRINTINGS = "Printings";
 
 /** An empty box asks nothing: the reader is told what typing will get them instead. */
-export const SEARCH_PROMPT = "Type the card's name to see its printings.";
+export const SEARCH_PROMPT = "Type a card name to see its printings.";
 
 export const SEARCHING = "Searching…";
 
@@ -102,7 +102,7 @@ export function noPrintingFound(query: string): string {
 
 /** A search that could not run — `DeckCoverPicker`'s sentence, which is the same failure. */
 export function searchFailed(reason: string): string {
-  return `Couldn't search the cards — ${reason}`;
+  return `Couldn't search cards — ${reason}`;
 }
 
 /**
@@ -128,7 +128,7 @@ export const SHOW_MORE = "Show more";
  * would send a reader looking for a card called "s:ltr".
  */
 export const SET_HINT_EXAMPLE = "s:ltr";
-export const SET_HINT = `A set code narrows it — add ${SET_HINT_EXAMPLE} to the search, for example.`;
+export const SET_HINT = `Add a set code to narrow it, for example ${SET_HINT_EXAMPLE}.`;
 
 /** `LTR 72` — the set upper-cased, then the number, as every card row in the Scanner spells it. */
 export function printingWords(printing: { setCode: string; collectorNumber: string }): string {
@@ -191,11 +191,7 @@ export const CHOOSE_ITS_FINISH = "Choose its finish.";
  */
 export function disclosure(pictures: number): string {
   return (
-    `These ${pictures} pictures — the last couple of seconds the scanner saw — and the card you ` +
-    "choose, or that there is none, are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the " +
-    "app's version and which app it is, and kept to improve the scanner. Nothing from your " +
-    "collection is sent, and nothing is kept that says who you are. Look through them and check " +
-    "they show only what you mean to send."
+    `Sent to MTG Grimoire's maker and kept to improve the scanner: these ${pictures} pictures (the last couple of seconds the scanner saw), the card you choose or that there is none, what the scanner read, how it was set, the app's version and which app it is. Nothing from your collection is sent, and nothing kept says who you are. Check the pictures show only what you mean to send.`
   );
 }
 
@@ -204,7 +200,7 @@ export const CANCEL = "Cancel";
 export const SEND = "Send scan";
 export const SENDING = "Sending…";
 
-export const SENT = "Sent — thank you.";
+export const SENT = "Sent. Thank you.";
 export const REFERENCE = "Reference:";
 /** Nothing kept says who sent it, so the reference is the only way back to one scan. */
 export const KEEP_THE_REFERENCE = "Keep the reference if you ever want these pictures deleted.";

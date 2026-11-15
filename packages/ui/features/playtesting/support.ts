@@ -102,7 +102,7 @@ const KINDS: Record<string, string> = {
   CastingOption: "Casting option",
   GraveyardCastPermission: "Casting from a graveyard",
   TokenRulesText: "A token’s rules text",
-  Swallow: "Clause read over",
+  Swallow: "Clause skipped",
   ParseWarning: "Parse warning",
   ResolverFeature: "Resolution",
 };

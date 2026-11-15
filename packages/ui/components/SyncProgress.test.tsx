@@ -42,7 +42,7 @@ describe("the first-run variant", () => {
     });
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/setting up your card database/i)).toBeInTheDocument();
+    expect(screen.getByText(/setting up card data/i)).toBeInTheDocument();
     expect(screen.getByText(/importing cards/i)).toBeInTheDocument();
     // The app's one progress bar, on the one screen that used to have a second one. The
     // name is the phase, which is `syncActivity`'s wording rather than this file's — the
@@ -86,7 +86,7 @@ describe("the first-run variant", () => {
     // the heading's. A `label` on the mark would add a second graphic beside it saying the
     // same words.
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toHaveAccessibleName("Setting up your card database");
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("Setting up card data");
   });
 
   /**
@@ -111,7 +111,7 @@ describe("the first-run variant", () => {
   it("keeps Retry off the screen while the download is running", () => {
     show({ cardCount: 0, busy: true, progress: event({ phase: "downloading" }) });
 
-    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
   });
 
   it("waits for the first sync even before any event arrives", () => {
@@ -120,7 +120,7 @@ describe("the first-run variant", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     // The generic sentence, and the ribbon's own: a run this window has only heard *about*
     // has no phase to name.
-    expect(screen.getByText("Syncing card data")).toBeInTheDocument();
+    expect(screen.getByText("Updating card data")).toBeInTheDocument();
   });
 
   /** A finished run means the database is filling; the overlay gets out of the way. */
@@ -162,7 +162,7 @@ describe("the first-run variant", () => {
       show({ cardCount: 0, busy: false, error: "rate limited by Scryfall" });
 
       expect(screen.getByText(/rate limited by Scryfall/i)).toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+      await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
       expect(onRetry).toHaveBeenCalledTimes(1);
     });
@@ -177,7 +177,7 @@ describe("the first-run variant", () => {
       });
 
       expect(screen.getByText(/no internet connection/i)).toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+      await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
       expect(onRetry).toHaveBeenCalledTimes(1);
     });
@@ -189,7 +189,7 @@ describe("the first-run variant", () => {
     it("offers Retry when nothing is running and nothing has been said", () => {
       show({ cardCount: 0, busy: false });
 
-      expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /try again/i })).toBeEnabled();
       expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     });
 
@@ -207,13 +207,13 @@ describe("the first-run variant", () => {
         progress: event({ phase: "error", done: 0, total: 0, message: "no internet connection" }),
       });
 
-      await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+      await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
       expect(onRetry).toHaveBeenCalledTimes(1);
       expect(screen.queryByText(/no internet connection/i)).not.toBeInTheDocument();
       // The generic sentence and a line with no denominator: a run nobody has heard from yet.
-      expect(screen.getByRole("progressbar", { name: "Syncing card data" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: "Updating card data" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
     });
 
     /**
@@ -227,7 +227,7 @@ describe("the first-run variant", () => {
         busy: true,
         progress: event({ phase: "error", message: "no internet connection" }),
       });
-      await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+      await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
       rerender(
         <SyncProgress
@@ -240,7 +240,7 @@ describe("the first-run variant", () => {
       );
 
       expect(screen.getByText(/rate limited by Scryfall/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /try again/i })).toBeEnabled();
     });
   });
 });
@@ -249,7 +249,7 @@ describe("what the first run says", () => {
   it("calls a first run a first run", () => {
     show({ cardCount: 0, busy: false });
     expect(
-      screen.getByRole("heading", { name: "Setting up your card database" }),
+      screen.getByRole("heading", { name: "Setting up card data" }),
     ).toBeInTheDocument();
     expect(screen.getByText(/Downloading every Magic card from Scryfall/)).toBeInTheDocument();
   });

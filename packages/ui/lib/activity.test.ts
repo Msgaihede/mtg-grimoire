@@ -23,7 +23,7 @@ import type {
 const job = (over: Partial<Activity> = {}): Activity => ({
   key: "sync",
   rank: RANK.sync,
-  label: "Syncing card data",
+  label: "Updating card data",
   detail: null,
   value: null,
   ...over,
@@ -146,7 +146,7 @@ describe("syncActivity", () => {
     expect(syncActivity(null, true)).toMatchObject({
       key: "sync",
       rank: RANK.sync,
-      label: "Syncing card data",
+      label: "Updating card data",
       detail: null,
       value: null,
     });
@@ -200,7 +200,7 @@ describe("syncActivity", () => {
   it("treats a finished or failed run as running with nothing to say", () => {
     for (const phase of ["done", "error"] as const) {
       const activity = syncActivity(event({ phase, done: 9, total: 9 }), true);
-      expect(activity?.label).toBe("Syncing card data");
+      expect(activity?.label).toBe("Updating card data");
       expect(activity?.value).toBeNull();
       expect(activity?.detail).toBeNull();
     }

@@ -91,7 +91,7 @@ const ROW_WITH_CAPTION = 51;
 const ROW_BARE = 36;
 
 const LOADING = "Loading decks…";
-const EMPTY = "No decks found. Build a deck on the Decks page to see it here.";
+const EMPTY = "No decks yet. Build one on the Decks page.";
 const PINS_GONE = "The pinned decks no longer exist.";
 const NOTHING_PINNED = "No pinned decks. Pin decks in this widget's settings.";
 const ALL_ARCHIVED = "All decks are archived. Choose Archived too in this widget's settings to show them.";
@@ -243,7 +243,7 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
   const footer = valuesQuery.isError
     ? `Couldn't load deck values — ${ipcError(valuesQuery.error)}`
     : unpriced > 0
-      ? `${pricesAsOf(marketplace)} ${plural(unpriced, "copy", "copies")} have no price listed.`
+      ? `${pricesAsOf(marketplace)} ${plural(unpriced, "copy", "copies")} unpriced.`
       : pricesAsOf(marketplace);
 
   /**
@@ -338,7 +338,7 @@ export function DecksWidgetSettings({ widget, onConfig }: WidgetSettingsProps): 
     const words = scopeWords();
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.pinned} under {words.row} to pick the decks this widget shows.
+        Set {words.row} to {words.pinned} to pick decks.
       </p>
     );
   }

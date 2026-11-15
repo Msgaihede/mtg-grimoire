@@ -38,7 +38,7 @@ export class RootBoundary extends Component<{ children: ReactNode }, { failed: b
           <div className="m-auto flex flex-col items-center gap-4 text-center">
             <GrimoireMark size={48} className="text-dim" />
             <p role="alert" className="max-w-prose text-sm text-destructive">
-              MTG Grimoire could not be drawn.
+              Couldn't display MTG Grimoire.
             </p>
             <button
               type="button"

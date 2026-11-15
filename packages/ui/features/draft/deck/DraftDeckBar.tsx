@@ -121,7 +121,7 @@ export const DraftDeckBar = memo(function DraftDeckBar({
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <p className="text-xs text-dim">
-          Draft deck — build from your Pool; the collection and card search are off.
+          Draft deck: build from your Pool. Your collection and card search are off.
         </p>
 
         {/* Five presses in WUBRG order, the order the symbols are printed in. A colour the corpus
@@ -133,8 +133,8 @@ export const DraftDeckBar = memo(function DraftDeckBar({
             const land = byColor.get(key);
             const label =
               land === undefined
-                ? `No ${MANA_LABEL[key]} basic land in this corpus`
-                : `Add a ${land.name} — Shift-click adds ${BASICS_SHIFT_COPIES}`;
+                ? `No ${MANA_LABEL[key]} basic land in the card data`
+                : `Add ${land.name} · Shift-click adds ${BASICS_SHIFT_COPIES}`;
             return (
               <button
                 key={key}
@@ -225,7 +225,7 @@ function CommanderStatus({ check }: { check: CommanderCheck }): JSX.Element {
       </span>
       <span className={cn("inline-flex items-center gap-1", chosen ? "text-ok" : "text-dim")}>
         <Crown aria-hidden className="size-3.5" />
-        {chosen ? "Commander chosen" : "No commander yet — put one in the Commander pile"}
+        {chosen ? "Commander chosen" : "No commander: put one in the Commander pile"}
       </span>
     </div>
   );
@@ -249,7 +249,7 @@ function DiscardQuestion({
     <div {...confirm}>
       <p className="text-xs">Discard “{name}”?</p>
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The deck and the pool you drafted are deleted. Nothing in your collection changes.
+        Deletes the deck and its drafted pool. Your collection is unchanged.
       </p>
       <div className="mt-2 flex gap-2">
         <button

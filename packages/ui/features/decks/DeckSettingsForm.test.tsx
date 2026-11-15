@@ -632,7 +632,7 @@ describe("DeckSettingsForm", () => {
       "Off",
       "All",
       "Missing",
-      "Different Printing",
+      "Different printing",
     ]);
     // `off` is the default, and the only pressed one.
     expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
@@ -645,7 +645,7 @@ describe("DeckSettingsForm", () => {
 
     await userEvent.click(within(group).getByRole("button", { name: "Missing" }));
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "missing" });
-    await userEvent.click(within(group).getByRole("button", { name: "Different Printing" }));
+    await userEvent.click(within(group).getByRole("button", { name: "Different printing" }));
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "other" });
     expect(onCommit).not.toHaveBeenCalled();
   });
@@ -697,7 +697,7 @@ describe("DeckSettingsForm", () => {
     expect(screen.queryByText(/Tokens subfolder/)).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalledWith({ managedWishlistTokens: false });
 
-    await userEvent.click(within(group).getByRole("button", { name: "Different Printing" }));
+    await userEvent.click(within(group).getByRole("button", { name: "Different printing" }));
     expect(screen.getByRole("button", { name: "Tokens" })).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(screen.getByRole("button", { name: "Tokens" }));
@@ -798,7 +798,7 @@ describe("DeckSettingsForm", () => {
       "Auto (by what it does)",
       "Main deck",
       "Sideboard",
-      "Maybeboard (off)",
+      "Maybeboard (inactive)",
     ]);
   });
 
@@ -834,7 +834,7 @@ describe("DeckSettingsForm", () => {
     form({ value: { ...VALUE, defaultCategoryId: 13 } });
     expect(
       screen.getByText(
-        "New cards go to Maybeboard, which is inactive and doesn't count.",
+        "New cards go to Maybeboard, which is inactive.",
       ),
     ).toBeInTheDocument();
   });
@@ -971,7 +971,7 @@ describe("DeckSettingsForm — tags", () => {
     const user = userEvent.setup();
     const { onChange, onCommit } = form({ value: { ...VALUE, tags: ["Budget"] } });
 
-    expect(screen.getByRole("button", { name: "Remove the Budget tag" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Budget" })).toBeInTheDocument();
 
     await user.type(screen.getByRole("combobox", { name: "Tags" }), "Meme{Enter}");
 

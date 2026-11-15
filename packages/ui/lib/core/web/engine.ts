@@ -25,7 +25,7 @@ export function once<T>(make: () => Promise<T>): () => Promise<T> {
 }
 
 /** What a call made to a Worker nobody has asked to open is refused with. */
-export const NOT_OPENED = "The card database has not been opened.";
+export const NOT_OPENED = "The card data isn't open yet.";
 
 export interface Engine {
   /** Answer one message from the page. Never rejects: every outcome is a message back. */

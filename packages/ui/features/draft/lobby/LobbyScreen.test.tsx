@@ -146,7 +146,7 @@ describe("the host's room", () => {
     setup();
     await userEvent.click(await screen.findByRole("button", { name: "Winston" }));
     await threePacks();
-    expect(screen.getByText("5 people are in; Winston seats 4 at most.")).toBeInTheDocument();
+    expect(screen.getByText("5 people are in. Winston seats 4 at most.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start draft/ })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -181,7 +181,7 @@ describe("a seat left mid-draft (issue #1468)", () => {
     ipcMock.lobbyState.mockResolvedValue({ ...GUEST, hostOnline: false });
     setup();
     expect(
-      await screen.findByText("Ada has dropped — waiting for them to come back."),
+      await screen.findByText("Ada disconnected. Waiting for them to return."),
     ).toBeVisible();
     expect(ipcMock.lobbyRejoin).not.toHaveBeenCalled();
   });

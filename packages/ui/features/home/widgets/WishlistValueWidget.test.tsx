@@ -359,7 +359,7 @@ describe("WishlistValueWidget", () => {
     });
 
     expect(
-      screen.getByText("Your wishlist is empty. Add cards to see costs here."),
+      screen.getByText("Nothing on your wishlist yet."),
     ).toBeInTheDocument();
     // Never a total over an empty list: `$0.00` is a price nobody quoted.
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();

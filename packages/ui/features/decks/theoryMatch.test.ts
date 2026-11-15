@@ -377,7 +377,7 @@ describe("the switches", () => {
 /**
  * **What the name tier is called depends on the exact switch** (managed tokens spec §3.10). With
  * `Matching printing` off the reader has asked not to be told printings apart, so a row resolved
- * on the name tier is not an "Art Mismatch" — whether it is the printing the plan named, falling
+ * on the name tier is not an "Art mismatch" — whether it is the printing the plan named, falling
  * through, or genuinely another one. `anyPrinting` is the mark's own record of that, and the
  * words are read off it; the tier, the number and the colour do not move.
  */
@@ -428,14 +428,14 @@ describe("the name tier with the exact switch off", () => {
 
   /** With the switch on, a name-tier row is a genuine different printing and says so — and the
    *  exact row beside it is the exact tier, which never carries the flag. */
-  it("keeps Art Mismatch for a name-tier row with the switch on", () => {
+  it("keeps Art mismatch for a name-tier row with the switch on", () => {
     const loose = theoryMatchMark(plan(ALL), other);
     const exact = theoryMatchMark(plan(ALL), planned);
 
     expect(loose).toEqual({ tier: "name", delta: 0, anyPrinting: false });
-    expect(theoryMatchLabel(loose!)).toBe("Art Mismatch");
+    expect(theoryMatchLabel(loose!)).toBe("Art mismatch");
     expect(exact).toEqual({ tier: "exact", delta: 2, anyPrinting: false });
-    expect(theoryMatchLabel(exact!)).toBe("Exact Match · 2 to add");
+    expect(theoryMatchLabel(exact!)).toBe("Exact match · 2 to add");
   });
 
   /** The third tier is about a card the plan does not ask for, which no printing switch can
@@ -451,12 +451,12 @@ describe("the name tier with the exact switch off", () => {
   });
 
   /** The `Matches theory` grouping buckets by the plan, whatever the switches say: its headings
-   *  are the three tier names, unchanged, and the exact row stays under `Exact Match`. */
+   *  are the three tier names, unchanged, and the exact row stays under `Exact match`. */
   it("leaves the grouping's headings and buckets as they were", () => {
     expect(THEORY_TIER_NAMES).toEqual({
-      exact: "Exact Match",
-      name: "Art Mismatch",
-      unplanned: "No Match",
+      exact: "Exact match",
+      name: "Art mismatch",
+      unplanned: "No match",
     });
     const off = plan(EXACT_OFF)!;
     expect(theoryTier(off, planned)).toBe("exact");

@@ -82,7 +82,7 @@ export function FolderRulesDialog({
     <Dialog
       open={open}
       title={`Rules for “${folderName}”`}
-      subtitle="Cards filed here should match every rule — group rules to match any of them instead. Nothing is refused for breaking one — it is outlined in red."
+      subtitle="Cards filed here should match every rule. Group rules to match any of them. Cards that don't match are outlined in red."
       closeLabel="Close"
       size="w-[44rem]"
       onDismiss={onClose}
@@ -152,7 +152,7 @@ function toRow(rule: FolderRule): Row {
 const num = (v: number | null): string => (v === null ? "" : String(v));
 
 /** Not one of the tidy's sentences: the backend never sees a box's text, only a number. */
-const NOT_A_NUMBER = "Write each end of a range as a number.";
+const NOT_A_NUMBER = "Enter a number for each end of the range.";
 
 /** A box's text as an end: blank is unbounded, `NaN` is a refusal. A comma is read as the decimal
  *  point, as `parsePrice` reads a purchase price. */
@@ -264,7 +264,7 @@ function Body({
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
         {rows.length === 0 ? (
           <p className="text-sm text-dim">
-            No rules of its own. Add one, and every card filed here is checked against it.
+            No rules of its own. Add one to check every card filed here.
           </p>
         ) : (
           <RowList rows={rows} op="and" path="" edits={edits} />
@@ -475,7 +475,7 @@ function GroupBox({
         />
       </div>
       {group.rows.length === 0 ? (
-        <p className="text-xs text-dim">Empty — add the rules this group joins.</p>
+        <p className="text-xs text-dim">Empty. Add rules to this group.</p>
       ) : (
         <RowList rows={group.rows} op={group.op} path={`${n}.`} depth={depth} edits={edits} />
       )}

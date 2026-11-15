@@ -173,7 +173,7 @@ describe("useTrayDestination", () => {
     });
     expect(commit).not.toHaveBeenCalled();
     expect(result.current.error).toBe(
-      "1 scanned card is still waiting for a printing to be picked.",
+      "1 scanned card is still waiting for a printing.",
     );
     expect(tray.setRows).not.toHaveBeenCalled();
   });
@@ -267,14 +267,14 @@ describe("useTrayDestination", () => {
       const { destination } = destinationOf();
       const { result } = renderHook(() => useTrayDestination({ tray, destination }));
       expect(result.current.notice).toBe(heldNotice(4, "their side"));
-      expect(result.current.notice).toMatch(/^4 cards were already in the scanner's tray\./);
+      expect(result.current.notice).toMatch(/^4 cards were already in the tray\./);
       expect(result.current.notice).toContain("onto their side");
       expect(result.current.notice).toContain("Clear all…");
     });
 
     it("says one card in the singular", () => {
       expect(heldNotice(1, "your side")).toMatch(
-        /^1 card was already in the scanner's tray\. It is in this list and goes onto your side/,
+        /^1 card was already in the tray\. It is in this list and goes onto your side/,
       );
     });
 

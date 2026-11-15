@@ -231,7 +231,7 @@ function LobbyDoor({ closed }: { closed: LobbyState | null }): JSX.Element {
           role="status"
           className="m-0 rounded-lg border border-border bg-surface px-4 py-3 text-sm"
         >
-          The lobby {closed.code} closed{closed.closedReason ? `: ${closed.closedReason}` : "."}
+          Lobby {closed.code} closed{closed.closedReason ? `: ${closed.closedReason}` : "."}
         </p>
       )}
       <div className="flex max-w-xl flex-col gap-1.5">
@@ -254,8 +254,7 @@ function LobbyDoor({ closed }: { closed: LobbyState | null }): JSX.Element {
             <h3 className="m-0 font-heading text-lg font-semibold">Host a pod</h3>
           </div>
           <p className="m-0 text-sm text-dim">
-            Open a lobby, share its code, and start when your table is in. Bots take the seats
-            nobody sits in.
+            Share the lobby code and start when everyone is in. Bots fill empty seats.
           </p>
           <PrimaryButton
             className="mt-auto self-start"
@@ -304,7 +303,7 @@ function LobbyDoor({ closed }: { closed: LobbyState | null }): JSX.Element {
           </PrimaryButton>
         </div>
       </div>
-      {!named && <p className="m-0 text-xs text-dim">Give yourself a name to host or join.</p>}
+      {!named && <p className="m-0 text-xs text-dim">Enter a name to host or join.</p>}
       <InlineError message={error} />
     </div>
   );
@@ -467,9 +466,9 @@ function HostRoom({
         )}
         <p className="m-0 text-xs leading-relaxed text-dim">
           {held.format === "commander"
-            ? `Two cards a pick; everyone builds a ${COMMANDER_DECK_SIZE}-card deck with a commander.`
+            ? `Two cards per pick. Everyone builds a ${COMMANDER_DECK_SIZE}-card deck with a commander.`
             : held.format === "winston"
-              ? "One face-down stack in three piles, shared by the table: take a pile or decline it."
+              ? "Three shared face-down piles: take one or decline it."
               : "Three boosters each, passed left, right, left."}
         </p>
         <Segmented
@@ -494,10 +493,10 @@ function HostRoom({
               {lobby.phase === "connecting"
                 ? "Connecting to the lobby…"
                 : crowded
-                  ? `${people} people are in; ${POD_FORMATS.find((f) => f.id === held.format)?.label ?? "this format"} seats ${range.max} at most.`
+                  ? `${people} people are in. ${POD_FORMATS.find((f) => f.id === held.format)?.label ?? "this format"} seats ${range.max} at most.`
                   : held.rounds.length < DRAFT_PACKS
                     ? `Choose ${DRAFT_PACKS - held.rounds.length} more ${DRAFT_PACKS - held.rounds.length === 1 ? "pack" : "packs"} to start.`
-                    : `${seats} seats: whoever is online now, and bots.`}
+                    : `${seats} seats: everyone online now, plus bots.`}
             </p>
           )}
         </div>
@@ -516,7 +515,7 @@ function GuestRoom({ lobby }: { lobby: LobbyState }): JSX.Element {
           {lobby.phase === "connecting"
             ? "Connecting to the lobby…"
             : !lobby.hostOnline
-              ? `${lobby.hostName} has dropped — waiting for them to come back.`
+              ? `${lobby.hostName} disconnected. Waiting for them to return.`
               : lobby.phase === "drafting"
                 ? `${lobby.hostName} is dealing the packs…`
                 : `Waiting for ${lobby.hostName} to start the draft.`}

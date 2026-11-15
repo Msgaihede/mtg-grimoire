@@ -157,7 +157,7 @@ export function PrintingsFilterBar({
           </span>
         ),
         hint: String(o.count),
-        title: `${languageName(o.lang)} — ${plural(o.count, "printing")}`,
+        title: `${languageName(o.lang)} · ${plural(o.count, "printing")}`,
       })),
     [langOptions],
   );
@@ -179,7 +179,7 @@ export function PrintingsFilterBar({
         value: o.id,
         label: o.label,
         hint: String(o.count),
-        title: `${o.label} — ${plural(o.count, "printing")}`,
+        title: `${o.label} · ${plural(o.count, "printing")}`,
         disabled: o.count === 0,
       })),
     [treatmentOptions],

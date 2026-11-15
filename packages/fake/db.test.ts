@@ -13314,7 +13314,7 @@ describe("the busy fault", () => {
     // `refuseIfBusy` would fail this loop; a new write correctly outside the lock has to be
     // argued for on the list above.
     //
-    // `Clear stack…` then added `deck_category_clear`, which moved it 39 → 40. It is a **card**
+    // `Clear category…` then added `deck_category_clear`, which moved it 39 → 40. It is a **card**
     // write despite the name — it empties a pile of one variant and changes nothing about the
     // category — so it takes the write lock like every other and belongs in the loop rather than
     // in `unlocked`.

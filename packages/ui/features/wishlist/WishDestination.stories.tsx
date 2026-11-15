@@ -126,7 +126,7 @@ export const NewFolder: Story = {
     // The caret goes to the name, because typing one is the first thing there is to do —
     // asserted before anything is typed, since typing would focus the field itself.
     await waitFor(() => expect(canvas.getByRole("textbox", { name: "Name" })).toHaveFocus());
-    await canvas.findByRole("group", { name: "Where the new folder goes" });
+    await canvas.findByRole("group", { name: "Parent folder" });
     await userEvent.keyboard("Draft night");
   },
 };

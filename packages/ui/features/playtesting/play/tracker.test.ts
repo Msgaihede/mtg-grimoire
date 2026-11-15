@@ -20,7 +20,7 @@ describe("trackerOf", () => {
     const t = trackerOf(respondStep().view);
     expect(t.whose).toBe("opponent");
     expect(t.steps.find((s) => s.lit)?.label).toBe("Beginning");
-    expect(t.caption).toBe("Turn 6 · Opponent's turn · Upkeep — you may respond");
+    expect(t.caption).toBe("Turn 6 · Opponent's turn · Upkeep · you may respond");
   });
 
   it("lights nothing during the opening hands", () => {

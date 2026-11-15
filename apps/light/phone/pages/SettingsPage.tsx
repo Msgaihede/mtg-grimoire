@@ -160,8 +160,7 @@ export function SettingsPage(): JSX.Element {
       {downloads.held && (
         <div className="mx-auto flex max-w-2xl flex-col gap-2 border-b border-border px-4 py-3 text-sm">
           <p className="text-dim">
-            The card data is waiting to download. Until it arrives, search and the card pages have
-            nothing to show.
+            Card data hasn't downloaded yet. Search and card pages stay empty until it does.
           </p>
           <button
             type="button"

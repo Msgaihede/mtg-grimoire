@@ -246,8 +246,7 @@ function describeError(err: unknown): { name: string; message: string } {
       return {
         name,
         message:
-          "MTG Grimoire needs camera access to scan a code. Allow the camera and try again, " +
-          "or type the code instead.",
+          "Allow camera access and try again, or type the code instead.",
       };
     case "NotFoundError":
       return { name, message: "No camera found. Type the code instead." };

@@ -766,7 +766,7 @@ function TheoryDiffBody({
       },
       (error: unknown) => {
         settled();
-        notify.error(`Couldn't send “${row.name}” to the wishlist`, { body: ipcError(error) });
+        notify.error(`Couldn't send “${row.name}” to your wishlist`, { body: ipcError(error) });
       },
     );
   };
@@ -1076,7 +1076,7 @@ function TheoryDiffBody({
                 onDismiss();
               },
               onError: (error) =>
-                notify.error(`Couldn't send ${plural(picked.length, "card")} to the wishlist`, {
+                notify.error(`Couldn't send ${plural(picked.length, "card")} to your wishlist`, {
                   body: ipcError(error),
                 }),
             })

@@ -505,7 +505,7 @@ function CreateDeckBody({
       // toasted: the dialog stays up and draws it in its own alert line under the button.
       {
         onSuccess: (deck) => {
-          notify.success(receipt?.(deck) ?? `Deck “${deck.name}” created`);
+          notify.success(receipt?.(deck) ?? `Created deck “${deck.name}”`);
           onCreated(deck);
         },
       },

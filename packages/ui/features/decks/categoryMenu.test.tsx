@@ -68,7 +68,7 @@ describe("buildCategoryMenu", () => {
       "Import cards…",
       "Export cards…",
       "Deactivate",
-      "Clear stack…",
+      "Clear category…",
       "Delete…",
     ]);
   });
@@ -109,8 +109,8 @@ describe("buildCategoryMenu", () => {
   it("orders the destructive rows from reversible to irreversible", () => {
     const rows = labels(buildCategoryMenu(REMOVAL, deps()));
 
-    expect(rows.indexOf("Deactivate")).toBeLessThan(rows.indexOf("Clear stack…"));
-    expect(rows.indexOf("Clear stack…")).toBeLessThan(rows.indexOf("Delete…"));
+    expect(rows.indexOf("Deactivate")).toBeLessThan(rows.indexOf("Clear category…"));
+    expect(rows.indexOf("Clear category…")).toBeLessThan(rows.indexOf("Delete…"));
   });
 
   /**
@@ -157,7 +157,7 @@ describe("buildCategoryMenu", () => {
 
     expect(items).not.toContain("Rename…");
     expect(items).not.toContain("Delete…");
-    expect(items).toEqual(["Import cards…", "Export cards…", "Deactivate", "Clear stack…"]);
+    expect(items).toEqual(["Import cards…", "Export cards…", "Deactivate", "Clear category…"]);
   });
 
   /**
@@ -170,7 +170,7 @@ describe("buildCategoryMenu", () => {
     const zone = { ...COMMANDER_ZONE, cardCount: 1 };
     const askClear = vi.fn();
 
-    (find(buildCategoryMenu(zone, deps({ askClear })), "Clear stack…") as MenuAction).onSelect();
+    (find(buildCategoryMenu(zone, deps({ askClear })), "Clear category…") as MenuAction).onSelect();
 
     expect(askClear).toHaveBeenCalledWith(zone);
   });
@@ -182,7 +182,7 @@ describe("buildCategoryMenu", () => {
       "Import cards…",
       "Export cards…",
       "Activate",
-      "Clear stack…",
+      "Clear category…",
     ]);
   });
 
@@ -264,7 +264,7 @@ describe("buildCategoryMenu", () => {
   it("routes the clear through a confirmation and can reach no clear write", () => {
     const askClear = vi.fn();
 
-    (find(buildCategoryMenu(REMOVAL, deps({ askClear })), "Clear stack…") as MenuAction).onSelect();
+    (find(buildCategoryMenu(REMOVAL, deps({ askClear })), "Clear category…") as MenuAction).onSelect();
 
     expect(askClear).toHaveBeenCalledWith(REMOVAL);
   });
@@ -282,7 +282,7 @@ describe("buildCategoryMenu", () => {
   it("greys the clear on a pile that is empty", () => {
     const askClear = vi.fn();
     const emptyHere = { ...REMOVAL, cardCount: 0 };
-    const row = find(buildCategoryMenu(emptyHere, deps({ askClear })), "Clear stack…") as MenuAction;
+    const row = find(buildCategoryMenu(emptyHere, deps({ askClear })), "Clear category…") as MenuAction;
 
     expect(row.disabled).toBe(true);
     expect(row.reason).toBe("already empty");

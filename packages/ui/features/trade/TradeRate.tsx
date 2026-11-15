@@ -177,7 +177,7 @@ function RatePanel({ trade, side }: { trade: Trade; side: TradeSide }) {
       </dl>
 
       <p className="text-xs leading-snug text-dim">
-        Applies to every card on this side. Each row keeps its full price beside the new one.
+        Applies to every card on this side. Rows show the full price too.
       </p>
 
       {failure !== null && (

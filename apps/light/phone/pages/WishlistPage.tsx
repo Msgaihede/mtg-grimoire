@@ -280,7 +280,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
     return (
       <>
         {top}
-        <ReadError>Your wishlist could not be read.</ReadError>
+        <ReadError>Couldn't load your wishlist.</ReadError>
       </>
     );
   }
@@ -288,7 +288,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
     return (
       <>
         {top}
-        <ReadError>Your wishlist's shelves could not be read.</ReadError>
+        <ReadError>Couldn't load your folders.</ReadError>
       </>
     );
   }

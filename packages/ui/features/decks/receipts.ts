@@ -76,7 +76,7 @@ export function notifyRefusal(title: string, error: unknown): void {
 
 /** `Added 3 copies of “Sol Ring” to the collection` — a quick add's receipt, one card. */
 export function quickAddReceipt(name: string, copies: number): string {
-  return `Added ${plural(copies, "copy", "copies")} of “${name}” to the collection`;
+  return `Added ${plural(copies, "copy", "copies")} of “${name}” to your collection`;
 }
 
 /**
@@ -85,12 +85,11 @@ export function quickAddReceipt(name: string, copies: number): string {
  */
 export function notifyMissingAdded(outcome: DeckMissingOutcome): void {
   if (outcome.copies === 0) {
-    notify.info("Nothing was added to the collection");
+    notify.info("Nothing was added to your collection");
     return;
   }
   notify.success(
-    `Added ${plural(outcome.copies, "copy", "copies")} of ${plural(outcome.cards, "card")} ` +
-      "to the collection",
+    `Added ${plural(outcome.copies, "copy", "copies")} of ${plural(outcome.cards, "card")} to your collection`,
     outcome.wishCopies > 0
       ? { body: `${plural(outcome.wishCopies, "copy", "copies")} taken off your wishlist` }
       : undefined,
@@ -100,7 +99,7 @@ export function notifyMissingAdded(outcome: DeckMissingOutcome): void {
 /** A pull's answer (`deck_pull_from_collection`): copies the reader owned, moved into the deck. */
 export function notifyPulled(outcome: DeckPullOutcome, deckName: string): void {
   if (outcome.copies === 0) {
-    notify.info("Nothing was pulled from the collection");
+    notify.info("Nothing was pulled from your collection");
     return;
   }
   const into = deckName === "" ? "this deck" : `“${deckName}”`;
@@ -138,12 +137,12 @@ export function notifyWishesSent(
   what?: string,
 ): void {
   if (wishes === 0) {
-    notify.info("Nothing sent to the wishlist", {
-      body: "These cards are no longer missing or no longer in the card database",
+    notify.info("Nothing was sent to your wishlist", {
+      body: "These cards are no longer missing, or aren't in your card data",
     });
     return;
   }
-  const where = destination === null ? "the wishlist" : `“${destination}”`;
+  const where = destination === null ? "your wishlist" : `“${destination}”`;
   notify.success(`Sent ${what ?? plural(wishes, "card")} to ${where}`);
 }
 

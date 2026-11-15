@@ -264,7 +264,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     return (
       <>
         {top}
-        <ReadError>Your collection could not be read.</ReadError>
+        <ReadError>Couldn't load your collection.</ReadError>
       </>
     );
   }
@@ -272,7 +272,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     return (
       <>
         {top}
-        <ReadError>Your collection's shelves could not be read.</ReadError>
+        <ReadError>Couldn't load your folders.</ReadError>
       </>
     );
   }
@@ -318,7 +318,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
                 missing, and an em dash for ever would say nothing about why. */}
             {collection.figuresRefused && (
               <p role="alert" className="pt-2 text-sm text-destructive">
-                Your collection's figures could not be read.
+                Couldn't load your collection's totals.
               </p>
             )}
           </div>

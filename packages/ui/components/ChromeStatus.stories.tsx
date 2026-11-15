@@ -242,7 +242,7 @@ export const AlreadyUpToDate: Story = {
  * **This is the whole of what `hasError` does.** The row draws no banner of its own; the
  * banner is `AppShell`'s `role="alert"` (`AppShell.tsx:134-142`) and this prop only tells the
  * row to stay out of its way. Both flags are on here, which is the combination that would
- * otherwise put "Already up to date" beside a red sentence saying the opposite.
+ * otherwise put "Up to date" beside a red sentence saying the opposite.
  *
  * The claim is an absence, so it is asserted rather than looked at.
  */
@@ -250,7 +250,7 @@ export const ErrorShowingBelow: Story = {
   args: { upToDate: true, hasError: true },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.queryByText("Already up to date")).toBeNull();
+    await expect(canvas.queryByText("Up to date")).toBeNull();
     // Still perfectly usable: the error is somebody else's to draw, and Refresh is how the
     // reader answers it.
     await expect(canvas.getByRole("button", { name: "Refresh data" })).toBeEnabled();
@@ -395,7 +395,7 @@ export const ImagesNotCached: Story = {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     await expect(panel).toHaveTextContent(
-      "D:\\MTG Grimoire\\data\n12 card images couldn't be saved to the cache — the data folder may be read-only or full.",
+      "D:\\MTG Grimoire\\data\n12 card images couldn't be saved. The data folder may be read-only or full.",
       { normalizeWhitespace: false },
     );
     await expect(line).toHaveAttribute("aria-describedby", panel.id);

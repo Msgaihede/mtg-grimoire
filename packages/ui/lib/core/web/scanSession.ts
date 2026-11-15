@@ -32,7 +32,7 @@ export interface ScanSession {
 }
 
 /** What a call after a trap is told, whatever it was. The page has ended this Worker by then. */
-export const AFTER_A_TRAP = "The card scanner stopped earlier and cannot answer.";
+export const AFTER_A_TRAP = "The card scanner stopped earlier and can't respond.";
 
 /**
  * The scanner Worker's session: the module loaded once, and each message answered by its id.

@@ -253,7 +253,7 @@ export function WidgetCard({
                     Remove <span className="font-medium">{title}</span>?
                   </p>
                   <p className="m-0 text-xs leading-[1.35] text-dim">
-                    Its settings are removed too. You can add it back from the catalogue.
+                    Its settings are removed too. Add it back from the catalog.
                   </p>
                   <div className="flex gap-1.5">
                     <button

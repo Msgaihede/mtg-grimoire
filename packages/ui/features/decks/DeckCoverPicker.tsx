@@ -252,7 +252,7 @@ export function DeckCoverPicker({
             of the reader. */}
         {searchFailure !== null && (
           <p role="alert" className="mb-1.5 text-xs text-destructive">
-            Couldn't search the cards — {searchFailure}
+            Couldn't search — {searchFailure}
           </p>
         )}
 

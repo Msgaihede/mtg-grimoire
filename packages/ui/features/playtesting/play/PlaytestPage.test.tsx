@@ -44,7 +44,16 @@ function page(onBack: () => void, held = holdGame(PICKS)) {
   );
 }
 
-const backButton = () => screen.getByRole("button", { name: "Back to the playtest setup" });
+/** The header's way back. Over a finished game the Game over panel draws a `Back to setup` of its
+ *  own — the same press, under the same name — so the header's is the one outside that panel. */
+const backButton = () => {
+  const over = screen.queryByRole("region", { name: "Game over" });
+  const header = screen
+    .getAllByRole("button", { name: "Back to setup" })
+    .filter((button) => over === null || !over.contains(button));
+  expect(header).toHaveLength(1);
+  return header[0];
+};
 
 // Issue #1322: a game is kept until the reader ends it, so the press that ends it asks first.
 describe("PlaytestPage", () => {
@@ -56,7 +65,7 @@ describe("PlaytestPage", () => {
     await screen.findByRole("button", { name: /keep/i });
     await userEvent.click(backButton());
     const dialog = await screen.findByRole("dialog", { name: "End this game?" });
-    expect(dialog).toHaveTextContent("the game is kept until you end it");
+    expect(dialog).toHaveTextContent("To keep it, switch pages instead.");
     await userEvent.click(screen.getByRole("button", { name: "Keep playing" }));
     expect(onBack).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

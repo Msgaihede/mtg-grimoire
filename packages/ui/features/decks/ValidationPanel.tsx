@@ -32,7 +32,7 @@ const CODE_LABEL: Record<string, string> = {
   "not-legal": "Outside the format",
   "unknown-legality": "Unknown legality",
   "unknown-copy-limit": "Unknown copy limit",
-  orphan: "Cards no longer in the database",
+  orphan: "Cards no longer in your card data",
   "mana-value": "Mana value",
   "commander-zone": "Commander zone",
   "commander-missing": "Missing commander",
@@ -448,12 +448,11 @@ export function ValidationFindings({
           true of it. Both faces draw this component, so both say so in the same words. */}
       {!spec.validates ? (
         <p className="text-dim">
-          {spec.displayName} decks are not checked against any rules. Choose a format for this deck
-          to check it.
+          {spec.displayName} decks aren't checked. Choose a format to check this deck.
         </p>
       ) : issues.length === 0 ? (
         <p className="text-dim">
-          No issues. This deck passes every {spec.displayName} rule we check.
+          No issues. This deck passes every {spec.displayName} check.
         </p>
       ) : (
         groupByCode(issues).map((group) => (

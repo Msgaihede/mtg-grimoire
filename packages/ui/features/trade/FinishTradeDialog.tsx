@@ -136,7 +136,7 @@ function Body({
         notify.success(`Finished “${trade.name}”`, {
           body:
             outcomeSentence(outcome) ??
-            "Finishing it changed nothing in your collection or your wishlist.",
+            "Nothing changed in your collection or wishlist.",
         });
         onFinished();
       })
@@ -172,8 +172,7 @@ function Body({
 
         {trade.finishedBefore && (
           <p className="text-[0.8125rem] leading-snug text-dim">
-            This trade was finished once before, so every step below starts off: that finish already
-            moved its cards, and a second pass would move them twice.
+            This trade was finished before, so every step starts off. Turning one on moves those cards a second time.
           </p>
         )}
 
@@ -183,7 +182,7 @@ function Body({
             id={`${id}-remove`}
             checked={options.removeGiven}
             onChange={(removeGiven) => set({ removeGiven })}
-            title="Take the cards you gave out of your collection"
+            title="Remove the cards you gave from your collection"
             note={givenNote(trade.lines)}
             warning={deckNote(trade.lines)}
           />
@@ -215,15 +214,15 @@ function Body({
             id={`${id}-unwish`}
             checked={options.unwishReceived}
             onChange={(unwishReceived) => set({ unwishReceived })}
-            title="Take the cards you received off your wishlist"
+            title="Remove the cards you received from your wishlist"
             note={unwishNote(trade.lines)}
           />
           <Question
             id={`${id}-wish`}
             checked={options.wishGiven}
             onChange={(wishGiven) => set({ wishGiven })}
-            title="Put the cards you gave on your wishlist"
-            note="For the ones you want back one day."
+            title="Add the cards you gave to your wishlist"
+            note="For cards you want back."
           />
         </fieldset>
       </div>
@@ -235,8 +234,7 @@ function Body({
           </p>
         ) : (
           <p className="min-w-0 flex-1 text-xs leading-snug text-dim">
-            Finishing files the trade in the archive with today's prices and both percentages. You
-            can reopen it later.
+            Finishing archives the trade with today's prices and percentages. You can reopen it later.
           </p>
         )}
         <button type="button" onClick={onDismiss} className={TRADE_BUTTON}>

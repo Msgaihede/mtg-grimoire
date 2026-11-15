@@ -115,7 +115,7 @@ export const Duel: Story = {
 export const FourPlayer: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const modes = await canvas.findByRole("group", { name: "Gamemode" });
+    const modes = await canvas.findByRole("group", { name: "Game mode" });
     await userEvent.click(within(modes).getByRole("button", { name: /^Four-player/ }));
     for (const name of ["Kenrith Two-Drops", "Modern Goodstuff", "Kenrith Two-Drops"]) {
       await userEvent.click(canvas.getByRole("button", { name: new RegExp(`^${name}`) }));
@@ -133,7 +133,7 @@ export const FourPlayer: Story = {
 export const Goldfish: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const modes = await canvas.findByRole("group", { name: "Gamemode" });
+    const modes = await canvas.findByRole("group", { name: "Game mode" });
     await userEvent.click(within(modes).getByRole("button", { name: /^Goldfish/ }));
     await expect(canvas.queryByRole("group", { name: "AI skill" })).toBeNull();
     await expect(canvas.getByText("Plays nothing")).toBeVisible();
@@ -162,7 +162,9 @@ export const NoDecks: Story = {
   parameters: { fake: { seed: "empty" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/needs a deck to play/)).toBeVisible();
+    await expect(
+      await canvas.findByText(/No decks yet\. Make one in Decks to playtest\./),
+    ).toBeVisible();
   },
 };
 
@@ -233,9 +235,9 @@ export const JoinedAGame: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByRole("heading", { name: "Lobby K7QX2M — hosted by Ada" }),
+      await canvas.findByRole("heading", { name: "Lobby K7QX2M · hosted by Ada" }),
     ).toBeVisible();
     await expect(canvas.getByText("Waiting for Ada to start the game.")).toBeVisible();
-    await expect(canvas.getByText("Pick the deck you bring to the table.")).toBeVisible();
+    await expect(canvas.getByText("Pick the deck you'll play.")).toBeVisible();
   },
 };

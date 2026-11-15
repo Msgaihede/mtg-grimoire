@@ -184,7 +184,7 @@ export function CustomWidgetsDialog({
     <Dialog
       open={open}
       title="Custom widgets"
-      subtitle="Your own widgets. New copies are placed in the first free spot on the grid."
+      subtitle="Your own widgets. New copies go in the first free spot."
       closeLabel="Close"
       size="w-[52rem]"
       onDismiss={onDismiss}
@@ -217,7 +217,7 @@ function Body({
   return (
     <div className="scrollbar-slim min-h-0 flex-1 overflow-y-auto p-5">
       {widgets.length === 0 ? (
-        <p className="m-0 text-sm text-dim">You have no custom widgets.</p>
+        <p className="m-0 text-sm text-dim">No custom widgets yet.</p>
       ) : (
         <ul
           ref={listRef}

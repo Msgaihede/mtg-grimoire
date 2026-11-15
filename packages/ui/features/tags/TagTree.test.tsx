@@ -326,7 +326,7 @@ describe("TagTree", () => {
 
     await user.pointer({ keys: "[MouseRight]", target: await row("Landscape") });
 
-    await user.click(await screen.findByRole("menuitem", { name: "Add this tag to the filter" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Add to filter" }));
     expect(onToggle.mock.calls[0][0]).toMatchObject({ slug: "landscape" });
   });
 
@@ -337,7 +337,7 @@ describe("TagTree", () => {
     await user.pointer({ keys: "[MouseRight]", target: await row("Landscape") });
 
     await user.click(
-      await screen.findByRole("menuitem", { name: "Remove this tag from the filter" }),
+      await screen.findByRole("menuitem", { name: "Remove from filter" }),
     );
     expect(onToggle.mock.calls[0][0]).toMatchObject({ slug: "landscape" });
   });
@@ -372,7 +372,7 @@ describe("TagTree", () => {
 
     await user.pointer({ keys: "[MouseRight]", target: await row("Creature") });
 
-    await user.click(await screen.findByRole("menuitem", { name: /tags under it/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /subtags/i }));
     expect(onMute).toHaveBeenCalledTimes(1);
     expect(onMute.mock.calls[0][0]).toMatchObject({ slug: "creature" });
   });
@@ -383,7 +383,7 @@ describe("TagTree", () => {
 
     await user.pointer({ keys: "[MouseRight]", target: await row("Lightning") });
 
-    const item = await screen.findByRole("menuitem", { name: /^Hide this tag$/ });
+    const item = await screen.findByRole("menuitem", { name: /^Hide tag$/ });
     await user.click(item);
     expect(onMute.mock.calls[0][0]).toMatchObject({ slug: "lightning" });
   });
@@ -403,7 +403,7 @@ describe("TagTree", () => {
 
     await user.pointer({ keys: "[MouseRight]", target: await row("Removal") });
 
-    const item = await screen.findByRole("menuitem", { name: /Hide this tag.*refresh/i });
+    const item = await screen.findByRole("menuitem", { name: /Hide tag.*refresh/i });
     expect(item).toHaveAttribute("aria-disabled", "true");
     await user.click(item);
     expect(onMute).not.toHaveBeenCalled();
@@ -425,7 +425,7 @@ describe("TagTree", () => {
     const status = await screen.findByRole("status");
     expect(status).toBeEmptyDOMElement();
     await user.pointer({ keys: "[MouseRight]", target: await row("Lightning") });
-    await user.click(await screen.findByRole("menuitem", { name: /^Hide this tag$/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /^Hide tag$/ }));
 
     await waitFor(() => expect(status).toHaveTextContent(/settings/i));
     // The same node throughout — a second `role="status"` swapped in for the first would
@@ -447,7 +447,7 @@ describe("TagTree", () => {
     });
 
     await user.pointer({ keys: "[MouseRight]", target: await row("Lightning") });
-    await user.click(await screen.findByRole("menuitem", { name: /^Hide this tag$/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /^Hide tag$/ }));
 
     // Every queued microtask given its chance to surface. **This is where the assertion really
     // lives, and it is vitest's rather than a line below**: an unhandled rejection fails the

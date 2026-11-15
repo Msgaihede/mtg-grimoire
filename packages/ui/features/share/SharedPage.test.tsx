@@ -297,7 +297,7 @@ describe("a shared collection, opened in the app", () => {
     useAppStore.setState({ openedShares: [] });
     mount();
 
-    expect(screen.getByRole("button", { name: "Open a shared collection" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open a shared collection…" })).toBeInTheDocument();
     expect(shareOpen).not.toHaveBeenCalled();
   });
 
@@ -313,7 +313,7 @@ describe("a shared collection, opened in the app", () => {
     expect(
       await screen.findByText("That shared collection is no longer available."),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Close this collection" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close collection" }));
     expect(useAppStore.getState().openedShares).toEqual([]);
   });
 
@@ -331,7 +331,7 @@ describe("a shared collection, opened in the app", () => {
     await userEvent.click(screen.getByRole("button", { name: /Check for an update/ }));
 
     expect(
-      await screen.findByText(/Couldn't check for an update: That shared collection/),
+      await screen.findByText(/Couldn't check for an update — That shared collection/),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2 })).toHaveAccessibleName(
       "Giradeli’s Trade binder",
@@ -439,10 +439,10 @@ describe("building a want list out of somebody else's binder", () => {
     // The bar names the count rather than the cards, because the wall behind it is already
     // showing which two are ticked.
     expect(screen.getByText("2 picked")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
+    await user.click(screen.getByRole("button", { name: "Add to wishlist…" }));
 
     await screen.findByRole("option", { name: "Trade targets" });
-    await user.selectOptions(screen.getByLabelText("Add them to"), "7");
+    await user.selectOptions(screen.getByLabelText("Add to"), "7");
     await user.click(screen.getByRole("button", { name: "Add 2 cards" }));
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
@@ -482,7 +482,7 @@ describe("building a want list out of somebody else's binder", () => {
 
     expect(screen.queryByRole("listitem", { name: /^Lightning Bolt/ })).toBeNull();
     expect(screen.getByText("1 picked")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
+    await user.click(screen.getByRole("button", { name: "Add to wishlist…" }));
 
     expect(await screen.findByRole("listitem", { name: "Lightning Bolt" })).toBeInTheDocument();
   });
@@ -565,9 +565,9 @@ describe("building a want list out of somebody else's binder", () => {
     // The re-check is not a different binder: what the reader typed is still there.
     expect(screen.getByLabelText("Search this collection")).toHaveValue("o");
 
-    await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
+    await user.click(screen.getByRole("button", { name: "Add to wishlist…" }));
     await screen.findByRole("option", { name: "Trade targets" });
-    await user.selectOptions(screen.getByLabelText("Add them to"), "7");
+    await user.selectOptions(screen.getByLabelText("Add to"), "7");
     await user.click(screen.getByRole("button", { name: "Add 1 card" }));
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(1));

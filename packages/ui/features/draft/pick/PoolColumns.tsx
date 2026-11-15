@@ -48,7 +48,7 @@ const POOL_COLUMN_WIDTH = 190;
 export function PoolColumns({
   pool,
   title = "Your pool",
-  empty = "The cards you pick land here, by mana value.",
+  empty = "Your picks appear here, by mana value.",
   moveTo,
   onMove,
   shape = "curve",
@@ -77,7 +77,7 @@ export function PoolColumns({
         <span className="font-mono text-sm tabular-nums text-dim">
           {plural(pool.length, "card")}
         </span>
-        <ColorTally tally={tally} label={`Colours in ${title.toLowerCase()}`} />
+        <ColorTally tally={tally} label={`Colors in ${title.toLowerCase()}`} />
       </div>
       <div
         className="grid grid-rows-[auto_auto] gap-x-3 gap-y-1.5"
@@ -163,7 +163,7 @@ export function PoolColumns({
 /** One pip per colour with its count, the colours the pool holds none of dimmed. */
 export function ColorTally({
   tally,
-  label = "Colours in your pool",
+  label = "Colors in your pool",
 }: {
   tally: Record<string, number>;
   label?: string;

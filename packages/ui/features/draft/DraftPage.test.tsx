@@ -134,14 +134,14 @@ describe("DraftPage", () => {
     const cards = within(start).getAllByRole("button");
     expect(cards.map((c) => modes.find((m) => c.textContent?.startsWith(m)))).toEqual(modes);
     await vi.waitFor(() => expect(ipcMock.draftSaved).toHaveBeenCalled());
-    expect(screen.queryByRole("region", { name: "Draft in progress" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "In progress" })).not.toBeInTheDocument();
   });
 
   it("lists the saved draft and resumes it on the pick screen", async () => {
     ipcMock.draftSaved.mockResolvedValue(SAVED);
     ipcMock.draftResume.mockResolvedValue(VIEW);
     setup();
-    const progress = await screen.findByRole("region", { name: "Draft in progress" });
+    const progress = await screen.findByRole("region", { name: "In progress" });
     expect(within(progress).getByText(SAVED.label)).toBeInTheDocument();
     expect(within(progress).getByText("Drafting")).toBeInTheDocument();
     expect(
@@ -160,7 +160,7 @@ describe("DraftPage", () => {
       ipcMock.draftResume.mockResolvedValue(VIEW);
       ipcMock.draftView.mockResolvedValue(VIEW);
       const page = setup();
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       await userEvent.click(within(progress).getByRole("button", { name: "Resume" }));
       await screen.findByRole("heading", { name: "Pack 2 · Pick 5" });
       await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
@@ -191,7 +191,7 @@ describe("DraftPage", () => {
       ipcMock.draftResume.mockResolvedValue(VIEW);
       ipcMock.draftView.mockResolvedValue(VIEW);
       const { client, unmount } = setup();
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       await userEvent.click(within(progress).getByRole("button", { name: "Resume" }));
       await screen.findByRole("heading", { name: "Pack 2 · Pick 5" });
       unmount();
@@ -203,9 +203,9 @@ describe("DraftPage", () => {
   it("lists an unsaved draft deck and continues building it in the editor", async () => {
     ipcMock.draftDeckList.mockResolvedValue([DRAFT_DECK]);
     setup();
-    const progress = await screen.findByRole("region", { name: "Draft in progress" });
+    const progress = await screen.findByRole("region", { name: "In progress" });
     expect(within(progress).getByText("Hobbit Draft")).toBeInTheDocument();
-    expect(within(progress).getByText("45 cards · not saved yet")).toBeInTheDocument();
+    expect(within(progress).getByText("45 cards · not saved")).toBeInTheDocument();
     await userEvent.click(within(progress).getByRole("button", { name: "Continue building" }));
     expect(openDraftDeck).toHaveBeenCalledWith(5);
   });
@@ -216,7 +216,7 @@ describe("DraftPage", () => {
     setup();
     await waitFor(() => expect(ipcMock.draftDeckList).toHaveBeenCalled());
     expect(await screen.findByRole("region", { name: "Start new" })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Draft in progress" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "In progress" })).not.toBeInTheDocument();
     expect(screen.queryByText("My Elves")).not.toBeInTheDocument();
     expect(ipcMock.deckList).not.toHaveBeenCalled();
   });
@@ -225,7 +225,7 @@ describe("DraftPage", () => {
     setup();
     await userEvent.click(screen.getByRole("button", { name: /^Sealed/ }));
     expect(screen.getByRole("button", { name: /Open sealed pool/ })).toBeInTheDocument();
-    expect(screen.getByText("0 packs chosen — up to 6")).toBeInTheDocument();
+    expect(screen.getByText("0 packs chosen · up to 6")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
     expect(screen.getByRole("region", { name: "Start new" })).toBeInTheDocument();
   });
@@ -286,7 +286,7 @@ describe("DraftPage", () => {
     };
     ipcMock.lobbyState.mockResolvedValue(lobby);
     setup();
-    const progress = await screen.findByRole("region", { name: "Draft in progress" });
+    const progress = await screen.findByRole("region", { name: "In progress" });
     await userEvent.click(within(progress).getByRole("button", { name: "Return" }));
     expect(screen.getByText("Waiting for Ada to start the draft.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Leave lobby" })).toBeInTheDocument();
@@ -312,7 +312,7 @@ describe("DraftPage", () => {
       ipcMock.lobbyRejoin.mockResolvedValue(7);
       ipcMock.draftView.mockResolvedValue({ ...VIEW, mode: "pod", pickNumber: 4 });
       setup();
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       expect(within(progress).getByText("Drafting")).toBeInTheDocument();
       expect(within(progress).getByText("Pod Draft · code K7QX2M · 2 people")).toBeInTheDocument();
       await userEvent.click(within(progress).getByRole("button", { name: "Rejoin" }));
@@ -332,7 +332,7 @@ describe("DraftPage", () => {
       // A seat the window kept opens on its pick, not the hub.
       expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 3" })).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       expect(
         within(progress).getByText(
           "Pod Draft · Pack 2 of 3 · Pick 3 · code K7QX2M · 2 people · hosted by Ada",
@@ -365,7 +365,7 @@ describe("DraftPage", () => {
       ipcMock.lobbyState.mockResolvedValue(POD);
       ipcMock.draftDiscard.mockResolvedValue(undefined);
       setup();
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       await within(progress).findByText("Rejoin");
       await userEvent.click(within(progress).getByRole("button", { name: "Abandon" }));
       ipcMock.draftSaved.mockResolvedValue(null);
@@ -384,7 +384,7 @@ describe("DraftPage", () => {
       ipcMock.draftSaved.mockResolvedValue(SAVED);
       ipcMock.draftDiscard.mockResolvedValue(undefined);
       setup();
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       await userEvent.click(within(progress).getByRole("button", { name: "Abandon" }));
       await userEvent.click(within(progress).getByRole("button", { name: "Abandon this draft?" }));
       await waitFor(() => expect(ipcMock.draftDiscard).toHaveBeenCalledOnce());
@@ -399,7 +399,7 @@ describe("DraftPage", () => {
       setup();
       // A kept solo draft opens on its pick; the hub is one press back.
       await userEvent.click(await screen.findByRole("button", { name: "Back to Draft & Packs" }));
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       await userEvent.click(within(progress).getByRole("button", { name: "Abandon" }));
       await userEvent.click(within(progress).getByRole("button", { name: "Abandon this draft?" }));
       await waitFor(() => expect(ipcMock.draftEnd).toHaveBeenCalledExactlyOnceWith(4));
@@ -411,10 +411,10 @@ describe("DraftPage", () => {
       ipcMock.draftSaved.mockResolvedValue(SAVED);
       ipcMock.lobbyState.mockResolvedValue(POD);
       setup();
-      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      const progress = await screen.findByRole("region", { name: "In progress" });
       expect(
         await within(progress).findByText(
-          "You are hosting a pod draft. Finish it or leave its lobby before starting another draft.",
+          "You're hosting a pod draft. Finish it or close its lobby first.",
         ),
       ).toBeInTheDocument();
       const resume = within(progress).getByRole("button", { name: "Resume" });

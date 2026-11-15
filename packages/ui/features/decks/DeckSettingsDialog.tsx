@@ -31,7 +31,7 @@ const ROOT_NAME = "All decks";
 const NO_TAGS: readonly string[] = [];
 
 /** `deck::DRAFT_STAYS_VIRTUAL`'s words — what the host answers a kind change on a draft deck. */
-const DRAFT_STAYS_VIRTUAL = "A draft deck stays virtual until it is saved.";
+const DRAFT_STAYS_VIRTUAL = "A draft deck stays virtual until it's saved.";
 
 export interface DeckSettingsDialogProps {
   deckId: number;
@@ -700,9 +700,9 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
               */}
           {collects && (
             <div className="mt-5 border-t border-border pt-4">
-              <h3 className="text-xs">Fill this deck from your collection</h3>
+              <h3 className="text-xs">Fill from your collection</h3>
               <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-                Moves copies you already own into this deck&rsquo;s folder.
+                Moves copies you own into this deck&rsquo;s folder.
               </p>
               {/* The small print states the one thing a reader standing here has not seen: this
                   writes no `deck_cards` row, so a 4-copy line the deck is 3 short of stays a

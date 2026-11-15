@@ -61,7 +61,7 @@ export function ScanControls({
           the desktop dock's group in name and colour (`ScanDock`'s *How scanning runs*). */}
       <div
         role="group"
-        aria-label="How scanning runs"
+        aria-label="Scan mode"
         className="flex min-w-0 flex-1 overflow-hidden rounded-md border border-border"
       >
         {WAYS.map((way) => {

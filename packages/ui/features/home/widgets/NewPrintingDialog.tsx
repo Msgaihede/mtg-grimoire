@@ -260,7 +260,7 @@ function Body({
             />
           ) : card === null ? (
             <p className="m-0 text-sm text-dim">
-              This printing is no longer in the card database. It will be removed after the next card data sync.
+              This printing is no longer in the card data. The next card data update removes it.
             </p>
           ) : (
             <CardModalArt

@@ -37,7 +37,7 @@ describe("complete backup", () => {
 
   it("warns that restore replaces current data and exports without reloading", async () => {
     const { user, restored } = setup();
-    expect(screen.getByText(/Import replaces all current app data/)).toBeInTheDocument();
+    expect(screen.getByText(/Importing replaces all current app data/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Export ZIP…" }));
     // A toast, since the ZIP is on disk where the panel cannot show it.
     await waitFor(() =>
@@ -64,7 +64,7 @@ describe("complete backup", () => {
       await user.click(
         screen.getByRole("button", { name: action === "export" ? "Export ZIP…" : "Import ZIP…" }),
       );
-      expect(await screen.findByRole("alert")).toHaveTextContent(/cancelled/);
+      expect(await screen.findByRole("alert")).toHaveTextContent(/canceled/);
       expect(restored).not.toHaveBeenCalled();
       // A closed picker changed nothing, so it is not news worth keeping.
       expect(useNotifications.getState().notices).toHaveLength(0);

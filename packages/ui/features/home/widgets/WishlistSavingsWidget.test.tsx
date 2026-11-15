@@ -772,7 +772,7 @@ describe("which wishes it counts", () => {
       expect(screen.queryByRole("button", { name: "Wishlists to count" })).toBeNull();
       expect(
         screen.getByText(
-          "Choose Chosen under Which wishlists to pick the wishlists this widget counts.",
+          "Set Which wishlists to Chosen to pick wishlists.",
         ),
       ).toBeInTheDocument();
     });

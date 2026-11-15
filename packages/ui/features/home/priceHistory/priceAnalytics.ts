@@ -192,5 +192,5 @@ export function signedPercent(pct: number): string {
 /** The range as a phrase for sentences: 7d → "7 days", 30d → "30 days", all → "all kept
  *  history". */
 export function rangePhrase(range: PriceMoverWindow): string {
-  return range === "7d" ? "7 days" : range === "30d" ? "30 days" : "all kept history";
+  return range === "7d" ? "7 days" : range === "30d" ? "30 days" : "all history";
 }

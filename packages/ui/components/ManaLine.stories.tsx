@@ -16,7 +16,7 @@ const meta = {
           "full-strength copy of itself fills across it behind a gold cap — the one place where the " +
           "identity element and a functional one are the same element. Every `label` below is " +
           "a string `syncActivity` can actually return — a value of `PHASE_LABEL`, or the " +
-          '`"Syncing card data"` it falls back to while busy with no event in hand.',
+          '`"Updating card data"` it falls back to while busy with no event in hand.',
       },
     },
   },
@@ -66,7 +66,7 @@ export const Indeterminate: Story = {
  * its own for it.
  */
 export const BeforeAnyEvent: Story = {
-  args: { sync: { label: "Syncing card data", value: null } },
+  args: { sync: { label: "Updating card data", value: null } },
 };
 
 /** The gold cap at 98%: the leading edge has to stay legible against five shifting hues right

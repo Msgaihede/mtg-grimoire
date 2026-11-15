@@ -334,7 +334,7 @@ export function SetCombobox({
     <>
       {full && (
         <p className="pt-2 text-center text-[0.7rem] text-dim">
-          You can search up to {MAX_SETS} sets. Remove one to add another.
+          Up to {MAX_SETS} sets. Remove one to add another.
         </p>
       )}
       {moreCount > 0 && (
@@ -343,7 +343,7 @@ export function SetCombobox({
               reachable but it is not the intended path, and the button below is the
               escape for the search that cannot be narrowed rather than the fast way. */}
           <p>
-            Showing {page.length} of {matches.length}. Keep typing to narrow it down.
+            Showing {page.length} of {matches.length}. Keep typing to narrow.
           </p>
           <button
             type="button"

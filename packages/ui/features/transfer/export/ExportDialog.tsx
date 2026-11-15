@@ -212,7 +212,7 @@ export function ExportDialog({
   return (
     <Dialog
       open={open}
-      title={`Export "${subject}"`}
+      title={`Export “${subject}”`}
       closeLabel="Close"
       size="w-[40rem]"
       onDismiss={onDismiss}
@@ -368,7 +368,7 @@ function Body({
                     FOCUS,
                   )}
                 >
-                  Retry
+                  Try again
                 </button>
               )}
             </>
@@ -449,8 +449,7 @@ function Body({
             checked={arenaOnly}
             onChange={toggleArenaOnly}
             className={cn("size-4 accent-accent", FOCUS)}
-          />
-          Only cards MTG Arena has
+          />Only cards on MTG Arena
         </label>
       )}
 

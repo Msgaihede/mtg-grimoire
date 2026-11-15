@@ -64,8 +64,7 @@ function noFeedNote(marketplace: Marketplace): string {
  */
 function unreachableNote(marketplace: Marketplace): string {
   return (
-    `Not available in a browser. ${marketplace.label}'s price list can't be read from a web ` +
-    `page — the desktop and Android apps can show it.`
+    `Not available in a browser. Use the desktop or Android app for ${marketplace.label} prices.`
   );
 }
 
@@ -79,8 +78,7 @@ function unreachableNote(marketplace: Marketplace): string {
  */
 function standInNote(marketplace: Marketplace, quoted: Marketplace): string {
   return (
-    `Your prices are set to ${marketplace.label}, so prices here are ${quoted.label}'s until ` +
-    `you choose another.`
+    `Your marketplace is ${marketplace.label}. Prices here are ${quoted.label}'s until you choose another.`
   );
 }
 
@@ -338,8 +336,7 @@ export function MarketplacePanel({ marketplace }: { marketplace: MarketplaceStat
   return (
     <SettingsSection id="prices" title="Prices">
       <p className="text-sm text-dim">
-        All prices come from your selected marketplace, in its currency. Cards without a price
-        show &ldquo;&mdash;&rdquo;.
+        Prices come from the marketplace you select, in its currency. Unpriced cards show &ldquo;&mdash;&rdquo;.
       </p>
 
       {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row

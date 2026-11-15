@@ -545,7 +545,7 @@ describe("Archidekt labels", () => {
     // `KEEPER` and not the file's `Keeper` — matched through `labelNameKey`, which is what
     // `commit_import` matches on.
     await screen.findByRole("checkbox", { name: "KEEPER" });
-    expect(screen.getByText("already yours")).toBeInTheDocument();
+    expect(screen.getByText("existing label")).toBeInTheDocument();
     expect(screen.getByText("new label")).toBeInTheDocument();
   });
 
@@ -587,9 +587,9 @@ describe("Archidekt labels", () => {
  * `ClearDeck`'s own ternary exists to avoid.
  */
 describe("where a live replace puts the copies", () => {
-  /** Verbatim, and asserted as a whole string rather than a fragment: it is the same sentence
-   *  three other confirmations draw, and a fragment would pass against a reworded one. */
-  const PROMISE = "Any copies you own go back to Recently removed.";
+  /** Verbatim, and asserted as a whole string rather than a fragment: a fragment would pass
+   *  against a reworded one. */
+  const PROMISE = "Copies you own go back to Recently removed.";
 
   function preview(variant: DeckVariant) {
     return mount(
@@ -613,7 +613,7 @@ describe("where a live replace puts the copies", () => {
     preview("live");
 
     await userEvent.click(
-      await screen.findByLabelText("Replace — remove the 42 cards in Actual first"),
+      await screen.findByLabelText("Replace: remove the 42 cards in Actual first"),
     );
     expect(screen.getByText(PROMISE)).toBeInTheDocument();
   });
@@ -638,7 +638,7 @@ describe("where a live replace puts the copies", () => {
     preview("theory");
 
     await userEvent.click(
-      await screen.findByLabelText("Replace — remove the 42 cards in Theory first"),
+      await screen.findByLabelText("Replace: remove the 42 cards in Theory first"),
     );
     expect(screen.queryByText(PROMISE)).toBeNull();
   });
@@ -649,7 +649,7 @@ describe("where a live replace puts the copies", () => {
   it("says nothing when the live list is already empty", async () => {
     preview("live");
 
-    await userEvent.click(await screen.findByLabelText("Replace — Actual is empty"));
+    await userEvent.click(await screen.findByLabelText("Replace: Actual is empty"));
     expect(screen.queryByText(PROMISE)).toBeNull();
   });
 });

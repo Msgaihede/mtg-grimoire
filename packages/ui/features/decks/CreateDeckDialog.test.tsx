@@ -341,7 +341,7 @@ describe("the create deck dialog", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(MADE));
     // Every host closes the dialog on success, so the dialog itself leaves the receipt.
     expect(useNotifications.getState().notices).toMatchObject([
-      { title: `Deck “${MADE.name}” created`, tone: "success" },
+      { title: `Created deck “${MADE.name}”`, tone: "success" },
     ]);
   });
 

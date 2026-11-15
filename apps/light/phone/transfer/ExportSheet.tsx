@@ -95,7 +95,7 @@ export function ExportSheet({
   return (
     <Dialog
       open={open}
-      title={`Export "${subject}"`}
+      title={`Export “${subject}”`}
       closeLabel="Close export"
       size="w-full self-end rounded-t-xl border-t border-border max-h-[92dvh] sm:max-h-full sm:w-[34rem] sm:self-center"
       onDismiss={onClose}
@@ -184,7 +184,7 @@ function Body({
                     FOCUS,
                   )}
                 >
-                  Retry
+                  Try again
                 </button>
               </div>
             )}
@@ -251,8 +251,7 @@ function Body({
               checked={model.arenaOnly}
               onChange={model.toggleArenaOnly}
               className={CHECKBOX}
-            />
-            Only cards MTG Arena has
+            />Only cards on MTG Arena
           </label>
         )}
         {model.offersInactive && (

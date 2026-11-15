@@ -49,7 +49,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
     <SettingsSection id="cache" title="Local cache">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-0 text-sm text-dim">
-          Cached card images and temporary download files. Missing files will be re-downloaded when needed.
+          Card images and temporary downloads. Cleared files download again when needed.
         </p>
         <button
           type="button"
@@ -92,7 +92,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
 
       <ConfirmDialog
         open={asking === "images"}
-        title="Clear local cache"
+        title="Clear local cache?"
         confirmLabel="Clear cache"
         typeToConfirm={false}
         pending={cache.clear.pending}
@@ -100,7 +100,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
         onDismiss={() => setAsking(null)}
         onClose={() => setAsking(null)}
       >
-        Deletes cached card images and temporary files. Images will download again when needed.
+        Deletes cached card images and temporary files. Images download again when needed.
       </ConfirmDialog>
 
       {/* Two dialogs rather than one keyed on `asking`, which is the opposite of what the danger
@@ -113,7 +113,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           mounted on its own flag. */}
       <ConfirmDialog
         open={asking === "combos"}
-        title="Refresh combo data"
+        title="Refresh combo data?"
         confirmLabel="Refresh combos"
         typeToConfirm={false}
         pending={cache.combos.pending}

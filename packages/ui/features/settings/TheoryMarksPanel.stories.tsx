@@ -127,7 +127,7 @@ export const Default: Story = {
 
     // The sentence a reader with two devices cannot do without: these colours are an `app_meta`
     // row, and `app_meta` is not one of the twelve tables sync carries.
-    await expect(canvas.getByText(/saved on this device only/)).toBeInTheDocument();
+    await expect(canvas.getByText(/Saved on this device only/)).toBeInTheDocument();
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
   },
 };

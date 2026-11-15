@@ -37,7 +37,7 @@ export const RULE_KINDS: readonly FolderRuleKind[] = [
 export const RULE_KIND_LABEL: Record<FolderRuleKind, string> = {
   price: "Price",
   manaValue: "Mana value",
-  colors: "Colour",
+  colors: "Color",
   types: "Card type",
   sets: "Set",
   rarities: "Rarity",

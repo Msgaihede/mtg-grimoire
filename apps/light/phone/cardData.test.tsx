@@ -55,10 +55,10 @@ describe("the phone face over a first card sync", () => {
 
     // Before any event: the status poll alone says a sync is running.
     expect(
-      await screen.findByText("Setting up your card database", undefined, SETTLE),
+      await screen.findByText("Setting up card data", undefined, SETTLE),
     ).toBeVisible();
     expect(screen.queryByText("No cards match.")).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("Syncing card data");
+    expect(screen.getByRole("status")).toHaveTextContent("Updating card data");
 
     progress("downloading", 31_000_000, 77_000_000);
 
@@ -72,7 +72,7 @@ describe("the phone face over a first card sync", () => {
   it("refills the wall when the sync's done event arrives", async () => {
     const { world, commands } = firstRun();
     renderPhone(<PhoneFace />, { path: "/search", commands });
-    await screen.findByText("Setting up your card database", undefined, SETTLE);
+    await screen.findByText("Setting up card data", undefined, SETTLE);
     progress("ingesting", 50_000, 117_000);
 
     // The corpus lands — but the status still says syncing, so only the event can refresh.
@@ -80,13 +80,13 @@ describe("the phone face over a first card sync", () => {
     progress("done", 0, 0);
 
     await waitFor(() => expect(wallTiles().length).toBeGreaterThan(0), SETTLE);
-    expect(screen.queryByText("Setting up your card database")).toBeNull();
+    expect(screen.queryByText("Setting up card data")).toBeNull();
   });
 
   it("refills the wall when the count leaves zero, for a done event that was never heard", async () => {
     const { world, commands } = firstRun();
     renderPhone(<PhoneFace />, { path: "/search", commands });
-    await screen.findByText("Setting up your card database", undefined, SETTLE);
+    await screen.findByText("Setting up card data", undefined, SETTLE);
 
     // No event at all — the page attached after the run emitted its last one.
     world.corpus = true;

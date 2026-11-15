@@ -45,9 +45,7 @@ export function BinderSort({
           Sort into folders and decks by binder
         </label>
         <p id={`${id}-hint`} className="text-[0.6875rem] text-dim">
-          This file names the binder each card is in. {headline(plan)} A binder goes into the folder
-          with its name, which is made if you don&apos;t have one; a deck becomes a new deck in the{" "}
-          {UNSPECIFIED_LABEL} format, with its cards added to your collection.
+          This file names each card's binder. {headline(plan)} Each binder goes into a folder of the same name, created if needed. Each deck becomes a new deck in the {UNSPECIFIED_LABEL} format, with its cards added to your collection.
         </p>
       </div>
       {checked && (

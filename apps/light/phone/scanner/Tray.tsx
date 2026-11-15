@@ -441,7 +441,7 @@ export function Tray({
       <ActionSheet
         open={asked !== null && asking?.page === "printing"}
         title={asked?.name ?? "Printings"}
-        subtitle="Which printing is it?"
+        subtitle="Pick a printing"
         closeLabel="Close printings"
         onClose={() => close(false)}
         onDismiss={() => close(true)}
@@ -693,7 +693,7 @@ function UnitPrice({
       {price === null ? (
         <>
           <span aria-hidden="true">—</span>
-          <span className="sr-only">Not priced at {marketplaceLabel}</span>
+          <span className="sr-only">No {marketplaceLabel} price</span>
         </>
       ) : (
         formatPrice(price, currency)

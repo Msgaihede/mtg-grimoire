@@ -93,6 +93,6 @@ describe("dropReceipt", () => {
   });
 
   it("counts a set", () => {
-    expect(dropReceipt(2, [bolt, helix], "the wishlist")).toBe("Added 2 cards to the wishlist");
+    expect(dropReceipt(2, [bolt, helix], "your wishlist")).toBe("Added 2 cards to your wishlist");
   });
 });

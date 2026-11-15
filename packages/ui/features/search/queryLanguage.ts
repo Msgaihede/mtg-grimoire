@@ -302,7 +302,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "gte",
     ops: COMPARISONS,
     example: "c>=rg",
-    blurb: "Card colors — letters, a color name, a guild or shard, m, or a count",
+    blurb: "Card colors: letters, a color name, a guild or shard, m, or a count",
     section: "Colors and mana",
   },
   {
@@ -347,7 +347,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "eq",
     ops: COMPARISONS,
     example: "cmc>=3",
-    blurb: "Mana value — or even, odd",
+    blurb: "Mana value, or even, odd",
     section: "Numbers",
   },
   {
@@ -608,7 +608,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "colon",
     ops: ["colon"],
     example: "is:fetchland",
-    blurb: "A property — not: asks for its absence",
+    blurb: "A property. not: asks for its absence",
     section: "Card properties",
   },
   {
@@ -626,7 +626,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "colon",
     ops: ["colon"],
     example: "otag:removal",
-    blurb: "Oracle tag — what it does",
+    blurb: "Oracle tag: what the card does",
     section: "Tags",
   },
   {
@@ -635,7 +635,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "colon",
     ops: ["colon"],
     example: "atag:dragon",
-    blurb: "Art tag — what it shows",
+    blurb: "Art tag: what the art shows",
     section: "Tags",
   },
 ];

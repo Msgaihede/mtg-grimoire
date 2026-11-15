@@ -1602,9 +1602,9 @@ describe("buildGroups by theory match (issue #502)", () => {
   const plan = (marks = ALL_ON) =>
     theoryMatchPlan([slot("Sol Ring"), slot("Forest")], deck, marks);
 
-  it("files each card under Exact Match, Art Mismatch or No Match, in that order", () => {
+  it("files each card under Exact match, Art mismatch or No match, in that order", () => {
     const groups = buildGroups(deck, [MAIN], "theory", "alphabetical", false, EDH, plan());
-    expect(names(groups)).toEqual(["Exact Match", "Art Mismatch", "No Match"]);
+    expect(names(groups)).toEqual(["Exact match", "Art mismatch", "No match"]);
     expect(groups.map((g) => g.cards.map((c) => c.name))).toEqual([
       ["Sol Ring"],
       ["Forest"],
@@ -1617,11 +1617,11 @@ describe("buildGroups by theory match (issue #502)", () => {
   it("buckets by the plan whatever the deck's mark switches say", () => {
     const off = { exact: false, name: false, unplanned: false };
     const groups = buildGroups(deck, [MAIN], "theory", "alphabetical", false, EDH, plan(off));
-    expect(names(groups)).toEqual(["Exact Match", "Art Mismatch", "No Match"]);
+    expect(names(groups)).toEqual(["Exact match", "Art mismatch", "No match"]);
   });
 
   it("uses the same names the card marks say", () => {
-    expect(Object.values(THEORY_TIER_NAMES)).toEqual(["Exact Match", "Art Mismatch", "No Match"]);
+    expect(Object.values(THEORY_TIER_NAMES)).toEqual(["Exact match", "Art mismatch", "No match"]);
   });
 
   /** The plan is a query; until it answers, every card still draws somewhere. */
@@ -1646,7 +1646,7 @@ describe("buildGroups by theory match (issue #502)", () => {
       EDH,
       theoryMatchPlan([slot("Sol Ring")], rows, ALL_ON),
     );
-    expect(names(groups)).toEqual(["Commander", "Exact Match", "Maybeboard"]);
+    expect(names(groups)).toEqual(["Commander", "Exact match", "Maybeboard"]);
   });
 
   it("is offered only on the Actual list of a deck that keeps a plan", () => {

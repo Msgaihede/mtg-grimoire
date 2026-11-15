@@ -516,15 +516,14 @@ function QuickCategoryBody({
       <p className="text-[0.6875rem] leading-relaxed text-dim">
         {cardNames.length > 1 ? (
           <>
-            <span className="text-text">{plural(cardNames.length, "card")}</span> will be moved to
-            the new category.
+            <span className="text-text">{plural(cardNames.length, "card")}</span> will move to the new category.
           </>
         ) : cardNames[0] ? (
           <>
-            <span className="text-text">{cardNames[0]}</span> will be moved to the new category.
+            <span className="text-text">{cardNames[0]}</span> will move to the new category.
           </>
         ) : (
-          "The card will be moved to the new category."
+          "The card will move to the new category."
         )}
       </p>
 

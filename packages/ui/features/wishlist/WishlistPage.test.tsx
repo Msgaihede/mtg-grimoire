@@ -917,7 +917,7 @@ describe("WishlistPage", () => {
     // The ✕ is a deliberate deletion, so it leaves a receipt naming the wish that went.
     expect(useNotifications.getState().notices).toHaveLength(1);
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Removed “Lightning Bolt” from the wishlist",
+      title: "Removed “Lightning Bolt” from your wishlist",
       tone: "success",
     });
   });
@@ -937,7 +937,7 @@ describe("WishlistPage", () => {
 
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Couldn't remove “Lightning Bolt” from the wishlist",
+        title: "Couldn't remove “Lightning Bolt” from your wishlist",
         body: "The wishlist is busy.",
         tone: "error",
       }),
@@ -1656,7 +1656,7 @@ describe("WishlistPage", () => {
     const sweeps = () =>
       wishlistList.mock.calls.filter(([q]) => (q as WishlistQuery).limit === 500).length;
     const before = sweeps();
-    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await user.click(within(dialog).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(sweeps()).toBeGreaterThan(before));
     await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
   });
@@ -4066,7 +4066,7 @@ describe("the folders", () => {
     // One bulk write, one receipt — with the count the command answered (the mock's 3).
     expect(useNotifications.getState().notices).toHaveLength(1);
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Folder “Ordered” deleted",
+      title: "Deleted folder “Ordered”",
       body: "Removed 3 cards from your wishlist",
       tone: "success",
     });
@@ -4144,7 +4144,7 @@ describe("the folders", () => {
     await user.click(menuOf(SOMEDAY.id));
     const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Clear…/ });
     expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(row).toHaveAccessibleName(/No cards directly in this folder/);
+    expect(row).toHaveAccessibleName(/no cards directly in this folder/);
 
     await user.click(row);
     expect(screen.queryByRole("group", { name: "Clear Someday" })).not.toBeInTheDocument();
@@ -4556,7 +4556,7 @@ describe("the folders", () => {
       });
       expect(box).toHaveTextContent(EMPTY_SHELF_COPY);
       expect(wallOf().contains(box)).toBe(true);
-      expect(screen.queryByText("No cards in this folder yet.")).toBeNull();
+      expect(screen.queryByText("This folder is empty.")).toBeNull();
       expect(
         screen.queryByText(/Add cards from search with the \+ on any row or tile/),
       ).not.toBeInTheDocument();
@@ -4651,7 +4651,7 @@ describe("the folders", () => {
 
     await user.click(screen.getByRole("button", { name: "Export wishlist" }));
     expect(
-      await screen.findByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+      await screen.findByRole("checkbox", { name: "Export everything, ignoring your filters" }),
     ).toBeInTheDocument();
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
 
@@ -4661,7 +4661,7 @@ describe("the folders", () => {
 
     expect(await screen.findByText("1 card in Ordered matching your filters")).toBeInTheDocument();
     expect(
-      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters and folders" }),
+      screen.getByRole("checkbox", { name: "Export everything, ignoring your filters and folders" }),
     ).toBeInTheDocument();
   });
 
@@ -4675,7 +4675,7 @@ describe("the folders", () => {
 
     await findHeading(ORDERED.id);
     expect(screen.queryByText(/Your wishlist is empty/)).not.toBeInTheDocument();
-    expect(screen.queryByText("No cards in this folder yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("This folder is empty.")).not.toBeInTheDocument();
   });
 
   /**
@@ -5258,7 +5258,7 @@ describe("the price sweep", () => {
       within(body).getByText("Switched 1 card to the cheapest printing, saving $6.00."),
     ).toBeInTheDocument();
     expect(
-      within(body).getByText(/merged with an existing entry in the same folder/),
+      within(body).getByText(/merged into an existing entry with the same folder/),
     ).toBeInTheDocument();
   });
 
@@ -5813,7 +5813,7 @@ describe("a needs-review hand-off over a filed wishlist", () => {
     // The wall is the flagged wish alone now — the healthy root wishes filtered away.
     await waitFor(() => expect(within(wallOf()).queryByText("Lightning Bolt")).toBeNull());
     expect(within(wallOf()).getByText("Rhystic Study")).toBeInTheDocument();
-    const chip = screen.getByRole("button", { name: "Remove filter — Needs review" });
+    const chip = screen.getByRole("button", { name: "Remove filter, Needs review" });
     // Stated in the path row, beside the shelf toolbar — not on a line of its own under the bar
     // (2026-09-27): the chip's line and the toolbar share one row.
     expect(chip.parentElement!.parentElement).toContainElement(
@@ -5877,7 +5877,7 @@ describe("a needs-review hand-off over a filed wishlist", () => {
    * one still on its folder's shelf.
    */
   it.each([
-    ["its chip", "Remove filter — Needs review"],
+    ["its chip", "Remove filter, Needs review"],
     ["Reset all", /^Reset all/],
   ] as const)("is the whole wishlist again when the filter is cleared by %s", async (_how, name) => {
     const user = userEvent.setup();

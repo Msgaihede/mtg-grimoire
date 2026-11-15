@@ -444,8 +444,7 @@ export function commanderIneligibility(
     // answers for the 99 (commons), so every uncommon reads `not_legal` there. Rarity decides.
     if (def.everUncommon && !card.everUncommon) {
       return (
-        `${card.name} has never been printed at uncommon, so it cannot be your ${def.noun} ` +
-        `in ${format}.`
+        `${card.name} has never been printed at uncommon, so it can't be your ${def.noun} in ${format}.`
       );
     }
     return null;
@@ -459,19 +458,17 @@ export function commanderIneligibility(
     // "legendary" only where the rule asks for it — Pauper Commander's does not, and saying it
     // would add a requirement the format has never had.
     return (
-      `${card.name} has no power and toughness, so it cannot be your ${def.noun} in ${format}; ` +
-      `a ${def.legendary ? "legendary " : ""}${vehicle ? "Vehicle" : "Spacecraft"} needs one.`
+      `${card.name} has no power and toughness, so it can't be your ${def.noun} in ${format}; a ${def.legendary ? "legendary " : ""}${vehicle ? "Vehicle" : "Spacecraft"} needs one.`
     );
   }
 
   if (def.creature && isBackground(typeLine)) {
     return (
-      `${card.name} is a Background, so it can only be a second commander beside a card that ` +
-      `says "Choose a Background".`
+      `${card.name} is a Background, so it can only be a second commander beside a card that says “Choose a Background”.`
     );
   }
 
-  return `${card.name} is not a legal ${def.noun} in ${format}: ${def.nounPhrase} must be ${def.requirement}.`;
+  return `${card.name} isn't a legal ${def.noun} in ${format}: ${def.nounPhrase} must be ${def.requirement}.`;
 }
 
 /**
@@ -550,7 +547,7 @@ function abilityLabel(facts: PartnerFacts): string | null {
   if (facts.plain) return "partner";
   if (facts.variant !== null) return `partner${EM_DASH}${facts.variant}`;
   if (facts.withName !== null) return `partner with ${facts.withName}`;
-  if (facts.choosesBackground) return '"Choose a Background"';
+  if (facts.choosesBackground) return '“Choose a Background”';
   if (facts.doctorsCompanion) return "Doctor's companion";
   return null;
 }
@@ -617,31 +614,28 @@ function sameTag(a: string, b: string): boolean {
 function pairingFailure(a: CardFacts, fa: PartnerFacts, b: CardFacts, fb: PartnerFacts): string {
   if (fa.isBackground && fb.isBackground) {
     return (
-      `${a.name} and ${b.name} are both Backgrounds; a Background is a second commander ` +
-      `beside a card that says "Choose a Background".`
+      `${a.name} and ${b.name} are both Backgrounds; a Background is a second commander beside a card that says “Choose a Background”.`
     );
   }
   if (fa.choosesBackground || fb.choosesBackground) {
     const [chooser, other] = fa.choosesBackground ? [a, b] : [b, a];
     return (
-      `${chooser.name} says "Choose a Background", so the other commander must be a legendary ` +
-      `Background; ${other.name} is not one.`
+      `${chooser.name} says “Choose a Background”, so the other commander must be a legendary Background; ${other.name} isn't one.`
     );
   }
   if (fa.doctorsCompanion || fb.doctorsCompanion) {
     const [companion, other] = fa.doctorsCompanion ? [a, b] : [b, a];
     return (
-      `${companion.name} has Doctor's companion, so the other commander must be a legendary ` +
-      `Time Lord Doctor; ${other.name} is not one.`
+      `${companion.name} has Doctor's companion, so the other commander must be a legendary Time Lord Doctor; ${other.name} isn't one.`
     );
   }
   // Name the side that is wrong, not the first side: when A names B and B names someone else,
   // the sentence the reader needs is about B.
   if (fa.withName !== null && !namesCard(fa.withName, b)) {
-    return `${a.name} partners only with ${fa.withName}; ${b.name} is not that card.`;
+    return `${a.name} partners only with ${fa.withName}; ${b.name} isn't that card.`;
   }
   if (fb.withName !== null && !namesCard(fb.withName, a)) {
-    return `${b.name} partners only with ${fb.withName}; ${a.name} is not that card.`;
+    return `${b.name} partners only with ${fb.withName}; ${a.name} isn't that card.`;
   }
 
   const la = abilityLabel(fa);
@@ -657,8 +651,7 @@ function pairingFailure(a: CardFacts, fa: PartnerFacts, b: CardFacts, fb: Partne
     );
   }
   return (
-    `${a.name} and ${b.name} cannot both be commanders; a second commander needs a partner ` +
-    `ability.`
+    `${a.name} and ${b.name} can't both be commanders; a second commander needs a partner ability.`
   );
 }
 
@@ -693,7 +686,7 @@ export function validateCommanderZone(zone: CardFacts[], spec: FormatSpec): Vali
     return [
       error(
         "commander-missing",
-        `${spec.displayName} decks need a commander; the commander zone is empty.`,
+        `${spec.displayName} decks need a commander; the command zone is empty.`,
       ),
     ];
   }
@@ -753,7 +746,7 @@ function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationI
     return [
       error(
         "commander-missing",
-        `${format} decks need an oathbreaker and a signature spell; the commander zone is empty.`,
+        `${format} decks need an oathbreaker and a signature spell; the command zone is empty.`,
       ),
     ];
   }
@@ -817,8 +810,7 @@ function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationI
         "commander-count",
         spellCap === 1
           ? `${format} decks have one signature spell; you have ${spells.length}.`
-          : `${format} decks have one signature spell for each oathbreaker and at most two ` +
-              `oathbreakers, so at most two; you have ${spells.length}.`,
+          : `${format} decks have one signature spell per oathbreaker, so at most two; you have ${spells.length}.`,
       ),
     );
   }

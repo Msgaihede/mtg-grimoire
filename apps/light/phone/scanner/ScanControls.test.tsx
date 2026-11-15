@@ -18,7 +18,7 @@ function controls(over: Partial<Parameters<typeof ScanControls>[0]> = {}) {
 describe("the controls over the picture", () => {
   it("draws how scanning runs as two pressed-or-not halves of one group, at the touch floor", () => {
     controls();
-    const group = screen.getByRole("group", { name: "How scanning runs" });
+    const group = screen.getByRole("group", { name: "Scan mode" });
     const halves = within(group).getAllByRole("button");
     expect(halves.map((half) => half.textContent)).toEqual(["Continuous", "Point & shoot"]);
     expect(halves[0]).toHaveAttribute("aria-pressed", "true");
@@ -28,7 +28,7 @@ describe("the controls over the picture", () => {
 
   it("switches to point and shoot, and back, and does nothing for the half already pressed", async () => {
     const props = controls();
-    const group = screen.getByRole("group", { name: "How scanning runs" });
+    const group = screen.getByRole("group", { name: "Scan mode" });
     await userEvent.click(within(group).getByRole("button", { name: "Continuous" }));
     expect(props.onPointAndShoot).not.toHaveBeenCalled();
     await userEvent.click(within(group).getByRole("button", { name: "Point & shoot" }));
@@ -51,7 +51,7 @@ describe("the controls over the picture", () => {
    */
   it("keeps one line at every shape, the words a step smaller on its side", () => {
     controls();
-    const group = screen.getByRole("group", { name: "How scanning runs" });
+    const group = screen.getByRole("group", { name: "Scan mode" });
     const row = group.parentElement as HTMLElement;
     expect(row.className).not.toMatch(/flex-wrap/);
     for (const name of ["Continuous", "Point & shoot"]) {

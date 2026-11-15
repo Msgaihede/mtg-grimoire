@@ -131,7 +131,7 @@ export function DeckPage({
       {detail.isLoadingError ? (
         // The read failed, which says nothing about the deck. "Gone" is the sentence below, for a
         // read that succeeded and answered no deck.
-        <ReadError>That deck could not be read.</ReadError>
+        <ReadError>Couldn't load that deck.</ReadError>
       ) : detail.data === null ? (
         <DimNote>That deck is gone.</DimNote>
       ) : detail.data === undefined ? null : (

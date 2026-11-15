@@ -241,7 +241,7 @@ function clearItem(category: DeckCategory, deps: CategoryMenuDeps): MenuItem {
     return {
       kind: "action",
       id: "clear",
-      label: "Clear stack…",
+      label: "Clear category…",
       Icon: Eraser,
       disabled: true,
       reason: ALREADY_EMPTY,
@@ -251,7 +251,7 @@ function clearItem(category: DeckCategory, deps: CategoryMenuDeps): MenuItem {
   return {
     kind: "action",
     id: "clear",
-    label: "Clear stack…",
+    label: "Clear category…",
     Icon: Eraser,
     onSelect: () => deps.askClear(category),
   };

@@ -148,7 +148,7 @@ describe("the trades list", () => {
       commands: () => ({ trade_list: refused() }),
     });
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your trades could not be read.",
+      "Couldn't load your trades.",
     );
     expect(screen.queryByText("No trades yet.")).toBeNull();
   });
@@ -186,7 +186,7 @@ describe("a trade in the URL", () => {
       commands: () => ({ trade_get: refused() }),
     });
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "That trade could not be read.",
+      "Couldn't load that trade.",
     );
   });
 });
@@ -282,7 +282,7 @@ describe("an open trade", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Archive" }, SETTLE));
 
     expect(
-      await screen.findByText(/^Archived without finishing, so nothing here can be edited\./, undefined, SETTLE),
+      await screen.findByText(/^Archived without finishing, so it can't be edited\./, undefined, SETTLE),
     ).toBeInTheDocument();
     expect((await stored()).status).toBe("archived");
     // Not finished: the cards never changed hands, so the columns keep the present tense.
@@ -594,7 +594,7 @@ describe("adding cards", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add cards" })).toBeNull(), SETTLE);
     expect(scanner).toHaveTextContent("their side");
 
-    await userEvent.click(within(scanner).getByRole("button", { name: "Close the scanner" }));
+    await userEvent.click(within(scanner).getByRole("button", { name: "Close scanner" }));
     await sheetGone();
     // The caret's way back is the press that started it all.
     expect(opener).toHaveFocus();
@@ -621,7 +621,7 @@ describe("Finish trade", () => {
     expect(questions(sheet)).toEqual([true, true, true, false]);
     expect(
       within(sheet).getByRole("checkbox", {
-        name: "Take the cards you gave out of your collection",
+        name: "Remove the cards you gave from your collection",
       }),
     ).toHaveAccessibleDescription("6 cards. All of them are in your collection.");
     expect(
@@ -631,7 +631,7 @@ describe("Finish trade", () => {
     ).toHaveAccessibleDescription("5 cards, in the printing and finish shown in the trade.");
     expect(
       within(sheet).getByRole("checkbox", {
-        name: "Take the cards you received off your wishlist",
+        name: "Remove the cards you received from your wishlist",
       }),
     ).toHaveAccessibleDescription("2 of them are on it: Urza's Saga, Tarmogoyf.");
     expect(within(sheet).getByRole("button", { name: "File under: Collection" })).toBeInTheDocument();
@@ -650,7 +650,7 @@ describe("Finish trade", () => {
     // The page stays, as the finished trade, and says what the finish did.
     expect(
       await screen.findByText(
-        "Finished and archived, so nothing here can be edited. Finishing it took 6 cards out of your collection, added 5 cards to your collection and took 2 cards off your wishlist.",
+        "Finished and archived, so it can't be edited. Finishing it removed 6 cards from your collection, added 5 cards to your collection and removed 2 cards from your wishlist.",
         undefined,
         SETTLE,
       ),
@@ -706,7 +706,7 @@ describe("Finish trade", () => {
 
     expect((await stored(2)).finishedBefore).toBe(true);
     expect(questions(sheet)).toEqual([false, false, false, false]);
-    expect(sheet).toHaveTextContent("This trade was finished once already");
+    expect(sheet).toHaveTextContent("This trade was already finished once");
     // A folder for cards that are not being added is a choice about nothing.
     expect(within(sheet).getByRole("button", { name: "File under: Collection" })).toHaveAttribute(
       "aria-disabled",
@@ -719,7 +719,7 @@ describe("Finish trade", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Finish trade" }, SETTLE));
     let sheet = await screen.findByRole("dialog", { name: "Finish trade" }, SETTLE);
     await userEvent.click(
-      within(sheet).getByRole("checkbox", { name: "Put the cards you gave on your wishlist" }),
+      within(sheet).getByRole("checkbox", { name: "Add the cards you gave to your wishlist" }),
     );
     expect(questions(sheet)).toEqual([true, true, true, true]);
 
@@ -741,7 +741,7 @@ describe("a closed trade", () => {
 
     expect(
       screen.getByText(
-        "Finished and archived, so nothing here can be edited. Finishing it took 3 cards out of your collection, added 3 cards to your collection and took 1 card off your wishlist.",
+        "Finished and archived, so it can't be edited. Finishing it removed 3 cards from your collection, added 3 cards to your collection and removed 1 card from your wishlist.",
       ),
     ).toBeInTheDocument();
     // The lines are drawn, and none of them is a press.
@@ -765,7 +765,7 @@ describe("a closed trade", () => {
   it("says an archived trade was never finished, and that it still owes", async () => {
     openTrade(1);
     expect(
-      await screen.findByText(/^Archived without finishing, so nothing here can be edited\./, undefined, SETTLE),
+      await screen.findByText(/^Archived without finishing, so it can't be edited\./, undefined, SETTLE),
     ).toBeInTheDocument();
     expect(balance()).toHaveTextContent("You owe them");
     expect(balance()).toHaveTextContent("$3.75");
@@ -976,7 +976,7 @@ describe("the copies a deck is holding", () => {
     expect(section).toContainElement(decks);
     expect(section).not.toContainElement(ordinary);
     expect(section).toHaveAccessibleDescription(
-      "A finished trade takes these out of their decks, once your copies outside any deck have run out.",
+      "Finishing the trade takes these from their decks once your other copies run out.",
     );
     const heading = within(section).getByRole("heading", { name: "In your decks" });
     expect(heading.parentElement?.classList.contains("text-destructive")).toBe(true);
@@ -1049,7 +1049,7 @@ describe("the copies a deck is holding", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Finish trade" }, SETTLE));
     const sheet = await screen.findByRole("dialog", { name: "Finish trade" }, SETTLE);
     const remove = within(sheet).getByRole("checkbox", {
-      name: "Take the cards you gave out of your collection",
+      name: "Remove the cards you gave from your collection",
     });
     const note = "1 of them comes out of a deck: Serah. That deck will be short of it.";
 
@@ -1078,7 +1078,7 @@ describe("the copies a deck is holding", () => {
 
     expect(
       within(sheet).getByRole("checkbox", {
-        name: "Take the cards you gave out of your collection",
+        name: "Remove the cards you gave from your collection",
       }),
     ).toHaveAccessibleDescription("6 cards. All of them are in your collection.");
     expect(sheet).not.toHaveTextContent("out of a deck");
@@ -1112,7 +1112,7 @@ describe("the copies a deck is holding", () => {
 
     expect(
       screen.getByText(
-        "Finished and archived, so nothing here can be edited. Finishing it took 3 cards out of your collection (1 from a deck), added 3 cards to your collection and took 1 card off your wishlist.",
+        "Finished and archived, so it can't be edited. Finishing it removed 3 cards from your collection (1 from a deck), added 3 cards to your collection and removed 1 card from your wishlist.",
       ),
     ).toBeInTheDocument();
     expect(deckMark(mine)).toBeNull();
@@ -1126,7 +1126,7 @@ describe("New trade", () => {
     renderPhone(<PhoneFace />, { path: "/trade", fake: TRADES });
     await userEvent.click(await screen.findByRole("button", { name: "New trade" }, SETTLE));
     const sheet = await screen.findByRole("dialog", { name: "New trade" }, SETTLE);
-    expect(sheet).toHaveTextContent("It opens empty. Cards go on once it is open.");
+    expect(sheet).toHaveTextContent("Starts empty. Add cards once it's open.");
     // The likeliest name, as a placeholder — never typed in for the reader.
     const name = within(sheet).getByRole("textbox", { name: "Name" });
     expect(name).toHaveValue("");
@@ -1505,14 +1505,14 @@ describe("cards with no price", () => {
 });
 
 describe("whose prices a new trade can use", () => {
-  const CK = "Switch the app to Card Kingdom in Settings to trade in its prices.";
-  const MP = "Switch the app to Mana Pool in Settings to trade in its prices.";
+  const CK = "Switch to Card Kingdom in Settings to use its prices.";
+  const MP = "Switch to Mana Pool in Settings to use its prices.";
   const newTrade = async (): Promise<HTMLElement> => {
     await userEvent.click(await screen.findByRole("button", { name: "New trade" }, SETTLE));
     return await screen.findByRole("dialog", { name: "New trade" }, SETTLE);
   };
   const reasons = (sheet: HTMLElement) =>
-    within(within(sheet).getByRole("list", { name: "Not offered" }))
+    within(within(sheet).getByRole("list", { name: "Marketplaces not offered" }))
       .getAllByRole("listitem")
       .map((item) => item.textContent);
   const options = () =>

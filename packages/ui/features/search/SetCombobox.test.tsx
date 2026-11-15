@@ -330,7 +330,7 @@ describe("SetCombobox", () => {
     await userEvent.click(picked);
     expect(onToggle).toHaveBeenCalledWith("lea");
 
-    expect(screen.getByText(/You can search up to 64 sets/i)).toBeInTheDocument();
+    expect(screen.getByText(/Up to 64 sets/i)).toBeInTheDocument();
   });
 
   /**
@@ -921,7 +921,7 @@ describe("SetCombobox", () => {
       await userEvent.click(spare);
       expect(onToggle).toHaveBeenCalledWith("s64");
 
-      expect(screen.queryByText(/You can search up to/i)).toBeNull();
+      expect(screen.queryByText(/Up to \d+ sets/i)).toBeNull();
     });
   });
 });

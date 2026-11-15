@@ -73,7 +73,7 @@ function Body() {
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       {notices.length === 0 ? (
         <p className="py-6 text-center text-sm text-dim">
-          Nothing yet. What the app tells you is kept here, on this device.
+          No notifications yet.
         </p>
       ) : (
         <>

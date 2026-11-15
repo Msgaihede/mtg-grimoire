@@ -137,7 +137,7 @@ function putSentence(
   if ((from === "hand" || from === "command") && to === "battlefield")
     return `Put ${name} onto the battlefield`;
   if ((from === "hand" || from === "command") && to === "graveyard")
-    return `Cast ${name} · not paid for`;
+    return `Cast ${name} · unpaid`;
   return `${name} to ${PUT_YOURS[to]}`;
 }
 
@@ -263,7 +263,7 @@ export function playtestSentence(
       return h.seat === "you" ? `Got ${what}` : `${playerName(h.seat, opponents)} got ${what}`;
     }
     case "chose":
-      return `The rules engine chose for you: ${promptTitle(h.what)}`;
+      return `The engine chose for you: ${promptTitle(h.what)}`;
     case "eliminated":
       // The reader's own is the end of their game: the others play on without them, unseen.
       return h.seat === "you" ? "You are out" : `${playerName(h.seat, opponents)} is out`;

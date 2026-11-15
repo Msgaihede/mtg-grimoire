@@ -309,14 +309,14 @@ describe("ResetAll", () => {
    */
   it("says the count in words and draws it as a badge", () => {
     const { rerender } = render(<ResetAll count={0} onReset={vi.fn()} />);
-    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 0 filters active");
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all: 0 filters active");
     expect(screen.getByRole("button")).toHaveTextContent("0");
 
     rerender(<ResetAll count={1} onReset={vi.fn()} />);
-    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 1 filter active");
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all: 1 filter active");
 
     rerender(<ResetAll count={2} onReset={vi.fn()} />);
-    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 2 filters active");
+    expect(screen.getByRole("button")).toHaveAccessibleName("Reset all: 2 filters active");
     expect(screen.getByRole("button")).toHaveTextContent("2");
   });
 });
@@ -377,11 +377,11 @@ describe("FiltersButton", () => {
     const { rerender } = render(
       <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />,
     );
-    expect(button()).toHaveAccessibleName("Show filters — 0 active");
+    expect(button()).toHaveAccessibleName("Show filters, 0 active");
     expect(button()).not.toHaveTextContent("0");
 
     rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
-    expect(button()).toHaveAccessibleName("Hide filters — 2 active");
+    expect(button()).toHaveAccessibleName("Hide filters, 2 active");
     expect(button()).toHaveTextContent("2");
   });
 });
@@ -531,7 +531,7 @@ describe("the filter row grows for a finger", () => {
   it("grows the stated-filter chip's target without growing the chip", () => {
     render(<ActiveFilterChip label="Colour: Blue, Red" onRemove={vi.fn()} />);
 
-    const chip = screen.getByRole("button", { name: "Remove filter — Colour: Blue, Red" });
+    const chip = screen.getByRole("button", { name: "Remove filter, Colour: Blue, Red" });
 
     // The drawn pill is untouched — 26px, and not the family's 36 or the finger's 44.
     expect(chip.classList.contains("h-[1.625rem]")).toBe(true);

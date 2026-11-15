@@ -97,7 +97,7 @@ export const Empty: Story = {
     // has not moved, and the row is gone from the list.
     await userEvent.click(within(list).getByRole("option", { name: /Budget/ }));
     await expect(args.onChange).toHaveBeenCalledWith(["Budget"]);
-    await expect(canvas.getByRole("button", { name: "Remove the Budget tag" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Remove Budget" })).toBeInTheDocument();
     await expect(box).toHaveFocus();
     await expect(canvas.queryByRole("option", { name: /Budget/ })).toBeNull();
   },
@@ -143,7 +143,7 @@ export const Many: Story = {
     const chips = within(canvas.getByRole("list", { name: "Tags on this deck" }));
     await expect(chips.getAllByRole("listitem")).toHaveLength(6);
 
-    await userEvent.click(canvas.getByRole("button", { name: "Remove the Gimmick tag" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Remove Gimmick" }));
     await expect(args.onChange).toHaveBeenCalledWith([
       "Budget",
       "No Gamechangers",

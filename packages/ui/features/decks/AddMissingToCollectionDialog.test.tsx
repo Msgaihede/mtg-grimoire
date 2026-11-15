@@ -165,14 +165,14 @@ describe("AddMissingToCollectionDialog", () => {
     open({ loading: true, rows: null });
 
     expect(await screen.findByText("Finding missing cards…")).toBeInTheDocument();
-    expect(screen.queryByText(/None of the missing cards are in the card database/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/None of the missing cards are in your card data/)).not.toBeInTheDocument();
   });
 
   it("prints the read's own refusal where the rows would have been", async () => {
     open({ rows: null, readError: "database is locked" });
 
     expect(await screen.findByText("database is locked")).toBeInTheDocument();
-    expect(screen.queryByText(/None of the missing cards are in the card database/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/None of the missing cards are in your card data/)).not.toBeInTheDocument();
     expect(screen.queryByText("Finding missing cards…")).not.toBeInTheDocument();
   });
 
@@ -189,7 +189,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     expect(
       await screen.findByText(
-        "None of the missing cards are in the card database anymore.",
+        "None of the missing cards are in your card data anymore.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -247,7 +247,7 @@ describe("AddMissingToCollectionDialog", () => {
       wishCopies: 2,
     });
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Added 5 copies of 2 cards to the collection",
+      title: "Added 5 copies of 2 cards to your collection",
       body: "2 copies taken off your wishlist",
       tone: "success",
     });
@@ -422,7 +422,7 @@ describe("AddMissingToCollectionDialog", () => {
     });
     await screen.findByText("Lightning Bolt");
 
-    const toggle = screen.getByRole("checkbox", { name: "Also take these off my wishlist" });
+    const toggle = screen.getByRole("checkbox", { name: "Also remove these from your wishlist" });
     expect(toggle).toBeChecked();
     expect(tally().textContent).toBe("6 copies across 3 cards · 3 copies off your wishlist");
 
@@ -470,7 +470,7 @@ describe("AddMissingToCollectionDialog", () => {
     open({ rows: [row()], add: { isPending: true } });
     await screen.findByText("Lightning Bolt");
 
-    expect(screen.getByRole("button", { name: "Recording…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Adding…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   });
 
@@ -504,10 +504,10 @@ describe("AddMissingToCollectionDialog", () => {
 
     expect(screen.getByRole("status")).toBe(region);
     expect(region).toHaveTextContent(
-      "Recorded 3 copies of 1 card into Burn. 2 copies off your wishlist.",
+      "Added 3 copies of 1 card to Burn. 2 copies off your wishlist.",
     );
     // …and the empty list under it is explained rather than left to look like a failed read.
-    expect(screen.getByText(/None of the missing cards are in the card database/)).toBeInTheDocument();
+    expect(screen.getByText(/None of the missing cards are in your card data/)).toBeInTheDocument();
   });
 
   /** The wishlist half is a separate sentence and is drawn only when it happened — a press with
@@ -528,7 +528,7 @@ describe("AddMissingToCollectionDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("status").textContent).toBe("Recorded 1 copy of 1 card into Burn.");
+    expect(screen.getByRole("status").textContent).toBe("Added 1 copy of 1 card to Burn.");
   });
 
   /** A refused batch is announced beside the button that was pressed, not in the editor's banner
@@ -555,7 +555,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(
-      "Couldn't record — That is more copies than this deck is short of.",
+      "Couldn't add the cards — That is more copies than this deck is short of.",
     );
     expect(panel().contains(alert)).toBe(true);
   });

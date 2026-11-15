@@ -107,8 +107,8 @@ export const NewTrade: Story = {
     await expect(within(sheet).getByRole("button", { name: "Prices from" })).toHaveTextContent(
       "TCGplayer",
     );
-    await expect(within(sheet).getByRole("list", { name: "Not offered" })).toHaveTextContent(
-      "Switch the app to Card Kingdom in Settings to trade in its prices.",
+    await expect(within(sheet).getByRole("list", { name: "Marketplaces not offered" })).toHaveTextContent(
+      "Switch to Card Kingdom in Settings to use its prices.",
     );
     await expect(within(sheet).getByRole("button", { name: "Create trade" })).toBeInTheDocument();
   },
@@ -319,7 +319,7 @@ export const FinishTrade: Story = {
     ).toEqual([true, true, true, false]);
     await expect(
       within(sheet).getByRole("checkbox", {
-        name: "Take the cards you received off your wishlist",
+        name: "Remove the cards you received from your wishlist",
       }),
     ).toHaveAccessibleDescription("2 of them are on it: Urza's Saga, Tarmogoyf.");
   },
@@ -355,7 +355,7 @@ export const ArchivedUnfinished: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("region", { name: "You give" })).toBeInTheDocument();
     await expect(
-      canvas.getByText(/^Archived without finishing, so nothing here can be edited\./),
+      canvas.getByText(/^Archived without finishing, so it can't be edited\./),
     ).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Balance" })).toHaveTextContent("You owe them");
   },

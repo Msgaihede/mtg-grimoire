@@ -669,7 +669,7 @@ export const SetPicker: Story = {
     const tooltip = await canvas.findByRole("tooltip", undefined, {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    await expect(tooltip).toHaveTextContent("Limited Edition Alpha — 3 printings");
+    await expect(tooltip).toHaveTextContent("Limited Edition Alpha: 3 printings");
     await userEvent.unhover(alpha);
     await expect(listbox.getAllByRole("option")).toHaveLength(6);
 

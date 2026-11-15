@@ -129,7 +129,7 @@ describe("Wishlist", () => {
     renderPhone(<PhoneFace />, { path: "/wishlist" });
     const wall = await cabinet();
     expect(
-      within(wall).getByRole("link", { name: "Open the deck Rhystic Testbed" }),
+      within(wall).getByRole("link", { name: "Open deck Rhystic Testbed" }),
     ).toHaveAttribute("href", "/decks/4");
     // The reader's own folders are no deck's.
     expect(within(wall).queryByRole("link", { name: /Ordered/ })).toBeNull();
@@ -217,8 +217,8 @@ describe("Wishlist", () => {
     );
     await userEvent.click(within(sheet).getByRole("button", { name: /^Show / }));
 
-    expect(screen.getByRole("button", { name: "Filters — 1 active" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Remove filter — Rarity/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filters, 1 active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Remove filter, Rarity/ })).toBeInTheDocument();
     await waitFor(
       () =>
         expect(within(wall).queryByRole("button", { name: "Sol Ring, any printing" })).toBeNull(),
@@ -260,7 +260,7 @@ describe("Wishlist", () => {
     await userEvent.click(tab("Wishlist"));
 
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your wishlist could not be read.",
+      "Couldn't load your wishlist.",
     );
   });
 
@@ -273,7 +273,7 @@ describe("Wishlist", () => {
     await waitFor(
       () =>
         expect(screen.getByRole("alert")).toHaveTextContent(
-          "Your wishlist's shelves could not be read.",
+          "Couldn't load your folders.",
         ),
       SETTLE,
     );

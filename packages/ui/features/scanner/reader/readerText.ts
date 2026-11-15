@@ -26,7 +26,7 @@ export const STOPPED_TITLE = "Scanning stopped";
 export const STOPPED_NOTE = "Press Start to begin. The camera stays on.";
 /** The picture under point and shoot on the phone, where the press is a hold. */
 export const HOLD_TITLE = "Hold the picture to scan";
-export const HOLD_NOTE = "Scanning pauses the moment you let go.";
+export const HOLD_NOTE = "Scanning pauses when you let go.";
 /** The chip over the picture while a read is in flight. */
 export const SCANNING_CHIP = "Scanning";
 
@@ -41,9 +41,9 @@ export const SHOT_READY_CLICK = "Point at a card, then press Scan card.";
 
 /** What point and shoot does, said where it is switched: the desktop's tooltip, the phone's note. */
 export const POINT_AND_SHOOT_CLICK_HINT =
-  "Read one card per press of Scan card, so moving the camera between cards reads nothing.";
+  "Reads one card each time you press Scan card.";
 /** The other way, under its name on the phone's sheet. */
-export const CONTINUOUS_HINT = "Start once, and every card the camera sees is read until you stop.";
+export const CONTINUOUS_HINT = "Reads every card the camera sees until you stop.";
 
 /**
  * Under the list of cameras, on both surfaces. **"Device", not "computer"**: the choice is a row
@@ -66,7 +66,7 @@ export const SKIP_PROMOS = "Skip promos";
 
 /** What the promo toggle does, under it on both surfaces. */
 export const SKIP_PROMOS_NOTE =
-  "Never match a promo printing — prerelease stamps, promo packs, buy-a-box and the like.";
+  "Never match promo printings: prerelease stamps, promo packs, buy-a-box.";
 
 /** Whether any filter is in force — what lights the desktop's Filters trigger. A cleared date
  *  field reports `""`, which is no bound. */
@@ -173,7 +173,7 @@ export function matchStrip(verdict: ScannerVerdict | null, lastAdded: LastAdded)
       ...empty,
       word: "Can't identify",
       tone: "error",
-      sentence: "The card recognizer isn't loaded, so cards can't be identified.",
+      sentence: "The Neural scanner isn't loaded.",
     };
   }
   if (verdict === null || verdict.quad === null) {
@@ -202,7 +202,7 @@ export function matchStrip(verdict: ScannerVerdict | null, lastAdded: LastAdded)
     // "Updated" rather than "Added" for a replaced row: the tray did not grow, and a reader told a
     // card was added after changing a filter would go looking for the duplicate.
     const sentence = lastAdded.bumpedTo
-      ? `Added again — ×${lastAdded.bumpedTo}`
+      ? `Added again · ×${lastAdded.bumpedTo}`
       : lastAdded.replaced
         ? "Printing updated"
         : "Added · swap in the next card";

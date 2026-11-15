@@ -422,7 +422,7 @@ describe("CardModalArt", () => {
     expect(screen.queryByRole("button", { name: /^meld part —/i })).not.toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Meld — Brisela, Voice of Nightmares" }),
+      screen.getByRole("button", { name: "Meld: Brisela, Voice of Nightmares" }),
     );
     expect(onMeld).toHaveBeenCalledWith(brisela);
 
@@ -454,7 +454,7 @@ describe("CardModalArt", () => {
     // functions: the same `meld_part` component means "your sibling" from one end and "your
     // halves" from the other, told apart only by whether a `meld_result` is present. From Bruna
     // the reader wants Brisela, not Gisela — so the half above draws no `Meld part` row, and the
-    // melded card below draws two and no `Meld —` toggle.
+    // melded card below draws two and no `Meld:` toggle.
     render(
       <CardModalArt
         card={card({ layout: "meld", name: "Brisela, Voice of Nightmares" })}
@@ -470,12 +470,12 @@ describe("CardModalArt", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Meld part — Bruna, the Fading Light" }),
+      screen.getByRole("button", { name: "Meld part: Bruna, the Fading Light" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Meld part — Gisela, the Broken Blade" }),
+      screen.getByRole("button", { name: "Meld part: Gisela, the Broken Blade" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^meld —/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^meld:/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open melded card" })).not.toBeInTheDocument();
   });
 

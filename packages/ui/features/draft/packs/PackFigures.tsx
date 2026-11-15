@@ -100,7 +100,7 @@ export function PackFigures({
     return (
       <aside aria-label="Figures" className={ASIDE}>
         <h3 className={LABEL}>Expected value</h3>
-        <p className="m-0 text-sm text-dim">Reading prices…</p>
+        <p className="m-0 text-sm text-dim">Loading prices…</p>
       </aside>
     );
   }
@@ -189,7 +189,7 @@ export function PackFigures({
             onClick={onResetTally}
             disabled={tally.opened === 0}
             aria-label="Reset this session"
-            title="Start the session's tally over"
+            title="Clear this session's totals"
             className={cn(
               BUTTON,
               "h-6 gap-1 border-transparent px-1.5 py-0 text-xs text-dim",

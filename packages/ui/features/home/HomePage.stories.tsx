@@ -187,7 +187,7 @@ export const CatalogueOpen: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Add widget" }));
 
     const dialog = within(
-      await canvas.findByRole("dialog", { name: "Widget catalogue" }, MOUNT_TIMEOUT),
+      await canvas.findByRole("dialog", { name: "Widget catalog" }, MOUNT_TIMEOUT),
     );
     for (const label of [
       "Summary",
@@ -339,7 +339,7 @@ export const ClearedByTheReader: Story = {
   args: { layout: { version: 2, widgets: [] } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/^Your home page is empty\./)).toBeInTheDocument();
+    await expect(await canvas.findByText(/^Your Home page is empty\./)).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Customize" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -360,7 +360,7 @@ export const AddingFromTheEmptyPage: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "Add widget" }));
     const dialog = within(
-      await canvas.findByRole("dialog", { name: "Widget catalogue" }, MOUNT_TIMEOUT),
+      await canvas.findByRole("dialog", { name: "Widget catalog" }, MOUNT_TIMEOUT),
     );
     await userEvent.click(dialog.getByRole("button", { name: "Add Activity" }));
 
@@ -370,7 +370,7 @@ export const AddingFromTheEmptyPage: Story = {
     await waitFor(async () => {
       await expect(canvas.queryByRole("dialog")).not.toBeInTheDocument();
     }, MOUNT_TIMEOUT);
-    await expect(canvas.queryByText(/^Your home page is empty\./)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/^Your Home page is empty\./)).not.toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
   },
 };
@@ -447,7 +447,7 @@ export const WhileTheDatabaseIsBusy: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: "Customize" }));
     await userEvent.click(canvas.getByRole("button", { name: "Add widget" }));
     const dialog = within(
-      await canvas.findByRole("dialog", { name: "Widget catalogue" }, MOUNT_TIMEOUT),
+      await canvas.findByRole("dialog", { name: "Widget catalog" }, MOUNT_TIMEOUT),
     );
     await userEvent.click(dialog.getByRole("button", { name: "Add Set completion" }));
 

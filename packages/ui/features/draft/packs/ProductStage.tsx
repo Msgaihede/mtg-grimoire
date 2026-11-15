@@ -79,7 +79,7 @@ export function conversionNote(picked: readonly Marketplace[], plan: PricingPlan
   if (plan.waiting) return "Fetching the exchange rate…";
   if (plan.leftOut.length > 0) {
     const names = listed(plan.leftOut.map((m) => m.label));
-    return `${names} left out: the exchange rate could not be fetched, and prices in two currencies can't be compared without it.`;
+    return `${names} left out: couldn't fetch the exchange rate to compare currencies.`;
   }
   return null;
 }
@@ -253,7 +253,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               searchable
               searchLabel="Search products"
               searchPlaceholder="Search packs and boxes"
-              emptyLine="No product matches."
+              emptyLine="No matching products."
               matches={(option, query) => {
                 const product = byValue.get(option.value);
                 return product !== undefined && openableMatches(product, query);
@@ -301,9 +301,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               </header>
               {opened.skipped > 0 && (
                 <p className="m-0 text-sm text-dim">
-                  {plural(opened.skipped, "item")} in it could not be opened — boosters of another
-                  set, or products MTGJSON does not describe — and{" "}
-                  {opened.skipped === 1 ? "is" : "are"} left out of every figure.
+                  {plural(opened.skipped, "item")} couldn't be opened and {opened.skipped === 1 ? "is" : "are"} left out of the figures.
                 </p>
               )}
               <OpenedWall

@@ -237,12 +237,12 @@ export function PickPanel({
               {row(
                 picked.flatMap((id) => byId.get(id) ?? []),
                 zones.picked,
-                "Click a card to keep it here; the first you click is the top.",
+                "Click a card to keep it here. The first click goes on top.",
               )}
               {row(
                 pick.cards.filter((c) => !picked.includes(c.id)),
                 zones.rest,
-                "Every card is staying on top.",
+                "Every card stays on top.",
               )}
             </>
           )}

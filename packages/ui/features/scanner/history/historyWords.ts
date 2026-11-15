@@ -9,7 +9,7 @@ import type { ScanBatchSummary } from "@/lib/ipc";
 export const SCAN_HISTORY_TITLE = "Scan history";
 
 /** What an empty history says — both ways a pile gets here, so a reader knows which presses do. */
-export const EMPTY_HISTORY = "Scans you add to your collection or archive will appear here.";
+export const EMPTY_HISTORY = "Scans you add or archive appear here.";
 
 /** Said in the detail column while no batch is picked — the list is never empty then. */
 export const PICK_A_SCAN = "Pick a scan to see its cards.";
@@ -71,7 +71,7 @@ export const PUT_BACK_LABEL = "Put back in tray";
 
 /** What the press does, for its tooltip: nothing is filed until the tray's own Add. */
 export const PUT_BACK_HINT =
-  "Puts these cards back in the scanner's tray, to add to your collection or archive again.";
+  "Returns these cards to the tray to add or archive again.";
 
 /** The toast's title once a pile has landed: `Put 12 cards from “Scan 4” back in the tray`. */
 export function putBackTitle(batch: Pick<ScanBatchSummary, "name">, copies: number): string {
@@ -85,9 +85,9 @@ export function putBackTitle(batch: Pick<ScanBatchSummary, "name">, copies: numb
  */
 export function leftOutSentence(left: number): string | undefined {
   if (left === 0) return undefined;
-  return `${plural(left, "card")} ${left === 1 ? "is" : "are"} no longer in the card database and ${left === 1 ? "was" : "were"} left out.`;
+  return `${plural(left, "card")} ${left === 1 ? "is" : "are"} no longer in the card data and ${left === 1 ? "was" : "were"} left out.`;
 }
 
 /** A put-back with nothing to land: every printing in the batch has left the card database. */
 export const NOTHING_TO_PUT_BACK =
-  "None of its cards are in the card database any more, so there is nothing to put back.";
+  "None of its cards are in the card data anymore. Nothing to put back.";

@@ -312,8 +312,8 @@ export function ColorExactChip({
 }) {
   const tip = useTooltip();
   const name = pressed
-    ? "Exact — cards whose color identity is exactly these colors"
-    : "Within — cards whose color identity fits within these colors";
+    ? "Exact: color identity is exactly these colors"
+    : "Within: color identity fits within these colors";
   // The glyph follows the press, where the colour chips' glyph never does: the ring already says
   // *on*, and what this chip has to say besides is *which reading* — AND or OR — which a fixed
   // glyph cannot.
@@ -725,7 +725,7 @@ export function LayoutToggle({
 export function ResetAll({ count, onReset }: { count: number; onReset: () => void }) {
   const tip = useTooltip();
   const empty = count <= 0;
-  const name = `Reset all — ${count} filter${count === 1 ? "" : "s"} active`;
+  const name = `Reset all: ${count} filter${count === 1 ? "" : "s"} active`;
   return (
     <button
       type="button"
@@ -826,7 +826,7 @@ export function FiltersButton({
   className?: string;
 }) {
   const tip = useTooltip();
-  const name = `${open ? "Hide" : "Show"} filters — ${count} active`;
+  const name = `${open ? "Hide" : "Show"} filters, ${count} active`;
   return (
     <button
       type="button"
@@ -974,7 +974,7 @@ export function ActiveFilterChip({
   onRemove: () => void;
 }) {
   const tip = useTooltip();
-  const name = `Remove filter — ${label}`;
+  const name = `Remove filter, ${label}`;
   return (
     <button
       type="button"

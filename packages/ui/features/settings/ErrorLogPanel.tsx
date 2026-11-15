@@ -107,8 +107,7 @@ export function ErrorLogPanel({ log }: { log: ErrorLog }) {
     <SettingsSection id="errors" title="Errors">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-0 text-sm text-dim">
-          Things that failed, like card updates, image downloads or update checks. Repeats are
-          grouped.
+          Failed card updates, image downloads and update checks. Repeats are grouped.
         </p>
         <button
           type="button"

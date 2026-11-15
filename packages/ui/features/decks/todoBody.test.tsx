@@ -23,14 +23,14 @@ describe("TodoBody", () => {
   it("draws real checkboxes that hand their line up when it can", () => {
     const onTick = vi.fn();
     render(<TodoBody blocks={parseTodoBody(body)} body={body} ticking={false} onTick={onTick} />);
-    fireEvent.click(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark “Revise tokens” done" }));
     expect(onTick).toHaveBeenCalledWith(0);
   });
 
   it("lays a finger's press area round each box under `touch`, and a press anywhere in it ticks", () => {
     const onTick = vi.fn();
     render(<TodoBody blocks={parseTodoBody(body)} body={body} onTick={onTick} touch />);
-    const box = screen.getByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' });
+    const box = screen.getByRole("checkbox", { name: "Mark “Sleeve the deck” not done" });
     // The area is a label round the same box, so nothing new reaches the accessibility tree and a
     // press on the label is the box's own.
     const area = box.closest("label");

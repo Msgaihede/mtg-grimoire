@@ -344,10 +344,10 @@ function WishOwned({
     const spoken = places.map((place) => `${shelfPlaceName(place)} (${place.count})`).join(", ");
     const hint =
       places.length === 0 ? (
-        `${sentence} — show in collection`
+        `${sentence}. Show in collection`
       ) : (
         <span className="flex flex-col gap-1">
-          <span>{`${sentence} — show in collection`}</span>
+          <span>{`${sentence}. Show in collection`}</span>
           {places.map((place) => (
             <span key={place.folderId ?? 0} className="flex items-center gap-1">
               <ShelfGlyph kind={place.kind} open={false} className="size-3" />

@@ -176,7 +176,7 @@ export const DescriptionAndTheory: Story = {
     });
     // The caption is the answer to the press, so it changes with it — and it is the one place
     // the deck's cards being poured into the plan is said before it happens.
-    await expect(canvas.getByText(/starts Actual empty/)).toBeInTheDocument();
+    await expect(canvas.getByText(/leaves Actual empty/)).toBeInTheDocument();
     await expect(description).toHaveValue(
       "Swap the Bolts for Bowmasters when the sideboard arrives.",
     );
@@ -188,7 +188,7 @@ export const DescriptionAndTheory: Story = {
  * this dialog answers with an *absence*.
  *
  * The reader tracks it without owning the cardboard, so there is nothing in their binder for it
- * to be short of: the whole `Fill this deck from your collection` block is gone — heading, small
+ * to be short of: the whole `Fill from your collection` block is gone — heading, small
  * print and the `Import missing cards from collection…` press alike — rather than drawn and
  * greyed. **Absent, not greyed** is this panel's own standing rule, the same one that keeps
  * `Clear theory list…` off a deck with no plan: a greyed control under a state the reader chose
@@ -216,7 +216,7 @@ export const VirtualDeck: Story = {
       "true",
     );
 
-    await expect(canvas.queryByText("Fill this deck from your collection")).toBeNull();
+    await expect(canvas.queryByText("Fill from your collection")).toBeNull();
     await expect(
       canvas.queryByRole("button", { name: /Pull owned cards/ }),
     ).toBeNull();

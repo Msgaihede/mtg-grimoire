@@ -187,8 +187,8 @@ export function CardActions({
             onPick={(labelId, labelName) => {
               receipt.track(deck.setLabel.mutateAsync({ ...slotOf(card), labelId }), () =>
                 labelName === null
-                  ? `Took the label off ${card.name}.`
-                  : `Labelled ${card.name} ${labelName}.`,
+                  ? `Removed the label from ${card.name}.`
+                  : `Labeled ${card.name} ${labelName}.`,
               );
               setPage("main");
             }}
@@ -207,7 +207,7 @@ export function CardActions({
                     finish: card.finish,
                   })
                   .then(() => moved(onMoved, card, { cardId: toCardId })),
-                () => `${card.name} now plays ${printingWords}.`,
+                () => `Changed ${card.name} to ${printingWords}.`,
               );
               setPage("main");
             }}
@@ -359,7 +359,7 @@ function MainPage({
           opens
           // A printing that has left the card database has no siblings to offer, and the swap
           // refuses it in Rust; said rather than offered.
-          reason={card.oracleId === null ? "this printing has left the card database" : null}
+          reason={card.oracleId === null ? "this printing is no longer in the card data" : null}
           onPress={() => onOpen("printing")}
         />
         <SheetRow
@@ -367,7 +367,7 @@ function MainPage({
           value={finishWord(card.finish)}
           Icon={Sparkles}
           opens
-          reason={choices.length <= 1 ? "this printing is sold in one finish" : null}
+          reason={choices.length <= 1 ? "this printing has only one finish" : null}
           onPress={() => onOpen("finish")}
         />
         {/* The deck's other list, one copy per press — the desktop menu's `Add to actual` /
@@ -377,7 +377,7 @@ function MainPage({
           <SheetRow
             label={`Add to ${other}`}
             Icon={CopyPlus}
-            reason={card.oracleId === null ? "this printing has left the card database" : null}
+            reason={card.oracleId === null ? "this printing is no longer in the card data" : null}
             onPress={() =>
               receipt.track(
                 toasted(deck.addToOtherList.mutateAsync(slotOf(card)), {
@@ -431,7 +431,7 @@ function PilePage({
                 ? ALREADY_HERE
                 : category.isActive
                   ? undefined
-                  : "switched off — counts toward nothing"
+                  : "inactive, not counted"
             }
             onPick={() => onPick(category.id)}
           />

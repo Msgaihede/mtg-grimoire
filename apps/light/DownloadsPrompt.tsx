@@ -134,7 +134,7 @@ export function DownloadsPrompt({ children }: { children?: ReactNode }) {
         <Dialog
           open={open}
           title="Download on mobile data?"
-          subtitle={`About ${megabytes(total)} in all`}
+          subtitle={`About ${megabytes(total)} total`}
           closeLabel="Close"
           size="w-full self-end rounded-t-xl border-t border-border sm:w-[26rem] sm:self-center"
           onDismiss={close}
@@ -142,10 +142,7 @@ export function DownloadsPrompt({ children }: { children?: ReactNode }) {
         >
           <div className="space-y-3 px-4 py-3 text-sm">
             <p className="text-dim">
-              Your connection says it is metered. These downloads wait until you say so — this is
-              asked again each time you come back to the app, and back on Wi-Fi they start by
-              themselves. Until the card data arrives, search and the card pages have nothing to
-              show.
+              These downloads wait on a metered connection and start on their own on Wi-Fi. Search and card pages stay empty until the card data arrives.
             </p>
             <ul className="divide-y divide-border rounded-md border border-border">
               {status?.due.map((d) => (

@@ -64,7 +64,7 @@ describe("collectionOutcome", () => {
 
   /** Pressing Clear on an empty collection is not a mistake worth a row of zeroes. */
   it("says nothing happened rather than reporting zero", () => {
-    expect(collectionOutcome({ entries: 0 })).toBe("The collection was already empty.");
+    expect(collectionOutcome({ entries: 0 })).toBe("Your collection was already empty.");
   });
 });
 
@@ -75,7 +75,7 @@ describe("wishlistOutcome", () => {
   });
 
   it("says nothing happened when it was already empty", () => {
-    expect(wishlistOutcome(0)).toBe("The wishlist was already empty.");
+    expect(wishlistOutcome(0)).toBe("Your wishlist was already empty.");
   });
 });
 
@@ -105,7 +105,7 @@ describe("decksOutcome", () => {
 
   it("says nothing happened only when nothing did", () => {
     expect(decksOutcome({ decks: 0, folders: 0 })).toBe(
-      "There were no decks to clear.",
+      "No decks to clear.",
     );
   });
 });
@@ -137,7 +137,7 @@ describe("cacheOutcome", () => {
 
   it("says there was nothing cached rather than freeing 0 bytes", () => {
     expect(cacheOutcome({ files: 0, bytes: 0, rows: 0, failed: 0 })).toBe(
-      "There was nothing cached to clear.",
+      "Nothing cached to clear.",
     );
   });
 });
@@ -176,7 +176,7 @@ describe("combosOutcome", () => {
 
     expect(said).not.toContain("0 combos");
     expect(said).toBe(
-      "Combos were cleared, but the download failed. See Errors below for details.",
+      "Combos were cleared, but the download failed. See Errors for details.",
     );
   });
 });

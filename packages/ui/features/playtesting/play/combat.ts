@@ -207,7 +207,7 @@ export function phaseLine(view: PlaytestView): string {
     view.active === "you"
       ? `Turn ${view.turn} · Your ${phase}`
       : `Turn ${view.turn} · ${whose} turn · ${phase.charAt(0).toUpperCase()}${phase.slice(1)}`;
-  return view.stage === "respond" ? `${line} — you may respond` : line;
+  return view.stage === "respond" ? `${line} · you may respond` : line;
 }
 
 /** Whose creature `id` is. */

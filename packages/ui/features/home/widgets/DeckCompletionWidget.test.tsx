@@ -431,7 +431,7 @@ describe("rowHint", () => {
   it("says when nothing on the list is priced at all", () => {
     expect(
       rowHint(completion({ deckId: 1, missing: 40, missingCost: null, unpricedMissing: 40 }), tcg),
-    ).toBe("Nothing on this deck's list has a price at TCGplayer.");
+    ).toBe("No card on this deck's list has a TCGplayer price.");
   });
 
   it("says a theory row is the actual list measured against the plan", () => {
@@ -445,7 +445,7 @@ describe("rowHint", () => {
 
   it("says when another printing of a card counts, under Missing", () => {
     expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg, "missing")).toBe(
-      "This deck's actual list, compared to its theory list. A card in any printing counts.",
+      "This deck's actual list, compared to its theory list. Any printing counts.",
     );
   });
 });
@@ -1138,7 +1138,7 @@ describe("DeckCompletionWidgetSettings", () => {
 
     expect(screen.queryByRole("button", { name: "Decks to track" })).toBeNull();
     expect(
-      screen.getByText("Choose Chosen… under Which decks to pick the decks this widget tracks."),
+      screen.getByText("Set Which decks to Chosen… to pick decks."),
     ).toBeInTheDocument();
   });
 

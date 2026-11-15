@@ -353,7 +353,7 @@ export function DeckTile({
   const archive = (archived: boolean) =>
     receipt(
       decks.update.mutateAsync({ id, patch: { archived } }),
-      () => notify.success(archived ? `Deck “${name}” archived` : `Deck “${name}” restored`),
+      () => notify.success(archived ? `Archived “${name}”` : `Restored “${name}”`),
       archived ? `Couldn't archive “${name}”` : `Couldn't restore “${name}”`,
     );
 

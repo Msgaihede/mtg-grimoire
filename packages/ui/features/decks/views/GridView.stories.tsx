@@ -327,7 +327,7 @@ export const BothTiers: Story = {
  * is the finer statement. Both Bolts and the Sol Ring draw blue here, with blue's own
  * **name-grain** number — the green `+2` about a printing is gone, and the card-grain tick in its
  * place is the honest reading for a reader who has four Bolts and has stopped caring which art.
- * Every blue mark on this deck says `Match` rather than `Art Mismatch` (since 2026-09-27), the
+ * Every blue mark on this deck says `Match` rather than `Art mismatch` (since 2026-09-27), the
  * words following the same switch the colour does.
  *
  * This is the switch for somebody playing proxies on purpose, and it is per **deck**
@@ -361,7 +361,7 @@ export const ExactMarkOff: Story = {
     // clause are named, because `theoryMatchLabel` has one phrasing per sign and an assertion
     // that checked only the one this row used to draw would go vacuous the moment it flipped.
     //
-    // **And blue's sentence is `Match` on this deck, not `Art Mismatch`** (managed tokens spec
+    // **And blue's sentence is `Match` on this deck, not `Art mismatch`** (managed tokens spec
     // §3.10, 2026-09-27): the reader switched printings off, so calling the very printing the plan
     // names a mismatch of one would be telling them the thing they asked not to hear.
     const bolt = canvas.getAllByRole("button", { name: /^Lightning Bolt/ });

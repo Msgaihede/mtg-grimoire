@@ -88,7 +88,7 @@ export function TagSearchBox({ value, onChange, namespace, onNamespaceChange }: 
         // Three examples rather than a category, because "Search tags" leaves a reader arriving
         // from the search page typing a card name — and because one art motif, a second, and one
         // rules effect teaches what the two taxonomies are in the width of a placeholder.
-        placeholder="Search tags — dragon, forest, removal…"
+        placeholder="Search tags: dragon, forest, removal…"
         // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and a
         // box the reader types into must not, or the native ✕ slides out from under the pointer
         // clearing it. Issue #179 — the reason is on the constant.

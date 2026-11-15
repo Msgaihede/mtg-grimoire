@@ -231,9 +231,7 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
       {/* No heading of its own — the dialog is titled "Categories" one element up, and a second
           "Categories" under it would be the same word twice with nothing between them. */}
       <p className="mb-2.5 text-[0.6875rem] leading-relaxed text-dim">
-        Inactive categories don&rsquo;t count toward deck size, copy limits or legality, and
-        don&rsquo;t reserve cards from your collection. Drag to reorder. The four default
-        categories can be turned off but not renamed or deleted.
+        Inactive categories don&rsquo;t count toward the deck or use cards from your collection. The four default categories can&rsquo;t be renamed or deleted.
       </p>
 
       {categoriesQuery.isPending ? (
@@ -458,7 +456,7 @@ function CategoryRow({
             }
           }}
           aria-label={`Move ${category.name}, ${index + 1} of ${total}`}
-          {...tip("Drag to reorder, or press the up and down arrow keys")}
+          {...tip("Drag or use the arrow keys to reorder")}
           className={cn(
             "shrink-0 cursor-grab rounded-sm text-dim",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
@@ -625,7 +623,7 @@ export function DeleteCategory({
   const copiesGo =
     category.variant === "theory"
       ? "The theory list doesn't use your collection, so no cards are moved."
-      : "Any copies you own go back to Recently removed.";
+      : "Copies you own go back to Recently removed.";
   /** The question is only asked when there is something to lose *and* somewhere to put it. */
   const choosing = cards > 0 && others.length > 0;
   const target = choosing ? (others.find((c) => String(c.id) === choice) ?? null) : null;

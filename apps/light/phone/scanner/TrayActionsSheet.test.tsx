@@ -96,7 +96,7 @@ describe("the tray's actions", () => {
     const { sheet } = await openSheet();
     // A greyed row's name includes its reason.
     const deck = within(sheet).getByRole("button", {
-      name: /^Create deck…\s*Choose a finish for every card first$/,
+      name: /^Create deck…\s*Pick a finish for every card first$/,
     });
     expect(deck).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(deck);

@@ -85,7 +85,7 @@ describe("FolderRulesDialog", () => {
     const user = userEvent.setup();
     const { onSave } = open({ rules: [{ kind: "colors", values: ["U"] }] });
 
-    await user.click(screen.getByRole("button", { name: "Remove rule 1 (Colour)" }));
+    await user.click(screen.getByRole("button", { name: "Remove rule 1 (Color)" }));
     await user.click(save());
 
     expect(onSave).toHaveBeenCalledWith([]);
@@ -120,7 +120,7 @@ describe("FolderRulesDialog", () => {
     const user = userEvent.setup();
     const { onSave } = open();
 
-    await addRule(user, "Colour");
+    await addRule(user, "Color");
     await user.click(screen.getByRole("button", { name: "Blue" }));
     await user.click(screen.getByRole("button", { name: "Red" }));
     await addRule(user, "Card type");
@@ -202,7 +202,7 @@ describe("FolderRulesDialog", () => {
     const user = userEvent.setup();
     const { onSave } = open();
 
-    await addRule(user, "Colour");
+    await addRule(user, "Color");
     expect(save()).toHaveAttribute("aria-disabled", "true");
     expect(save()).toHaveAccessibleDescription(RULE_REFUSAL.noValues);
     await user.click(save());
@@ -227,7 +227,7 @@ describe("FolderRulesDialog", () => {
     await user.click(screen.getByRole("button", { name: "Remove rule 1 (Release date)" }));
     await addRule(user, "Mana value");
     await user.type(screen.getByRole("textbox", { name: "Minimum mana value" }), "two");
-    expect(screen.getByText("Write each end of a range as a number.")).toBeInTheDocument();
+    expect(screen.getByText("Enter a number for each end of the range.")).toBeInTheDocument();
   });
 
   it("offers no condition rule on a wishlist folder", async () => {
@@ -289,13 +289,13 @@ describe("FolderRulesDialog", () => {
     );
     const { rerender } = render(tree(props));
 
-    await user.click(screen.getByRole("button", { name: "Remove rule 1 (Colour)" }));
-    expect(screen.queryByRole("group", { name: "Rule 1: Colour" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove rule 1 (Color)" }));
+    expect(screen.queryByRole("group", { name: "Rule 1: Color" })).not.toBeInTheDocument();
     rerender(tree({ ...props, open: false }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     rerender(tree(props));
 
-    expect(await screen.findByRole("group", { name: "Rule 1: Colour" })).toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "Rule 1: Color" })).toBeInTheDocument();
   });
 
   /**
@@ -390,7 +390,7 @@ describe("FolderRulesDialog", () => {
     expect(screen.getByRole("option", { name: /^Group: any of/ })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Add rule to group 1.2.1" }));
-    expect(screen.getByRole("option", { name: "Colour" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Color" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /^Group:/ })).not.toBeInTheDocument();
   });
 });

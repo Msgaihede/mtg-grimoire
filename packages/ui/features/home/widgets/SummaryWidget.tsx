@@ -214,7 +214,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Couldn't load totals. {ipcError(failure)}
+        Couldn't load totals — {ipcError(failure)}
       </WidgetMessage>
     );
   }

@@ -227,7 +227,7 @@ export function DeckLink({ deckId, name }: { deckId: number; name: string }) {
   return (
     <a
       {...linkTo({ view: "decks", deckId, cardId: null })}
-      aria-label={`Open the deck ${name}`}
+      aria-label={`Open deck ${name}`}
       className={cn("flex h-11 flex-none items-center rounded-md px-1", FOCUS)}
     >
       <span className="rounded-full border border-border px-2 text-[0.6875rem] leading-5 text-dim">

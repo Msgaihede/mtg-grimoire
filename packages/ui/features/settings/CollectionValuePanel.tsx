@@ -18,9 +18,9 @@ const ID = "collection-value";
 
 /** The crate's bounds, in the page's own words for each box. */
 const REFUSED = {
-  sellPercent: "Sell percentage has to be above 0 and at most 100.",
-  minimumValue: "Minimum card value has to be a price of zero or more.",
-  bulkPrice: "Bulk price has to be a price of zero or more.",
+  sellPercent: "Sell percentage must be above 0 and at most 100.",
+  minimumValue: "Minimum card value must be zero or more.",
+  bulkPrice: "Bulk price must be zero or more.",
 };
 
 const BOX = cn(
@@ -153,9 +153,7 @@ export function CollectionValuePanel(): JSX.Element {
   return (
     <SettingsSection id="collection-value" title="Collection value">
       <p className="text-sm text-dim">
-        Cards rarely sell at full market price. Set what you expect to get, and a reduced price
-        appears in brackets beside your collection&rsquo;s value, your folders and your Home
-        widgets.
+        Set what you expect to get when selling. A reduced price then shows in brackets beside every value.
       </p>
 
       <Row
@@ -171,7 +169,7 @@ export function CollectionValuePanel(): JSX.Element {
       <Row
         id={`${ID}-minimum`}
         title="Minimum card value"
-        detail="Cards priced below this aren't counted at their price, because they aren't worth selling one by one."
+        detail="Cards priced below this count at the bulk price instead."
         prefix={sign}
         value={drafts.minimumValue}
         placeholder="0.00"
@@ -183,8 +181,8 @@ export function CollectionValuePanel(): JSX.Element {
         title="Bulk price"
         detail={
           noMinimum
-            ? "What each card under the minimum is worth instead. Set a minimum card value first."
-            : "What each card under the minimum is worth instead, such as a store's bulk rate. Empty counts them as nothing."
+            ? "What each card under the minimum counts as. Set a minimum card value first."
+            : "What each card under the minimum counts as, such as a store's bulk rate. Empty counts them as nothing."
         }
         prefix={sign}
         value={drafts.bulkPrice}
@@ -199,7 +197,7 @@ export function CollectionValuePanel(): JSX.Element {
       <div aria-hidden="true" className="h-px bg-border" />
 
       {!active ? (
-        <p className="text-sm text-dim">No reduced price is set, so only full values are shown.</p>
+        <p className="text-sm text-dim">No reduced price set. Only full values are shown.</p>
       ) : (
         <div className="space-y-2.5">
           {reduced !== null && (
@@ -220,8 +218,7 @@ export function CollectionValuePanel(): JSX.Element {
           )}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <p className="min-w-0 flex-1 basis-60 text-xs leading-snug text-dim">
-              The minimum is checked first, on each card&rsquo;s market price, and the bulk price is
-              added after the sell percentage. Prices are {marketplace.label}&rsquo;s.
+              The minimum applies to market price. Bulk cards skip the sell percentage. Prices are {marketplace.label}&rsquo;s.
             </p>
             <button
               type="button"

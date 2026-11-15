@@ -116,7 +116,7 @@ const MANAGED_ROW = "Managed by a deck. Change the printing in the deck.";
  * number a reader has to guess at.
  */
 const SKIPPED_NOTE =
-  "Skipped: card not found, invalid printing, or no marketplace pricing available for the finish.";
+  "Skipped: card not found, invalid printing, or no price for the finish.";
 
 /** The way out, and the affirmative, in the app's two button shapes — `PullFromCollectionDialog`'s
  *  pair, which is where the app settled them. Written once because the footer draws both on one
@@ -702,8 +702,7 @@ function Outcome({
               because they are now the same wish. The saving still stands. */}
           {outcome.merged > 0 && (
             <li>
-              {count(outcome.merged)} merged with an existing entry in the same folder and finish.
-              Their copies were added together.
+              {count(outcome.merged)} merged into an existing entry with the same folder and finish.
             </li>
           )}
           {outcome.unpriced > 0 && (
@@ -751,8 +750,8 @@ function headlineOf(outcome: OptimizeOutcome, currency: Marketplace["currency"])
 function skippedLine(skip: OptimizeSkip): string {
   const name = skip.name ?? `Item ${skip.wishId}`;
   return skip.status === "stale"
-    ? `${name} — printing already changed, skipped.`
-    : `${name} — no longer on your wishlist.`;
+    ? `${name}: printing already changed.`
+    : `${name}: no longer on your wishlist.`;
 }
 
 /**

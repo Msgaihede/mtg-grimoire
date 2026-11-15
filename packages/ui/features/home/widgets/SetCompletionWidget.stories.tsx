@@ -118,7 +118,7 @@ export const NoSetsYet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText("No sets found. Sets for cards in your collection will show up here."),
+      await canvas.findByText("No sets yet. Sets you own cards from show up here."),
     ).toBeInTheDocument();
   },
 };

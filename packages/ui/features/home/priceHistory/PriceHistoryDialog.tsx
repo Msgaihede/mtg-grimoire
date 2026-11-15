@@ -279,7 +279,7 @@ function Body({
       )}
       {!pending && error === null && card === null && (
         <p className="mx-5 mt-3 text-sm text-dim">
-          This printing is no longer in the card database.
+          This printing is no longer in the card data.
         </p>
       )}
 
@@ -633,7 +633,7 @@ function HistoryFigures({
         />
       ) : (
         <p className="text-sm text-dim">
-          Not enough data yet. A chart needs at least two days of prices.
+          A chart needs at least two days of prices.
         </p>
       )}
 

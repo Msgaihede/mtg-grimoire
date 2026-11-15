@@ -120,7 +120,7 @@ describe("QuickUnwishDialog", () => {
     const { onConfirm } = open({ wishes: [wish({ cardId: "bolt-m10", setCode: "m10" })] });
 
     expect(await screen.findByRole("radio")).toBeChecked();
-    await userEvent.click(screen.getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add 4 copies" }));
     expect(onConfirm).toHaveBeenCalledWith(31);
   });
 
@@ -141,7 +141,7 @@ describe("QuickUnwishDialog", () => {
   it("says how many copies the press records", async () => {
     open({ copies: 1 });
 
-    expect(await screen.findByRole("button", { name: "Record 1 copy" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Add 1 copy" })).toBeInTheDocument();
     expect(screen.getByText(/1 copy of Lightning Bolt/)).toBeInTheDocument();
   });
 
@@ -149,7 +149,7 @@ describe("QuickUnwishDialog", () => {
   it("confirms on the pre-picked wish", async () => {
     const { onConfirm } = open();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add 4 copies" }));
 
     expect(onConfirm).toHaveBeenCalledWith(31);
   });
@@ -165,7 +165,7 @@ describe("QuickUnwishDialog", () => {
     const { onConfirm } = open();
 
     await userEvent.click(await screen.findByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` }));
-    await userEvent.click(screen.getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add 4 copies" }));
 
     expect(onConfirm).toHaveBeenCalledWith(32);
     expect(onConfirm).toHaveBeenCalledTimes(1);
@@ -212,11 +212,11 @@ describe("QuickUnwishDialog", () => {
     open({ failure: "that wishlist line is not there any more" });
 
     expect(await within(panel()).findByRole("alert")).toHaveTextContent(
-      "Couldn't record those copies — that wishlist line is not there any more",
+      "Couldn't add those copies — that wishlist line is not there any more",
     );
     // Still answerable: a refusal leaves the question open with its button live, which is what
     // makes a second press possible at all.
-    expect(screen.getByRole("button", { name: "Record 4 copies" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add 4 copies" })).toBeEnabled();
   });
 
   /** In flight, the verb keeps its name and the button is out of reach — the `disabled`
@@ -225,7 +225,7 @@ describe("QuickUnwishDialog", () => {
   it("says the write is in flight and refuses a second press", async () => {
     open({ pending: true });
 
-    const button = await screen.findByRole("button", { name: "Recording…" });
+    const button = await screen.findByRole("button", { name: "Adding…" });
     expect(button).toBeDisabled();
   });
 
@@ -240,7 +240,7 @@ describe("QuickUnwishDialog", () => {
     expect(
       await screen.findByText("This printing is no longer on your wishlist."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record 4 copies" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add 4 copies" })).toBeDisabled();
   });
 
   /** Closed is nothing mounted, which is `Dialog`'s own guarantee and what makes the pre-pick

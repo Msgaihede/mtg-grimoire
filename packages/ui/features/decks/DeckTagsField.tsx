@@ -42,7 +42,7 @@ const DECK_COPY: TagsFieldCopy = {
   hint: (count) =>
     count < 2
       ? "Shown on the deck tile. Press Enter to add one."
-      : "Shown on the deck tile in this order. Drag a tag to move it.",
+      : "Shown on the deck tile in this order. Drag to reorder.",
 };
 
 export interface DeckTagsFieldProps {
@@ -435,7 +435,7 @@ function TagChip({
             }
           }}
           aria-label={`Move ${tag}, ${index + 1} of ${total}`}
-          {...tip("Drag to reorder, or press the left and right arrow keys")}
+          {...tip("Drag or use the arrow keys to reorder")}
           className={cn("min-w-0 cursor-grab truncate rounded-sm text-left", FOCUS)}
         >
           {tag}
@@ -444,7 +444,7 @@ function TagChip({
       {onRemove !== undefined && (
         <button
           type="button"
-          aria-label={`Remove the ${tag} tag`}
+          aria-label={`Remove ${tag}`}
           onClick={onRemove}
           className={cn(
             "grid size-5 shrink-0 place-items-center rounded-sm text-dim",

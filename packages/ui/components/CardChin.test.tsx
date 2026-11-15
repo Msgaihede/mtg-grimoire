@@ -297,7 +297,7 @@ describe("CardChin", () => {
         </TooltipProvider>,
       );
       const mark = screen.getByRole("img", {
-        name: "Unreleased — out 2026-11-14 · Image updated 2026-10-09",
+        name: "Unreleased, out 2026-11-14 · Image updated 2026-10-09",
       });
       expect(mark.getAttribute("class")).toContain("text-destructive");
       expect(mark.previousElementSibling).toBe(screen.getByText("TLA · 12"));
@@ -310,7 +310,7 @@ describe("CardChin", () => {
         ...(document.getElementById(TOOLTIP_PANEL_ID)?.querySelectorAll(".block") ?? []),
       ];
       expect(lines.map((line) => line.textContent)).toEqual([
-        "Unreleased — out 2026-11-14",
+        "Unreleased, out 2026-11-14",
         "Image updated 2026-10-09",
       ]);
     });
@@ -326,7 +326,7 @@ describe("CardChin", () => {
           seam="art"
         />,
       );
-      expect(screen.getByRole("img", { name: "Unreleased — out 2026-11-14" })).toBeInTheDocument();
+      expect(screen.getByRole("img", { name: "Unreleased, out 2026-11-14" })).toBeInTheDocument();
     });
 
     it("draws nothing for a released printing", () => {

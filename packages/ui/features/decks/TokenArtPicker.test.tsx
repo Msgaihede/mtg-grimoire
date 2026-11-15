@@ -453,7 +453,7 @@ describe("TokenArtPicker — All tokens", () => {
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(
-      screen.getByText("This deck doesn’t make any tokens or emblems."),
+      screen.getByText("This deck makes no tokens or emblems."),
     ).toBeInTheDocument();
   });
 

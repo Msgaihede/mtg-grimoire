@@ -678,7 +678,7 @@ describe("singleton exceptions (exact phrases)", () => {
         severity: "warning",
         code: "unknown-copy-limit",
         message:
-          'Couldn\'t read Goblin Trapfinder\'s copy limit ("thirty"), so its 8 copies ' +
+          "Couldn't read Goblin Trapfinder's copy limit (“thirty”), so its 8 copies " +
           "weren't checked.",
         cardIds: ["c-Goblin Trapfinder"],
       },
@@ -726,7 +726,7 @@ describe("legality (per printing — TRAP B)", () => {
       {
         severity: "error",
         code: "not-legal",
-        message: "Lightning Bolt is not legal in Modern.",
+        message: "Lightning Bolt isn't legal in Modern.",
         cardIds: ["c-Lightning Bolt"],
       },
     ]);
@@ -798,7 +798,7 @@ describe("legality (per printing — TRAP B)", () => {
       {
         severity: "error",
         code: "not-legal",
-        message: "Serra Angel is not legal in Old School.",
+        message: "Serra Angel isn't legal in Old School.",
         cardIds: ["serra-8ed"],
       },
     ]);
@@ -818,7 +818,7 @@ describe("legality (per printing — TRAP B)", () => {
     expect(validateDeck(padTo(60, [card({ legalities: "{}" })]), spec("modern"))[0]).toMatchObject({
       severity: "error",
       code: "not-legal",
-      message: "Lightning Bolt is not legal in Modern.",
+      message: "Lightning Bolt isn't legal in Modern.",
     });
     expect(validateDeck(padTo(60, [card({ legalities: null })]), spec("modern"))[0]).toMatchObject({
       code: "not-legal",
@@ -839,7 +839,7 @@ describe("legality (per printing — TRAP B)", () => {
         severity: "warning",
         code: "unknown-legality",
         message:
-          'Lightning Bolt has an unrecognized Modern legality ("probationary").',
+          "Lightning Bolt has an unrecognized Modern legality (“probationary”).",
         cardIds: ["c-Lightning Bolt"],
       },
     ]);
@@ -885,7 +885,7 @@ describe("legality (per printing — TRAP B)", () => {
         severity: "warning",
         code: "orphan",
         message:
-          "Ancient Tomb isn't in the card database, so it wasn't checked against Modern rules.",
+          "Ancient Tomb isn't in your card data, so it wasn't checked against Modern rules.",
         cardIds: ["c-Ancient Tomb"],
       },
     ]);
@@ -917,7 +917,7 @@ describe("legality (per printing — TRAP B)", () => {
       {
         severity: "warning",
         code: "orphan",
-        message: "Island isn't in the card database, so it wasn't checked against Modern rules.",
+        message: "Island isn't in your card data, so it wasn't checked against Modern rules.",
         cardIds: ["c-Island"],
       },
     ]);
@@ -1009,7 +1009,7 @@ describe("one sentence, one finding", () => {
       {
         severity: "error",
         code: "not-legal",
-        message: "Serra Angel is not legal in Old School.",
+        message: "Serra Angel isn't legal in Old School.",
         cardIds: ["serra-8ed"],
       },
       {

@@ -67,13 +67,10 @@ const PAIRING_POLL_KEY: QueryKey = ["sync", "pairing", "poll"];
  * wiped, which is the opposite of what happens.
  */
 export const REMOVAL_WARNING =
-  "Removing a device changes your sync key. The removed device keeps anything it already " +
-  "synced, and it can't be wiped remotely.";
+  "This changes your sync key. The removed device keeps what it already synced. It can't be wiped remotely.";
 
 export const LEAVE_WARNING =
-  "Your collection stays on this device. If the relay can't be reached, or this device hasn't " +
-  "heard of every device in the group, other devices may still list this one until they " +
-  "remove it.";
+  "Your collection stays on this device. If the relay can't be reached, other devices may still list this one until they remove it.";
 
 /**
  * What the host has to say to a paired device about its storage — the light-app spec §7:
@@ -146,8 +143,7 @@ const askMembershipElsewhere = (): Promise<string | null> =>
  * are.
  */
 export const EXPIRED_NOTE =
-  "Pairing code expired (codes last 10 minutes). Start again or get a new code from the other " +
-  "device.";
+  "Pairing code expired after 10 minutes. Start again or get a new code from the other device.";
 
 /**
  * A pairing in flight on this screen, and which half of it this device is playing.
@@ -523,7 +519,7 @@ export function relayNote(
       );
     case "unpaired":
       return (
-        "No other devices yet. Pair a device above to start syncing."
+        "No other devices yet. Pair one above to start syncing."
       );
     case "never":
       return "Nothing has synced yet.";
@@ -553,7 +549,7 @@ export function liveNote(state: LiveState): string | null {
   switch (state) {
     case "offline":
       return (
-        "Not connected to the relay. Changes will sync when it's back."
+        "Not connected. Changes sync when the connection is back."
       );
     case "off":
     case "connecting":
@@ -601,7 +597,7 @@ export function liveNote(state: LiveState): string | null {
 export function outcomeText(outcome: RelayOutcome | null, hosted = false): string {
   if (outcome === null) {
     return hosted
-      ? "Nothing to sync. Sync is not on for this device."
+      ? "Nothing to sync. Sync isn't on for this device."
       : "Nothing to sync. Connect a membership and pair a device first.";
   }
   const parts = [
@@ -619,7 +615,7 @@ export function outcomeText(outcome: RelayOutcome | null, hosted = false): strin
     parts.push("See Needs review below.");
   }
   if (outcome.baselineOps > 0) {
-    parts.push(`First sync with a new device: ${count(outcome.baselineOps)} rows synced.`);
+    parts.push(`First sync with a new device: ${count(outcome.baselineOps)} items synced.`);
   }
   if (outcome.heldNewer > 0) {
     parts.push(
@@ -707,8 +703,7 @@ export function supporterNote(
  * teaches them there is something to worry about.
  */
 const LAPSE_REASSURANCE =
-  "Your collection stays on this device, and your devices stay paired. Reconnect anytime to " +
-  "continue.";
+  "Your collection stays on this device and your devices stay paired. Reconnect anytime.";
 
 /**
  * The one dead end this press can still walk a reader into, and the reassurance beside it.
@@ -739,15 +734,13 @@ const LAPSE_REASSURANCE =
  * level out of the `offering` block leaves the rest of the file green.
  */
 const CONNECT_ORDER =
-  "A device can only be in one group. If your other devices already sync, pair this one with " +
-  "them first. One membership covers the whole group.";
+  "One membership covers a whole group. If your other devices already sync, pair this one with them first.";
 
 /**
  * The cost of a *re-claim*, said beside the field that makes one.
  */
 const RECLAIM_WARNING =
-  "One membership covers one group. Claiming it here stops sync for your previous group. " +
-  "Their data isn't affected.";
+  "One membership covers one group. Claiming it here stops sync for your previous group. Its data isn't affected.";
 
 /**
  * The one line drawn from `RelayStatus.pullHeld === "newer"`, and the reason it is a paragraph
@@ -785,8 +778,7 @@ export const PULL_HELD_NEWER_NOTICE =
  * the hold itself does.
  */
 export const PULL_HELD_CLOCK_NOTICE =
-  "A device in your group has its clock set more than a day ahead of this one. Its changes " +
-  "wait until this device's clock catches up — check the date and time on both.";
+  "A device in your group has its clock more than a day ahead. Its changes wait until this device's clock catches up. Check the date and time on both.";
 
 /**
  * The membership, the relay it pays for, and the one press that makes a round trip.
@@ -970,8 +962,7 @@ function SupporterSection({
       <h3 className="font-heading text-sm leading-none">{hosted ? "Relay" : "Membership"}</h3>
 
       <p className="text-sm text-dim">
-        Your devices sync through an end-to-end encrypted relay server that requires no account.
-        {hosted ? null : " Relay hosting is funded by supporters on Patreon."}
+        Your devices sync through an end-to-end encrypted relay. No account needed.{hosted ? null : " Relay hosting is funded by supporters on Patreon."}
       </p>
 
       {hosted ? (
@@ -981,7 +972,7 @@ function SupporterSection({
         // code — and no "loading membership", which would name the thing this host never does.
         supporter === null ? (
           supporterRead.isError ? (
-            <p className="text-sm text-dim">Couldn't load whether sync is on.</p>
+            <p className="text-sm text-dim">Couldn't load sync status.</p>
           ) : null
         ) : on ? null : (
           <p className="text-sm">{elsewhere}</p>
@@ -1534,8 +1525,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
       <h3 className="font-heading text-sm leading-none">Devices</h3>
 
       <p className="text-sm text-dim">
-        Pairing links two online devices using a 6-digit confirmation code.
-        No account or password required.
+        Pair two online devices with a 6-digit code. No account or password needed.
       </p>
 
       {status === null ? (
@@ -1551,8 +1541,8 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
           <div className="space-y-1">
             <p className="text-sm">
               {paired
-                ? `${status.deviceName} — in a group of ${plural(status.devices.length, "device")}.`
-                : `${status.deviceName} — not paired yet.`}
+                ? `${status.deviceName}: in a group of ${plural(status.devices.length, "device")}.`
+                : `${status.deviceName}: not paired yet.`}
             </p>
             <p className="font-mono text-xs break-all text-dim tabular-nums">{status.deviceId}</p>
           </div>
@@ -1601,7 +1591,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                 }}
                 className={cn(PANEL_BUTTON, "border-border hover:bg-bg")}
               >
-                Enter a code from another device
+                Enter a code
               </button>
               <button
                 type="button"
@@ -1675,7 +1665,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
               {flow.sas === null ? (
                 <>
                   <p className="text-sm">
-                    Point the other device&rsquo;s camera at this, or type the code into it.
+                    Scan this with the other device, or type the code there.
                   </p>
                   {/* **The typed form has a floor of its own, so it drops under the picture rather
                       than standing beside it in whatever is left.** It grew from a basis of
@@ -1754,7 +1744,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
               </p>
               <Digits sas={flow.sas} />
               <p className="text-sm text-dim">
-                Compare these codes, then click Codes match on the other device.
+                If they match, click Codes match on the other device.
               </p>
               <Cancel onCancel={() => cancel.mutate()} />
             </div>

@@ -59,7 +59,7 @@ describe("the Filters button", () => {
     const button = filtersButton();
     // The whole name: the badge is hidden from a screen reader, so the name is the count's only
     // way there.
-    expect(button).toHaveAccessibleName("Filters — 2 active");
+    expect(button).toHaveAccessibleName("Filters, 2 active");
     expect(within(button).getByText("2")).toHaveAttribute("aria-hidden", "true");
   });
 
@@ -81,7 +81,7 @@ describe("the Filters button", () => {
     await userEvent.click(filtersButton());
     const sheet = await screen.findByRole("dialog", { name: "Filters" });
     expect(within(sheet).getByRole("button", { name: /^Reset all/ })).toHaveAccessibleName(
-      "Reset all — 0 filters active",
+      "Reset all: 0 filters active",
     );
   });
 });
@@ -110,7 +110,7 @@ describe("the filters sheet", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: /^Instant\b/ }));
     await waitFor(() => expect(tiles().length).toBeLessThan(before), SETTLE);
 
-    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all — 2 filters/ }));
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all: 2 filters/ }));
 
     await waitFor(() => expect(tiles().length).toBe(before), SETTLE);
     expect(within(sheet).getByRole("button", { name: /^Blue\b/ })).toHaveAttribute(
@@ -118,7 +118,7 @@ describe("the filters sheet", () => {
       "false",
     );
     // At zero it stays drawn, greyed — a control that came and went would move the footer.
-    expect(within(sheet).getByRole("button", { name: /^Reset all — 0 filters/ })).toHaveAttribute(
+    expect(within(sheet).getByRole("button", { name: /^Reset all: 0 filters/ })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
@@ -133,13 +133,13 @@ describe("the filters sheet", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: /^Red\b/ }));
 
     // One kind in the sheet, and the word in the box is not a second.
-    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all — 1 filter / }));
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all: 1 filter / }));
 
     expect(within(sheet).getByRole("button", { name: /^Red\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
-    expect(within(sheet).getByRole("button", { name: /^Reset all — 0 filters/ })).toHaveAttribute(
+    expect(within(sheet).getByRole("button", { name: /^Reset all: 0 filters/ })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
@@ -187,14 +187,14 @@ describe("the stated filters", () => {
 
     // Two colours are one kind and one chip, which is one off the badge when it goes.
     await userEvent.click(
-      screen.getByRole("button", { name: "Remove filter — Color: Red, Green" }),
+      screen.getByRole("button", { name: "Remove filter, Color: Red, Green" }),
     );
 
-    expect(screen.queryByRole("button", { name: /^Remove filter — Color/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove filter, Color/ })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Remove filter — Rarity: Rare" }),
+      screen.getByRole("button", { name: "Remove filter, Rarity: Rare" }),
     ).toBeInTheDocument();
-    expect(filtersButton()).toHaveAccessibleName("Filters — 1 active");
+    expect(filtersButton()).toHaveAccessibleName("Filters, 1 active");
   });
 });
 
@@ -221,7 +221,7 @@ describe("a refused next page", () => {
     fireEvent.scroll(scroller, { target: { scrollTop: 1_000_000 } });
 
     const retry = await screen.findByRole("button", { name: "Try again" }, SETTLE);
-    expect(screen.getByText("The next cards could not be read.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load more cards.")).toBeInTheDocument();
     // An answer about the page after the wall, not about the wall: no alert, and the cards stay.
     expect(screen.queryByRole("alert")).toBeNull();
     expect(within(wall).getAllByRole("button").length).toBeGreaterThan(0);
@@ -235,7 +235,7 @@ describe("a refused next page", () => {
       SETTLE,
     );
     expect(search.mock.calls.length).toBeGreaterThan(asked);
-    expect(screen.queryByText("The next cards could not be read.")).toBeNull();
+    expect(screen.queryByText("Couldn't load more cards.")).toBeNull();
   });
 });
 
@@ -250,7 +250,7 @@ describe("a figure that cannot be read over an empty wall", () => {
     await userEvent.click(tab("Collection"));
 
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your collection's figures could not be read.",
+      "Couldn't load your collection's totals.",
     );
     expect(screen.getByRole("heading", { name: "Not sorted" })).toBeInTheDocument();
     expect(screen.queryByText("Nothing in your collection yet.")).toBeNull();
@@ -266,7 +266,7 @@ describe("a figure that cannot be read over an empty wall", () => {
     // The cabinet (step 3.3) is laid out from those counts, so without them it says so rather
     // than drawing shelves it cannot size.
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your wishlist's shelves could not be read.",
+      "Couldn't load your folders.",
     );
     expect(screen.queryByText("Nothing on your wishlist yet.")).toBeNull();
   });
@@ -295,7 +295,7 @@ describe("the Tags sheet", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: "Close tags" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByRole("button", { name: /^Tags/ })).toHaveAccessibleName("Tags — 1 picked");
+    expect(screen.getByRole("button", { name: /^Tags/ })).toHaveAccessibleName("Tags, 1 picked");
     expect(
       screen.getByRole("button", { name: /^Landscape, art tag, included/ }),
     ).toBeInTheDocument();

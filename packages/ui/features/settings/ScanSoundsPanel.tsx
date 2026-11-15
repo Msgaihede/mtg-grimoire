@@ -97,8 +97,7 @@ export function ScanSoundsPanel(): JSX.Element {
             Play a sound when a card is scanned
           </p>
           <p className="mt-0.5 text-xs leading-snug text-dim">
-            Pricier cards get a bigger jingle, at the prices you see on {marketplace.label} (
-            {marketplace.currency.toUpperCase()}).
+            Pricier cards get a bigger jingle. Prices are {marketplace.label}&rsquo;s ({marketplace.currency.toUpperCase()}).
           </p>
         </div>
         <button

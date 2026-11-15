@@ -554,7 +554,7 @@ describe("buildCardMenu", () => {
     const items = buildCardMenu({ ...BOLT, oracleId: null }, deps());
     const item = find(items, "View all printings") as MenuAction;
     expect(item.disabled).toBe(true);
-    expect(item.reason).toBe("this printing has left the card database");
+    expect(item.reason).toBe("this printing is no longer in the card data");
   });
 
   /** Inside the modal itself the row would re-ask a question already on screen. */
@@ -565,7 +565,7 @@ describe("buildCardMenu", () => {
 
     expect(item.disabled).toBe(true);
     // And **not** the orphan's sentence, which would be false of a perfectly healthy card.
-    expect(item.reason).toBe("you are already looking at them");
+    expect(item.reason).toBe("already open");
     item.onSelect();
     expect(openAllPrintings).not.toHaveBeenCalled();
   });

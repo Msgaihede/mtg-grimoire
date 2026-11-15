@@ -49,14 +49,14 @@ const TITLES: Record<string, string> = {
   CastOffer: "Cast it?",
   UnlessPayment: "Pay?",
   ReplacementChoice: "Choose a replacement effect",
-  OrderTriggers: "Put your triggers in order",
+  OrderTriggers: "Order your triggers",
   AssignCombatDamage: "Assign combat damage",
   RetargetChoice: "Choose a new target",
 };
 
 /** What the reader is choosing, for the questions whose title alone does not say it. */
 const HELP: Record<string, string> = {
-  OrderTriggers: "Pick which one resolves first",
+  OrderTriggers: "Pick which resolves first",
   ReplacementChoice: "Pick the effect that applies",
 };
 

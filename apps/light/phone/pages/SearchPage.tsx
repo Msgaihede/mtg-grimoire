@@ -82,7 +82,7 @@ export function SearchResults({
   const cardData = useCardData();
   const held = useHeldDownloads();
   return query.isLoadingError ? (
-    <ReadError>The search could not be read.</ReadError>
+    <ReadError>Couldn't run the search.</ReadError>
   ) : !query.isPending && items.length === 0 ? (
     <NoCards
       empty={cardData.cardCount === 0 || search.unfiltered}

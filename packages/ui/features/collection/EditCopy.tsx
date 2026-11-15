@@ -277,7 +277,7 @@ export function EditCopy({
     <Dialog
       open={target !== null}
       title="Edit copy"
-      closeLabel="Close the copy editor"
+      closeLabel="Close copy editor"
       // Two fields and two buttons. Narrower than the copy picker's `w-[30rem]`, which has a
       // scrolling list in it; wider than the quick-add popup's `w-64`, which is anchored to a
       // row and has to fit beside one.

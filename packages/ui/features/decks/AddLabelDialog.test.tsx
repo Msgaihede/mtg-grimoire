@@ -45,7 +45,7 @@ describe("AddLabelDialog", () => {
   it("names the card the label is going on", async () => {
     mount();
     const dialog = await screen.findByRole("dialog", { name: "Add label" });
-    expect(within(dialog).getByText(/Put a label on “Lightning Bolt”/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Label “Lightning Bolt”/)).toBeInTheDocument();
   });
 
   /**
@@ -85,7 +85,7 @@ describe("AddLabelDialog", () => {
     mount();
     const user = userEvent.setup();
 
-    await user.type(screen.getByLabelText("Find or name a label"), "CANDID");
+    await user.type(screen.getByLabelText("Find or create a label"), "CANDID");
 
     const rows = screen.getAllByRole("listitem");
     expect(rows).toHaveLength(1);
@@ -96,7 +96,7 @@ describe("AddLabelDialog", () => {
     const { onCreate } = mount();
     const user = userEvent.setup();
 
-    await user.type(screen.getByLabelText("Find or name a label"), "Sac outlet");
+    await user.type(screen.getByLabelText("Find or create a label"), "Sac outlet");
     expect(screen.getByText(/No label named “Sac outlet”/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Moss" }));
@@ -115,10 +115,10 @@ describe("AddLabelDialog", () => {
     const { onCreate } = mount();
     const user = userEvent.setup();
 
-    await user.type(screen.getByLabelText("Find or name a label"), "  budget SWAP ");
+    await user.type(screen.getByLabelText("Find or create a label"), "  budget SWAP ");
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "“Budget swap” already exists — pick it from the list above",
+      "“Budget swap” already exists. Pick it from the list.",
     );
     const create = screen.getByRole("button", { name: "Create “budget SWAP”" });
     // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
@@ -133,7 +133,7 @@ describe("AddLabelDialog", () => {
   it("says so when every label the reader has is already in this list", async () => {
     mount({ choices: [] });
     expect(
-      await screen.findByText(/All your labels are already in this list/),
+      await screen.findByText(/All your labels are in this list/),
     ).toBeInTheDocument();
   });
 

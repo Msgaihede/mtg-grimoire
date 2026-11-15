@@ -148,7 +148,7 @@ export function CopyActions({
       subtitle={
         row === null
           ? tileRows.length > 1
-            ? `${tileRows.length} copies on this tile — which one?`
+            ? `${tileRows.length} copies on this tile. Pick one.`
             : undefined
           : `${copyOption(row).label} · ${row.folderName ?? ROOT}`
       }
@@ -197,7 +197,7 @@ function CopiesPage({
   onPick: (row: CollectionRow) => void;
 }) {
   if (rows.length === 0) {
-    return <p className="px-4 py-3 text-sm text-dim">These copies are not in your collection any more.</p>;
+    return <p className="px-4 py-3 text-sm text-dim">These copies are no longer in your collection.</p>;
   }
   return (
     <ul aria-label="Copies on this tile">
@@ -253,7 +253,7 @@ function RowPages({
     receipt.track(
       toasted(removeMany.mutateAsync({ entryIds: [row.id], name: row.name }), {
         done: removedReceipt(1, row.name),
-        failed: `Couldn't remove “${name}” from the collection`,
+        failed: `Couldn't remove “${name}” from your collection`,
       }),
       () => `Removed ${row.quantity} × ${name} from your collection.`,
       (outcome) => {
@@ -388,7 +388,7 @@ function RowPages({
           value={finish === null ? finishLabel(row.finish) : FINISH_LABEL[finish]}
           Icon={Sparkles}
           opens
-          reason={finish === null ? "this build cannot name the copy's finish" : null}
+          reason={finish === null ? "this version doesn't know this copy's finish" : null}
           onPress={() => setPage("finish")}
         />
         <SheetRow
@@ -396,7 +396,7 @@ function RowPages({
           value={`${row.setCode.toUpperCase()} · ${row.collectorNumber}`}
           Icon={Layers}
           opens
-          reason={row.oracleId === null ? "this printing has left the card database" : null}
+          reason={row.oracleId === null ? "this printing is no longer in the card data" : null}
           onPress={() => setPage("printing")}
         />
         {/* The menu's `Move to` is drawn only once the reader has a drawer of their own: with no
@@ -445,13 +445,13 @@ function FinishPage({
     <>
       <SheetBack label="Finish" onBack={onBack} />
       {detail.isPending ? (
-        <p className="px-4 py-3 text-sm text-dim">Loading the printing…</p>
+        <p className="px-4 py-3 text-sm text-dim">Loading printing…</p>
       ) : detail.isError ? (
         <p role="alert" className="px-4 py-3 text-sm text-destructive">
-          {`Couldn't read the printing — ${ipcError(detail.error)}`}
+          {`Couldn't load the printing — ${ipcError(detail.error)}`}
         </p>
       ) : offered.length <= 1 ? (
-        <p className="px-4 py-3 text-sm text-dim">This printing is sold in one finish.</p>
+        <p className="px-4 py-3 text-sm text-dim">This printing has only one finish.</p>
       ) : (
         <ul aria-label="Finishes">
           {offered.map((f) => (
@@ -576,7 +576,7 @@ function FolderPage({
               folder.id === row.folderId
                 ? "already here"
                 : locked.has(folder.id)
-                  ? "set aside"
+                  ? "locked"
                   : undefined
             }
             onPick={() => onPick(folder.id, folder.name)}

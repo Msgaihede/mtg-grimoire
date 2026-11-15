@@ -1418,7 +1418,7 @@ describe("DecksPage", () => {
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
     // The dialog has closed and the editor has opened over the wall, so the receipt is a toast.
-    expect(notices()).toMatchObject([{ title: "Deck “Sunday burn” created", tone: "success" }]);
+    expect(notices()).toMatchObject([{ title: "Created deck “Sunday burn”", tone: "success" }]);
   });
 
   /**
@@ -1545,7 +1545,7 @@ describe("DecksPage", () => {
     finish();
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(notices()).toMatchObject([{ title: "Deck “Burn” deleted", tone: "success" }]);
+    expect(notices()).toMatchObject([{ title: "Deleted deck “Burn”", tone: "success" }]);
   });
 
   it("duplicates a deck", async () => {
@@ -1558,7 +1558,7 @@ describe("DecksPage", () => {
     // the wall's sort puts it.
     await waitFor(() =>
       expect(notices()).toMatchObject([
-        { title: "Deck “Burn” duplicated", body: "The copy is “Burn (copy)”", tone: "success" },
+        { title: "Duplicated “Burn”", body: "The copy is “Burn (copy)”", tone: "success" },
       ]),
     );
   });
@@ -1577,8 +1577,8 @@ describe("DecksPage", () => {
     // One receipt per press, newest first: both tiles left the wall they were pressed on.
     await waitFor(() =>
       expect(notices().map((n) => n.title)).toEqual([
-        "Deck “Old Standard” restored",
-        "Deck “Burn” archived",
+        "Restored “Old Standard”",
+        "Archived “Burn”",
       ]),
     );
   });
@@ -1610,7 +1610,7 @@ describe("DecksPage", () => {
 
     await userEvent.keyboard("{F2}");
 
-    const field = await screen.findByLabelText("Rename Burn");
+    const field = await screen.findByRole("textbox", { name: "Rename Burn" });
     expect(field).toHaveFocus();
     expect(field).toHaveValue("Burn");
     // `keyboard`, never `type`: `type` focuses what it is handed and would repair the very
@@ -1641,7 +1641,7 @@ describe("DecksPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Couldn't change your decks — The database is busy.",
     );
-    expect(screen.getByLabelText("Rename Burn")).toHaveValue("Sunburn");
+    expect(screen.getByRole("textbox", { name: "Rename Burn" })).toHaveValue("Sunburn");
     expect(notices()).toEqual([]);
   });
 
@@ -1658,12 +1658,12 @@ describe("DecksPage", () => {
     const pencil = screen.getByRole("button", { name: "Rename the Burn deck" });
     await userEvent.click(pencil);
 
-    const field = await screen.findByLabelText("Rename Burn");
+    const field = await screen.findByRole("textbox", { name: "Rename Burn" });
     expect(field).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
 
-    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Rename Burn" })).not.toBeInTheDocument();
     // A *new* element with the same name — the one this render built where the field was.
     expect(screen.getByRole("button", { name: "Rename the Burn deck" })).toHaveFocus();
     expect(deckUpdate).not.toHaveBeenCalled();
@@ -1677,11 +1677,11 @@ describe("DecksPage", () => {
     const tile = await tileFor("Burn");
     tile.focus();
     await userEvent.keyboard("{F2}");
-    await screen.findByLabelText("Rename Burn");
+    await screen.findByRole("textbox", { name: "Rename Burn" });
 
     await userEvent.keyboard("{Escape}");
 
-    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Rename Burn" })).not.toBeInTheDocument();
     expect(tile).toHaveFocus();
     expect(deckUpdate).not.toHaveBeenCalled();
   });
@@ -1697,14 +1697,14 @@ describe("DecksPage", () => {
     const tile = await tileFor("Burn");
     tile.focus();
     await userEvent.keyboard("{F2}");
-    await screen.findByLabelText("Rename Burn");
+    await screen.findByRole("textbox", { name: "Rename Burn" });
     await userEvent.keyboard("Sunburn");
     await userEvent.keyboard("{Escape}");
     expect(tile).toHaveFocus();
 
     await userEvent.keyboard("{F2}");
 
-    const field = await screen.findByLabelText<HTMLInputElement>("Rename Burn");
+    const field = await screen.findByRole<HTMLInputElement>("textbox", { name: "Rename Burn" });
     expect(field).toHaveFocus();
     expect(field).toHaveValue("Burn");
     expect([field.selectionStart, field.selectionEnd]).toEqual([0, 4]);
@@ -1719,11 +1719,11 @@ describe("DecksPage", () => {
     const tile = await tileFor("Burn");
     tile.focus();
     await userEvent.keyboard("{F2}");
-    await screen.findByLabelText("Rename Burn");
+    await screen.findByRole("textbox", { name: "Rename Burn" });
 
     await userEvent.keyboard("  Burn {Enter}");
 
-    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Rename Burn" })).not.toBeInTheDocument();
     expect(tile).toHaveFocus();
     expect(deckUpdate).not.toHaveBeenCalled();
   });
@@ -1738,7 +1738,7 @@ describe("DecksPage", () => {
     const tile = await tileFor("Burn");
     tile.focus();
     await userEvent.keyboard("{F2}");
-    await screen.findByLabelText("Rename Burn");
+    await screen.findByRole("textbox", { name: "Rename Burn" });
 
     // jsdom lets the click's own focus land after a `focus()` called inside the blur, so where the
     // caret ends up cannot tell the two paths apart here — whether the tile was *asked* can.
@@ -1746,7 +1746,7 @@ describe("DecksPage", () => {
     const filter = screen.getByLabelText("Filter decks by name");
     await userEvent.click(filter);
 
-    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Rename Burn" })).not.toBeInTheDocument();
     expect(filter).toHaveFocus();
     expect(focusTile).not.toHaveBeenCalled();
     expect(deckUpdate).not.toHaveBeenCalled();
@@ -1759,16 +1759,16 @@ describe("DecksPage", () => {
     const tile = await tileFor("Burn");
     tile.focus();
     await userEvent.keyboard("{F2}");
-    await screen.findByLabelText("Rename Burn");
+    await screen.findByRole("textbox", { name: "Rename Burn" });
 
     await userEvent.tab();
     expect(screen.getByRole("button", { name: "Save name" })).toHaveFocus();
     await userEvent.tab();
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
-    expect(screen.getByLabelText("Rename Burn")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Rename Burn" })).toBeInTheDocument();
     await userEvent.tab();
 
-    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Rename Burn" })).not.toBeInTheDocument();
     expect(document.activeElement).not.toBe(tile);
     expect(deckUpdate).not.toHaveBeenCalled();
   });
@@ -1834,7 +1834,7 @@ describe("DecksPage", () => {
     await rightClick(await tileFor("Burn"));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
 
-    expect(await screen.findByLabelText("Rename Burn")).toHaveValue("Burn");
+    expect(await screen.findByRole("textbox", { name: "Rename Burn" })).toHaveValue("Burn");
   });
 
   /**
@@ -1933,7 +1933,7 @@ describe("DecksPage", () => {
 
     await rightClick(tile);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
-    await screen.findByLabelText("Rename Burn");
+    await screen.findByRole("textbox", { name: "Rename Burn" });
     await userEvent.keyboard("{Escape}");
 
     expect(document.activeElement).toBe(tile);
@@ -2620,7 +2620,7 @@ describe("DecksPage folders", () => {
     await waitFor(() =>
       expect(notices()).toMatchObject([
         {
-          title: "Folder “Commander” deleted",
+          title: "Deleted folder “Commander”",
           body: "2 decks moved to “All decks” · 1 subfolder deleted",
           tone: "success",
         },

@@ -362,7 +362,7 @@ function EditWishPanel({
           // control, because a reason a reader has to hover for is a reason half of them never
           // read — `MoveToFolder`'s `forbiddenReason` makes the same call about its own list.
           <p id={reasonId} className="text-[0.7rem] leading-relaxed text-dim">
-            No other printings. This one is no longer in the card database.
+            No other printings. This one is no longer in the card data.
           </p>
         )}
       </div>

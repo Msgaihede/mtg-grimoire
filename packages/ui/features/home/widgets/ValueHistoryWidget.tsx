@@ -134,7 +134,7 @@ const WINDOW_WORD: Record<ValueWindow, string> = {
   "30d": "30 days",
   "90d": "90 days",
   "1y": "1 year",
-  all: "all kept history",
+  all: "all history",
 };
 
 /** A split as a sentence says it. */
@@ -409,7 +409,7 @@ function ValueHistoryBody({
   if (failure !== null && failure !== undefined) {
     return (
       <WidgetMessage tone="destructive">
-        Couldn't load price history. {ipcError(failure)}
+        Couldn't load price history — {ipcError(failure)}
       </WidgetMessage>
     );
   }
@@ -602,7 +602,7 @@ function ValueHistoryBody({
             <p className="m-0 text-[0.8125rem] leading-[18px] text-dim">
               {firstDay
                 ? "Prices are recorded daily. The chart starts tomorrow."
-                : "No prices recorded in this range. Select a longer range to view price history."}
+                : "No prices recorded in this range. Try a longer range."}
             </p>
           )}
         </div>

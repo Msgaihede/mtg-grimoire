@@ -259,7 +259,7 @@ describe("ValueHistoryWidget", () => {
     seedRefusal(valueHistoryKey("type", MARKETPLACE), "database is locked");
     draw();
     expect(
-      screen.getByText("Couldn't load price history. database is locked"),
+      screen.getByText("Couldn't load price history — database is locked"),
     ).toBeInTheDocument();
   });
 
@@ -584,7 +584,7 @@ describe("WishlistValueHistoryWidget", () => {
     seedRefusal(wishlistValueHistoryKey("type", MARKETPLACE), "database is locked");
     drawWishes();
     expect(
-      screen.getByText("Couldn't load price history. database is locked"),
+      screen.getByText("Couldn't load price history — database is locked"),
     ).toBeInTheDocument();
   });
 

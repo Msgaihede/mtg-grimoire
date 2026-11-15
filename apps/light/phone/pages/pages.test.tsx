@@ -78,7 +78,7 @@ describe("Search", () => {
 
     await userEvent.click(tab("Search"));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("The search could not be read.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't run the search.");
     expect(screen.queryByRole("list", { name: "Search results" })).toBeNull();
     // The box stays: the way out of a search that failed is another search.
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();

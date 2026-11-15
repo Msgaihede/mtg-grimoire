@@ -341,7 +341,7 @@ export const DeckLedger = memo(function DeckLedger({
                     aria-pressed={missingOnly}
                     {...tip(
                       missingOnly
-                        ? "Showing only missing cards. Click to show all cards."
+                        ? "Showing only missing cards. Click to show all."
                         : "Show only missing cards",
                     )}
                     onClick={onMissingOnlyToggle}
@@ -407,7 +407,7 @@ export const DeckLedger = memo(function DeckLedger({
             // so the spread is the whole binding.
             {...tip(
               gameChangersOnly
-                ? "Showing only Game Changers. Click to show all cards."
+                ? "Showing only Game Changers. Click to show all."
                 : "Show only Game Changers",
             )}
             onClick={onGameChangersOnlyToggle}

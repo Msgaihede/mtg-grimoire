@@ -75,7 +75,7 @@ describe("tokenTheoryPlan", () => {
   /**
    * **A token's name does not identify it** — `Wurmcoil Engine` makes two different `Wurm`s. A
    * plan making the Lifelink one against a live list making the Deathtouch one is a different
-   * token, not another printing of the same one, so the mark is the X and never `Art Mismatch`.
+   * token, not another printing of the same one, so the mark is the X and never `Art mismatch`.
    */
   it("crosses a different token that only shares the planned token's name", () => {
     const planned = view({ oracleId: "o-wurm-lifelink", name: "Wurm", printingId: "p-wl" });

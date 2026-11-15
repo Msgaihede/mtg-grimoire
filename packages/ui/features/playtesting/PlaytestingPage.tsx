@@ -218,7 +218,7 @@ function lobbyNotice(lobby: LobbyState | null): string | null {
   if (lobby.phase === "closed")
     return `The lobby closed${lobby.closedReason ? `: ${lobby.closedReason}` : "."}`;
   if (lobby.role === "guest" && !lobby.hostOnline)
-    return `${lobby.hostName} has dropped — the game goes on when they are back.`;
+    return `${lobby.hostName} dropped. The game resumes when they're back.`;
   return null;
 }
 

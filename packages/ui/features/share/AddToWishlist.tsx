@@ -363,7 +363,7 @@ export function AddToWishlist({
       <div className="flex flex-col gap-4 border-t border-border p-5">
         <div className="flex flex-wrap items-center gap-2">
           <label htmlFor="want-folder" className="text-sm text-dim">
-            Add them to
+            Add to
           </label>
           {/* A native `<select>`, and every `value` matches an option by construction: a
               controlled select whose value matches nothing does not draw blank, it silently
@@ -425,7 +425,7 @@ export function AddToWishlist({
               ? "Adding…"
               : landed.size === 0
                 ? `Add ${cards(wants.length)}`
-                : `Add the remaining ${cards(pending.length)}`}
+                : `Add remaining ${cards(pending.length)}`}
           </button>
         </div>
       </div>

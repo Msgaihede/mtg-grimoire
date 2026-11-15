@@ -486,7 +486,7 @@ export const GroupAndSort: Story = {
     // beside it. It begins with the visible label all the same (WCAG 2.5.3).
     const chip = canvas.getByRole("button", { name: /^Split X/ });
     await expect(chip).toHaveAccessibleName(
-      "Split X — group X-cost cards separately instead of counting X as 0",
+      "Split X: group X-cost cards separately instead of counting X as 0",
     );
     // A pressed-state control and never the `disabled` attribute, which would take it out of the
     // tab order. *Which* way it is set is the deck's own column and therefore the seed's to say,
@@ -1021,7 +1021,7 @@ export const EmptyCommandZone: Story = {
     // and the format is not, because it is the deck's own and the whole point of the story.
     await userEvent.click(canvas.getByRole("button", { name: /^\d+ issues · Commander$/ }));
     await expect(canvas.getByRole("dialog", { name: "Commander check" })).toHaveTextContent(
-      "Commander decks need a commander; the commander zone is empty.",
+      "Commander decks need a commander; the command zone is empty.",
     );
   },
 };
@@ -1199,7 +1199,7 @@ export const Gone: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText("This deck no longer exists. It may have been deleted."),
+      await canvas.findByText("This deck no longer exists."),
     ).toBeInTheDocument();
     // Not an alert: nothing failed, and a red band would make a deleted deck read as a fault.
     await expect(canvas.queryByRole("alert")).toBeNull();

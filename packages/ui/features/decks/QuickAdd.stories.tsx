@@ -356,7 +356,7 @@ export const ClickToAdd: Story = {
  * `onKeyDown` handles Enter *before* it gives up on an empty list.
  *
  * **The field is not cleared.** A hit and a miss are different next actions: type the next card,
- * or correct this one. The one live region carries both, so the sentence replaces "Looking…"
+ * or correct this one. The one live region carries both, so the sentence replaces "Searching…"
  * rather than appearing beside it.
  */
 export const NoMatch: Story = {

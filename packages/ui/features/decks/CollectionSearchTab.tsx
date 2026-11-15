@@ -691,7 +691,7 @@ export function CollectionSearchTab({
           split the card tab makes, and the reason the caption above cannot carry it. */}
       {!empty && listFailure && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
-          {query.isFetchNextPageError ? "Couldn't load more copies" : "Couldn't refresh these"} —{" "}
+          {query.isFetchNextPageError ? "Couldn't load more copies" : "Couldn't refresh the list"} —{" "}
           {listFailure}
         </p>
       )}
@@ -759,11 +759,11 @@ function AddButton({
 
   const refusal =
     play === "unread"
-      ? `${tile.name} — checking deck…`
+      ? `${tile.name}: checking the deck…`
       : play === "unreadable"
-        ? `${tile.name} — couldn't check the deck`
+        ? `${tile.name}: couldn't check the deck`
         : play === "notPlayed"
-          ? `${tile.name} is not in this deck — add it from the Card search tab first`
+          ? `${tile.name} isn't in this deck. Add it from All cards first.`
           : tile.add === null
             ? `${tile.name} is already in this deck`
             : null;
@@ -826,7 +826,7 @@ function AddButton({
               ? lands.name === null
                 ? `Take from ${place.name}`
                 : `Take from ${place.name} → ${lands.name}`
-              : `Add${into} — your copy in ${place.name}`
+              : `Add${into} from ${place.name}`
             : landsIn === null
               ? UNNAMED_PILE_TIP
               : `Add${into}`),
@@ -901,8 +901,7 @@ function Confirm({
       className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5"
     >
       <p className="text-[0.6875rem] leading-relaxed text-destructive">
-        Your copy of “{tile.name}” is in “{deckName}”. Moving it here takes it off that deck’s list
-        too.
+        Your copy of “{tile.name}” is in “{deckName}”. Moving it here removes it from that deck.
       </p>
       {/* Said only where it can be promised: a pile the rule has not named yet is not guessed at
           in the one sentence a reader is being asked to agree to. */}

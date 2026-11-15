@@ -204,7 +204,7 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
     return (
       <>
         <div className="min-h-0 flex-1">
-          <ReadError>Your decks could not be read.</ReadError>
+          <ReadError>Couldn't load your decks.</ReadError>
         </div>
         {doors}
       </>

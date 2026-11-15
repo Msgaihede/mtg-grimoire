@@ -68,7 +68,7 @@ export function GoldfishPage({
     leaveGameLobby(client).then(
       () =>
         notify.info("Lobby closed", {
-          body: "Your lobby game was put away to goldfish this deck.",
+          body: "Ended your lobby game to goldfish this deck.",
         }),
       (e: unknown) => notify.error(ipcError(e)),
     );
@@ -79,14 +79,14 @@ export function GoldfishPage({
       <EndGameDialog
         open
         title={hosting ? "Close your lobby game?" : "End your Playtesting game?"}
-        confirmLabel={hosting ? "Close it and goldfish" : "End it and goldfish"}
+        confirmLabel={hosting ? "Close and goldfish" : "End and goldfish"}
         cancelLabel="Keep it"
         onConfirm={() => setClear(true)}
         onCancel={back}
       >
         {hosting
-          ? "You are hosting a lobby game on the Playtesting page, with people at the table. Goldfishing this deck ends that game for everyone, and the lobby closes."
-          : "A game is underway on the Playtesting page. Goldfishing this deck puts that game away for good."}
+          ? "You're hosting a lobby game on Playtesting. Goldfishing this deck ends it for everyone and closes the lobby."
+          : "A game is underway on Playtesting. Goldfishing this deck ends it for good."}
       </EndGameDialog>
     );
   }

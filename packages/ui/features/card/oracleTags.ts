@@ -47,7 +47,7 @@ export const ORACLE_TAG_STATUS_KEY: QueryKey = ["tags", "oracle", "status"];
  * second sentence is the Tags page's, word for word: there is no button for this anywhere in the
  * app, so the honest instruction is that nothing needs a press.
  */
-export const ORACLE_TAGS_NEVER_FETCHED = "Tag data is still downloading. Check back shortly.";
+export const ORACLE_TAGS_NEVER_FETCHED = "Oracle tags are still downloading.";
 
 /** An empty answer from a taxonomy that *is* here: Tagger's editors have not tagged this card.
  *  The other half of {@link ORACLE_TAGS_NEVER_FETCHED}'s split, and the claim that needs the

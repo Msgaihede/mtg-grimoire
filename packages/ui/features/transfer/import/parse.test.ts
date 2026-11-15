@@ -146,9 +146,9 @@ describe("parseDecklist", () => {
       );
       expect(out.lines).toEqual([]);
       expect(out.issues.map((i) => [i.lineNumber, i.reason])).toEqual([
-        [3, "No card name on this line."],
-        [4, "Quantity can't be zero."],
-        [5, "`two` is not a whole number of copies"],
+        [3, "no card name on this line"],
+        [4, "quantity can't be zero"],
+        [5, "`two` isn't a whole number of copies"],
       ]);
     });
 
@@ -250,7 +250,7 @@ describe("parseDecklist", () => {
     expect(out.lines).toHaveLength(3); // "???" is a nameable card as far as this parser knows
     const junk = parseDecklist("1 Sol Ring\n0 Shock");
     expect(junk.issues).toEqual([
-      { lineNumber: 2, raw: "0 Shock", reason: "Quantity can't be zero." },
+      { lineNumber: 2, raw: "0 Shock", reason: "quantity can't be zero" },
     ]);
     expect(junk.lines).toHaveLength(1);
   });
@@ -1182,12 +1182,12 @@ describe("a CSV's quantity column", () => {
     );
     expect(list.lines).toEqual([]);
     expect(list.issues.map((i) => [i.lineNumber, i.reason])).toEqual([
-      [2, "`1.5` is not a whole number of copies"],
-      [3, "`3 copies` is not a whole number of copies"],
-      [4, "Quantity can't be zero."],
-      [5, "`12345` exceeds the maximum of 9999 copies per row"],
-      [6, "`-1` is not a whole number of copies"],
-      [7, "`+3` is not a whole number of copies"],
+      [2, "`1.5` isn't a whole number of copies"],
+      [3, "`3 copies` isn't a whole number of copies"],
+      [4, "quantity can't be zero"],
+      [5, "`12345` is over the limit of 9999 copies per row"],
+      [6, "`-1` isn't a whole number of copies"],
+      [7, "`+3` isn't a whole number of copies"],
     ]);
   });
 
@@ -1217,7 +1217,7 @@ describe("a CSV, read as a file", () => {
     ]);
     expect(list.lines[0].extra.notes).toBe("first\nsecond\nthird");
     expect(list.issues).toEqual([
-      { lineNumber: 5, raw: "0,Shock,", reason: "Quantity can't be zero." },
+      { lineNumber: 5, raw: "0,Shock,", reason: "quantity can't be zero" },
     ]);
   });
 
@@ -1246,7 +1246,7 @@ describe("a CSV, read as a file", () => {
       {
         lineNumber: 2,
         raw: '1,Sol Ring,"promo',
-        reason: "a quote in this row is never closed — close it or remove it",
+        reason: "a quote in this row is never closed",
       },
     ]);
   });

@@ -324,7 +324,7 @@ describe("CategoriesDialog", () => {
   it("says what an inactive category costs", async () => {
     mount();
     expect(
-      await screen.findByText(/Inactive categories don’t count toward deck size/),
+      await screen.findByText(/Inactive categories don’t count toward the deck/),
     ).toBeInTheDocument();
   });
 });
@@ -908,7 +908,7 @@ describe("categories", () => {
     // The destructive arm says where the cards actually end up: the `deck_cards` rows go, and
     // the copies the reader owns are filed into `Recently removed` rather than destroyed.
     expect(
-      within(dialog).getByText(/will be removed.*Any copies you own go back to Recently removed/),
+      within(dialog).getByText(/will be removed.*Copies you own go back to Recently removed/),
     ).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 

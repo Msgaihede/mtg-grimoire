@@ -22,7 +22,7 @@
  * twenty-seven megabytes of models for a scanner that cannot start.
  */
 export const SCANNER_NEEDS_SIMD =
-  "The card scanner cannot run in this browser: it needs WebAssembly SIMD, which this browser does not have.";
+  "The card scanner can't run in this browser. It needs WebAssembly SIMD.";
 
 /** Every sentence a host refuses the scanner's session with when it has none to offer. */
 export const HOST_SCANNER_UNAVAILABLE: readonly string[] = [SCANNER_NEEDS_SIMD];

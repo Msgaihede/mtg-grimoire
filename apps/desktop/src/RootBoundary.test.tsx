@@ -33,7 +33,7 @@ describe("the desktop's root boundary", () => {
       </RootBoundary>,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("MTG Grimoire could not be drawn.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't display MTG Grimoire.");
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
     // The window's only caption, and so its only Close (`decorations: false`).
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();

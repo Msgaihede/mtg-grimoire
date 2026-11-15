@@ -332,7 +332,7 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Couldn't load your collection. {ipcError(failure)}
+        Couldn't load your collection — {ipcError(failure)}
       </WidgetMessage>
     );
   }

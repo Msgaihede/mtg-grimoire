@@ -198,8 +198,8 @@ export function QuickSearch() {
   const status = busy
     ? "Searching…"
     : text.trim() === ""
-      ? "Nothing recent yet. Type to search."
-      : `Nothing matches “${text.trim()}”.`;
+      ? "No recent items. Type to search."
+      : `No matches for “${text.trim()}”.`;
 
   return (
     <div

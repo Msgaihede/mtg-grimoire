@@ -194,7 +194,7 @@ describe("Collection", () => {
     tallViewport();
     renderPhone(<PhoneFace />, { path: "/collection" });
     const wall = await cabinet();
-    const link = within(wall).getByRole("link", { name: "Open the deck Modern Goodstuff" });
+    const link = within(wall).getByRole("link", { name: "Open deck Modern Goodstuff" });
     expect(link).toHaveAttribute("href", "/decks/1");
     // Recently removed is the app's but is no deck's, and a reader's folder is neither.
     expect(within(wall).queryByRole("link", { name: /Recently removed/ })).toBeNull();
@@ -247,8 +247,8 @@ describe("Collection", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: /^Show / }));
 
     // One kind on: the badge says so, the line states it, and the wall holds the etched copies.
-    expect(screen.getByRole("button", { name: "Filters — 1 active" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Remove filter — Finish/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filters, 1 active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Remove filter, Finish/ })).toBeInTheDocument();
     await waitFor(
       () =>
         expect(
@@ -292,7 +292,7 @@ describe("Collection", () => {
     fireEvent.scroll(wall, { target: { scrollTop: 1_000_000 } });
 
     const retry = await screen.findByRole("button", { name: "Try again" }, SETTLE);
-    expect(screen.getByText("The next cards could not be read.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load more cards.")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
     const asked = list.mock.calls.length;
 
@@ -362,7 +362,7 @@ describe("Collection", () => {
     await userEvent.click(tab("Collection"));
 
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your collection could not be read.",
+      "Couldn't load your collection.",
     );
   });
 
@@ -373,7 +373,7 @@ describe("Collection", () => {
     await userEvent.click(tab("Collection"));
 
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your collection's shelves could not be read.",
+      "Couldn't load your folders.",
     );
     expect(screen.queryByText("Nothing in your collection yet.")).toBeNull();
   });

@@ -64,7 +64,7 @@ export function ShortfallFigure({ card }: { card: DeckCard }) {
       <>
         {owned}
         <br />
-        No other copies anywhere in your collection
+        No other copies in your collection
       </>
     ) : (
       <>

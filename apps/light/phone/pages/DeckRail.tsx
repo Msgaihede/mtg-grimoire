@@ -95,7 +95,7 @@ export function DeckRail({
           onBracket={(bracket) =>
             receipt.track(deck.update.mutateAsync({ bracket }), () =>
               bracket === AUTO_BRACKET
-                ? "The bracket is read from the cards again."
+                ? "Set the bracket to automatic."
                 : `Set the bracket to ${bracket}.`,
             )
           }
@@ -319,7 +319,7 @@ function TokensSection({
     return (
       <Section title="Tokens">
         <p role="alert" className="text-xs text-destructive">
-          This deck&rsquo;s tokens could not be read.
+          Couldn&rsquo;t load this deck&rsquo;s tokens.
         </p>
       </Section>
     );
@@ -417,7 +417,7 @@ function NotesSection({
 
   const body = notes.query.isLoadingError ? (
     <p role="alert" className="text-xs text-destructive">
-      This deck&rsquo;s notes could not be read.
+      Couldn&rsquo;t load this deck&rsquo;s notes.
     </p>
   ) : notes.notes.length === 0 ? (
     notes.query.isSuccess ? (
@@ -575,7 +575,7 @@ function TodosSection({ deckId }: { deckId: number }) {
     : todos.remove.isError
       ? ipcError(todos.remove.error)
       : failure !== null
-        ? "This deck\u2019s to-do lists could not be read."
+        ? "Couldn’t load this deck’s to-do lists."
         : null;
   // A key per opening, so every press of `New list` is a fresh dialog with no id of its own yet.
   const open = (id: number | null) => setEditing((now) => ({ id, key: (now?.key ?? 0) + 1 }));

@@ -109,7 +109,7 @@ describe("AddedToast", () => {
     );
     expect(screen.getByText("Pick a printing")).toBeInTheDocument();
     expect(screen.getByText("Minas Tirith")).toBeInTheDocument();
-    expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+    expect(screen.getByText("3 printings match. Pick one in the tray")).toBeInTheDocument();
     // The provisional printing is a guess, so the line that would state it is not drawn.
     expect(screen.queryByText(/LTR · 256/)).toBeNull();
 
@@ -128,7 +128,7 @@ describe("AddedToast", () => {
 
     rerender(<AddedToast card={landedFrom(waiting, false, false)} price="$0.25 – $1.50" />);
     expect(screen.getByText("$0.25 – $1.50")).toBeInTheDocument();
-    expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+    expect(screen.getByText("3 printings match. Pick one in the tray")).toBeInTheDocument();
   });
 
   /** Bold gold from the sound ladder's first tier up; below it, or unpriced, plain. */
@@ -170,7 +170,7 @@ describe("AddedToast", () => {
   it("asks for a pick in a compact landing too", () => {
     render(<AddedToast card={landedFrom(waiting, false, false)} compact />);
     expect(screen.queryByText("Pick a printing")).toBeNull();
-    expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+    expect(screen.getByText("3 printings match. Pick one in the tray")).toBeInTheDocument();
     expect(screen.queryByText(/LTR · 256/)).toBeNull();
   });
 

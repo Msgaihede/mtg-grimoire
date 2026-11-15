@@ -423,8 +423,8 @@ export function PlaytestSetup({
         <div className="flex min-h-0 flex-1 items-center justify-center px-6">
           <p className="m-0 text-sm text-dim">
             {loading
-              ? "Reading your decks…"
-              : "Playtesting needs a deck to play. Make one in Decks, then come back."}
+              ? "Loading your decks…"
+              : "No decks yet. Make one in Decks to playtest."}
           </p>
         </div>
       </section>
@@ -559,7 +559,7 @@ export function PlaytestSetup({
         {room.phase === "open" && (
           <p role="status" className="m-0 text-xs text-dim">
             {seated[0] === undefined
-              ? "Pick the deck you bring to the table."
+              ? "Pick the deck you'll play."
               : sent.sending
                 ? `Sending your deck to ${room.hostName}…`
                 : sent.name !== null
@@ -865,7 +865,7 @@ function DeckWall({
 function Gamemodes({
   mode,
   onMode,
-  label = "Gamemode",
+  label = "Game mode",
   modes = GAMEMODES,
 }: {
   mode: Gamemode;
@@ -1159,7 +1159,7 @@ function SupportMark({
     return <span className="size-6" aria-hidden="true" />;
   }
   if (state.state === "failed") {
-    const words = "The cards could not be checked against the rules engine.";
+    const words = "Couldn't check the cards against the rules engine.";
     return (
       <span
         role="img"

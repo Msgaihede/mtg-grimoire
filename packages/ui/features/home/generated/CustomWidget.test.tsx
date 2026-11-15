@@ -179,7 +179,7 @@ describe("CustomWidget", () => {
       }),
     ]);
     draw({ widgetId: 5 });
-    expect(await screen.findByText(/picture could not be drawn/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Couldn't draw this widget — /)).toBeInTheDocument();
     expect(graphqlQuery).not.toHaveBeenCalled();
   });
 
