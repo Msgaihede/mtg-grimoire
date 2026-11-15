@@ -113,10 +113,21 @@ const NO_WALK: CardWalk = { label: "", stops: [] };
  * exactly once, when the surface goes: a walk left behind would step a modal opened somewhere
  * else through a list nobody is looking at.
  */
-export function usePublishCardWalk(label: string, stops: CardWalkStop[]): void {
+export function usePublishCardWalk(
+  label: string,
+  stops: CardWalkStop[],
+  /**
+   * Which walk this surface is. `"view"` is the store's `cardWalk`, the one list the active view
+   * draws; `"deckSearch"` is `deckSearchWalk`, the deck editor's docked search column, which is
+   * on screen beside the desk's own walk and so cannot share its field (issue #1672).
+   */
+  target: "view" | "deckSearch" = "view",
+): void {
   // The write, and deliberately not a read: a publisher that also selected the walk would
   // re-render itself on its own writes.
-  const setCardWalk = useAppStore((s) => s.setCardWalk);
+  const setCardWalk = useAppStore((s) =>
+    target === "deckSearch" ? s.setDeckSearchWalk : s.setCardWalk,
+  );
 
   useEffect(() => {
     setCardWalk({ label, stops });

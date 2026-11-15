@@ -86,8 +86,7 @@
  * deck can hold one printing in two piles and all five parts of `DECK_CARD_GRAIN` are what tell
  * those rows apart, and everything else by `cardId`, because a plain list has no address finer
  * than the cardboard and `listWalkStops` has already made that unique. It is `-1` from a card
- * pane opened on something the list does not contain, from the deck editor's docked search panel
- * (which publishes nothing, so the desk's own walk stands), and from a deck that is not the one
+ * pane opened on something the list does not contain, and from a deck that is not the one
  * the walk belongs to — and in every one of those there is no walk to step along, so there are no
  * chevrons and the arrow keys are not ours.
  *
@@ -276,9 +275,11 @@ function LanguageMark({ lang }: { lang: string }) {
 export function AllPrintingsDialog() {
   const request = useAppStore((s) => s.printingsRequest);
   const closeRequest = useAppStore((s) => s.closeAllPrintings);
-  const walk = useAppStore((s) => s.cardWalk);
+  const viewWalk = useAppStore((s) => s.cardWalk);
+  const deckSearchWalk = useAppStore((s) => s.deckSearchWalk);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
+  const openCardFromDeckSearch = useAppStore((s) => s.openCardFromDeckSearch);
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   /**
    * The header's subtitle, as a node the body writes its count line into.
@@ -346,16 +347,34 @@ export function AllPrintingsDialog() {
    * no slot, and so no address — would find *the deck's* row for the same printing and start
    * arrow-stepping the desk from a surface that is not the desk.
    */
-  const stops = walk.stops;
-  const at = useMemo(() => {
+  /**
+   * **Which walk, and where on it** — the view's walk first, then the deck editor's docked search
+   * column's (issue #1672).
+   *
+   * The fallback is only ever reached by a plain printing, and is safe for that reason: inside
+   * the deck editor the view's walk is the desk's, every stop of which is a deck row, so a plain
+   * request can never be on it — and outside the editor there is no search column and its walk is
+   * empty. So a printings modal opened on a card from the column, by its card modal or by a tile's
+   * own menu, walks the column's results, and nothing else changes which walk it reads.
+   */
+  const { walk, at, viaDeckSearch } = useMemo(() => {
+    const none = { walk: viewWalk, at: -1, viaDeckSearch: false };
     // A trade line is on nobody's walk: the trade publishes none, and a stop elsewhere that
     // happened to share the printing would step the modal off the line onto a card it is not.
-    if (request === null || request.trade) return -1;
+    if (request === null || request.trade) return none;
     const slot = request.deck;
-    return slot === null
-      ? stops.findIndex((stop) => stop.deck === null && stop.cardId === request.cardId)
-      : stops.findIndex((stop) => stop.deck !== null && sameDeckSlot(stop.deck, slot));
-  }, [stops, request]);
+    if (slot !== null) {
+      const index = viewWalk.stops.findIndex(
+        (stop) => stop.deck !== null && sameDeckSlot(stop.deck, slot),
+      );
+      return { ...none, at: index };
+    }
+    const plain = (stop: CardWalkStop) => stop.deck === null && stop.cardId === request.cardId;
+    const onView = viewWalk.stops.findIndex(plain);
+    if (onView !== -1) return { ...none, at: onView };
+    return { walk: deckSearchWalk, at: deckSearchWalk.stops.findIndex(plain), viaDeckSearch: true };
+  }, [viewWalk, deckSearchWalk, request]);
+  const stops = walk.stops;
   const previous = at > 0 ? stops[at - 1] : null;
   const next = at >= 0 && at + 1 < stops.length ? stops[at + 1] : null;
 
@@ -417,10 +436,13 @@ export function AllPrintingsDialog() {
        * behind the scrim knows nothing about.
        */
       openAllPrintings({ ...stop, wish: null });
-      if (stop.deck === null) selectCard(stop.cardId);
+      // The search column's own opener, so the card behind the scrim stays "opened from the
+      // column" and its modal walks the same list this one does (issue #1672).
+      if (viaDeckSearch) openCardFromDeckSearch(stop.cardId);
+      else if (stop.deck === null) selectCard(stop.cardId);
       else openCardFromDeck(stop.deck);
     },
-    [openAllPrintings, openCardFromDeck, selectCard],
+    [openAllPrintings, openCardFromDeck, openCardFromDeckSearch, selectCard, viaDeckSearch],
   );
 
   /**

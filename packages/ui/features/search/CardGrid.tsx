@@ -932,8 +932,9 @@ export function CardGrid<T extends GridCard>({
    * entirely — stepping through the printings inside the surface the reader has already opened.
    * Two meanings for one key on one screen is not a conflict a component can arbitrate, so the
    * modal keeps its own and this wall is told nothing. The deck editor's docked search column
-   * (`DeckSearchPanel`) passes nothing either, for a plainer reason: its tiles are drag sources
-   * into the deck beside them, and the arrows are how a reader moves *within the deck*.
+   * (`DeckSearchPanel`, both tabs) passes it since issue #1672: the handler answers only a caret
+   * on one of this wall's tiles, so the deck beside it keeps its own keys, and a reader building a
+   * deck asked to walk the results the same way the search page does.
    *
    * Off by default, so the two walls that want it say so and nobody inherits it by omission —
    * the same argument {@link zoomSection} makes from the other end, where the risk was a default
@@ -2161,7 +2162,7 @@ export function CardGrid<T extends GridCard>({
    *
    * The bail-outs, in the order they are cheapest:
    *
-   * - **Not armed.** Three of this component's four callers pass nothing; see `arrowNav`.
+   * - **Not armed.** The printings modal and the sidebars pass nothing; see `arrowNav`.
    * - **Already handled.** A tile's own `cardMenuKey` and any layer above this one run first, and
    *   `defaultPrevented` is this app's handshake for "that press was mine" — the same protocol
    *   `useDismissOnEscape` runs on.

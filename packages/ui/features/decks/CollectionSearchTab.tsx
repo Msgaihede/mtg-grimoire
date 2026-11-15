@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { rowHasBackFace } from "@/features/card/printings";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type TrayCell } from "@/features/search/FilterBar";
@@ -24,6 +25,7 @@ import { ADD_BUTTON } from "./addButton";
 import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
 import { TOKENS_HEADING } from "./deckTokens";
+import { NOTHING_IN_DECK } from "./inDeck";
 import type { DragPayload } from "./dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 import { useCollectionSearch, type PlayState } from "./useCollectionSearch";
@@ -279,7 +281,11 @@ export function CollectionSearchTab({
   deckId,
   targetCategoryId,
   defaultFormat,
+  inDeck = NOTHING_IN_DECK,
 }: {
+  /** Copies of each card already in the deck's drawn list, by oracle id — the tiles' mark
+   *  (issue #1672). See `DeckSearchPanelProps.inDeck`. */
+  inDeck?: ReadonlyMap<string, number>;
   /** The open deck's piles — where a copy may land. */
   categories: readonly DeckCategory[];
   /**
@@ -364,6 +370,22 @@ export function CollectionSearchTab({
    */
   const tiles = useMemo(() => foldCopies(rows, sourceOf), [rows, sourceOf]);
   const empty = tiles.length === 0;
+
+  /**
+   * The tiles as a walk (issue #1672) — the card-search tab's walk, on this tab. Deduplicated by
+   * printing (`listWalkStops`), so a foil and a nonfoil tile of one printing are one stop, which is
+   * the collection page's own rule for the same two tiles.
+   */
+  const walk = useMemo(
+    () =>
+      listWalkStops(tiles, (tile) => ({
+        cardId: tile.id,
+        oracleId: tile.oracleId,
+        name: tile.name,
+      })),
+    [tiles],
+  );
+  usePublishCardWalk("your collection", walk, "deckSearch");
 
   /**
    * What every card on this wall *does*, so a button under `Auto` names the pile the filing rule
@@ -592,6 +614,8 @@ export function CollectionSearchTab({
           // pressed rather than on its sibling. The tile is `CardGrid`'s second argument because a
           // tile here is a printing *and* a finish; the wall itself knows nothing about finishes.
           onSelect={(cardId, tile) => selectCard(cardId, tile.finish)}
+          // The arrows walk this tab as they walk the card-search tab beside it (issue #1672).
+          arrowNav
           finish={tileFinish}
           dragPayload={tileDrag}
           // What one copy of this printing **in this finish** costs — the tile's own figure, so a
@@ -603,7 +627,12 @@ export function CollectionSearchTab({
           money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
           // The copies behind the art, in the corner the collection page's own wall marks them in.
           // No `wishlisted`: this wall shows what is owned and has no opinion about what is wanted.
-          badge={(tile) => <OwnedBadge owned={tile.copies} />}
+          badge={(tile) => (
+            <OwnedBadge
+              owned={tile.copies}
+              inDeck={tile.oracleId === null ? 0 : (inDeck.get(tile.oracleId) ?? 0)}
+            />
+          )}
           // A two-sided card turns over from its tile, as on every other wall (issue #844).
           flips={rowHasBackFace}
           action={(tile) => (

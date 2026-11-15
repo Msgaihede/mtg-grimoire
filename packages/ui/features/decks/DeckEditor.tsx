@@ -74,6 +74,7 @@ import { useDeckFolders } from "./useDeckFolders";
 import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
+import { inDeckByOracle } from "./inDeck";
 import { usePrefetchDeckSearchWidth } from "./useDeckSearchWidth";
 import { DeckStats, isShort } from "./DeckStats";
 import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
@@ -1935,6 +1936,9 @@ export function DeckEditor({
     setCardSelection,
   });
   const cards = deck.cards;
+  /** What the search column marks as already in the deck (issue #1672) — every pile of the list
+   *  being drawn, by card. Recounted only when the rows change; see `inDeckByOracle`. */
+  const inDeck = useMemo(() => inDeckByOracle(cards), [cards]);
 
   /**
    * **The cards the reader has Ctrl- and Shift-clicked**, as rows of this deck — issue #214.
@@ -3879,6 +3883,7 @@ export function DeckEditor({
           roomy={roomForPanel}
           overWidth={panelOverWidth}
           maxWidth={maxPanelWidth}
+          inDeck={inDeck}
         />
       </div>
     </>

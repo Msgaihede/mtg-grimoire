@@ -815,8 +815,8 @@ function Results({ search }: { search: CardSearch }) {
             // The arrow keys walk the wall, and the selection walks with them — which on this
             // page means the card pane really does move to the card the caret lands on, because
             // the `selectedId` above and the `onSelect` beside it are the same store field the
-            // pane reads. Two of the four walls pass this; `CardGrid`'s own `arrowNav` carries
-            // why the printings modal and the deck editor's docked column do not.
+            // pane reads. `CardGrid`'s own `arrowNav` carries which walls pass this, and why the
+            // printings modal does not.
             arrowNav
             // Spec §1's first drag source: a tile is a printing the reader can carry to a
             // deck's category column or to the sidebar. The click paths beside it — the quick-add below,

@@ -152,6 +152,12 @@ export interface CardSearchBodyProps {
   /** Which tile is open in the card surface, so the wall can mark it. */
   selectedId: string | null;
   /**
+   * Whether the arrow keys walk the wall and open each card they land on — `CardGrid`'s
+   * `arrowNav`, handed straight through. The deck editor's column passes it (issue #1672), so its
+   * search walks exactly as the search page's does.
+   */
+  arrowNav?: boolean;
+  /**
    * Open the card a tile is about.
    *
    * One argument, and the row is deliberately dropped: `CardGrid`'s `onSelect` widened to
@@ -198,6 +204,7 @@ export function CardSearchBody({
   cardMenu,
   cardMenuKey,
   selectedId,
+  arrowNav = false,
   onSelect,
 }: CardSearchBodyProps): ReactElement {
   const { query, rows, searchKey, marketplace } = search;
@@ -294,6 +301,7 @@ export function CardSearchBody({
           selectionScope={selectionScope}
           baseTileWidth={baseTileWidth}
           selectedId={selectedId}
+          arrowNav={arrowNav}
           onSelect={(id) => onSelect(id)}
           dragPayload={dragPayload}
           dragRecord={dragRecord}

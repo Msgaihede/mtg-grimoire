@@ -487,6 +487,75 @@ it("steps to the next card on ArrowRight and the previous one on ArrowLeft", asy
 });
 
 /**
+ * Issue #1672: a card opened from the deck editor's docked search column walks **that column**,
+ * not the desk beside it. The desk's walk is all deck rows, so before the column published one
+ * of its own the card found no stop and the arrows did nothing.
+ *
+ * The step must go through `openCardFromDeckSearch`, which is what keeps `paneFromDeckSearch` set
+ * — and so the next press on the same walk rather than dropping onto the desk's.
+ */
+it("steps along the deck search column for a card opened from it", async () => {
+  useAppStore.setState({
+    cardWalk: {
+      label: "the deck",
+      stops: [
+        {
+          cardId: "c1",
+          oracleId: "o1",
+          name: "Lightning Bolt",
+          deck: {
+            deckId: 1,
+            cardId: "c1",
+            categoryId: 2,
+            categoryName: "Burn",
+            variant: "live",
+            finish: null,
+          },
+        },
+      ],
+    },
+    deckSearchWalk: {
+      label: "the search results",
+      stops: [
+        { cardId: "c0", oracleId: "o0", name: "Ancestral Recall", deck: null },
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Black Lotus", deck: null },
+      ],
+    },
+  });
+  useAppStore.getState().openCardFromDeckSearch("c1");
+  renderModal(null);
+  await screen.findByRole("dialog");
+  await screen.findByRole("button", { name: /next card in the search results/i });
+
+  await userEvent.keyboard("{ArrowRight}");
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+  expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+  expect(useAppStore.getState().paneDeckContext).toBeNull();
+
+  await userEvent.keyboard("{ArrowLeft}");
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(useAppStore.getState().selectedCardId).toBe("c0");
+  expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+});
+
+/** And the column's walk is never read for a card opened some other way — here, plainly. */
+it("ignores the deck search column for a card not opened from it", async () => {
+  useAppStore.setState({
+    deckSearchWalk: {
+      label: "the search results",
+      stops: [
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Black Lotus", deck: null },
+      ],
+    },
+  });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  expect(screen.queryByRole("button", { name: /next card/i })).not.toBeInTheDocument();
+});
+
+/**
  * **The half of "one card at a time" that jsdom can see.**
  *
  * The reader's requirement is that the card modal and the printings modal open together still
