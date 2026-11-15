@@ -66,6 +66,22 @@ describe("collectionTiles", () => {
     expect(tile.finish).toBeNull();
     expect(tile.finishes).toBe("[]");
   });
+
+  /**
+   * The printing's promo types ride on the tile, because they are what names a Surge Foil copy on
+   * its chip and draws it as surge. Found missing by the live check of the per-kind foil drawings
+   * (2026-11-15): every special foil on this wall wore the plain foil sheen and the word "Foil".
+   */
+  it("carries the printing's promo types, so a special foil can be named and drawn as one", () => {
+    const [foil, plain] = collectionTiles([
+      row({ id: 1, finish: "foil", promoTypes: '["surgefoil","universesbeyond"]' }),
+      row({ id: 2, finish: "nonfoil", promoTypes: '["surgefoil","universesbeyond"]' }),
+    ]);
+    expect(foil.promoTypes).toBe('["surgefoil","universesbeyond"]');
+    // The plain copy carries the same printing fact; `finishTreatments` is what withholds the
+    // foil word from it, as it does everywhere else.
+    expect(plain.promoTypes).toBe(foil.promoTypes);
+  });
 });
 
 describe("ownedFinishes", () => {

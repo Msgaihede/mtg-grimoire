@@ -1979,6 +1979,29 @@ describe("CollectionPage", () => {
   });
 
   /**
+   * A Surge Foil copy is drawn as surge, and its plain copy draws no foil at all. The wall passed no
+   * treatments until the per-kind foil drawings' live check (2026-11-15) found every special foil
+   * here wearing the plain foil sheen.
+   */
+  it("draws a special foil copy as its own kind of foil", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const surge = '["surgefoil","universesbeyond"]';
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, id: 7, finish: "foil", promoTypes: surge },
+        { ...BOLT, id: 8, finish: "nonfoil", promoTypes: surge },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    expect(await screen.findAllByAltText("Lightning Bolt")).toHaveLength(2);
+
+    const drawn = [...container.querySelectorAll("[data-foil]")].map((o) =>
+      o.getAttribute("data-foil"),
+    );
+    expect(drawn).toEqual(["surge"]);
+  });
+
+  /**
    * A tile that merges exactly one finish records that finish without asking — which is a fix
    * rather than a tidy-up. Before the split a tile holding a foil *and* a plain copy offered
    * both and made the reader pick, and picking wrongly on a wall of forty is one keystroke; now

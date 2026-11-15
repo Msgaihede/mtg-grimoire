@@ -264,6 +264,8 @@ describe("tokenFaceFacts", () => {
       // "Not said": `playedFinish` then falls to the printing's sole finish, as for a deck card.
       finish: null,
       finishes: '["nonfoil"]',
+      // A token row carries no promo types, so a foil token is drawn as traditional foil.
+      promoTypes: null,
       name: "Treasure",
       manaCost: null,
       typeLine: "Token Artifact — Treasure",

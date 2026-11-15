@@ -178,6 +178,12 @@ export interface CollectionTile extends GridCard {
    */
   finishes: string;
   /**
+   * The printing's `promo_types`, verbatim — what names a Surge Foil copy on the chip and draws it
+   * as surge rather than as plain foil (`finishTreatments`, `lib/foilEffect.ts`). Off the row, like
+   * every other printing fact here.
+   */
+  promoTypes: string | null;
+  /**
    * The folder every copy behind this tile is filed in — `null` for the root.
    *
    * **One folder, and that is decision 11.** The folder joined the tile's key when the wall became
@@ -287,6 +293,7 @@ export function collectionTiles(rows: readonly CollectionRow[]): CollectionTile[
       layout: row.layout,
       oracleId: row.oracleId,
       finishes: ownedFinishes(finishes.get(key) ?? new Set()),
+      promoTypes: row.promoTypes,
       folderId: row.folderId,
     });
   }

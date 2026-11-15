@@ -46,6 +46,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **Foil & card badges**:
   - Foil glyphs from `FinishMark`: `Sparkles` (foil), `Gem` (etched), `Aperture` (special non-foil).
   - Top-right corner chip: `FoilOverlay` combines finish glyphs and `GameChangerMark`.
+  - Foil drawing: `FoilOverlay` draws one per kind of foil — `lib/foilEffect.ts` picks it from the finish and the treatments (pass `finishTreatments(promoTypes, finish)` wherever a row has promo types, or a Surge Foil draws as plain foil), `index.css`'s "Foil" section draws it, `scripts/foil-textures.ts` generates its patterns. The light follows the pointer and the card never tilts (the owner's call). Never wrap the foil layers in anything with a mask, clip, opacity, filter or transform — it isolates their blend modes and they paint flat. See [frontend-design.md](../../docs/reference/frontend-design.md).
   - Count badges: `CountTag` for counts overlaid on card art (no `×`, grey by default). Counts beside cards keep `×`.
 - **Touch floor (the light app's phone face draws these components too)**:
   - A control grows for a finger through the `coarse:` variant and `--target-min` (44px), never a raw pointer query (`touchTargets.test.ts`). Under a mouse nothing changes size.
