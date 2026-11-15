@@ -107,8 +107,8 @@ export function MatchPanel({
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
-          aria-label="What it actually is"
-          placeholder="What it actually is"
+          aria-label="Actual card"
+          placeholder="Actual card"
           value={expected}
           onChange={(e) => setExpected(e.target.value)}
           className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"

@@ -137,12 +137,12 @@ function LegalityBody({
 }) {
   if (loading) return <p className="text-sm text-dim">Loading card…</p>;
   if (error !== null) {
-    return <p className="text-sm text-destructive">Couldn't read the card — {error}.</p>;
+    return <p className="text-sm text-destructive">Couldn't read this card — {error}</p>;
   }
   // `card_detail` answers `null` for an id `cards` has no row for, which is a real state rather
   // than a failure: a collection or a deck can hold a printing the corpus has since dropped.
   if (card === null) {
-    return <p className="text-sm text-dim">This printing is no longer in the card database.</p>;
+    return <p className="text-sm text-dim">This printing is no longer in the card data.</p>;
   }
 
   const rows = legalityRows(card.legalities);

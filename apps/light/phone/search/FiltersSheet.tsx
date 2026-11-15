@@ -132,7 +132,7 @@ export function FiltersButton({
       aria-expanded={expanded}
       // The count is in the name because the badge is hidden from a screen reader, and the
       // word on the button is in it too (WCAG 2.5.3).
-      aria-label={active > 0 ? `Filters — ${active} active` : "Filters"}
+      aria-label={active > 0 ? `Filters, ${active} active` : "Filters"}
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,
@@ -414,12 +414,12 @@ function SheetBody<SortKey extends string>({
                 always true. */}
               <div
                 role="group"
-                aria-label="Color reading"
+                aria-label="Color match"
                 className="grid grid-cols-2 gap-1.5 sm:flex-1"
               >
                 <ToggleChip
                   label="Within"
-                  hint="cards whose color identity fits within these colors"
+                  hint="color identity fits within these colors"
                   pressed={!search.colorsStrict}
                   onClick={() => {
                     if (search.colorsStrict) search.toggleColorsStrict();
@@ -427,7 +427,7 @@ function SheetBody<SortKey extends string>({
                 />
                 <ToggleChip
                   label="Exactly"
-                  hint="cards whose color identity is exactly these colors"
+                  hint="color identity is exactly these colors"
                   pressed={search.colorsStrict}
                   onClick={() => {
                     if (!search.colorsStrict) search.toggleColorsStrict();

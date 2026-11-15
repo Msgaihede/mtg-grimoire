@@ -90,7 +90,7 @@ export interface LabelsDialogProps {
  *  control in it. The second is the one nothing on screen can show: a label is shared, so the
  *  colour a reader picks here is the colour it has in every deck. */
 export const LABELS_SUBTITLE =
-  "Cards can have at most one label. Labels are shared across all decks.";
+  "A card can have one label. Labels are shared across all decks.";
 
 /**
  * The chrome is {@link Dialog}'s and the body below is this file's.
@@ -290,7 +290,7 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
           <p className="text-xs text-dim">Loading labels…</p>
         ) : labels.length === 0 ? (
           <p className="text-xs text-dim">
-            No cards in this list are labeled yet. Right-click a card to apply a label.
+            No labeled cards in this list yet. Right-click a card to add a label.
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
@@ -699,7 +699,7 @@ function DeleteLabel({
           onClick={() =>
             meta.deleteLabel.mutate(label.id, {
               onSuccess: () => {
-                notify.success(`Label “${label.name}” deleted`);
+                notify.success(`Deleted label “${label.name}”`);
                 onDeleted();
               },
             })

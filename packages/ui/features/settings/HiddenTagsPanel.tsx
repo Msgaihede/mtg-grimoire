@@ -46,8 +46,8 @@ export function HiddenTagsPanel({ hidden }: { hidden: HiddenTags }): JSX.Element
       {tags !== null && (
         <p className="text-sm text-dim">
           {tags.length === 0
-            ? "You haven't hidden any tags. Right-click a tag in the Search page's tag sidebar to hide it and its sub-tags."
-            : "Hidden tags and their sub-tags don't appear in the Search page's tag sidebar. Names are shown as they were when hidden."}
+            ? "No hidden tags. Right-click a tag in the Search page's tag sidebar to hide it and its sub-tags."
+            : "Hidden tags and their sub-tags don't appear in the Search page's tag sidebar."}
         </p>
       )}
 

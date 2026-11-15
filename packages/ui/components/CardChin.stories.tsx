@@ -225,7 +225,7 @@ export const Unreleased: Story = {
   },
   play: async ({ canvas }) => {
     const mark = canvas.getByRole("img", {
-      name: "Unreleased — out 2026-11-14 · Image updated 2026-10-09",
+      name: "Unreleased, out 2026-11-14 · Image updated 2026-10-09",
     });
     await expect(mark.previousElementSibling).toHaveTextContent("C21 · 179");
   },

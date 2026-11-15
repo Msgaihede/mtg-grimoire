@@ -49,7 +49,7 @@ import {
 
 export const CUSTOM_WIDGET_GONE = "This custom widget was deleted. Remove it from the page.";
 export const CUSTOM_WIDGET_LOADING = "Loading…";
-export const CUSTOM_WIDGET_PARTIAL = "Part of this widget's data could not be read.";
+export const CUSTOM_WIDGET_PARTIAL = "Couldn't read part of this widget's data.";
 
 export function CustomWidget({ widget, fit }: WidgetBodyProps): ReactElement {
   const { widgets, ready, error } = useCustomWidgets();
@@ -128,7 +128,7 @@ function Drawn({
   if (!checked.ok) {
     return (
       <WidgetMessage tone="destructive">
-        {`This widget's picture could not be drawn: ${checked.problem}`}
+        {`Couldn't draw this widget — ${checked.problem}`}
       </WidgetMessage>
     );
   }

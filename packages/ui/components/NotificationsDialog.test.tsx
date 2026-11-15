@@ -56,7 +56,7 @@ describe("NotificationsDialog", () => {
     expect(screen.getByText("keep")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
-    expect(screen.getByText(/Nothing yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No notifications yet/)).toBeInTheDocument();
   });
 });
 

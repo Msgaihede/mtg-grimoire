@@ -144,11 +144,10 @@ export function DeckBracket({
         // Every one of the three begins with the visible label (WCAG 2.5.3).
         aria-label={
           !set
-            ? `Bracket ${estimate.floor}, an estimate`
+            ? `Bracket ${estimate.floor}, estimated`
             : warning === null
               ? `Bracket ${bracket}, set for this deck`
-              : `Bracket ${bracket}, set for this deck — the cards read as bracket ` +
-                `${estimate.floor} or higher`
+              : `Bracket ${bracket}, set for this deck. The cards suggest bracket ${estimate.floor} or higher`
         }
         onClick={() => (open ? onDismiss() : onOpen())}
         className={cn(
@@ -312,32 +311,32 @@ const BRACKETS: readonly { value: number; label: string; name: string; clause: s
     value: AUTO_BRACKET,
     label: "Auto",
     name: "Auto",
-    clause: "read from the cards, and it moves as the deck does",
+    clause: "estimated from the cards, updated as the deck changes",
   },
   {
     value: 1,
     label: "1",
     name: "Exhibition",
-    clause: "a theme over power, and no extra turns — no card list can show it",
+    clause: "theme over power, no extra turns (can't be read from the cards)",
   },
   { value: 2, label: "2", name: "Core", clause: "extra turns in low quantities, never chained" },
   {
     value: 3,
     label: "3",
     name: "Upgraded",
-    clause: "up to three Game Changers, and no early two-card combos",
+    clause: "up to three Game Changers, no early two-card combos",
   },
   {
     value: 4,
     label: "4",
     name: "Optimized",
-    clause: "nothing restricted — mass land denial and combos allowed",
+    clause: "no restrictions: mass land denial and combos allowed",
   },
   {
     value: 5,
     label: "5",
     name: "cEDH",
-    clause: "bracket 4's card list, built for the competitive metagame — no card list can show it",
+    clause: "bracket 4's rules, built for competitive play (can't be read from the cards)",
   },
 ];
 
@@ -372,7 +371,7 @@ export const COMBO_TAG: Record<ComboBracketTag, { name: string; forces: string }
   O: { name: "Oddball", forces: "probably 2 or 3, but hard to classify" },
   P: { name: "Powerful", forces: "for strong decks in bracket 3+" },
   S: { name: "Spicy", forces: "probably 3 or 4, but hard to classify" },
-  R: { name: "Ruthless", forces: "for competitive decks at brackets 4+" },
+  R: { name: "Ruthless", forces: "for competitive decks in bracket 4+" },
   B: { name: "Banned", forces: "not legal in Commander" },
 };
 
@@ -508,7 +507,7 @@ export function BracketAdvisory({
           Bracket ~{estimate.floor} · {gameChangers} Game Changer{gameChangers === 1 ? "" : "s"}
         </p>
         <p className="mt-1 text-dim">
-          Estimated minimum bracket, based on the cards. Your playgroup decides the real bracket.
+          The lowest bracket these cards allow. Your playgroup decides the real one.
         </p>
 
         {/* **A real radio group rather than six buttons**: one of six is chosen, exactly one is
@@ -607,7 +606,7 @@ export function BracketAdvisory({
             Couldn&rsquo;t load combo data, so two-card combos weren&rsquo;t checked.
           </p>
         ) : estimate.combos.length === 0 && estimate.possibleCombos.length === 0 ? (
-          <p className="mt-2 text-dim">No two-card combo in the list matches this deck.</p>
+          <p className="mt-2 text-dim">No known two-card combo in this deck.</p>
         ) : (
           <>
             {estimate.combos.length > 0 && (
@@ -628,8 +627,7 @@ export function BracketAdvisory({
             {estimate.possibleCombos.length > 0 && (
               <>
                 <p className="mt-2 leading-snug text-dim">
-                  Possible combos (not counted). Each needs a generic piece, like a flier or a sac
-                  outlet, that can&rsquo;t be checked automatically.
+                  Possible combos, not counted. Each needs a generic piece, like a flier or a sac outlet, that can&rsquo;t be checked.
                 </p>
                 <ul className="mt-1 space-y-1.5">
                   {estimate.possibleCombos.map((combo) => (

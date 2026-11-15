@@ -219,9 +219,9 @@ describe("DeckTodosWidget", () => {
       expect(headings()).toEqual(["Burn · 2 open"]);
       expect(screen.getByRole("heading", { level: 4 })).toHaveAccessibleName("Burn · 2 open");
       // Completed ones are hidden by default; the open child stays under its open parent.
-      expect(boxes()).toEqual(['Mark "Revise tokens" done', 'Mark "Add a Treasure maker" done']);
-      const parent = screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' });
-      const child = screen.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' });
+      expect(boxes()).toEqual(['Mark “Revise tokens” done', 'Mark “Add a Treasure maker” done']);
+      const parent = screen.getByRole("checkbox", { name: 'Mark “Revise tokens” done' });
+      const child = screen.getByRole("checkbox", { name: 'Mark “Add a Treasure maker” done' });
       // Indented one step per level: the sub-to-do's row says its level and is pushed in.
       expect(parent.closest("li")).toHaveAttribute("aria-level", "1");
       expect(child.closest("li")).toHaveAttribute("aria-level", "2");
@@ -241,13 +241,13 @@ describe("DeckTodosWidget", () => {
       draw({ done: true });
 
       expect(boxes()).toEqual([
-        'Mark "Revise tokens" done',
-        'Mark "Add a Treasure maker" done',
-        'Mark "Cut Clue tokens" not done',
-        'Mark "Sleeve the deck" not done',
+        'Mark “Revise tokens” done',
+        'Mark “Add a Treasure maker” done',
+        'Mark “Cut Clue tokens” not done',
+        'Mark “Sleeve the deck” not done',
       ]);
-      expect(screen.getByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' })).toBeChecked();
-      expect(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' })).not.toBeChecked();
+      expect(screen.getByRole("checkbox", { name: 'Mark “Sleeve the deck” not done' })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: 'Mark “Revise tokens” done' })).not.toBeChecked();
     });
 
     it("draws a to-do's marks, and keeps a hard break a line of its own", () => {
@@ -290,10 +290,10 @@ describe("DeckTodosWidget", () => {
       expect(outline()).toEqual([
         "# Burn · 3 open",
         "## Mana",
-        'Mark "Cut a land" done',
+        'Mark “Cut a land” done',
         "## Tokens",
-        'Mark "Revise tokens" done',
-        'Mark "Add a Treasure maker" done',
+        'Mark “Revise tokens” done',
+        'Mark “Add a Treasure maker” done',
       ]);
       // The two lists are one deck, and one heading press, not two.
       expect(screen.getAllByRole("button", { name: /^Burn/ })).toHaveLength(1);
@@ -349,8 +349,8 @@ describe("DeckTodosWidget", () => {
       expect(outline()).toEqual([
         "# Burn · 2 open",
         "## Mana",
-        'Mark "Cut a land" done',
-        'Mark "Sleeve" done',
+        'Mark “Cut a land” done',
+        'Mark “Sleeve” done',
       ]);
       expect(screen.queryByText(/Before the event/)).toBeNull();
       expect(screen.queryByText(/Some notes/)).toBeNull();
@@ -383,7 +383,7 @@ describe("DeckTodosWidget", () => {
       seed([list({ deckId: 1, deckName: "Burn", body: "- [x] Parent\n  - [ ] Child\n- [x] Alone" })]);
       draw();
 
-      expect(boxes()).toEqual(['Mark "Parent" not done', 'Mark "Child" done']);
+      expect(boxes()).toEqual(['Mark “Parent” not done', 'Mark “Child” done']);
     });
 
     it("shows completed to-dos when asked", () => {
@@ -391,9 +391,9 @@ describe("DeckTodosWidget", () => {
       draw({ done: true });
 
       expect(boxes()).toEqual([
-        'Mark "Parent" not done',
-        'Mark "Child" done',
-        'Mark "Alone" not done',
+        'Mark “Parent” not done',
+        'Mark “Child” done',
+        'Mark “Alone” not done',
       ]);
     });
 
@@ -401,7 +401,7 @@ describe("DeckTodosWidget", () => {
       seed([BURN]);
       draw({ nested: false });
 
-      expect(boxes()).toEqual(['Mark "Revise tokens" done']);
+      expect(boxes()).toEqual(['Mark “Revise tokens” done']);
     });
 
     it("leaves archived decks out unless they are asked for", () => {
@@ -528,7 +528,7 @@ describe("DeckTodosWidget", () => {
       seed([BURN]);
       draw();
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “Add a Treasure maker” done' }));
 
       expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
       expect(deckTodoListUpdate).toHaveBeenCalledWith(1, BURN.id, {
@@ -546,7 +546,7 @@ describe("DeckTodosWidget", () => {
       seed([BURN, second]);
       draw();
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "x" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “x” done' }));
 
       expect(deckTodoListUpdate).toHaveBeenCalledWith(1, 12, {
         body: toggleTodo("- [ ] x", 0),
@@ -564,7 +564,7 @@ describe("DeckTodosWidget", () => {
       seed([BURN, second]);
       draw({ done: true });
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "x" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “x” done' }));
 
       await waitFor(() =>
         expect(qc.getQueryData<DeckTodoListEntry[]>(deckTodoListsKey)).toEqual([
@@ -572,7 +572,7 @@ describe("DeckTodosWidget", () => {
           { ...second, body: toggleTodo("- [ ] x", 0) },
         ]),
       );
-      expect(screen.getByRole("checkbox", { name: 'Mark "x" not done' })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: 'Mark “x” not done' })).toBeChecked();
     });
 
     it("greys the row while the write is out, and takes no second tick", async () => {
@@ -581,11 +581,11 @@ describe("DeckTodosWidget", () => {
       seed([BURN]);
       draw();
 
-      const box = screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' });
+      const box = screen.getByRole("checkbox", { name: 'Mark “Revise tokens” done' });
       await user.click(box);
       expect(box).toHaveAttribute("aria-disabled", "true");
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “Add a Treasure maker” done' }));
       expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
     });
 
@@ -596,7 +596,7 @@ describe("DeckTodosWidget", () => {
       seed([BURN]);
       draw();
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “Revise tokens” done' }));
 
       expect(await screen.findByRole("alert")).toHaveTextContent(TODOS_CHANGED);
       expect(everyDeckTodoList).toHaveBeenCalled();
@@ -608,9 +608,9 @@ describe("DeckTodosWidget", () => {
       seed([list({ deckId: 1, deckName: "Burn", body: "- plain bullet\n- [ ] a" })]);
       draw();
 
-      const plain = screen.getByRole("checkbox", { name: 'Mark "plain bullet" done' });
+      const plain = screen.getByRole("checkbox", { name: 'Mark “plain bullet” done' });
       expect(plain).toHaveAttribute("aria-disabled", "true");
-      expect(screen.getByRole("checkbox", { name: 'Mark "a" done' })).not.toHaveAttribute(
+      expect(screen.getByRole("checkbox", { name: 'Mark “a” done' })).not.toHaveAttribute(
         "aria-disabled",
       );
 
@@ -619,7 +619,7 @@ describe("DeckTodosWidget", () => {
       // Drawn as not tickable, too: a dashed box, where a tickable to-do's is solid.
       const boxOf = (el: HTMLElement) => el.querySelector('[aria-hidden="true"]');
       expect(boxOf(plain)?.classList.contains("border-dashed")).toBe(true);
-      const tickable = screen.getByRole("checkbox", { name: 'Mark "a" done' });
+      const tickable = screen.getByRole("checkbox", { name: 'Mark “a” done' });
       expect(boxOf(tickable)?.classList.contains("border-dashed")).toBe(false);
     });
 
@@ -634,14 +634,14 @@ describe("DeckTodosWidget", () => {
       seed([MONO]);
       draw();
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “Two” done' }));
 
       await waitFor(() =>
-        expect(screen.queryByRole("checkbox", { name: 'Mark "Two" done' })).toBeNull(),
+        expect(screen.queryByRole("checkbox", { name: 'Mark “Two” done' })).toBeNull(),
       );
       expect(document.activeElement).not.toBe(document.body);
       expect(document.activeElement).toBe(
-        screen.getByRole("checkbox", { name: 'Mark "Three" done' }),
+        screen.getByRole("checkbox", { name: 'Mark “Three” done' }),
       );
     });
 
@@ -651,13 +651,13 @@ describe("DeckTodosWidget", () => {
       seed([MONO]);
       draw();
 
-      act(() => screen.getByRole("checkbox", { name: 'Mark "Three" done' }).focus());
+      act(() => screen.getByRole("checkbox", { name: 'Mark “Three” done' }).focus());
       await user.keyboard(" ");
 
       await waitFor(() =>
-        expect(screen.queryByRole("checkbox", { name: 'Mark "Three" done' })).toBeNull(),
+        expect(screen.queryByRole("checkbox", { name: 'Mark “Three” done' })).toBeNull(),
       );
-      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
+      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark “Two” done' }));
     });
 
     /** A deck whose last open to-do is ticked leaves the card whole, heading and all. */
@@ -669,7 +669,7 @@ describe("DeckTodosWidget", () => {
       draw();
       expect(headings()).toEqual(["Atraxa · 1 open", "Mono Red · 3 open"]);
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "Cut three creatures" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “Cut three creatures” done' }));
 
       await waitFor(() => expect(headings()).toEqual(["Mono Red · 3 open"]));
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Mono Red · 3 open" }));
@@ -689,10 +689,10 @@ describe("DeckTodosWidget", () => {
       draw();
       expect(titles()).toEqual(["First", "Second"]);
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "a" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “a” done' }));
 
       await waitFor(() => expect(titles()).toEqual(["Second"]));
-      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark "b" done' }));
+      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark “b” done' }));
     });
 
     /**
@@ -708,10 +708,10 @@ describe("DeckTodosWidget", () => {
       seed([first, second]);
       draw();
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "b" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “b” done' }));
 
       await waitFor(() => expect(titles()).toEqual(["First"]));
-      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark "a2" done' }));
+      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark “a2” done' }));
     });
 
     it("leaves the caret on a ticked to-do that stays on the card", async () => {
@@ -720,9 +720,9 @@ describe("DeckTodosWidget", () => {
       seed([MONO]);
       draw({ done: true });
 
-      await user.click(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
+      await user.click(screen.getByRole("checkbox", { name: 'Mark “Two” done' }));
 
-      const two = await screen.findByRole("checkbox", { name: 'Mark "Two" not done' });
+      const two = await screen.findByRole("checkbox", { name: 'Mark “Two” not done' });
       await waitFor(() => expect(everyDeckTodoList).toHaveBeenCalled());
       expect(document.activeElement).toBe(two);
     });
@@ -858,10 +858,10 @@ describe("DeckTodosWidget", () => {
       expect(outline()).toEqual([
         "# Burn · 5 open",
         "## First",
-        'Mark "Item 1" done',
-        'Mark "Item 2" done',
-        'Mark "Item 3" done',
-        'Mark "Item 4" done',
+        'Mark “Item 1” done',
+        'Mark “Item 2” done',
+        'Mark “Item 3” done',
+        'Mark “Item 4” done',
       ]);
       expect(screen.getByText("+1 more")).toBeInTheDocument();
     });
@@ -877,7 +877,7 @@ describe("DeckTodosWidget", () => {
       draw(null, { fit: fitFor(2, 2) });
 
       expect(headings()).toEqual(["Burn · 2 open"]);
-      const box = screen.getByRole("checkbox", { name: `Mark "${long}" done` });
+      const box = screen.getByRole("checkbox", { name: `Mark “${long}” done` });
       const text = box.querySelector(".whitespace-pre-line");
       const clamp = Array.from(text?.classList ?? []).find((name) => name.startsWith("line-clamp-"));
       expect(clamp).toBeDefined();
@@ -944,7 +944,7 @@ describe("DeckTodosWidgetSettings", () => {
 
     expect(screen.queryByRole("button", { name: "Decks to track" })).toBeNull();
     expect(
-      screen.getByText("Choose Chosen… under Which decks to pick the decks this widget tracks."),
+      screen.getByText("Set Which decks to Chosen… to pick decks."),
     ).toBeInTheDocument();
   });
 

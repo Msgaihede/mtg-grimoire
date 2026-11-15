@@ -196,7 +196,7 @@ function toggleWord(key: string): string {
  * tell a reader who has just finished a list that they never wrote one — `DeckCompletionWidget`'s
  * `ALL_COMPLETE`, for the same reason and in its words.
  */
-export const ALL_DONE = `Every to-do here is done. Enable ${toggleWord("done")} in settings to view them.`;
+export const ALL_DONE = `Every to-do here is done. Turn on ${toggleWord("done")} in this widget's settings to show them.`;
 
 /**
  * Nothing is drawn, yet a to-do in scope is still open — which only `Show sub-to-dos` off can do:
@@ -204,7 +204,7 @@ export const ALL_DONE = `Every to-do here is done. Enable ${toggleWord("done")} 
  * whose only open work is nested draws nothing. {@link ALL_DONE} there would be false and would
  * name the wrong switch.
  */
-export const NESTED_ONLY = `Open to-dos are nested under finished ones. Enable ${toggleWord("nested")} in settings to view them.`;
+export const NESTED_ONLY = `The open to-dos sit under finished ones. Turn on ${toggleWord("nested")} in this widget's settings to show them.`;
 
 /** A pick's row label and one option's label, read off the registry — `DeckCompletionWidget`'s
  *  `pickWords`, so the checklist's hint names the control this card really has. */
@@ -469,7 +469,7 @@ export function cutRows(
  *  thing in both places. Whitespace is collapsed: a hard break is a line on screen, not in a name. */
 export function tickLabel(item: TodoItem): string {
   const text = item.text.replace(/\s+/g, " ").trim() || "empty to-do";
-  return `Mark "${text}" ${item.done ? "not done" : "done"}`;
+  return `Mark “${text}” ${item.done ? "not done" : "done"}`;
 }
 
 /** The open count in words, as a heading carries it. */
@@ -1065,7 +1065,7 @@ export function DeckTodosWidgetSettings({ widget, onConfig }: WidgetSettingsProp
   if (todoScope(widget) !== "chosen") {
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.option} under {words.row} to pick the decks this widget tracks.
+        Set {words.row} to {words.option} to pick decks.
       </p>
     );
   }
@@ -1102,7 +1102,7 @@ export function DeckTodosWidgetSettings({ widget, onConfig }: WidgetSettingsProp
         triggerLabel={ticked.length === 0 ? "None chosen" : plural(ticked.length, "deck")}
       />
       {!decksQuery.isPending && options.length === 0 && !decksQuery.isError && (
-        <p className="m-0 text-xs text-dim">No decks yet. Build a deck on the Decks page first.</p>
+        <p className="m-0 text-xs text-dim">No decks yet. Build one on the Decks page.</p>
       )}
       {decksQuery.isError && (
         <p className="m-0 text-xs text-destructive">

@@ -56,5 +56,5 @@ export function finishRefusal(
   if (offered.length === 0 || offered.includes(finish)) return null;
   return `${printing.setCode.toUpperCase()} ${printing.collectorNumber} has no ${FINISH_LABEL[
     finish
-  ].toLowerCase()} version — change this copy's finish first.`;
+  ].toLowerCase()} version. Change this copy's finish first.`;
 }

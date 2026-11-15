@@ -69,7 +69,7 @@ export function LegalitySection({ legalities }: { legalities: string | null }) {
             controls={listId}
             onToggle={() => setExpanded((open) => !open)}
             more={`Show all ${plural(rows.length, "format")}`}
-            fewer="Hide the formats"
+            fewer="Hide formats"
           />
         </>
       )}

@@ -41,7 +41,7 @@ export function ManagedFolderNote({
   return (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-dim">
       <Layers className="size-3.5 flex-none" aria-hidden="true" />
-      <span>Managed by the deck “{deckName}”. Updates automatically and can’t be edited here.</span>
+      <span>Managed by the deck “{deckName}” and can't be edited here.</span>
       {deckLink !== undefined ? (
         <a {...deckLink} className={look}>
           Open deck

@@ -151,8 +151,7 @@ export function UpdatePanel({
           )}
           {action === "unavailable" && (
             <p className="text-xs text-dim">
-              This install can&rsquo;t update itself. Download {release.version} from the
-              release page and install it over this one. Your data stays put.
+              This install can&rsquo;t update itself. Download {release.version} from the release page and install it over this one. Your data is kept.
             </p>
           )}
         </div>
@@ -206,8 +205,7 @@ function PrimaryAction({ update, windows }: { update: Update; windows: number })
         onClick={update.openReleasePage}
         className={cn(PANEL_BUTTON, gold)}
       >
-        <ExternalLink className="size-4" aria-hidden="true" />
-        Open the release page
+        <ExternalLink className="size-4" aria-hidden="true" />Open release page
       </button>
     );
   }

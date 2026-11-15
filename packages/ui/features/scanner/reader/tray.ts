@@ -247,7 +247,7 @@ export const MAX_TRAY_ROWS = 5_000;
 
 /** {@link addBatch}'s refusal: the pile would take the tray past {@link MAX_TRAY_ROWS}. */
 export const BATCH_WONT_FIT =
-  "That scan won't fit in the tray — add or archive what is in it first.";
+  "That scan won't fit in the tray. Add or archive what's in it first.";
 
 /**
  * **A past scan back into the tray** — *Put back in tray* (issue #1374), the way back from a pile
@@ -480,7 +480,7 @@ export function needsFinishCount(rows: readonly ScannerTrayRow[]): number {
 
 /** Why nothing can be filed yet, as the press's own refusal: `waiting` rows have no printing. */
 function stillWaiting(waiting: number): string {
-  return `${waiting} scanned ${waiting === 1 ? "card is" : "cards are"} still waiting for a printing to be picked.`;
+  return `${waiting} scanned ${waiting === 1 ? "card is" : "cards are"} still waiting for a printing.`;
 }
 
 /**
@@ -520,7 +520,7 @@ export const EMPTY_REASON = "Nothing scanned yet";
 /** Why an Add cannot go: a row is still waiting for the reader to say which printing it is. */
 export const UNPICKED_REASON = "Pick a printing for every card first";
 /** Why a deck cannot be made yet: a deck's rows each need a finish, where an Add leaves those out. */
-export const DECK_NEEDS_FINISHES = "Choose a finish for every card first";
+export const DECK_NEEDS_FINISHES = "Pick a finish for every card first";
 
 /**
  * Why Add is out of reach, in the order a reader can do something about each — **the order

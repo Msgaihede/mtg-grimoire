@@ -186,17 +186,17 @@ export function TradeOwnedPrintings({
       {owned.pending && <p className="shrink-0 text-xs text-dim">Loading your copies…</p>}
       {owned.error !== null && (
         <p className="shrink-0 text-xs text-destructive">
-          Couldn't read your copies — {owned.error}
+          Couldn't load your copies — {owned.error}
         </p>
       )}
       {choose.isError && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
-          Couldn't change the trade line's printing — {ipcError(choose.error)}
+          Couldn't change the printing — {ipcError(choose.error)}
         </p>
       )}
       {!owned.pending && owned.error === null && tiles.length === 0 && (
         <p className="shrink-0 text-sm text-dim">
-          Your collection holds no copy of this card a trade can take.
+          No copies in your collection to trade.
         </p>
       )}
 

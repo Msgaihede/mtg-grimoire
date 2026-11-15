@@ -192,7 +192,7 @@ function fold(
   if (rest.length > 0) {
     series.push({
       key: OTHER_KEY,
-      label: split === "type" ? "Other types" : "Every other set",
+      label: split === "type" ? "Other types" : "Other sets",
       fill: OTHER_FILL,
       values: rest[0].values.map((_, i) => rest.reduce((sum, r) => sum + r.values[i], 0)),
     });

@@ -147,8 +147,8 @@ function WishPages({
   const removeWish = () => {
     receipt.track(
       toasted(writes.remove.mutateAsync(wish), {
-        done: `Removed “${wish.name}” from the wishlist`,
-        failed: `Couldn't remove “${wish.name}” from the wishlist`,
+        done: `Removed “${wish.name}” from your wishlist`,
+        failed: `Couldn't remove “${wish.name}” from your wishlist`,
       }),
       () => `Removed ${wish.name} from your wishlist.`,
     );
@@ -225,7 +225,7 @@ function WishPages({
           }
           Icon={Layers}
           opens
-          reason={wish.oracleId === null ? "this card has left the card database" : null}
+          reason={wish.oracleId === null ? "this card is no longer in the card data" : null}
           onPress={() => setPage("printing")}
         />
         {userWishFolders(folders).length > 0 && (
@@ -282,7 +282,7 @@ function PrintingPage({
         <SheetChoice
           label="Any printing"
           current={anyNow}
-          note={anyNow ? "already a wish for any printing" : undefined}
+          note={anyNow ? "already any printing" : undefined}
           onPick={onAny}
         />
         {printings.isPending ? (

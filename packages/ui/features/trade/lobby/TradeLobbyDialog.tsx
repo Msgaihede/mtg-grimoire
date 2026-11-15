@@ -48,7 +48,7 @@ export function TradeLobbyDialog({
     <Dialog
       open={open}
       title="Trade online"
-      subtitle="Build one trade with another reader, each in your own app."
+      subtitle="Build a trade with someone else, each in your own app."
       closeLabel="Close"
       size="w-[30rem]"
       onDismiss={onDismiss}
@@ -154,8 +154,8 @@ function Body({
           </button>
           <span className="text-xs text-dim">
             {mayHost
-              ? "You get a code to share. Each of you adds what you give, and the trade goes through when you both accept."
-              : "Starting a trade online is for supporters; anybody can join one with its code."}
+              ? "Share the code. You each add what you give, then both accept."
+              : "Starting an online trade is for supporters. Anyone can join with a code."}
           </span>
         </div>
 
@@ -192,7 +192,7 @@ function Body({
             </button>
           </div>
         </div>
-        {!named && <p className="m-0 text-xs text-dim">Give yourself a name to start or join.</p>}
+        {!named && <p className="m-0 text-xs text-dim">Enter a name to start or join.</p>}
       </div>
 
       <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3.5">

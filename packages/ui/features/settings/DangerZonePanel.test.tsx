@@ -66,7 +66,7 @@ describe("DangerZonePanel", () => {
 
     await user.click(within(panel()).getByRole("button", { name: "Clear collection" }));
 
-    expect(dialog()).toHaveTextContent("Your decks are kept");
+    expect(dialog()).toHaveTextContent("Decks are kept");
     expect(dialog()).toHaveTextContent("no longer marked as owned");
   });
 

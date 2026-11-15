@@ -130,7 +130,7 @@ describe("useDangerZone", () => {
     act(() => result.current.collection.run());
 
     await waitFor(() =>
-      expect(newest()).toMatchObject({ tone: "info", title: "The collection was already empty" }),
+      expect(newest()).toMatchObject({ tone: "info", title: "Your collection was already empty" }),
     );
   });
 
@@ -150,12 +150,12 @@ describe("useDangerZone", () => {
     await waitFor(() =>
       expect(newest()).toMatchObject({
         tone: "error",
-        title: "Couldn't clear the decks",
+        title: "Couldn't clear your decks",
         body: "The card database is busy.",
       }),
     );
     expect(useNotifications.getState().notices.map((n) => n.title)).toEqual([
-      "Couldn't clear the decks",
+      "Couldn't clear your decks",
       "Cleared 4 wishlist entries",
     ]);
   });

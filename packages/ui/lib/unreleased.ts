@@ -78,7 +78,7 @@ export function imageUpdatedDay(imageUpdatedAt: string | null | undefined): stri
 
 /** The words an unreleased mark stands for, for a tooltip or a screen reader. */
 export function unreleasedLabel(releasedAt: string): string {
-  return `Unreleased — out ${releasedAt}`;
+  return `Unreleased, out ${releasedAt}`;
 }
 
 /**

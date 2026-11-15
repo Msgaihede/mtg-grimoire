@@ -32,7 +32,7 @@ export function hostsDraftingPod(lobby: LobbyState | null): boolean {
 
 /** Why a solo draft cannot start or resume while the pod is drafting — the host's sentence. */
 export const POD_HOLDS_TABLE =
-  "You are hosting a pod draft. Finish it or leave its lobby before starting another draft.";
+  "You're hosting a pod draft. Finish it or close its lobby first.";
 
 /** Where a draft is, in a row's words: its pack and pick, or done picking. */
 export function whereOf(at: {

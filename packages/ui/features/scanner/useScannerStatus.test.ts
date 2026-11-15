@@ -41,7 +41,7 @@ describe("scannerStatusFacts", () => {
   it("says a recogniser that is there and did not load did not load, in the load's words", () => {
     const facts = scannerStatusFacts(STATUS.corrupt);
     expect(facts.filtersDisabled).toBeNull();
-    expect(facts.assetNotes).toEqual(["The card recognizer did not load: gallery: bad magic."]);
+    expect(facts.assetNotes).toEqual(["The Neural scanner didn't load: gallery: bad magic."]);
   });
 });
 

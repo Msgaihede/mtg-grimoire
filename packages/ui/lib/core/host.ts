@@ -10,10 +10,10 @@ import type { Host } from "./types";
 export const NO_CLIPBOARD = "this browser offers no clipboard here.";
 
 /** What an open is refused with when the browser made no tab — a pop-up blocker, in practice. */
-export const NOT_OPENED = "The link could not be opened. This browser may be blocking new tabs.";
+export const NOT_OPENED = "Couldn't open the link. Your browser may be blocking new tabs.";
 
 /** What an open is refused with for anything that is not a whole `http` or `https` address. */
-export const NOT_A_WEB_ADDRESS = "That link is not a web address, so it was not opened.";
+export const NOT_A_WEB_ADDRESS = "That link isn't a web address, so it wasn't opened.";
 
 /**
  * Whether `url` is a whole web address — absolute, and `http` or `https`.

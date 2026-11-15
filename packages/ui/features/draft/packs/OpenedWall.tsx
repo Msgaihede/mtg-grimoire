@@ -91,7 +91,7 @@ export function OpenedWall({
             <li
               key={`${index}-${card.cardId}`}
               className="min-w-0"
-              title={inCorpus ? undefined : "Not in this app's card data yet"}
+              title={inCorpus ? undefined : "Not in your card data yet"}
             >
               <CardTile
                 // `null` for a card this corpus lacks: no picture to ask for, so the frame draws

@@ -254,7 +254,7 @@ describe("TagChips", () => {
 
     const control = screen.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
     expect(control).toBeInTheDocument();
-    expect(control).toHaveAccessibleName(/background element/i);
+    expect(control).toHaveAccessibleName(/background detail/i);
     // Both halves, because the phrase can hide in two places: `queryByText` walks visible text
     // only and would miss it reappearing in a `title` or an `aria-label`, which is exactly where
     // `ToggleChip` puts the sentence it is handed.
@@ -274,7 +274,7 @@ describe("TagChips", () => {
     const control = screen.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
     expect(control).toHaveAttribute("aria-pressed", "true");
     expect(control).toHaveAttribute("aria-disabled", "true");
-    expect(control).toHaveAccessibleName(/on, and narrowing nothing/i);
+    expect(control).toHaveAccessibleName(/on, but has no effect/i);
   });
 
   /** The group names the reader's picks, so the switch that modifies them is not inside it. */
@@ -318,7 +318,7 @@ describe("TagChips", () => {
 
     const control = screen.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
     expect(control).toHaveAttribute("aria-disabled", "true");
-    expect(control).toHaveAccessibleName(/until an art tag is picked/i);
+    expect(control).toHaveAccessibleName(/pick an art tag first/i);
     await user.click(control);
     expect(onFloorChange).not.toHaveBeenCalled();
   });

@@ -247,7 +247,7 @@ describe("useTrayCommit", () => {
     await act(async () => {
       expect(await waiting.result.current.commit.commit()).toBeNull();
     });
-    expect(waiting.result.current.commit.error).toMatch(/still waiting for a printing to be picked/);
+    expect(waiting.result.current.commit.error).toMatch(/still waiting for a printing\./);
 
     scannerTray.mockResolvedValue([NEEDS_A_FINISH_ROW]);
     const unfinished = await mount(null);
@@ -433,7 +433,7 @@ describe("useTrayCommit's archive", () => {
     await act(async () => {
       expect(await result.current.commit.archive()).toBeNull();
     });
-    expect(result.current.commit.error).toMatch(/still waiting for a printing to be picked/);
+    expect(result.current.commit.error).toMatch(/still waiting for a printing\./);
     expect(scannerTrayArchive).not.toHaveBeenCalled();
   });
 

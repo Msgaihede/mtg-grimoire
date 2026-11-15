@@ -278,7 +278,7 @@ describe("the startup gate, answered from the open", () => {
     expect(answered).toMatchObject({ state: "failed", reload: true });
     expect(answered).toMatchObject({
       message: expect.stringMatching(
-        /could not load its card engine[\s\S]*TypeError: Failed to fetch/,
+        /MTG Grimoire couldn't load\.[\s\S]*TypeError: Failed to fetch/,
       ),
     });
   });
@@ -732,14 +732,14 @@ describe("storage cleared under the app", () => {
     // order, and each for a reader rather than as a code.
     expect(answer?.title).toBe("Your browser cleared MTG Grimoire's saved data");
     expect(answer?.lines).toHaveLength(4);
-    expect(answer?.lines[0]).toMatch(/Browsers can remove what a site has stored/);
+    expect(answer?.lines[0]).toMatch(/Browsers can remove a site's stored data/);
     expect(answer?.lines[1]).toBe("The card data downloads again by itself.");
     expect(answer?.lines[2]).toMatch(/collection, wishlist and decks/);
-    expect(answer?.lines[2]).toMatch(/nothing to restore it from/);
+    expect(answer?.lines[2]).toMatch(/can't be restored here/);
     expect(answer?.lines[2]).toMatch(/import those files again/);
     // And, as an *if*: a paired browser's old entry still holds a place in its group.
     expect(answer?.lines[3]).toMatch(/^If this browser was paired/);
-    expect(answer?.lines[3]).toMatch(/Remove the old entry in Settings, under Sync/);
+    expect(answer?.lines[3]).toMatch(/remove the old entry in Settings › Sync/);
     // And on the console, where a bug report can carry it — with what the open made of it.
     expect(warned).toHaveBeenCalledWith(`${CLEARED_LINE} — a new, empty one was created`);
     expect(CLEARED_LINE).toBe(
@@ -883,7 +883,7 @@ describe("storage cleared under the app", () => {
     worker.say({ kind: "opened", opened: READY, existed: false });
     worker.crash("RuntimeError: unreachable");
 
-    await expect(core.call("deck_list")).rejects.toMatch(/card engine stopped/);
+    await expect(core.call("deck_list")).rejects.toMatch(/MTG Grimoire stopped working/);
     // About the browser and not the engine: true of a page whatever became of its Worker.
     expect(await cleared(core)).toMatchObject({ title: CLEARED_TITLE });
   });
@@ -898,8 +898,8 @@ describe("a Worker that died", () => {
 
     const answered = await status(core);
     expect(answered).toMatchObject({ state: "failed", reload: true });
-    expect(answered).toMatchObject({ message: expect.stringMatching(/card engine stopped/) });
-    await expect(waiting).rejects.toMatch(/card engine stopped/);
+    expect(answered).toMatchObject({ message: expect.stringMatching(/MTG Grimoire stopped working/) });
+    await expect(waiting).rejects.toMatch(/MTG Grimoire stopped working/);
   });
 
   it("rejects every call in flight when it dies later, and every call after", async () => {
@@ -912,11 +912,11 @@ describe("a Worker that died", () => {
     // A trap in the engine's own task queue names no call, so no `err` is coming for either.
     worker.crash("RuntimeError: unreachable");
 
-    await expect(one).rejects.toMatch(/card engine stopped[\s\S]*RuntimeError: unreachable/);
-    await expect(two).rejects.toMatch(/card engine stopped/);
+    await expect(one).rejects.toMatch(/MTG Grimoire stopped working[\s\S]*RuntimeError: unreachable/);
+    await expect(two).rejects.toMatch(/MTG Grimoire stopped working/);
     // And nothing more is sent to it: an answer from that heap is not one to wait for.
     const sent = worker.messages.length;
-    await expect(core.call("deck_list")).rejects.toMatch(/Reload to start it again/);
+    await expect(core.call("deck_list")).rejects.toMatch(/Reload to restart it/);
     expect(worker.messages).toHaveLength(sent);
   });
 
@@ -937,7 +937,7 @@ describe("a Worker that died", () => {
 
     const told = {
       state: "failed",
-      message: expect.stringMatching(/card engine stopped[\s\S]*RuntimeError: unreachable/),
+      message: expect.stringMatching(/MTG Grimoire stopped working[\s\S]*RuntimeError: unreachable/),
       reload: true,
     };
     expect(heard).toEqual([{ state: "ready" }, told]);
@@ -979,7 +979,7 @@ describe("a Worker that died", () => {
 
     expect(await status(core)).toMatchObject({ state: "failed", reload: true });
     expect(heard).toHaveLength(2);
-    await expect(core.call("deck_list")).rejects.toMatch(/card engine stopped/);
+    await expect(core.call("deck_list")).rejects.toMatch(/MTG Grimoire stopped working/);
     expect(worker.messages).toHaveLength(sent);
   });
 
@@ -1166,7 +1166,7 @@ describe("a database another document may still hold", () => {
     expect(await status(core)).toEqual({ state: "failed", message: STILL_HELD, reload: true });
     // This document holds the lock: there is no other tab for the sentence to name.
     expect(STILL_HELD).not.toMatch(/another tab/);
-    expect(STILL_HELD).toMatch(/Reload to try again/);
+    expect(STILL_HELD).toMatch(/Close other windows with the app, then reload\./);
     await expect(decks).rejects.toBe(STILL_HELD);
     // And it lets the lock go: a document with no database must not make the next one a "second".
     await asked();
@@ -1351,7 +1351,7 @@ describe("the service worker's page half", () => {
     // nothing is refused in a sentence — so a control that greyed itself on it comes back.
     await expect(core.call(HOST_UPDATE)).resolves.toBeNull();
     await expect(core.call(HOST_UPDATE_APPLY)).rejects.toBe(NOTHING_WAITING);
-    expect(NOTHING_WAITING).toBe("There is no newer version of MTG Grimoire waiting.");
+    expect(NOTHING_WAITING).toBe("No update is waiting.");
   });
 
   it("refuses `host_update_apply` when the build has stopped waiting since the bar was drawn", async () => {

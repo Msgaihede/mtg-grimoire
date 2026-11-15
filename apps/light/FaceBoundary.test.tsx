@@ -57,7 +57,7 @@ describe("the boundary around a face", () => {
       </FaceBoundary>,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("This page could not be drawn.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't show this page.");
     // The reader's way out is a real link to where they already are: a fresh document, and the
     // one control here that needs no script to have survived.
     expect(screen.getByRole("link", { name: "Reload" })).toHaveAttribute(
@@ -92,7 +92,7 @@ describe("the boundary around a face", () => {
 
     const update = await screen.findByRole("button", { name: "Reload to update" });
     expect(screen.getByText("A new version is ready.")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("This page could not be drawn.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't show this page.");
     // Not both: a reload here would be a way back into the same failure.
     expect(screen.queryByRole("link", { name: "Reload" })).toBeNull();
 

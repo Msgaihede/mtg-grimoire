@@ -644,7 +644,7 @@ describe("Delete list", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete list" }));
 
     const question = await screen.findByRole("dialog", { name: "Delete “Mana”?" });
-    expect(question).toHaveTextContent("Its to-dos go with it.");
+    expect(question).toHaveTextContent("Its to-dos are deleted too.");
     fireEvent.click(within(question).getByRole("button", { name: "Delete list" }));
 
     expect(onDelete).toHaveBeenCalledWith(7);

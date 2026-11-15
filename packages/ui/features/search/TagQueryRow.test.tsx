@@ -182,7 +182,7 @@ describe("TagQueryRow", () => {
     expect(
       screen.getByRole("button", { name: "cmc>=3, included. Click to exclude." }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove cmc>=3, search term" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove search term cmc>=3" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Tags from the search box" })).toBeNull();
   });
 
@@ -221,7 +221,7 @@ describe("TagQueryRow", () => {
       { wrapper },
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Remove cmc>=3, search term" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove search term cmc>=3" }));
     await userEvent.click(
       screen.getByRole("button", { name: "cmc>=3, included. Click to exclude." }),
     );

@@ -93,7 +93,7 @@ const inFlight = new WeakSet<ScannerTrayRow>();
 export function heldNotice(copies: number, name: string): string {
   const were = copies === 1 ? "1 card was" : `${copies} cards were`;
   const they = copies === 1 ? "It is in this list and goes" : "They are in this list and go";
-  return `${were} already in the scanner's tray. ${they} onto ${name} with the rest. Remove any that do not belong, or use Clear all… to empty the list.`;
+  return `${were} already in the tray. ${they} onto ${name} with the rest. Remove any that don't belong, or use Clear all… to empty it.`;
 }
 
 /**

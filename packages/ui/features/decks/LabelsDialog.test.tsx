@@ -184,7 +184,7 @@ describe("LabelsDialog", () => {
    */
   it("says the labels are shared in the header, and names both of its sections", async () => {
     mount();
-    expect(await screen.findByText(/Cards can have at most one/)).toHaveTextContent(
+    expect(await screen.findByText(/A card can have one label/)).toHaveTextContent(
       "Labels are shared across all decks",
     );
     expect(screen.getByText("On cards in this actual list")).toBeInTheDocument();
@@ -243,7 +243,7 @@ describe("the two sections", () => {
   it("says so when nothing in this list is labelled", async () => {
     deckLabelList.mockResolvedValue([]);
     mount();
-    expect(await screen.findByText(/No cards in this list are labeled yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No labeled cards in this list yet/)).toBeInTheDocument();
   });
 
   it("says so when every label the reader has is already on a card here", async () => {

@@ -134,7 +134,7 @@ describe("the deck gallery", () => {
 
     await userEvent.click(tab("Decks"));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Your decks could not be read.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load your decks.");
   });
 
   it("says there are no decks yet, and offers both ways to make one", async () => {
@@ -345,7 +345,7 @@ describe("a deck", () => {
     // A to-do list's boxes are real checkboxes, named for their own line.
     const todos = screen.getByRole("region", { name: "To-do lists" });
     expect(
-      within(todos).getByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' }),
+      within(todos).getByRole("checkbox", { name: "Mark “Sleeve the deck” not done" }),
     ).toBeChecked();
   });
 
@@ -452,7 +452,7 @@ describe("a deck", () => {
 
     await userEvent.click(await waitFor(() => within(wall).getAllByRole("link")[0], SETTLE));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck could not be read.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load that deck.");
     expect(screen.queryByText("That deck is gone.")).toBeNull();
   });
 });

@@ -120,8 +120,8 @@ describe("facetTitle", () => {
   /** The word "printings" is the whole fix for the two different numbers this app calls
    *  `total`: the list collapses printings into cards and a facet count never does. */
   it("says what it counted, and says printings", () => {
-    expect(facetTitle("Modern", 12481)).toBe("Modern — 12,481 printings");
-    expect(facetTitle("Limited Edition Alpha", 1)).toBe("Limited Edition Alpha — 1 printing");
+    expect(facetTitle("Modern", 12481)).toBe("Modern: 12,481 printings");
+    expect(facetTitle("Limited Edition Alpha", 1)).toBe("Limited Edition Alpha: 1 printing");
   });
 
   /** A greyed control's tooltip has to explain *why* it is greyed. "0 printings" is a

@@ -45,10 +45,9 @@ export function NoCards({
   if (sync) {
     return (
       <div className="flex flex-col gap-2 p-4 text-sm">
-        <p className="font-medium text-text">Setting up your card database</p>
+        <p className="font-medium text-text">Setting up card data</p>
         <p className="text-dim">
-          Downloading every Magic card from Scryfall. This happens once — after that, search works
-          offline.
+          Downloading every Magic card from Scryfall. It happens once, then search works offline.
         </p>
         <div className="flex items-start justify-between gap-3 text-xs">
           {/* The desktop's arrangement: the phase is announced, the count is not — it changes
@@ -69,7 +68,7 @@ export function NoCards({
   return (
     <div className="flex flex-col gap-2 p-4 text-sm">
       <p className="text-dim">
-        No card data yet — search has nothing to look through until it downloads.
+        No card data yet. Search works once it downloads.
       </p>
       {error && <p className="text-destructive">{error}</p>}
       {onDownload && (

@@ -38,7 +38,7 @@ export interface BootDeps {
 export const OPENING = "Opening the collection…";
 
 /** Under {@link SNAPSHOT_PENDING} — the publish resolves in seconds, so the advice is "reload". */
-export const PENDING_DETAIL = "The collection is still uploading. Reload this page in a moment.";
+export const PENDING_DETAIL = "Still uploading. Reload this page in a moment.";
 
 /** Under whatever went wrong. The one thing a stranger can actually do about any of it. */
 export const FAILED_DETAIL =

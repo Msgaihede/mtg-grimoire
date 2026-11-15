@@ -143,7 +143,7 @@ export function ImportLabels({
                 {mine?.name ?? label.name}
               </label>
               <span id={`${id}-${label.key}-note`} className="shrink-0 text-[0.6875rem] text-dim">
-                {mine === undefined ? "new label" : "already yours"}
+                {mine === undefined ? "new label" : "existing label"}
               </span>
               <span className="shrink-0 font-mono text-xs tabular-nums text-dim">
                 {label.copies}

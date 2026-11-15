@@ -116,7 +116,7 @@ describe("a deck row's action sheet", () => {
     );
     await waitFor(async () => expect((await bolts())[0]?.labelName).toBe("Cut candidate"), SETTLE);
     expect(
-      await within(sheet).findByText("Labelled Lightning Bolt Cut candidate.", undefined, SETTLE),
+      await within(sheet).findByText("Labeled Lightning Bolt Cut candidate.", undefined, SETTLE),
     ).toBeInTheDocument();
     // A label is an edit to the row in a sheet that stays open on it: its line answers, no toast.
     expect(said()).toEqual([]);
@@ -139,7 +139,7 @@ describe("a deck row's action sheet", () => {
         SETTLE,
       ),
     );
-    const line = "Labelled Lightning Bolt Cut candidate.";
+    const line = "Labeled Lightning Bolt Cut candidate.";
     expect(await within(sheet).findByText(line, undefined, SETTLE)).toBeInTheDocument();
 
     // The core's commonest refusal — another device's sync landed first — held until released.
@@ -330,7 +330,7 @@ describe("a deck's notes and to-do lists", () => {
     await userEvent.click(
       await within(todos).findByRole(
         "checkbox",
-        { name: 'Mark "Cut three creatures" done' },
+        { name: "Mark “Cut three creatures” done" },
         SETTLE,
       ),
     );

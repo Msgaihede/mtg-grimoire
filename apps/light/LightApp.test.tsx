@@ -93,7 +93,7 @@ describe("LightApp", () => {
     render(<LightApp gate={false} />);
 
     // Without the boundary the throw unwinds the whole tree and the page is blank.
-    expect(await screen.findByRole("alert")).toHaveTextContent("This page could not be drawn.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't show this page.");
 
     // The boundary is keyed by the face: unkeyed, it would stay failed and draw its sentence over
     // a desktop face that has nothing wrong with it.
@@ -180,7 +180,7 @@ describe("LightApp", () => {
   describe("when the host says its engine stopped under an open app", () => {
     const STOPPED = {
       state: "failed",
-      message: "MTG Grimoire's card engine stopped. Reload to start it again.",
+      message: "MTG Grimoire stopped working. Reload to restart it.",
       reload: true,
     };
 
@@ -197,7 +197,7 @@ describe("LightApp", () => {
       act(() => gate.heard?.(STOPPED));
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "MTG Grimoire's card engine stopped. Reload to start it again.",
+        "MTG Grimoire stopped working. Reload to restart it.",
       );
       expect(screen.getByRole("link", { name: "Reload" })).toBeInTheDocument();
       // The whole app is gone with it, and so is everything mounted beside the faces: nothing
@@ -214,13 +214,13 @@ describe("LightApp", () => {
       stubViewport(false);
       startupStatus.mockResolvedValue({ state: "ready" });
       render(<LightApp gate />);
-      expect(await screen.findByRole("alert")).toHaveTextContent("This page could not be drawn.");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't show this page.");
 
       act(() => gate.heard?.(STOPPED));
 
       const alerts = screen.getAllByRole("alert");
       expect(alerts).toHaveLength(1);
-      expect(alerts[0]).toHaveTextContent("card engine stopped");
+      expect(alerts[0]).toHaveTextContent("MTG Grimoire stopped working");
       expect(screen.getAllByRole("link", { name: "Reload" })).toHaveLength(1);
     });
 
@@ -237,7 +237,7 @@ describe("LightApp", () => {
       // And the listener that heard it is finished: a late `ready` is not an app again.
       act(() => heard?.({ state: "ready" }));
 
-      expect(screen.getByRole("alert")).toHaveTextContent("card engine stopped");
+      expect(screen.getByRole("alert")).toHaveTextContent("MTG Grimoire stopped working");
       expect(screen.queryByText("the desktop face")).toBeNull();
       expect(screen.queryByText("the phone face")).toBeNull();
     });

@@ -577,7 +577,6 @@ export function bracketWarning(set: number, estimate: BracketEstimate): string |
   if (estimate.reasons.length === 0) return null;
 
   return (
-    `Set to bracket ${set}, but the cards suggest bracket ${estimate.floor}+ ` +
-    `(${describeReason(estimate.reasons[0])}). Worth mentioning to your playgroup.`
+    `Set to bracket ${set}, but the cards suggest bracket ${estimate.floor}+ (${describeReason(estimate.reasons[0])}). Mention it to your playgroup.`
   );
 }

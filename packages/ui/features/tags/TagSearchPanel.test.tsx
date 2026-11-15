@@ -404,7 +404,7 @@ describe("hiding a tag", () => {
     await screen.findByRole("menu");
     client.setQueryData(HIDDEN_TAGS_KEY, []);
 
-    await user.click(screen.getByRole("menuitem", { name: /^Hide this tag/ }));
+    await user.click(screen.getByRole("menuitem", { name: /^Hide tag/ }));
 
     await waitFor(() => expect(tagMute).toHaveBeenCalledWith("art", "id-landscape", "landscape"));
     await waitFor(() => expect(tagChildren.mock.calls.length).toBeGreaterThan(1));
@@ -412,7 +412,7 @@ describe("hiding a tag", () => {
     // The menu has closed, so the receipt is a toast — and it says where the tag comes back from.
     expect(useNotifications.getState().notices[0]).toMatchObject({
       title: "Hid “Landscape”",
-      body: "Unhide tags in Settings",
+      body: "Unhide tags in Settings › Tags",
       tone: "success",
     });
   });
@@ -424,7 +424,7 @@ describe("hiding a tag", () => {
     rightClick(await railRow("Landscape"));
     await screen.findByRole("menu");
 
-    await user.click(screen.getByRole("menuitem", { name: /^Hide this tag/ }));
+    await user.click(screen.getByRole("menuitem", { name: /^Hide tag/ }));
 
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({

@@ -456,12 +456,12 @@ describe("CardGrid", () => {
         listKey="k"
         zoomSection="search"
         badge={(c) => <span title="3 in your collection">×{c.printings}</span>}
-        topLeft={() => <span title="3 printings matched these filters">×3</span>}
+        topLeft={() => <span title="3 printings match these filters">×3</span>}
       />,
     );
 
     const bottomLeft = screen.getByTitle("3 in your collection").parentElement!;
-    const topLeft = screen.getByTitle("3 printings matched these filters").parentElement!;
+    const topLeft = screen.getByTitle("3 printings match these filters").parentElement!;
     expect(bottomLeft).toHaveClass("pointer-events-auto");
     expect(topLeft).toHaveClass("pointer-events-auto");
 
@@ -539,7 +539,7 @@ describe("CardGrid", () => {
     const marks = container.querySelectorAll("[data-unreleased-mark]");
     expect(marks).toHaveLength(1);
     const mark = marks[0] as HTMLElement;
-    expect(mark).toHaveAccessibleName("Unreleased — out 2999-01-01 · Image updated 2998-12-01");
+    expect(mark).toHaveAccessibleName("Unreleased, out 2999-01-01 · Image updated 2998-12-01");
     expect(mark.getAttribute("class")).toContain("text-destructive");
     // Right after the printing line, in the chin rather than on the art.
     expect(mark.previousElementSibling?.textContent).toBe("TLA · 161");

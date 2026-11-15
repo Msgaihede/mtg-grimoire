@@ -144,7 +144,7 @@ const DEFAULT_LANG = "en";
  * half a sentence.
  */
 const PULL_NOTE =
-  "Selected copies move into this deck. The list doesn't change, and this can't be undone.";
+  "Selected copies move into this deck. The list stays the same. This can't be undone.";
 
 /** What the body says while the read is in flight. */
 const READING = "Loading your collection…";
@@ -566,7 +566,7 @@ function PullBody({
               role="alert"
               className="min-w-0 shrink overflow-hidden text-right text-[0.7rem] text-destructive"
             >
-              Couldn't pull — {failure}
+              Couldn't pull the copies — {failure}
             </motion.p>
           )}
         </AnimatePresence>
@@ -801,7 +801,7 @@ function Row({
               press, and saying so would be the control accusing them of its own state. */}
           {on && unfilled > 0 && (
             <span className="text-[0.7rem] text-dim">
-              {plural(unfilled, "copy", "copies")} still missing (no other matching copies owned).
+              {plural(unfilled, "copy", "copies")} still missing. You own no other matching copies.
             </span>
           )}
         </span>

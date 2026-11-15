@@ -986,7 +986,7 @@ function Body({
       if (split && request.deck && !deckGone) {
         setSplitRefusal(null);
         if (cardId === request.cardId) {
-          setSplitRefusal("These copies are already this printing — pick another one.");
+          setSplitRefusal("These copies are already this printing. Pick another.");
           return;
         }
         const from = request.deck;

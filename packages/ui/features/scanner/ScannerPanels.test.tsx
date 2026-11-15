@@ -79,7 +79,7 @@ describe("the match panel", () => {
     render(<ScannerPanels {...props({ status: STATUS.corrupt, verdict: VERDICTS.noCard })} />);
     const match = screen.getByRole("region", { name: "Match" });
     expect(
-      within(match).getByText("The card recognizer did not load: gallery: bad magic."),
+      within(match).getByText("The Neural scanner didn't load: gallery: bad magic."),
     ).toBeInTheDocument();
   });
 
@@ -93,7 +93,7 @@ describe("the match panel", () => {
     const p = props();
     render(<ScannerPanels {...p} />);
     expect(screen.queryByRole("button", { name: "Reset evidence" })).not.toBeInTheDocument();
-    await userEvent.type(screen.getByRole("textbox", { name: "What it actually is" }), "Plains");
+    await userEvent.type(screen.getByRole("textbox", { name: "Actual card" }), "Plains");
     await userEvent.click(screen.getByRole("button", { name: "Add frame to dataset" }));
     expect(p.onCapture).toHaveBeenCalledWith("Plains");
     expect(await screen.findByText("saved live-1.jpg")).toBeInTheDocument();

@@ -48,7 +48,7 @@ function five(): DeckNoteCard[] {
 
 /** The whole of what the strip says to a screen reader for {@link five}'s cards. */
 const FIVE_SPOKEN =
-  "Names 5 cards: Krenko, Mob Boss; Goblin Chieftain; Purphoros, God of the Forge; " +
+  "Linked to 5 cards: Krenko, Mob Boss; Goblin Chieftain; Purphoros, God of the Forge; " +
   "Skirk Prospector; Goblin Matron.";
 
 /** The art strip, which has no role and no name of its own — see {@link NOTE_STRIP_ATTR}. */
@@ -165,7 +165,7 @@ describe("a note as a card", () => {
     expect(screen.queryByRole("button", { name: /^Open / })).not.toBeInTheDocument();
     expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
     // And nothing is *said* either. The sentence lives inside the strip, so a note that names
-    // nothing announces nothing rather than `Names 0 cards:` with an empty list after it.
+    // nothing announces nothing rather than `Linked to 0 cards:` with an empty list after it.
     expect(screen.queryByText(/^Names /)).not.toBeInTheDocument();
   });
 

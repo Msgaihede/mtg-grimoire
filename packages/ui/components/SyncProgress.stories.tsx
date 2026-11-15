@@ -102,7 +102,7 @@ type Story = StoryObj<typeof meta>;
  * The gap this covers is real twice over: the run is a moment old, *or* its opening events were
  * emitted before the webview registered its listener and Tauri dropped them. Either way `busy`
  * is true and there is nothing to report, so the line sweeps rather than fills and the sentence
- * is the generic "Syncing card data" rather than a phase nobody has announced. Both come from
+ * is the generic "Updating card data" rather than a phase nobody has announced. Both come from
  * `syncActivity`, the same fold that drives the ribbon's line, which is why the wording here is
  * the wording there.
  *
@@ -123,9 +123,9 @@ export const Starting: Story = {
     const canvas = within(canvasElement);
     // The line carries no `aria-valuenow` — omitted rather than zeroed, because `0` would be a
     // claim that no progress has been made rather than that none is measurable. Invisible.
-    const bar = canvas.getByRole("progressbar", { name: "Syncing card data" });
+    const bar = canvas.getByRole("progressbar", { name: "Updating card data" });
     await expect(bar).not.toHaveAttribute("aria-valuenow");
-    await expect(canvas.queryByRole("button", { name: "Retry download" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull();
 
     // Found by selector rather than by role, and that *is* the assertion below it: the mark
     // carries no `label`, so there is nothing in the accessibility tree to query for. The
@@ -247,7 +247,7 @@ export const Error: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("no internet connection")).toBeInTheDocument();
     await expect(canvas.queryByRole("progressbar")).toBeNull();
-    await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();
+    await expect(canvas.getByRole("button", { name: "Try again" })).toBeEnabled();
   },
 };
 
@@ -265,7 +265,7 @@ export const FailedBeforeAnyEvent: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("rate limited by Scryfall; retry after 30s")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();
+    await expect(canvas.getByRole("button", { name: "Try again" })).toBeEnabled();
   },
 };
 
@@ -289,7 +289,7 @@ export const Throttled: Story = {
       canvas.getByText("No card data yet."),
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("progressbar")).toBeNull();
-    await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();
+    await expect(canvas.getByRole("button", { name: "Try again" })).toBeEnabled();
   },
 };
 
@@ -311,13 +311,13 @@ export const Retrying: Story = {
   args: { busy: true, progress: event("error", { message: "no internet connection" }) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "Retry download" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }));
 
     await expect(canvas.queryByText("no internet connection")).toBeNull();
     await expect(
-      canvas.getByRole("progressbar", { name: "Syncing card data" }),
+      canvas.getByRole("progressbar", { name: "Updating card data" }),
     ).toBeInTheDocument();
-    await expect(canvas.queryByRole("button", { name: "Retry download" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull();
   },
 };
 

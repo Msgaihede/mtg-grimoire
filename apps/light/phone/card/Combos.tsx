@@ -280,7 +280,7 @@ function ComboDetail({
           would be this app implying fewer things are needed than the feed says. */}
       {combo.templateCount > 0 && (
         <p className="text-xs leading-snug text-dim">
-          {`Also needs ${plural(combo.templateCount, "piece")} that can't be matched to a specific card (e.g. a creature with flying or a sacrifice outlet).`}
+          {`Also needs ${plural(combo.templateCount, "piece")} not tied to a specific card, like a sacrifice outlet.`}
         </p>
       )}
     </div>

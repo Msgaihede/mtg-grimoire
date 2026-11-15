@@ -157,14 +157,14 @@ export function PlaytestPage({
         onCancel={() => setOpen(false)}
       >
         {asking === "newGame"
-          ? `This game is put away for good, and a new one is dealt from the same ${goldfish ? "deck" : "decks"}.`
+          ? `This game ends for good. A new one is dealt from the same ${goldfish ? "deck" : "decks"}.`
           : lobby === "host"
-            ? "The game ends for everyone at the table, and the lobby closes."
+            ? "The game ends for everyone and the lobby closes."
             : lobby === "guest"
               ? "You leave the lobby and this game. The host can let the AI play your seat."
               : held === undefined
-                ? "This game is put away for good."
-                : "This game is put away for good. To come back to it later, go to another page instead: the game is kept until you end it."}
+                ? "This game ends for good."
+                : "This game ends for good. To keep it, switch pages instead."}
       </EndGameDialog>
     </>
   );

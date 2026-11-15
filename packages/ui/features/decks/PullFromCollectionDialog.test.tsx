@@ -376,7 +376,7 @@ describe("PullFromCollectionDialog", () => {
 
     const note = screen.getByText(/still missing/);
     expect(note).toHaveTextContent(
-      "2 copies still missing (no other matching copies owned).",
+      "2 copies still missing. You own no other matching copies.",
     );
     expect(note).toHaveClass("text-dim");
     expect(note).not.toHaveAttribute("role");
@@ -450,7 +450,7 @@ describe("PullFromCollectionDialog", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Couldn't pull — entry 11 is no longer where you left it",
+      "Couldn't pull the copies — entry 11 is no longer where you left it",
     );
   });
 

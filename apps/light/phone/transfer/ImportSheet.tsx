@@ -116,7 +116,7 @@ function Body({
     readDecklistFile(file)
       .then(source.takeFile, (error: unknown) =>
         // The desktop dialog's frame, true of an oversized file and an unreadable one alike.
-        setFileFailure(`Couldn't read a card list from a file — ${ipcError(error)}`),
+        setFileFailure(`Couldn't import the file — ${ipcError(error)}`),
       )
       .finally(() => {
         setReading(false);
@@ -192,8 +192,7 @@ function Body({
           </p>
         )}
         <p id={`${id}-hint`} className="text-xs leading-relaxed text-dim">
-          One card per line, quantity first. Arena, Moxfield and MTGO exports and CSV files are read
-          as they are.
+          One card per line, quantity first. Arena, Moxfield, MTGO and CSV exports also work.
         </p>
         {text.trim() !== "" && (
           <p className="font-mono text-xs tabular-nums text-dim">

@@ -48,7 +48,7 @@ export const OPFS_DIRECTORY = "mtg-grimoire";
  * way out, never a code: reloading is the only way to find out whether the other tab has closed.
  */
 export const ALREADY_OPEN =
-  "MTG Grimoire is already open in another tab of this browser. Close that tab, then reload this one.";
+  "MTG Grimoire is already open in another tab. Close it, then reload this one.";
 
 /**
  * What the reader is told when the pool stayed taken and **no other tab holds the lock** — so it
@@ -57,8 +57,7 @@ export const ALREADY_OPEN =
  * the sentence still says where to look. A reload asks again.
  */
 export const STILL_HELD =
-  "MTG Grimoire could not open your collection: this browser has not let go of it yet. " +
-  "Reload to try again. If the app is open in another window, close that one first.";
+  "MTG Grimoire couldn't open your collection because the browser is still holding it. Close other windows with the app, then reload.";
 
 /** One line for the console when the open needed more than one ask. A bug report can carry it. */
 export const retriedLine = (attempts: number, waited: number): string =>
@@ -67,13 +66,17 @@ export const retriedLine = (attempts: number, waited: number): string =>
 
 /** What the reader is told when there was no engine to open anything with. */
 const unloaded = (detail: string): string =>
-  `MTG Grimoire could not load its card engine. Check your connection, then reload.\n\n${detail}`;
+  `MTG Grimoire couldn't load. Check your connection, then reload.
+
+${detail}`;
 
 /** What the reader is told when the Worker died, with whatever it said on the way. */
 const stopped = (detail: string | undefined): string =>
   detail
-    ? `MTG Grimoire's card engine stopped. Reload to start it again.\n\n${detail}`
-    : "MTG Grimoire's card engine stopped. Reload to start it again.";
+    ? `MTG Grimoire stopped working. Reload to restart it.
+
+${detail}`
+    : "MTG Grimoire stopped working. Reload to restart it.";
 
 /** One line for the console when the database opens: which journal each file got, and its rung. */
 export const openedLine = (opened: Extract<Opening, { kind: "ready" }>): string =>
@@ -115,7 +118,7 @@ export const IMAGE_SOURCE_COMMAND = "card_image_source";
 export const CACHE_CLEAR_COMMAND = "cache_clear";
 
 /** What `host_update_apply` is refused with when no newer build is waiting to be told. */
-export const NOTHING_WAITING = "There is no newer version of MTG Grimoire waiting.";
+export const NOTHING_WAITING = "No update is waiting.";
 
 /** The page itself, as far as the update flow touches it. */
 export interface Page {

@@ -476,8 +476,7 @@ function copyIssues(
           severity: "warning",
           code: "unknown-copy-limit",
           message:
-            `Couldn't read ${name}'s copy limit ("${unreadable}"), so its ${quantity} copies ` +
-            `weren't checked.`,
+            `Couldn't read ${name}'s copy limit (“${unreadable}”), so its ${quantity} copies weren't checked.`,
           cardIds,
         });
       }
@@ -568,8 +567,7 @@ function cardIssues(
         code: "orphan",
         message: card.needsReview
           ? `${card.name}: ${card.needsReview}`
-          : `${card.name} isn't in the card database, so it wasn't checked against ` +
-            `${spec.displayName} rules.`,
+          : `${card.name} isn't in your card data, so it wasn't checked against ${spec.displayName} rules.`,
         cardIds: [card.cardId],
       });
       continue;
@@ -632,7 +630,7 @@ function legalityIssues(
       return [
         warning(
           "unknown-legality",
-          `${name} has an unrecognized ${format} legality ("${read.status}").`,
+          `${name} has an unrecognized ${format} legality (“${read.status}”).`,
           card,
         ),
       ];
@@ -661,7 +659,7 @@ function legalityIssues(
  */
 function outsidePoolIssues(card: CardFacts, spec: FormatSpec): ValidationIssue[] {
   if (spec.commanderRule === "pdh" && card.categoryKind === "commander") return [];
-  return [error("not-legal", `${card.name} is not legal in ${spec.displayName}.`, [card.cardId])];
+  return [error("not-legal", `${card.name} isn't legal in ${spec.displayName}.`, [card.cardId])];
 }
 
 /**

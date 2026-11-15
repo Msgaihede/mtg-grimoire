@@ -80,7 +80,7 @@ export function lobbyReadiness({
       `${lobby.peers.length + 1} people are in; ${table === "duel" ? "a duel" : "a four-player game"} seats ${seats}.`,
     );
   }
-  if (lobby.peers.length === 0) return not("Share the code: a game needs someone to join it.");
+  if (lobby.peers.length === 0) return not("Share the code. A game needs another player.");
   if (yours === undefined) return not("Pick your deck to start.");
   for (const seat of lobbySeats(lobby.peers, opponents)) {
     if (seat.kind === "guest" && seat.peer.deck === null)

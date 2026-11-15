@@ -315,7 +315,7 @@ describe("HomePage", () => {
     await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("button", { name: "Add widget" }));
-    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
     expect(within(dialog).getByRole("button", { name: "Add To-dos" })).toBeInTheDocument();
     expect(handed.get("preview-deckTodos")).toEqual(
       expect.objectContaining({ still: true, editing: false }),
@@ -336,7 +336,7 @@ describe("HomePage", () => {
 
     await customize(user);
     await user.click(screen.getByRole("button", { name: "Add widget" }));
-    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
     expect(
       within(dialog).getByRole("button", { name: "Add Latest change notes" }),
     ).toBeInTheDocument();
@@ -351,7 +351,7 @@ describe("HomePage", () => {
     mount(layoutOf());
 
     await user.click(screen.getByRole("button", { name: "Add widget" }));
-    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
 
     for (const [kind, label] of [
       ["deckCompletion", "Deck completion"],
@@ -459,7 +459,7 @@ describe("HomePage", () => {
 
       await customize(user);
       await user.click(screen.getByRole("button", { name: "Add widget" }));
-      const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+      const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
       await user.click(within(dialog).getByRole("button", { name: "Add Folders" }));
 
       // Drawn, `b` takes columns 0–3 and `a` 7–8 of the top two rows, so Folders' 4×2 fits first on
@@ -509,7 +509,7 @@ describe("HomePage", () => {
     await customize(user);
     await user.click(screen.getByRole("button", { name: "Add widget" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
     // Each entry says whether that kind is already on the page.
     const status = (label: string) =>
       within(dialog).getByRole("heading", { name: label }).closest("li");
@@ -726,7 +726,7 @@ describe("HomePage", () => {
     mount(layoutOf());
 
     await user.click(screen.getByRole("button", { name: "Add widget" }));
-    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
 
     expect(within(dialog).getByText("Body of preview-priceMovers")).toBeInTheDocument();
     expect(handed.get("preview-priceMovers")).toEqual(
@@ -892,16 +892,16 @@ describe("HomePage", () => {
 
     // An empty document is a layout and not a missing one, so the page says so — and carries the two
     // controls that can put something on it without a Customize press.
-    expect(screen.getByText(/^Your home page is empty\./)).toBeInTheDocument();
+    expect(screen.getByText(/^Your Home page is empty\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reset" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add widget" }));
-    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalog" });
     await user.click(within(dialog).getByRole("button", { name: "Add Folders" }));
 
     await waitFor(() =>
       expect(storedWidget("folders")).toEqual(expect.objectContaining({ x: 0, y: 0, w: 4, h: 2 })),
     );
-    expect(screen.queryByText(/^Your home page is empty\./)).toBeNull();
+    expect(screen.queryByText(/^Your Home page is empty\./)).toBeNull();
     // The tray went with the emptiness, so the caret lands on the control that is still there.
     await waitFor(() => expect(screen.getByRole("button", { name: "Customize" })).toHaveFocus());
   });

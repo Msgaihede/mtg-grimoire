@@ -235,7 +235,7 @@ export function TokenPileGrip({
         }
       }}
       aria-label={`Move ${TOKENS_HEADING}, ${slot + 1} of ${railLength + 1}`}
-      {...tip("Drag to reorder, or press the left and right arrow keys")}
+      {...tip("Drag or use the arrow keys to reorder")}
       className={cn(
         "shrink-0 cursor-grab rounded-sm text-dim",
         "transition-colors duration-150 hover:text-text motion-reduce:transition-none",

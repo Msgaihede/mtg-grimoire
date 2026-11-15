@@ -147,7 +147,7 @@ export function useDangerZone(): {
       invalidate(client, COLLECTION_ROOTS);
       receipt(collectionOutcome(r), r.entries === 0 ? "info" : "success");
     },
-    onError: refused("Couldn't clear the collection"),
+    onError: refused("Couldn't clear your collection"),
   });
 
   const wishlist = useMutation({
@@ -156,7 +156,7 @@ export function useDangerZone(): {
       invalidate(client, WISHLIST_ROOTS);
       receipt(wishlistOutcome(entries), entries === 0 ? "info" : "success");
     },
-    onError: refused("Couldn't clear the wishlist"),
+    onError: refused("Couldn't clear your wishlist"),
   });
 
   const decks = useMutation({
@@ -165,7 +165,7 @@ export function useDangerZone(): {
       invalidate(client, DECK_ROOTS);
       receipt(decksOutcome(r), r.decks + r.folders === 0 ? "info" : "success");
     },
-    onError: refused("Couldn't clear the decks"),
+    onError: refused("Couldn't clear your decks"),
   });
 
   return {

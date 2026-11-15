@@ -102,7 +102,7 @@ describe("ScanDock", () => {
     const onPointAndShoot = vi.fn();
     const onShoot = vi.fn();
     const { rerender } = wrap(<ScanDock {...props({ onPointAndShoot, onShoot })} />);
-    const runs = screen.getByRole("group", { name: "How scanning runs" });
+    const runs = screen.getByRole("group", { name: "Scan mode" });
     const halves = within(runs).getAllByRole("button");
     expect(halves.map((b) => b.textContent)).toEqual(["Continuous", "Point & shoot"]);
     expect(within(runs).getByRole("button", { name: "Continuous" })).toHaveAttribute(
@@ -135,7 +135,7 @@ describe("ScanDock", () => {
   });
 
   /** A press on the half already pressed is not a change — and must not stop a running scan. */
-  it("calls nothing for the half of How scanning runs that is already pressed", async () => {
+  it("calls nothing for the half of Scan mode that is already pressed", async () => {
     const user = userEvent.setup();
     const onPointAndShoot = vi.fn();
     wrap(<ScanDock {...props({ onPointAndShoot })} />);
@@ -170,7 +170,7 @@ describe("ScanDock", () => {
     expect(panel).toHaveTextContent("New cards land as");
     expect(
       within(panel).getByText(
-        "A card printed in one finish takes it. One printed in several waits in the tray for you to pick.",
+        "Cards with one finish get it. Others wait in the tray for you to pick.",
       ),
     ).toBeInTheDocument();
     const group = within(panel).getByRole("radiogroup", { name: "New cards land as" });
@@ -216,7 +216,13 @@ describe("ScanDock", () => {
 
   it("draws no mode switch: the scanner has one way of reading", () => {
     wrap(<ScanDock {...props()} />);
-    expect(screen.queryByRole("group", { name: "Scan mode" })).toBeNull();
+    // *Scan mode* names How scanning runs now: the one group by that name is Continuous | Point &
+    // shoot, and no recognition mode is offered beside it.
+    expect(
+      screen
+        .getAllByRole("group", { name: "Scan mode" })
+        .map((group) => within(group).getAllByRole("button").map((b) => b.textContent)),
+    ).toEqual([["Continuous", "Point & shoot"]]);
     for (const name of ["Fast", "Exact", "Neural"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
@@ -301,7 +307,7 @@ describe("ScanDock", () => {
     await user.click(screen.getByRole("button", { name: /^Filters:/ }));
     const toggle = await screen.findByRole("switch", { name: "Skip promos" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(toggle).toHaveAccessibleDescription(/Never match a promo printing/);
+    expect(toggle).toHaveAccessibleDescription(/Never match promo printings/);
     await user.click(toggle);
     expect(onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: true });
 

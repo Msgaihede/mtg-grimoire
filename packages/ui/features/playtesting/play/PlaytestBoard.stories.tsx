@@ -705,7 +705,7 @@ export const Goldfish: Story = {
       "aria-pressed",
       "true",
     );
-    await expect(canvas.getByRole("button", { name: /Back to the Kenrith deck/ })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: /Back to Kenrith/ })).toBeVisible();
   },
 };
 

@@ -338,7 +338,7 @@ describe("SummaryWidget", () => {
     renderWidget();
 
     expect(
-      await screen.findByText(/Couldn't load totals\. database is locked/),
+      await screen.findByText(/Couldn't load totals — database is locked/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Collection:/ })).toBeNull();
   });

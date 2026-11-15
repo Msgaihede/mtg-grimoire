@@ -102,7 +102,7 @@ describe("useScannedDeck", () => {
     calls.cardDetail.mockResolvedValue(null);
     const { result } = renderHook(() => useScannedDeck([ROW]), { wrapper });
     await expect(result.current.mutateAsync(INPUT)).rejects.toThrow(
-      "no longer in the card database",
+      "no longer in the card data",
     );
     expect(calls.deckCreate).not.toHaveBeenCalled();
     await waitFor(() =>

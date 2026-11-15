@@ -278,7 +278,7 @@ export function QuickAdd({
   const statusText = failure
     ? `Couldn't search — ${failure}`
     : lookup.isPending
-      ? "Looking…"
+      ? "Searching…"
       : miss !== null
         ? `No card found for “${miss}”.`
         : "";

@@ -322,13 +322,13 @@ function givenShares(lines: readonly FinishLine[]): FinishLine[] {
 export function givenNote(lines: readonly FinishLine[]): string {
   const mine = givenShares(lines);
   const copies = mine.reduce((sum, line) => sum + line.quantity, 0);
-  if (copies === 0) return "There is nothing on your side.";
+  if (copies === 0) return "Nothing on your side.";
   const held = mine.reduce((sum, line) => sum + takeable(line), 0);
   if (held === copies) {
     return `${cardCount(copies)}. ${copies === 1 ? "It is" : "All of them are"} in your collection.`;
   }
   if (held === 0) {
-    return `${cardCount(copies)}. None of them are in your collection, so nothing is taken.`;
+    return `${cardCount(copies)}. None are in your collection, so nothing is removed.`;
   }
   return `${cardCount(copies)}. ${held} of them ${held === 1 ? "is" : "are"} in your collection; the rest are left alone.`;
 }
@@ -355,7 +355,7 @@ export function deckNote(lines: readonly FinishLine[]): string | null {
 /** Under *Add the cards you received to your collection*. */
 export function receivedNote(lines: readonly FinishLine[]): string {
   const copies = linesOf(lines, "theirs").reduce((sum, line) => sum + line.quantity, 0);
-  if (copies === 0) return "There is nothing on their side.";
+  if (copies === 0) return "Nothing on their side.";
   return `${cardCount(copies)}, in the printing and finish shown in the trade.`;
 }
 
@@ -368,7 +368,7 @@ export function unwishNote(lines: readonly FinishLine[]): string {
         .map((line) => line.name),
     ),
   ];
-  if (names.length === 0) return "None of them are on your wishlist.";
+  if (names.length === 0) return "None are on your wishlist.";
   return `${names.length} of them ${names.length === 1 ? "is" : "are"} on it: ${names.join(", ")}.`;
 }
 
@@ -379,7 +379,7 @@ export function outcomeSentence(outcome: TradeOutcome | null): string | null {
   if (outcome.removedFromCollection > 0) {
     const decks = outcome.removedFromDecks;
     parts.push(
-      `took ${cardCount(outcome.removedFromCollection)} out of your collection${
+      `removed ${cardCount(outcome.removedFromCollection)} from your collection${
         decks > 0 ? ` (${decks} from ${decks === 1 ? "a deck" : "decks"})` : ""
       }`,
     );
@@ -388,10 +388,10 @@ export function outcomeSentence(outcome: TradeOutcome | null): string | null {
     parts.push(`added ${cardCount(outcome.addedToCollection)} to your collection`);
   }
   if (outcome.removedFromWishlist > 0) {
-    parts.push(`took ${cardCount(outcome.removedFromWishlist)} off your wishlist`);
+    parts.push(`removed ${cardCount(outcome.removedFromWishlist)} from your wishlist`);
   }
   if (outcome.addedToWishlist > 0) {
-    parts.push(`put ${cardCount(outcome.addedToWishlist)} on your wishlist`);
+    parts.push(`added ${cardCount(outcome.addedToWishlist)} to your wishlist`);
   }
   if (parts.length === 0) return null;
   const last = parts.pop();

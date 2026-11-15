@@ -472,7 +472,7 @@ describe("buildDeckCardMenu", () => {
   });
 
   /**
-   * One press, no confirmation — where the *pile's* `Clear stack…` has one. The asymmetry is
+   * One press, no confirmation — where the *pile's* `Clear category…` has one. The asymmetry is
    * deliberate: one card is one add to put back and the reader can see which one it was, and a
    * pile is a column they would have to rebuild.
    */

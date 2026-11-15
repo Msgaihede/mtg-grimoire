@@ -360,7 +360,7 @@ export const RecognizerMissing: Story = {
     const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
     await waitFor(() =>
       expect(within(sheet).getByRole("button", { name: /^Filters/ })).toHaveTextContent(
-        "Filters need the card database",
+        "Filters need card names, which the scanner couldn't read from the card data",
       ),
     );
     await expect(canvasElement.querySelector("[data-scanner-data-slot]")).toBeNull();

@@ -38,7 +38,7 @@ a.btn,button{display:inline-block;font:inherit;background:#2A2B36;color:#E8E6F0;
      text-decoration:none}
 </style></head><body><main>
 <h1>Pair this device</h1>
-<p id="lead">Open MTG Grimoire on this device, choose <b>Enter a code from another device</b>, and
+<p id="lead">Open MTG Grimoire on this device, choose <b>Enter a code</b>, and
 paste the code below.</p>
 <code id="code"></code>
 <button id="copy" type="button">Copy the code</button>

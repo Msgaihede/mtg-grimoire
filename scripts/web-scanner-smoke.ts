@@ -121,7 +121,7 @@ const NEURAL_PREFIX = "/scanner-neural/";
 /** The recogniser's four, which the first frame waits on (`assets.ts`' `NEURAL_FILES`). */
 const NEURAL_FILES = ["detector.onnx", "embedder.onnx", "gallery.bin", "neural.json"];
 /** The page's sentence for a Worker that trapped (`packages/ui/lib/core/web/scanner.ts`). */
-const STOPPED = "The card scanner stopped unexpectedly. It starts again with the next frame.";
+const STOPPED = "The card scanner stopped and will restart by itself.";
 
 const mb = (bytes: number | null) => `${((bytes ?? 0) / 1e6).toFixed(2)} MB`;
 const ms = (n: number) => `${Math.round(n)} ms`;

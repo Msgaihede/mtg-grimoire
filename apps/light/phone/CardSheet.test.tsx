@@ -169,7 +169,7 @@ describe("the sheet's empty states", () => {
     openOn(ALPHA_BOLT.id);
     const combos = await screen.findByRole("region", { name: "Combos" });
     expect(
-      await within(combos).findByText("Couldn't read the combos — the database is locked."),
+      await within(combos).findByText("Couldn't read the combos — the database is locked"),
     ).toBeInTheDocument();
   });
 });

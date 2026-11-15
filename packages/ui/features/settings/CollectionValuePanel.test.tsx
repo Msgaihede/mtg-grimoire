@@ -55,7 +55,7 @@ describe("CollectionValuePanel", () => {
   it("says nothing is set, with no reduced price and empty boxes", async () => {
     render(wrap(<CollectionValuePanel />));
     expect(screen.getByRole("region", { name: "Collection value" })).toBeInTheDocument();
-    expect(await screen.findByText(/only full values are shown/)).toBeInTheDocument();
+    expect(await screen.findByText(/Only full values are shown/)).toBeInTheDocument();
     expect(sell()).toHaveValue("");
     expect(minimum()).toHaveValue("");
     expect(bulk()).toHaveValue("");
@@ -83,7 +83,7 @@ describe("CollectionValuePanel", () => {
   it("stores a box when it is left, keeping the other figure", async () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
-    await screen.findByText(/only full values are shown/);
+    await screen.findByText(/Only full values are shown/);
     await user.type(sell(), "70");
     await user.tab();
     await waitFor(() =>
@@ -99,7 +99,7 @@ describe("CollectionValuePanel", () => {
   it("greys the bulk price until a minimum is set, then stores it", async () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
-    await screen.findByText(/only full values are shown/);
+    await screen.findByText(/Only full values are shown/);
     expect(bulk()).toHaveAttribute("aria-disabled", "true");
     await user.type(minimum(), "1{Enter}");
     await waitFor(() => expect(bulk()).not.toHaveAttribute("aria-disabled"));
@@ -141,14 +141,14 @@ describe("CollectionValuePanel", () => {
     render(wrap(<CollectionValuePanel />));
     await waitFor(() => expect(bulk()).not.toHaveAttribute("aria-disabled"));
     await user.type(bulk(), "cheap{Enter}");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Bulk price has to be a price");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Bulk price must be zero or more");
     expect(setCollectionValue).not.toHaveBeenCalled();
   });
 
   it("refuses a percentage out of bounds in words and stores nothing", async () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
-    await screen.findByText(/only full values are shown/);
+    await screen.findByText(/Only full values are shown/);
     await user.type(sell(), "120{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent(/above 0 and at most 100/);
     expect(setCollectionValue).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe("CollectionValuePanel", () => {
   it("keeps a refused box's sentence and draft when another box is stored", async () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
-    await screen.findByText(/only full values are shown/);
+    await screen.findByText(/Only full values are shown/);
     await user.type(sell(), "150");
     await user.tab();
     expect(await screen.findByRole("alert")).toHaveTextContent(/above 0 and at most 100/);
@@ -179,7 +179,7 @@ describe("CollectionValuePanel", () => {
   it("keeps focus in the box after Enter stores it", async () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
-    await screen.findByText(/only full values are shown/);
+    await screen.findByText(/Only full values are shown/);
     const before = sell();
     await user.type(before, "70{Enter}");
     await waitFor(() => expect(setCollectionValue).toHaveBeenCalled());
@@ -191,7 +191,7 @@ describe("CollectionValuePanel", () => {
   it("tabs from the minimum to the bulk price as the minimum wakes it", async () => {
     const user = userEvent.setup();
     render(wrap(<CollectionValuePanel />));
-    await screen.findByText(/only full values are shown/);
+    await screen.findByText(/Only full values are shown/);
     await user.type(minimum(), "0.50");
     await user.tab();
     expect(bulk()).toHaveFocus();

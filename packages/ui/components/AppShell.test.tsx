@@ -696,7 +696,7 @@ describe("the Refresh button", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /refresh/i }));
 
-    expect(await screen.findByText(/already up to date/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^up to date$/i)).toBeInTheDocument();
   });
 
   it("stays quiet when the Refresh actually ingested something", async () => {
@@ -706,7 +706,7 @@ describe("the Refresh button", () => {
     await userEvent.click(await screen.findByRole("button", { name: /refresh/i }));
 
     await waitFor(() => expect(syncRun).toHaveBeenCalled());
-    expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^up to date$/i)).not.toBeInTheDocument();
   });
 
   it("stays disabled while a sync started elsewhere is running", async () => {
@@ -801,7 +801,7 @@ it("retries the first run from inside the overlay", async () => {
   );
   render(<AppShell update={noUpdate}>{null}</AppShell>);
 
-  await userEvent.click(await screen.findByRole("button", { name: /retry/i }));
+  await userEvent.click(await screen.findByRole("button", { name: /try again/i }));
 
   expect(syncRun).toHaveBeenCalledWith(true);
 });
@@ -1319,7 +1319,7 @@ describe("the sidebar's drop targets", () => {
     await waitFor(() =>
       expect(said()).toMatchObject({
         tone: "success",
-        title: "Added “Lightning Bolt” to the wishlist",
+        title: "Added “Lightning Bolt” to your wishlist",
       }),
     );
     // Quantity 1, and the printing that was dragged — a wish made from a card the reader was
@@ -1467,7 +1467,7 @@ describe("the sidebar's drop targets", () => {
     await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
     expect(said()).toMatchObject({
       tone: "warning",
-      title: "Added 1 of 2 cards to the wishlist",
+      title: "Added 1 of 2 cards to your wishlist",
       body: "That printing is not there any more.",
     });
   });
@@ -1502,7 +1502,7 @@ describe("the sidebar's drop targets", () => {
     await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
-    expect(await screen.findByText("Added “Lightning Bolt” to the wishlist")).toBeInTheDocument();
+    expect(await screen.findByText("Added “Lightning Bolt” to your wishlist")).toBeInTheDocument();
   });
 });
 

@@ -56,7 +56,7 @@ export function TradeScan({
     <Dialog
       open={open}
       title="Scan cards"
-      closeLabel="Close the scanner"
+      closeLabel="Close scanner"
       // `AddCards`' shape, wider: the whole window below 640px, with the top inset taken because
       // the shell's header is underneath. Above it the panel takes what the scrim leaves — the
       // page's two columns stand side by side whenever the phone is on its side (the `landscape:`

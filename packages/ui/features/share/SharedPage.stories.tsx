@@ -134,7 +134,7 @@ export const WantList: Story = {
     await tick("Swords to Plowshares");
     await expect(canvas.getByText("2 picked")).toBeInTheDocument();
 
-    await userEvent.click(canvas.getByRole("button", { name: "Add to wishlist" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Add to wishlist…" }));
     await waitFor(async () => {
       await expect(canvas.getByRole("option", { name: "Ordered" })).toBeInTheDocument();
     });
@@ -146,7 +146,7 @@ export const WantList: Story = {
       canvas.getByText("1 already in your wishlist. Its quantity will increase."),
     ).toBeInTheDocument();
 
-    await userEvent.selectOptions(canvas.getByLabelText("Add them to"), "1");
+    await userEvent.selectOptions(canvas.getByLabelText("Add to"), "1");
     // …and it moves with the select. `starter` keeps a second Rhystic Study wish in `Ordered`,
     // so this destination folds too — but the sentence had to be recomputed to say so.
     await expect(
@@ -187,7 +187,7 @@ export const Gone: Story = {
     });
     // Two ways out and no third: the link cannot be revived from this side.
     await expect(canvas.getByRole("button", { name: "Try again" })).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Close this collection" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Close collection" })).toBeInTheDocument();
   },
 };
 
@@ -207,7 +207,7 @@ export const NothingOpened: Story = {
       canvas.getByRole("heading", { name: "Open a shared collection" }),
     ).toBeInTheDocument();
     await expect(
-      canvas.getByRole("button", { name: "Open a shared collection" }),
+      canvas.getByRole("button", { name: "Open a shared collection…" }),
     ).toBeInTheDocument();
   },
 };

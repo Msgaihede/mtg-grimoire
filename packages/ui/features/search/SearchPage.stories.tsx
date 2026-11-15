@@ -279,7 +279,7 @@ export const Unplayable: Story = {
     // what is, as a corpus rather than as a format.
     await expect(format).toHaveTextContent("Any format");
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Showing: Tokens & extras" }),
+      canvas.getByRole("button", { name: "Remove filter, Showing: Tokens & extras" }),
     ).toBeInTheDocument();
 
     // **Named rather than counted, and reached by a search rather than by scrolling.** The
@@ -358,7 +358,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText("Card database is empty. Waiting for the first sync."),
+      await canvas.findByText("No card data yet. Waiting for the first update."),
     ).toBeInTheDocument();
 
     const chips = canvas.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));

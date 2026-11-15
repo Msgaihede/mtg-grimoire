@@ -123,7 +123,7 @@ function setup() {
 /** The switch, once the status has answered — its name is the line beside it and its own word. */
 const theSwitch = () => screen.findByRole("switch", { name: /^Keep a copy for integrations/ });
 const box = (name: string) => screen.getByRole("checkbox", { name });
-const theQuestion = () => screen.getByRole("dialog", { name: "Turn off integrations" });
+const theQuestion = () => screen.getByRole("dialog", { name: "Turn off integrations?" });
 
 /** The local server off — typed, for `status`'s reason. */
 const MCP_OFF: McpStatus = {
@@ -193,24 +193,24 @@ describe("IntegrationsPanel", () => {
     // Pinned in its own words as well as through the export: the export is the panel's own
     // constant, and an assertion reading only that would agree with a paraphrase.
     expect(
-      screen.getByText(/^If you enable an integration, our servers hold a copy of the parts/),
+      screen.getByText(/^Our servers hold a copy of the parts of your collection you choose/),
     ).toBeInTheDocument();
     expect(screen.getByText(NONE_CONNECTED)).toBeInTheDocument();
-    expect(screen.getByText("No integration is connected to this copy yet.")).toBeInTheDocument();
+    expect(screen.getByText("No integration connected yet.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Purchase price, purchase currency, acquired date and acquisition source are never included.",
+        "Never included: purchase price and currency, acquired date and source.",
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Locked folders are included — this copy is private to your integrations, not a public share.",
+        "Locked folders are included. The copy is private to your integrations.",
       ),
     ).toBeInTheDocument();
     // Any device of the group may be the one that refills it — never "every device".
     expect(
       screen.getByText(
-        "Changing these while the copy is on deletes it from the server, and your devices send it again under the new choice.",
+        "Changing these deletes the copy, and your devices send a new one.",
       ),
     ).toBeInTheDocument();
   });
@@ -381,12 +381,12 @@ describe("IntegrationsPanel", () => {
     // The question says what the press costs: the server's copy, for every device in the group —
     // and promises nothing about integrations answering, since none reads the copy yet.
     expect(dialog).toHaveTextContent(
-      /deletes the copy our servers hold for every device in your sync group\./,
+      /Deletes the copy on our servers for every device in your sync group\./,
     );
     expect(dialog).not.toHaveTextContent(/stop answering/);
     expect(integrationsDisable).not.toHaveBeenCalled();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete the copy" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete copy" }));
 
     expect(integrationsDisable).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
@@ -434,7 +434,7 @@ describe("IntegrationsPanel", () => {
     const toggle = await theSwitch();
 
     await userEvent.click(toggle);
-    await userEvent.click(within(theQuestion()).getByRole("button", { name: "Delete the copy" }));
+    await userEvent.click(within(theQuestion()).getByRole("button", { name: "Delete copy" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The integrations service did not accept this device.",
@@ -475,7 +475,7 @@ describe("IntegrationsPanel", () => {
       press: async (toggle: HTMLElement) => {
         await userEvent.click(toggle);
         await userEvent.click(
-          within(theQuestion()).getByRole("button", { name: "Delete the copy" }),
+          within(theQuestion()).getByRole("button", { name: "Delete copy" }),
         );
       },
       landed: (toggle: HTMLElement) => expect(toggle).toHaveAttribute("aria-checked", "false"),
@@ -611,7 +611,7 @@ describe("IntegrationsPanel", () => {
     await theSwitch();
 
     expect(screen.getByText("Last sent from this device: 2 hours ago.")).toBeInTheDocument();
-    expect(screen.getByText("Checked with the service 1 minute ago.")).toBeInTheDocument();
+    expect(screen.getByText("Checked 1 minute ago.")).toBeInTheDocument();
   });
 
   /**
@@ -829,6 +829,6 @@ describe("the two time lines", () => {
 
   it("draws no checked line for a store never asked", () => {
     expect(checkedLine(null, nowMs)).toBeNull();
-    expect(checkedLine(NOW - 120, nowMs)).toBe("Checked with the service 2 minutes ago.");
+    expect(checkedLine(NOW - 120, nowMs)).toBe("Checked 2 minutes ago.");
   });
 });

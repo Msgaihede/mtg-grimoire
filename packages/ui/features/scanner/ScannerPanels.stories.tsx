@@ -143,7 +143,7 @@ export const RecognizerDidNotLoad: Story = {
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
     await expect(
-      within(match).getByText("The card recognizer did not load: gallery: bad magic."),
+      within(match).getByText("The Neural scanner didn't load: gallery: bad magic."),
     ).toBeInTheDocument();
   },
 };

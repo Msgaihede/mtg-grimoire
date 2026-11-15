@@ -65,7 +65,7 @@ type Story = StoryObj<typeof meta>;
 export const Resting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByText(/Missing files will be re-downloaded/)).toBeInTheDocument();
+    await expect(canvas.getByText(/Cleared files download again when needed/)).toBeInTheDocument();
     await expect(canvas.getByText(/Re-downloads combo data from Commander Spellbook/)).toBeInTheDocument();
   },
 };

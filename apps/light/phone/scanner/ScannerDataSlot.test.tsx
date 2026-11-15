@@ -30,7 +30,7 @@ describe("the slot for the scanner's data", () => {
    */
   it("says the recogniser's own refusal where it did not load, with nothing to press", () => {
     const { slot } = mount(STATUS.corrupt);
-    expect(slot()).toHaveTextContent("The card recognizer did not load: gallery: bad magic.");
+    expect(slot()).toHaveTextContent("The Neural scanner didn't load: gallery: bad magic.");
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("region", { name: "Scanner files" })).toBeNull();
     expect(slot()).not.toHaveTextContent("Restart the app");

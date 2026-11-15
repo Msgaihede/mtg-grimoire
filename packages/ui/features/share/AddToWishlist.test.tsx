@@ -110,7 +110,7 @@ describe("adding picked rows from somebody else's binder", () => {
     });
 
     await screen.findByRole("option", { name: "Trade targets" });
-    await user.selectOptions(screen.getByLabelText("Add them to"), "1");
+    await user.selectOptions(screen.getByLabelText("Add to"), "1");
     await user.click(addButton());
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
@@ -131,7 +131,7 @@ describe("adding picked rows from somebody else's binder", () => {
     mount();
 
     await screen.findByRole("option", { name: "Trade targets" });
-    const destination = screen.getByLabelText("Add them to");
+    const destination = screen.getByLabelText("Add to");
     // The root plus the two folders the reader has, and nothing else — no *New folder* row, no
     // name box, and no button that would mint one. Spec decision 8 files into a folder the
     // reader already has, and building the other half here would be a second folder-creating
@@ -188,7 +188,7 @@ describe("adding picked rows from somebody else's binder", () => {
     await screen.findByRole("option", { name: "Trade targets" });
     expect(screen.getByText(/Its quantity will increase\./)).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("Add them to"), "1");
+    await user.selectOptions(screen.getByLabelText("Add to"), "1");
 
     expect(screen.queryByText(/will increase/)).toBeNull();
     expect(
@@ -327,10 +327,10 @@ describe("adding picked rows from somebody else's binder", () => {
     rerender(dialog(false, two));
     rerender(dialog(true, two));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add the remaining 1 card" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add remaining 1 card" })).toBeInTheDocument();
 
     wishlistAdd.mockRejectedValueOnce("The card database is busy finishing a sync.");
-    await user.click(screen.getByRole("button", { name: "Add the remaining 1 card" }));
+    await user.click(screen.getByRole("button", { name: "Add remaining 1 card" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Added 1 of 2 cards/);
     rerender(dialog(true, [card({ id: "ring", n: "Sol Ring", s: "c21", cn: "263" })]));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -350,7 +350,7 @@ describe("adding picked rows from somebody else's binder", () => {
     await screen.findByRole("option", { name: "Trade targets" });
     await user.click(addButton());
     await screen.findByRole("alert");
-    const retry = screen.getByRole("button", { name: "Add the remaining 1 card" });
+    const retry = screen.getByRole("button", { name: "Add remaining 1 card" });
     await user.click(retry);
 
     await waitFor(() => expect(onAdded).toHaveBeenCalled());

@@ -234,7 +234,7 @@ describe("DraftSession", () => {
     // Every column is drawn before the first pick, so the first card moves nothing.
     expect(within(pool).getByRole("list", { name: "Mana value 0: 0 cards" })).toBeInTheDocument();
     expect(within(pool).getByRole("list", { name: "Lands: 0 cards" })).toBeInTheDocument();
-    const hint = within(pool).getByText("The cards you pick land here, by mana value.");
+    const hint = within(pool).getByText("Your picks appear here, by mana value.");
     expect(hint).toHaveStyle({ gridRow: "2" });
     // jsdom lays nothing out: the row's height is held by one column's card, 5:7, in that row.
     const holder = hint.parentElement!.querySelector('[aria-hidden="true"].aspect-\\[5\\/7\\]');
@@ -418,7 +418,7 @@ describe("DraftSession", () => {
     ipcMock.lobbyState.mockResolvedValue({ ...SEATED, hostOnline: false });
     setup(view({ mode: "pod" }), "guest", null);
     expect(
-      await screen.findByText("The host is offline — your pick waits until they are back."),
+      await screen.findByText("The host is offline. Your pick waits until they return."),
     ).toBeInTheDocument();
     await waitFor(() => expect(ipcMock.lobbyRejoin).toHaveBeenCalledOnce());
     await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
@@ -477,7 +477,7 @@ describe("DraftSession", () => {
     // One short line, the Commander pile named in it.
     expect(
       screen.getByText(
-        "Name your deck — you’ll add basic lands, and put your commander in its Commander pile, in the editor.",
+        "Name your deck. In the editor, add basic lands and move your commander to the Commander pile.",
       ),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
@@ -603,7 +603,7 @@ describe("DraftSession", () => {
         }),
       );
       expect(
-        screen.getByText("Name your deck — you’ll add basic lands in the editor."),
+        screen.getByText("Name your deck. Add basic lands in the editor."),
       ).toBeInTheDocument();
       // The split is the shelf's, under the panel: two in the deck, one on the sideboard.
       expect(within(zone("Deck")).getByText("2 cards")).toBeInTheDocument();
@@ -941,7 +941,7 @@ describe("DraftSession", () => {
       // Only the columns holding cards, a name once with its count, by name within a column.
       const lists = within(pool)
         .getAllByRole("list")
-        .filter((l) => l.getAttribute("aria-label") !== "Colours in deck");
+        .filter((l) => l.getAttribute("aria-label") !== "Colors in deck");
       expect(lists.map((l) => l.getAttribute("aria-label"))).toEqual([
         "Mana value 1: 4 cards",
         "Lands: 1 card",
@@ -978,7 +978,7 @@ describe("DraftSession", () => {
         view({ pickNumber: 1, pack: [card("Opt")], pool: [card("Shock")] }),
       );
       setup(view());
-      expect(screen.getByText("The cards you pick land here, by mana value.")).toBeInTheDocument();
+      expect(screen.getByText("Your picks appear here, by mana value.")).toBeInTheDocument();
       await dragToPool("Shock");
       expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
       expect(await screen.findByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();

@@ -1116,7 +1116,7 @@ export function DeckStats({
               if (wishes > 0) notifyWishesSent({ wishes, destination });
             },
             onError: (error) =>
-              notifyRefusal("Couldn't send the missing cards to the wishlist", error),
+              notifyRefusal("Couldn't send the missing cards to your wishlist", error),
           });
         }}
         onPull={onPull}
@@ -1557,7 +1557,7 @@ function Missing({
         {added === null ? (
           ""
         ) : added === 0 ? (
-          "Nothing to add. The missing cards are already covered or no longer in the card database."
+          "Nothing to add. The missing cards are already covered or no longer in your card data."
         ) : (
           // One element holding the glyph and the sentence, so the arrival is one thing that
           // happens rather than two. `popup`'s own fade and 4% grow and nothing else: a status
@@ -1593,7 +1593,7 @@ function Missing({
       <AnimatePresence initial={false}>
         {failure && (
           <motion.p {...statusLine} role="alert" className="overflow-hidden text-destructive">
-            Couldn't add to the wishlist — {failure}
+            Couldn't add to your wishlist — {failure}
           </motion.p>
         )}
       </AnimatePresence>

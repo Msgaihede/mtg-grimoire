@@ -824,7 +824,7 @@ it("opens the collection on the collection entry", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Collection" }));
 
   expect(await screen.findByText("$801.00")).toBeInTheDocument();
-  expect(screen.getByText(/nothing here yet/i)).toBeInTheDocument();
+  expect(screen.getByText(/your collection is empty/i)).toBeInTheDocument();
   expect(screen.queryByText(/import \(coming soon\)/i)).not.toBeInTheDocument();
 });
 
@@ -1333,7 +1333,7 @@ it("says a refused swap in the printings modal, and the deck behind it goes with
   expect(within(printings).getByRole("button", { name: "Close printings" })).toBeInTheDocument();
 
   expect(
-    await screen.findByText(/this deck no longer exists\. it may have been deleted/i),
+    await screen.findByText(/this deck no longer exists\./i),
   ).toBeInTheDocument();
 });
 
@@ -1363,7 +1363,7 @@ it("stops offering swaps into a deck the read says is gone", async () => {
   await userEvent.clear(name);
   await userEvent.type(name, "Sunday burn{Enter}");
   expect(
-    await screen.findByText(/this deck no longer exists\. it may have been deleted/i),
+    await screen.findByText(/this deck no longer exists\./i),
   ).toBeInTheDocument();
 
   const printings = await openPrintings();

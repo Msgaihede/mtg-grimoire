@@ -83,7 +83,7 @@ describe("ShortfallFigure", () => {
 
     fireEvent.pointerEnter(figure);
     act(() => void vi.advanceTimersByTime(TOOLTIP_OPEN_MS));
-    expect(panel()).toHaveTextContent("No other copies anywhere in your collection");
+    expect(panel()).toHaveTextContent("No other copies in your collection");
   });
 
   it("is gold when copies sit elsewhere, and the tooltip names every place", () => {

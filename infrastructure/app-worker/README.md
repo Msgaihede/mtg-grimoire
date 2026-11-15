@@ -510,7 +510,7 @@ each time.** The fourth is what production serves, and is the last bullet.
   app's (the one console error was Chrome's own new-tab page failing to resolve a Google host);
   the first run began (`api.scryfall.com`, `data.scryfall.io`); **no request to the relay and
   no socket**, from a device in no group; and the Sync panel, 4.6 s in: *Browser — not paired
-  yet.*, *Pair a device*, *Enter a code from another device*, *Not connected.*, *Connect
+  yet.*, *Pair a device*, *Enter a code*, *Not connected.*, *Connect
   Patreon*, *Sync is off. Nothing leaves this device until you connect a membership.* — the
   refusal sentence is gone. Nothing was pressed that asks the relay. **Not seen: a browser
   pairing, or opening a socket, in production** — that needs the owner's membership. (**Since

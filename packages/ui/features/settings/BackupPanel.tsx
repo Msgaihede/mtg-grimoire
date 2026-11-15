@@ -85,11 +85,11 @@ function passRanAt(status: MirrorStatus): number | null {
  */
 export function lastPassLine(status: MirrorStatus, nowMs: number = Date.now()): string {
   const at = passRanAt(status);
-  if (at === null) return "Not run yet. Click Rebuild now to create one.";
+  if (at === null) return "No backup yet. Click Rebuild now to create one.";
   const when = ago(at, nowMs);
   return status.lastReport === null
     ? `Last backup ${when}.`
-    : `Last backup ${when} — ${passSummary(status.lastReport)}.`;
+    : `Last backup ${when}: ${passSummary(status.lastReport)}.`;
 }
 
 /** The panel's one line of news, and how loudly it says it. */
@@ -201,8 +201,7 @@ export function BackupPanel(): JSX.Element {
       <FullBackupPanel />
       <h3 className="border-t border-border pt-4 text-sm font-medium">Automatic text files</h3>
       <p className="text-sm text-dim">
-        Saves your decks, collection and wishlist as text files. These are for backup only and
-        can&rsquo;t be imported back.
+        Saves your decks, collection and wishlist as text files. They can&rsquo;t be imported back.
       </p>
 
       {status === null ? (
@@ -217,8 +216,7 @@ export function BackupPanel(): JSX.Element {
                 Back up my cards as text files
               </p>
               <p className="mt-0.5 text-xs leading-snug text-dim">
-                Updates automatically a few seconds after each change. Turning this off keeps
-                existing files.
+                Updates a few seconds after each change. Turning it off keeps existing files.
               </p>
             </div>
             {/* Named by the heading beside it *and* by its own word, in that order — an
@@ -352,7 +350,7 @@ function noteFor(
   if (rebuilt) {
     return {
       tone: rebuilt.report.failed > 0 ? "problem" : "plain",
-      text: `Rebuilt — ${passSummary(rebuilt.report)}.`,
+      text: `Rebuilt: ${passSummary(rebuilt.report)}.`,
     };
   }
   if (status === null && read.isError) return { tone: "problem", text: ipcError(read.error) };

@@ -94,7 +94,7 @@ const BANDS = [
     label: "Other",
     glyph: "·",
     rail: "bg-border",
-    hint: "changes this version of the app has no name for",
+    hint: "changes this app version doesn't recognize",
   },
 ] as const satisfies readonly {
   id: AuditBand;
@@ -271,7 +271,7 @@ function History({
           than told to the dialog, because a count the backend sent separately is a count that
           can disagree with the list under it. */}
       <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-5 py-3">
-        <div role="group" aria-label="Filter the history by kind" className="flex flex-wrap gap-2">
+        <div role="group" aria-label="Filter history by kind" className="flex flex-wrap gap-2">
           {chips.map((band) => (
             <ToggleChip
               key={band.id}
@@ -350,20 +350,20 @@ function Body({
   if (pending) return <Notice title="Loading history…" />;
   if (empty) {
     return (
-      <Notice title="No changes recorded yet.">
-        Every change to this deck shows up here.
+      <Notice title="No changes yet.">
+        Changes to this deck appear here.
       </Notice>
     );
   }
   return (
-    <Notice title="Nothing matches these filters.">
+    <Notice title="No matching changes.">
       No changes match this filter.{" "}
       <button
         type="button"
         onClick={onShowEverything}
         className={cn("rounded-sm text-accent hover:underline", FOCUS)}
       >
-        Show everything
+        Show all
       </button>
       .
     </Notice>

@@ -65,9 +65,7 @@ export function TheoryMarksPanel(): JSX.Element {
           calling one of them green would be describing the screen it is sitting on wrongly. What
           it says instead is what the two marks *mean*, which is the thing that does not move. */}
       <p className="text-sm text-dim">
-        Decks with a theory list mark each card on the actual list: one color for the exact
-        printing, one for a different printing, and one for cards not in the theory list.
-        Quantity differences show how many to add or remove.
+        In a deck with a theory list, each card on the actual list is marked by how it matches. Quantity differences show how many to add or remove.
       </p>
 
       {/* `space-y-4` over a hairline the first row does not wear — `HiddenTagsPanel`'s list,
@@ -212,7 +210,7 @@ export function TheoryMarksPanel(): JSX.Element {
           stylesheet's on the phone beside it, and that is the design rather than a fault to be
           reported. */}
       <p className="text-sm text-dim">
-        These colors are saved on this device only.
+        Saved on this device only.
       </p>
 
       {/* `problem`, and this is the one hook in the app whose refusal is surfaced at all: the
@@ -327,7 +325,7 @@ const MARKS: readonly MarkRow[] = [
     // rule is one name in all three places. The blurb says both of what the mark covers: another
     // printing, and — on a deck with `Matching printing` off — every printing, as a match.
     title: "Any printing",
-    blurb: "The right card in a different printing (or any printing, if exact matching is off).",
+    blurb: "The right card in another printing, or in any printing when Matching printing is off.",
     noun: "any-printing mark",
     subject: "Any printing color",
     fill: "--color-theory-name",

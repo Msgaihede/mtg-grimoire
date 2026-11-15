@@ -262,7 +262,7 @@ function printingLine(card: LandedCard): string {
 
 /** A row waiting on a pick has no printing to name, so the line says where the question is. */
 function pickLine(n: number): string {
-  return `${plural(n, "printing")} ${verb(n, "matches", "match")} — pick in the tray`;
+  return `${plural(n, "printing")} ${verb(n, "matches", "match")}. Pick one in the tray`;
 }
 
 /** What kind of landing it was, in the colour that kind means: `ok` for a card filed, the accent

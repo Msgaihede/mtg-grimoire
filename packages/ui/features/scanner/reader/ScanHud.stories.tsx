@@ -110,7 +110,7 @@ export const ChipAtTheFloor: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("alert")).toHaveTextContent(
-      "The card recognizer isn't loaded, so cards can't be identified.",
+      "The Neural scanner isn't loaded.",
     );
     await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Send scan…" })).toBeInTheDocument();
@@ -150,7 +150,7 @@ export const Error: Story = {
   args: { strip: matchStrip({ ...VERDICTS.noCard, matcher: false }, null) },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByRole("alert")).toHaveTextContent(
-      "The card recognizer isn't loaded, so cards can't be identified.",
+      "The Neural scanner isn't loaded.",
     );
   },
 };

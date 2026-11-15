@@ -9,14 +9,14 @@ export const PHASE_LABEL: Record<SyncPhase, string> = {
   // The swap has just freed an entire copy of the card table, and this hands those pages
   // back to the filesystem. Alone among the phases it reports a *true* fraction: the
   // freelist is counted before the work starts and only ever falls.
-  reclaiming: "Reclaiming disk space",
+  reclaiming: "Freeing disk space",
   sets: "Updating set list",
   // Once per database, ever: the one-time conversion to incremental auto-vacuum. It rides
   // the mana line like every other phase, with no denominator — `VACUUM` reports no
   // progress of any kind, so claiming a fraction would be an invention.
-  compacting: "Compacting database…",
+  compacting: "Optimizing storage",
   done: "Card data is up to date",
-  error: "Sync failed",
+  error: "Couldn't update card data",
 };
 
 /**

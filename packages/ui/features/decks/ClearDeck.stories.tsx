@@ -82,7 +82,7 @@ export const LiveListWithAPlan: Story = {
 
     await expect(canvas.getByText("Clear the actual list?")).toBeVisible();
     await expect(canvas.getByText(/will be removed from the deck\. Categories stay/)).toHaveTextContent(
-      "Any copies you own go back to Recently removed.",
+      "Copies you own go back to Recently removed.",
     );
     await expect(canvas.getByText("The 100 cards in the other list are untouched.")).toBeVisible();
 

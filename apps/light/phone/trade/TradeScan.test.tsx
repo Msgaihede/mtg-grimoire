@@ -285,7 +285,7 @@ describe("the phone's trade scanner", () => {
     expect(within(actions).queryByRole("button", { name: /Create deck/ })).toBeNull();
     await userEvent.click(within(actions).getByRole("button", { name: "Clear all…" }));
     expect(await screen.findByRole("dialog", { name: "Clear the tray" })).toHaveTextContent(
-      "5 scanned copies will leave the tray without being added to your side.",
+      "5 scanned copies will be removed without being added to your side.",
     );
   });
 
@@ -293,7 +293,7 @@ describe("the phone's trade scanner", () => {
     mount({ tray: RESOLVED });
     const panel = await sheet();
     expect(await within(panel).findByRole("note", {}, SETTLE)).toHaveTextContent(
-      "5 cards were already in the scanner's tray. They are in this list and go onto their side with the rest.",
+      "5 cards were already in the tray. They are in this list and go onto their side with the rest.",
     );
     cleanup();
     await settled();
@@ -310,7 +310,7 @@ describe("the phone's trade scanner", () => {
     const { onClose } = mount({ tray: [LOTUS] });
     const panel = await sheet();
     await within(panel).findByRole("button", { name: "Add 1 to their side" }, SETTLE);
-    await userEvent.click(within(panel).getByRole("button", { name: "Close the scanner" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Close scanner" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     // Gone at once, not at the end of the panel's fade.
     expect(screen.queryByRole("button", { name: /^Scanned for their side/ })).toBeNull();

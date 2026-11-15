@@ -772,7 +772,7 @@ describe("SyncPanel", () => {
 
     await user.click(await screen.findByRole("button", { name: /remove phone/i }));
     expect(
-      await screen.findByText(/keeps anything it already synced/i),
+      await screen.findByText(/keeps what it already synced/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/can't be wiped remotely/i)).toBeInTheDocument();
     // And the three things §7.6 says the removal *is*, so a rewrite that kept the shape and
@@ -1178,10 +1178,10 @@ describe("the relay half", () => {
     syncLiveState.mockResolvedValue("offline");
     render(<SyncPanel />, { wrapper: unpaired });
 
-    expect(await screen.findByText(/not connected to the relay/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^not connected\. changes sync when the connection is back\.$/i)).toBeInTheDocument();
     // The changes are not gone — this is the one sentence in the file that has to say so, since
     // `relayState`'s own ladder has nothing to say about a socket that dropped after a success.
-    expect(screen.getByText(/changes will sync when it's back/i)).toBeInTheDocument();
+    expect(screen.getByText(/changes sync when the connection is back/i)).toBeInTheDocument();
   });
 
   it("says nothing extra about the socket while it is doing its job", async () => {
@@ -1193,7 +1193,7 @@ describe("the relay half", () => {
     // The waiting line is the anchor: it proves the relay half has finished reading before the
     // absence below is asserted, rather than the socket note simply not having painted yet.
     await screen.findByText(/4 changes pending/i);
-    expect(screen.queryByText(/not connected to the relay/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^not connected\. changes sync when the connection is back\.$/i)).not.toBeInTheDocument();
   });
 
   /**
@@ -1296,8 +1296,8 @@ describe("delivery holds", () => {
 
     expect(
       await screen.findByText(
-        "A device in your group has its clock set more than a day ahead of this one. Its " +
-          "changes wait until this device's clock catches up — check the date and time on both.",
+        "A device in your group has its clock more than a day ahead. Its changes wait until " +
+          "this device's clock catches up. Check the date and time on both.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
@@ -1463,7 +1463,7 @@ describe("the supporter half", () => {
     syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
     render(<SyncPanel />, { wrapper: unpaired });
 
-    expect(await screen.findByText(/one membership covers the whole group/i))
+    expect(await screen.findByText(/one membership covers a whole group/i))
       .toBeInTheDocument();
     // ...and the advice it replaced is gone, or the panel is telling a reader that the order
     // matters in the same breath as telling them it does not.
@@ -1520,7 +1520,7 @@ describe("the supporter half", () => {
     expect(line).toHaveTextContent(/claiming it here stops sync/i);
     expect(line).toHaveTextContent(/your previous group/i);
     // ...and what it does *not* cost, which is the half that stops this reading as data loss.
-    expect(line).toHaveTextContent(/their data isn't affected/i);
+    expect(line).toHaveTextContent(/its data isn't affected/i);
 
     expect(line.nextElementSibling?.contains(screen.getByLabelText(/claim code/i))).toBe(true);
   });
@@ -1855,7 +1855,7 @@ describe("a freshly paired device can reach the sync that entitles it", () => {
     const user = userEvent.setup();
     render(<SyncPanel />, { wrapper: unpaired });
 
-    await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
+    await user.click(await screen.findByRole("button", { name: /^enter a code$/i }));
     await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
     await user.click(screen.getByRole("button", { name: /read the code/i }));
 
@@ -2037,7 +2037,7 @@ describe("on a host that offers no membership of its own", () => {
     render(<SyncPanel />, { wrapper: unpaired });
     await screen.findByText(SAID);
     expect(screen.getByRole("heading", { name: "Relay" })).toBeInTheDocument();
-    expect(screen.getByText(/end-to-end encrypted relay server that requires no account/i)).toBeInTheDocument();
+    expect(screen.getByText(/end-to-end encrypted relay\. no account needed\./i)).toBeInTheDocument();
     expect(screen.getByText("Sync is off. Nothing leaves this device.")).toBeInTheDocument();
   });
 
@@ -2063,7 +2063,7 @@ describe("on a host that offers no membership of its own", () => {
     render(<SyncPanel />, { wrapper: paired });
 
     await user.click(await screen.findByRole("button", { name: /sync now/i }));
-    expect(await screen.findByText("Nothing to sync. Sync is not on for this device.")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing to sync. Sync isn't on for this device.")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(PAID);
   });
 
@@ -2211,7 +2211,7 @@ describe("the two sentences that name a membership, on a host that offers none",
 
   it("says a trip had nothing to do without telling the reader to connect", () => {
     expect(outcomeText(null)).toBe("Nothing to sync. Connect a membership and pair a device first.");
-    expect(outcomeText(null, true)).toBe("Nothing to sync. Sync is not on for this device.");
+    expect(outcomeText(null, true)).toBe("Nothing to sync. Sync isn't on for this device.");
     expect(outcomeText(OUTCOME, true)).toBe(outcomeText(OUTCOME));
   });
 });
@@ -2229,7 +2229,7 @@ describe("the panel says only what is still true", () => {
     const user = userEvent.setup();
     render(<SyncPanel />, { wrapper: unpaired });
 
-    await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
+    await user.click(await screen.findByRole("button", { name: /^enter a code$/i }));
     await user.type(await screen.findByLabelText(/code shown on the other device/i), "WRONG");
     await user.click(screen.getByRole("button", { name: /read the code/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/isn't valid/i);
@@ -2251,7 +2251,7 @@ describe("the panel says only what is still true", () => {
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/relay could not be reached/i);
 
-    await user.click(screen.getByRole("button", { name: /enter a code from another/i }));
+    await user.click(screen.getByRole("button", { name: /^enter a code$/i }));
     await user.type(await screen.findByLabelText(/code shown on the other device/i), "WRONG");
     await user.click(screen.getByRole("button", { name: /read the code/i }));
 

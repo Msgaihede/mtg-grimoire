@@ -436,7 +436,7 @@ describe("the import dialog", () => {
     wrap(<Harness />);
     await preview("1 Sol Ring\n1 Lightning Bolth");
 
-    expect(await screen.findByText('line 2 · "1 Lightning Bolth"')).toBeInTheDocument();
+    expect(await screen.findByText("line 2 · “1 Lightning Bolth”")).toBeInTheDocument();
     // Never an error: the rest of the list still imports.
     expect(screen.getByText("1 card")).toBeInTheDocument();
   });
@@ -506,7 +506,7 @@ describe("the import dialog", () => {
     await pickOption(user, "Format", "Oathbreaker");
     expect(
       await screen.findByText(
-        "No card in this list can be the commander. The deck will import without one.",
+        "No card in this list can be the commander. The deck imports without one.",
       ),
     ).toBeInTheDocument();
     expect(await piles()).not.toContainEqual(["Commander", "1"]);
@@ -909,7 +909,7 @@ describe("the import dialog", () => {
     const go = await preview("1 Definitely Not A Card\n2 Nor This One");
 
     await waitFor(() => expect(go).toBeDisabled());
-    expect(screen.getByText('line 1 · "1 Definitely Not A Card"')).toBeInTheDocument();
+    expect(screen.getByText("line 1 · “1 Definitely Not A Card”")).toBeInTheDocument();
   });
 
   /**
@@ -966,12 +966,12 @@ describe("the import dialog", () => {
 
     const merge = await screen.findByLabelText(/^Merge/);
     expect(merge).toBeChecked();
-    const replace = screen.getByLabelText("Replace — remove the 42 cards in Actual first");
+    const replace = screen.getByLabelText("Replace: remove the 42 cards in Actual first");
     await userEvent.click(replace);
     // And where that cardboard goes, which is the other half of what the press does — issue
     // #336. The label above is asserted verbatim, so the sentence being a note under the radios
     // rather than a second clause on the radio's own name is pinned by the two lines together.
-    expect(screen.getByText("Any copies you own go back to Recently removed.")).toBeInTheDocument();
+    expect(screen.getByText("Copies you own go back to Recently removed.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     await waitFor(() =>
@@ -1017,8 +1017,8 @@ describe("the import dialog", () => {
     wrap(<Harness />);
     const go = await preview("1 Sol Ring\n1 Lightning Bolt\n1 Duress");
 
-    expect(await screen.findByText(/Card data is still syncing/)).toBeInTheDocument();
-    expect(screen.queryByText('line 1 · "1 Sol Ring"')).not.toBeInTheDocument();
+    expect(await screen.findByText(/Card data is still updating/)).toBeInTheDocument();
+    expect(screen.queryByText("line 1 · “1 Sol Ring”")).not.toBeInTheDocument();
     expect(go).toBeDisabled();
   });
 
@@ -1222,7 +1222,7 @@ describe("the import dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      `Couldn't read a card list from a file — ${refusal}`,
+      `Couldn't import the file — ${refusal}`,
     );
     expect(screen.getByLabelText("Card list")).toHaveValue("");
   });
@@ -1245,8 +1245,8 @@ describe("the import dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     const notice = await screen.findByText(
-      "This file isn't UTF-8, so it was read as Windows-1252 (Western European). If accented " +
-        "names look wrong, save it as UTF-8 and try again.",
+      "Read as Windows-1252, not UTF-8. If accented names look wrong, save the file as UTF-8 and " +
+        "try again.",
     );
     expect(notice).not.toHaveAttribute("role");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1542,7 +1542,7 @@ describe("a list with nothing to preview", () => {
       '<?xml version="1.0"?>\n<cockatrice_deck version="1">\n</cockatrice_deck>',
       "this is an XML file, but not an MTGO .dek deck",
     ],
-    ["a list of refused lines", "0 Shock", "Quantity can't be zero."],
+    ["a list of refused lines", "0 Shock", "quantity can't be zero"],
   ])("says why it will not preview %s", async (_, text, reason) => {
     importPickFile.mockResolvedValue({ text, encoding: "utf-8" });
     wrap(<Harness />);
@@ -1571,7 +1571,7 @@ describe("a list with nothing to preview", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled());
     expect(screen.getByText(/1 line · 1 card · 1 unreadable line/)).toBeInTheDocument();
-    expect(screen.queryByText("Quantity can't be zero.")).not.toBeInTheDocument();
+    expect(screen.queryByText("quantity can't be zero")).not.toBeInTheDocument();
   });
 
   it("goes as soon as the reader fixes the line", async () => {
@@ -1581,13 +1581,13 @@ describe("a list with nothing to preview", () => {
 
     await userEvent.click(box);
     await userEvent.paste("0 Shock");
-    expect(await screen.findByText("Quantity can't be zero.")).toBeInTheDocument();
+    expect(await screen.findByText("quantity can't be zero")).toBeInTheDocument();
 
     await userEvent.clear(box);
     await userEvent.paste("1 Shock");
 
     await waitFor(() =>
-      expect(screen.queryByText("Quantity can't be zero.")).not.toBeInTheDocument(),
+      expect(screen.queryByText("quantity can't be zero")).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "Preview" })).toBeEnabled();
   });

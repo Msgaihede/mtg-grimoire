@@ -172,7 +172,7 @@ function Deciding({
             {sent === "mulligan"
               ? "Shuffling for a new seven…"
               : sent === "keep"
-                ? "Keeping — the game is starting…"
+                ? "Keeping. Starting the game…"
                 : "Working…"}
           </p>
         ) : (
@@ -205,7 +205,7 @@ function Deciding({
       <dl className="m-0 flex gap-8">
         <Figure label="Lands kept" value={String(lands)} note={`of ${kept.length}`} />
         <Figure label="Spells kept" value={String(spells.length)} />
-        <Figure label="Their mana value" value={average} note="average" />
+        <Figure label="Spell mana value" value={average} note="average" />
         <Figure
           label="In the library"
           value={`${view.libraryLands} lands`}

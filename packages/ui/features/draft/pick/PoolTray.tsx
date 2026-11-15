@@ -59,7 +59,7 @@ function edgeOf(colors: readonly string[]): CSSProperties {
 export function PoolTray({
   pool,
   title = "Your pool",
-  empty = "The cards you pick land here, by mana value.",
+  empty = "Your picks appear here, by mana value.",
   moveTo,
   onMove,
 }: {
@@ -88,7 +88,7 @@ export function PoolTray({
             {plural(pool.length, "card")}
           </span>
         </div>
-        <ColorTally tally={tally} label={`Colours in ${title.toLowerCase()}`} />
+        <ColorTally tally={tally} label={`Colors in ${title.toLowerCase()}`} />
       </div>
       {pool.length === 0 ? (
         <p className="m-0 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-dim">

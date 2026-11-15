@@ -75,8 +75,8 @@ describe("DeckTagsField", () => {
     field({ initial: ["Budget", "Meme"] });
 
     expect(chips()).toEqual(["Budget", "Meme"]);
-    expect(screen.getByRole("button", { name: "Remove the Budget tag" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove the Meme tag" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Budget" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Meme" })).toBeInTheDocument();
   });
 
   /** The list is shut until the box has the caret — a dialog that opened with a panel already
@@ -210,7 +210,7 @@ describe("DeckTagsField", () => {
     const user = userEvent.setup();
     const { box, onChange } = field({ initial: ["Budget", "Meme"] });
 
-    await user.click(screen.getByRole("button", { name: "Remove the Budget tag" }));
+    await user.click(screen.getByRole("button", { name: "Remove Budget" }));
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith(["Meme"]);
     expect(chips()).toEqual(["Meme"]);
@@ -316,7 +316,7 @@ describe("DeckTagsField", () => {
     const { box, onChange } = field({ initial: ["Budget"] });
 
     await user.type(box, "Gimmick");
-    await user.click(screen.getByRole("button", { name: "Remove the Budget tag" }));
+    await user.click(screen.getByRole("button", { name: "Remove Budget" }));
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith([]);
     expect(box).toHaveValue("Gimmick");
@@ -421,7 +421,7 @@ describe("DeckTagsField", () => {
     items.forEach((chip, index) => boxed(chip, index * 60));
 
     const held = await startPointerDrag(items[1], {
-      pressOn: within(items[1]).getByRole("button", { name: "Remove the Meme tag" }),
+      pressOn: within(items[1]).getByRole("button", { name: "Remove Meme" }),
     });
     expect(held.started).toBe(false);
     await held.cancel();

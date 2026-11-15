@@ -190,7 +190,7 @@ describe("EditWishButton", () => {
     const change = within(panel).getByRole("button", { name: /^Change printing/ });
     expect(change).toHaveAttribute("aria-disabled", "true");
     expect(change).not.toBeDisabled();
-    expect(within(panel).getByText(/no longer in the card database/)).toBeInTheDocument();
+    expect(within(panel).getByText(/no longer in the card data\./)).toBeInTheDocument();
     await user.click(change);
     expect(onChangePrinting).not.toHaveBeenCalled();
   });

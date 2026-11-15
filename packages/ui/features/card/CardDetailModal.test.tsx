@@ -937,7 +937,7 @@ it("credits the illustrator of the face on screen, meld view included", async ()
   expect(await screen.findByText(/illustrated by christopher rush\./i)).toBeInTheDocument();
 
   const meld = await screen.findByRole("button", {
-    name: "Meld — Brisela, Voice of Nightmares",
+    name: "Meld: Brisela, Voice of Nightmares",
   });
   await userEvent.click(meld);
 
@@ -2437,7 +2437,7 @@ it("asks which copy to edit when the printing is held in more than one row", asy
   });
   renderFromCollection();
 
-  await userEvent.click(await screen.findByRole("button", { name: /^edit which copy/i }));
+  await userEvent.click(await screen.findByRole("button", { name: /^copy to edit/i }));
   await userEvent.click(await screen.findByRole("option", { name: /1× Lightly played/ }));
 
   await waitFor(() => expect(useAppStore.getState().paneCopy).toEqual({ entryId: 43 }));

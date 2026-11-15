@@ -1785,7 +1785,7 @@ export function DeckEditor({
     (card: DeckCard, copies: number) =>
       void writeQuickAdd({ card, quantity: copies, wishId: null }).then(
         () => notify.success(quickAddReceipt(card.name, copies)),
-        (error: unknown) => notifyRefusal(`Couldn't add “${card.name}” to the collection`, error),
+        (error: unknown) => notifyRefusal(`Couldn't add “${card.name}” to your collection`, error),
       ),
     [writeQuickAdd],
   );
@@ -1793,7 +1793,7 @@ export function DeckEditor({
   const addMissingOf = useCallback(
     (picks: DeckMissingPick[], clearWishes: boolean) =>
       void writeMissing({ picks, clearWishes }).then(notifyMissingAdded, (error: unknown) =>
-        notifyRefusal("Couldn't add the missing copies to the collection", error),
+        notifyRefusal("Couldn't add the missing copies to your collection", error),
       ),
     [writeMissing],
   );
@@ -1869,7 +1869,7 @@ export function DeckEditor({
           wishes = await queryClient.fetchQuery(quickAddWishesQuery(card.cardId, card.finish));
         } catch (error) {
           // The row that was pressed added nothing to the collection, and the menu has closed.
-          notifyRefusal(`Couldn't add “${card.name}” to the collection`, error);
+          notifyRefusal(`Couldn't add “${card.name}” to your collection`, error);
           return;
         }
         const choice = chooseWish(wishes);
@@ -2056,8 +2056,8 @@ export function DeckEditor({
               presses,
               filed.map((f) => f.name),
               {
-                done: (what) => `Created “${category.name}” and filed ${what} in it`,
-                failed: (what) => `Couldn't file ${what} in “${category.name}”`,
+                done: (what) => `Created “${category.name}” and moved ${what} into it`,
+                failed: (what) => `Couldn't move ${what} to “${category.name}”`,
               },
             );
             // `applyDrops`' rule: the cards have moved, so a set still pointing at where they
@@ -3824,7 +3824,7 @@ export function DeckEditor({
 
       {gone && (
         <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
-          This deck no longer exists. It may have been deleted.
+          This deck no longer exists.
         </p>
       )}
     </>

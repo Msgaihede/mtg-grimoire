@@ -322,7 +322,7 @@ export const PartlyCovered: Story = {
     );
 
     await expect(canvas.getByText(/still missing/)).toHaveTextContent(
-      "1 copy still missing (no other matching copies owned).",
+      "1 copy still missing. You own no other matching copies.",
     );
     await expect(canvas.queryByRole("alert")).toBeNull();
     await expect(canvas.getByRole("button", { name: "Pull 1 copy" })).toBeEnabled();

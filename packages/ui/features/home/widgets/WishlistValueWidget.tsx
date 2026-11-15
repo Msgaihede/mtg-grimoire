@@ -332,7 +332,7 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
     // **The wishlist's sentence, not the collection's**, and no figures over it: nothing is owned
     // or unowned here, and a total cost of `$0.00` over an empty list is a price nobody quoted.
     return (
-      <WidgetMessage>Your wishlist is empty. Add cards to see costs here.</WidgetMessage>
+      <WidgetMessage>Nothing on your wishlist yet.</WidgetMessage>
     );
   }
 

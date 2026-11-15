@@ -32,7 +32,7 @@ export function ImportProblems({
       {unmatched.length > 0 && (
         <ProblemList
           caption={`${plural(unmatched.length, "line")} didn't match any card`}
-          lines={unmatched.map((line) => `line ${line.lineNumber} · "${line.raw.trim()}"`)}
+          lines={unmatched.map((line) => `line ${line.lineNumber} · “${line.raw.trim()}”`)}
         />
       )}
       {hintMisses.length > 0 && (
@@ -47,7 +47,7 @@ export function ImportProblems({
         <ProblemList
           caption={`${plural(parseIssues.length, "line")} couldn't be read`}
           lines={parseIssues.map(
-            (issue) => `line ${issue.lineNumber} · "${issue.raw.trim()}" — ${issue.reason}`,
+            (issue) => `line ${issue.lineNumber} · “${issue.raw.trim()}” — ${issue.reason}`,
           )}
         />
       )}

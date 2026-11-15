@@ -367,9 +367,9 @@ export const Done: Story = {
     // The merge is the app's documented rule rather than a card going missing, and the skipped
     // row is named rather than counted.
     await expect(
-      body.getByText(/merged with an existing entry in the same folder/),
+      body.getByText(/merged into an existing entry with the same folder/),
     ).toBeVisible();
-    await expect(body.getByText(/^Rhystic Study — printing already changed/)).toBeVisible();
+    await expect(body.getByText(/^Rhystic Study: printing already changed/)).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Done" })).toBeVisible();
   },
 };

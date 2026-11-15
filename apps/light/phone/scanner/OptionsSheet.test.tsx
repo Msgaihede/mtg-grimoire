@@ -153,7 +153,7 @@ describe("the scanner's options sheet", () => {
     const dialog = await sheet();
     expect(within(dialog).queryByLabelText("Released from")).toBeNull();
     expect(
-      within(dialog).getByRole("button", { name: /^Filters\s*Filters need the card database/ }),
+      within(dialog).getByRole("button", { name: /^Filters\s*Filters need card names, which the scanner couldn't read from the card data/ }),
     ).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -161,7 +161,7 @@ describe("the scanner's options sheet", () => {
     mount({ filtersDisabled: FILTERS_NEED_NAMES });
     // A greyed row's name includes its reason; the two are separate lines of one press.
     const row = within(await sheet()).getByRole("button", {
-      name: /^Filters\s*Filters need the card database/,
+      name: /^Filters\s*Filters need card names, which the scanner couldn't read from the card data/,
     });
     expect(row).toHaveTextContent(FILTERS_NEED_NAMES);
     expect(row).toHaveAttribute("aria-disabled", "true");
@@ -226,7 +226,7 @@ describe("the scanner's options sheet", () => {
       "button",
     );
     expect(choices.map((c) => c.textContent?.replace(/\..*$/, ""))).toEqual([
-      "DetectA card printed in one finish takes it",
+      "DetectCards with one finish get it",
       "NonfoilEach new card starts in this finish",
       "FoilEach new card starts in this finish",
       "EtchedEach new card starts in this finish",

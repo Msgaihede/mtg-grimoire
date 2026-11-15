@@ -200,19 +200,19 @@ const MODES: readonly {
   {
     id: "quick",
     title: "Quick Draft",
-    blurb: "Three boosters of any sets you like, passed round a table of seven bots.",
+    blurb: "Three boosters from sets you choose, drafted against seven bots.",
     icon: Layers,
   },
   {
     id: "sealed",
     title: "Sealed",
-    blurb: "Six boosters straight into your pool — build the best forty you can.",
+    blurb: "Open six boosters and build a 40-card deck.",
     icon: Package,
   },
   {
     id: "cube",
     title: "Cube Draft",
-    blurb: "Paste a cube list; it is shuffled and dealt into boosters for the table.",
+    blurb: "Paste a cube list and draft it against bots.",
     icon: Boxes,
   },
   {
@@ -224,19 +224,19 @@ const MODES: readonly {
   {
     id: "commander",
     title: "Commander Draft",
-    blurb: "Two cards a pick round a table of bots, then a 60-card Commander deck.",
+    blurb: "Pick two cards at a time, then build a 60-card Commander deck.",
     icon: Crown,
   },
   {
     id: "winston",
     title: "Winston Draft",
-    blurb: "One face-down stack in three piles — take a pile or decline it.",
+    blurb: "Three face-down piles: take one or decline it.",
     icon: WinstonPiles,
   },
   {
     id: "packs",
     title: "Open Packs",
-    blurb: "Open any booster or box and see how it stacks up against its average.",
+    blurb: "Open a booster or box and compare it to its expected value.",
     icon: PackageOpen,
   },
 ];
@@ -268,13 +268,12 @@ function DraftHub({
           Draft &amp; Packs
         </h2>
         <p className="m-0 max-w-[70ch] text-sm text-dim">
-          Draft against bots or friends, build a deck from what you take, or open a pack and see
-          what it was worth. Nothing here touches your collection.
+          Draft against bots or friends, or open packs. Nothing here changes your collection.
         </p>
       </header>
 
       {anything && (
-        <HubSection title="Draft in progress">
+        <HubSection title="In progress">
           <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {savedDraft !== null && (
               <SavedDraftRow
@@ -290,7 +289,7 @@ function DraftHub({
                 icon={Hammer}
                 title={deck.name}
                 chip="Building"
-                detail={`${plural(deck.cardCount, "card")} · not saved yet`}
+                detail={`${plural(deck.cardCount, "card")} · not saved`}
                 actions={
                   <button
                     type="button"

@@ -166,7 +166,7 @@ describe("ValidationPanel", () => {
     expect(findings(panel)).toEqual([
       "Error: Modern decks allow up to 4 copies of Lightning Bolt; you have 5.",
       "Error: Blightsteel Colossus is banned in Modern.",
-      "Error: Black Lotus is not legal in Modern.",
+      "Error: Black Lotus isn't legal in Modern.",
     ]);
     expect(within(panel).getByText("Copy limits")).toBeInTheDocument();
     expect(within(panel).getByText("Banned cards")).toBeInTheDocument();
@@ -231,7 +231,7 @@ describe("ValidationPanel", () => {
 
     await userEvent.click(chip);
     const panel = screen.getByRole("dialog");
-    expect(within(panel).getByText(/not checked against any rules/)).toBeInTheDocument();
+    expect(within(panel).getByText(/decks aren't checked/)).toBeInTheDocument();
     expect(within(panel).queryByText(/passes every/)).not.toBeInTheDocument();
     expect(within(panel).queryAllByRole("listitem")).toEqual([]);
   });

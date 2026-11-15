@@ -115,7 +115,7 @@ describe("OpeningHand", () => {
     await userEvent.click(screen.getByRole("button", { name: "Keep 7" }));
     expect(onAct).toHaveBeenLastCalledWith({ type: "keep", bottom: [] });
     rerender(<OpeningHand view={view} onAct={onAct} busy />);
-    expect(screen.getByRole("status")).toHaveTextContent("Keeping — the game is starting…");
+    expect(screen.getByRole("status")).toHaveTextContent("Keeping. Starting the game…");
   });
 
   it("says whether the first mulligan is free", () => {

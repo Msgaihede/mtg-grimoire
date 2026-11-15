@@ -290,7 +290,7 @@ function QuickUnwishBody({
           reduced by what is recorded and disappears when that empties it, which is the fact a
           reader most wants before pressing and cannot read off a radio. */}
       <p className="text-[0.6875rem] leading-relaxed text-dim">
-        Copies will be recorded in this deck&rsquo;s folder and deducted from the selected wishlist item.
+        Adds the copies to this deck&rsquo;s folder and takes them off the selected wishlist item.
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner behind the scrim. Its
@@ -304,7 +304,7 @@ function QuickUnwishBody({
             role="alert"
             className="overflow-hidden text-[0.6875rem] text-destructive"
           >
-            Couldn't record those copies — {failure}
+            Couldn't add those copies — {failure}
           </motion.p>
         )}
       </AnimatePresence>
@@ -316,7 +316,7 @@ function QuickUnwishBody({
         <button type="submit" disabled={pending || picked === null} className={META_SUBMIT}>
           {/* The verb keeps its name through the flow and the number is the menu row's, so a
               reader who pressed `Quick add 4 and remove from wishlist` meets the same 4 here. */}
-          {pending ? "Recording…" : `Record ${plural(copies, "copy", "copies")}`}
+          {pending ? "Adding…" : `Add ${plural(copies, "copy", "copies")}`}
         </button>
       </div>
     </form>

@@ -67,10 +67,10 @@ const SOURCES_UNKNOWN = "Mana sources appear after the next card sync.";
 const SOURCES_UNKNOWN_SHORT = "awaiting card sync";
 
 const COST_HINT =
-  "Total colored mana symbols in casting costs. Hybrid symbols count toward both colors; generic mana is excluded.";
+  "Colored mana symbols in casting costs. Hybrid counts for both colors; generic is left out.";
 
 const SOURCES_HINT =
-  "Mana-producing cards for each required color and colorless. Multi-color sources count toward each color they produce.";
+  "Cards that make each color the deck needs, plus colorless. A multicolor source counts for each of its colors.";
 
 /** A band's label, set **above** its strip so the strip takes the card's full width.
  *  `CreatureSplitBar` spells the same label, so the two bands read as one grammar. */

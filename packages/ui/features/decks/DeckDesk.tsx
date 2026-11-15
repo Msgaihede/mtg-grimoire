@@ -1019,7 +1019,7 @@ export function DeckDesk({
               <ToggleChip
                 label="Split X"
                 pressed={separateX}
-                title="Split X — group X-cost cards separately instead of counting X as 0"
+                title="Split X: group X-cost cards separately instead of counting X as 0"
                 onClick={() => updateDeck({ separateXGroup: !separateX })}
               />
             )}

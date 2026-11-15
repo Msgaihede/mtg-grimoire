@@ -497,7 +497,7 @@ function stackTags(
       disabledHint:
         editableRows.length === 1
           ? "Press Edit to change this stack's tags."
-          : `Tags on your ${editableRows.length} stacks of this printing. Press Edit and pick one to change its tags.`,
+          : `Tags from ${editableRows.length} stacks. Press Edit and pick one to change its tags.`,
     };
   }
   if (scope.surface === "wishlist") {
@@ -509,7 +509,7 @@ function stackTags(
     return {
       target: { kind: "wishlist", id: first.id },
       tags: union(wishedRows),
-      disabledHint: `This printing is on your wishlist ${wishedRows.length} times. Right-click one in the wishlist to change its tags.`,
+      disabledHint: `On your wishlist ${wishedRows.length} times. Right-click one there to change its tags.`,
     };
   }
   return null;
@@ -2111,7 +2111,7 @@ function Body({
         )}
         {!pending && error === null && card === null && (
           <p className="mx-5 mt-3 text-sm text-dim">
-            This printing is no longer in the card database.
+            This printing is no longer in the card data.
           </p>
         )}
 
@@ -2495,7 +2495,7 @@ function Body({
                       }}
                       options={copyOptions}
                       placeholder="Edit"
-                      label="Edit which copy"
+                      label="Copy to edit"
                       className={ACTION}
                     />
                   ) : null}

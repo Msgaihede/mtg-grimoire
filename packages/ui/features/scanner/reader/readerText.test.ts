@@ -54,7 +54,7 @@ describe("matchStrip", () => {
       tone: "error",
       name: null,
       printing: null,
-      sentence: "The card recognizer isn't loaded, so cards can't be identified.",
+      sentence: "The Neural scanner isn't loaded.",
       fill: 0,
       committed: false,
     });
@@ -134,7 +134,7 @@ describe("matchStrip", () => {
   });
 
   it("says a second copy as a count, and a second opinion as an update", () => {
-    expect(matchStrip(settled, { ...forest, bumpedTo: 3 }).sentence).toBe("Added again — ×3");
+    expect(matchStrip(settled, { ...forest, bumpedTo: 3 }).sentence).toBe("Added again · ×3");
     expect(matchStrip(settled, { ...forest, replaced: true }).sentence).toBe("Printing updated");
   });
 
@@ -264,6 +264,6 @@ describe("the redesigned page's words", () => {
     expect(STOPPED_TITLE).toBe("Scanning stopped");
     expect(STOPPED_NOTE).toBe("Press Start to begin. The camera stays on.");
     expect(HOLD_TITLE).toBe("Hold the picture to scan");
-    expect(HOLD_NOTE).toBe("Scanning pauses the moment you let go.");
+    expect(HOLD_NOTE).toBe("Scanning pauses when you let go.");
   });
 });

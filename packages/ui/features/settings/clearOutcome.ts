@@ -63,13 +63,13 @@ export function fileSize(bytes: number): string {
  * the collection empties the decks themselves rather than releasing a claim against them.
  */
 export function collectionOutcome(r: CollectionCleared): string {
-  if (r.entries === 0) return "The collection was already empty.";
+  if (r.entries === 0) return "Your collection was already empty.";
   return `Cleared ${counted(r.entries, "collection entry", "collection entries")}.`;
 }
 
 export function wishlistOutcome(entries: number): string {
   return entries === 0
-    ? "The wishlist was already empty."
+    ? "Your wishlist was already empty."
     : `Cleared ${counted(entries, "wishlist entry", "wishlist entries")}.`;
 }
 
@@ -88,7 +88,7 @@ export function decksOutcome(r: DecksCleared): string {
   const parts: string[] = [];
   if (r.decks > 0) parts.push(counted(r.decks, "deck"));
   if (r.folders > 0) parts.push(counted(r.folders, "folder"));
-  if (parts.length === 0) return "There were no decks to clear.";
+  if (parts.length === 0) return "No decks to clear.";
   return `Cleared ${list(parts)}.`;
 }
 
@@ -106,7 +106,7 @@ export function decksOutcome(r: DecksCleared): string {
 export function cacheOutcome(r: CacheCleared): string {
   const swept =
     r.files === 0
-      ? "There was nothing cached to clear."
+      ? "Nothing cached to clear."
       : `Freed ${fileSize(r.bytes)} across ${counted(r.files, "file")}.`;
   return r.failed === 0
     ? swept
@@ -133,7 +133,7 @@ export function cacheOutcome(r: CacheCleared): string {
 export function combosOutcome(r: ComboStatus): string {
   if (r.combos === 0) {
     return (
-      "Combos were cleared, but the download failed. See Errors below for details."
+      "Combos were cleared, but the download failed. See Errors for details."
     );
   }
   return (

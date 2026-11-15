@@ -319,7 +319,7 @@ describe("ExportDialog", () => {
       }),
       exportCard({ name: "Sol Ring", quantity: 1, legalities: PAPER_ONLY }),
     ];
-    const arenaBox = () => screen.getByRole("checkbox", { name: "Only cards MTG Arena has" });
+    const arenaBox = () => screen.getByRole("checkbox", { name: "Only cards on MTG Arena" });
 
     it("is offered by the Arena format and by no other", async () => {
       const user = userEvent.setup();
@@ -327,7 +327,7 @@ describe("ExportDialog", () => {
       // Not a field — it changes which cards are written, never what a line says about one —
       // so it is absent everywhere the question cannot be asked.
       expect(
-        screen.queryByRole("checkbox", { name: "Only cards MTG Arena has" }),
+        screen.queryByRole("checkbox", { name: "Only cards on MTG Arena" }),
       ).not.toBeInTheDocument();
 
       await user.click(await screen.findByRole("radio", { name: "Arena" }));
@@ -338,7 +338,7 @@ describe("ExportDialog", () => {
 
       await user.click(screen.getByRole("radio", { name: "Moxfield" }));
       expect(
-        screen.queryByRole("checkbox", { name: "Only cards MTG Arena has" }),
+        screen.queryByRole("checkbox", { name: "Only cards on MTG Arena" }),
       ).not.toBeInTheDocument();
     });
 
@@ -373,7 +373,7 @@ describe("ExportDialog", () => {
         />,
       );
       await user.click(await screen.findByRole("radio", { name: "Arena" }));
-      expect(screen.queryByText(/on MTG Arena/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/(isn't|aren't) on MTG Arena/)).not.toBeInTheDocument();
 
       await user.click(arenaBox());
       expect(
@@ -999,7 +999,7 @@ describe("the scope line", () => {
     await user.click(saveButton);
     expect(vi.mocked(ipc.exportSaveFile)).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
     // The escape hatch is still offered: widening the question is a way out of a failure too.
     expect(
@@ -1007,10 +1007,10 @@ describe("the scope line", () => {
     ).toBeInTheDocument();
   });
 
-  it("draws no Retry button for a caller that passed no way to retry", async () => {
+  it("draws no Try again button for a caller that passed no way to retry", async () => {
     render(<ExportDialog {...props} surface="collection" scope={scope({ error: "gone" })} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("gone");
-    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
   it("goes back to the count and arms both buttons once the error clears", async () => {

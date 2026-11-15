@@ -36,7 +36,7 @@ type Story = StoryObj<typeof meta>;
 export const NotSet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/only full values are shown/)).toBeInTheDocument();
+    await expect(await canvas.findByText(/Only full values are shown/)).toBeInTheDocument();
   },
 };
 
@@ -44,7 +44,7 @@ export const NotSet: Story = {
 export const SetAPercentage: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText(/only full values are shown/);
+    await canvas.findByText(/Only full values are shown/);
     await userEvent.type(canvas.getByRole("textbox", { name: /Sell percentage/ }), "70{Enter}");
     await expect(await canvas.findByText("Sell at 70%")).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Reset" })).toBeInTheDocument();
@@ -55,7 +55,7 @@ export const SetAPercentage: Story = {
 export const OutOfBounds: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText(/only full values are shown/);
+    await canvas.findByText(/Only full values are shown/);
     await userEvent.type(canvas.getByRole("textbox", { name: /Sell percentage/ }), "120{Enter}");
     await expect(await canvas.findByRole("alert")).toHaveTextContent(/at most 100/);
   },
@@ -66,7 +66,7 @@ export const OutOfBounds: Story = {
 export const SetABulkPrice: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText(/only full values are shown/);
+    await canvas.findByText(/Only full values are shown/);
     const bulk = canvas.getByRole("textbox", { name: /Bulk price/ });
     await expect(bulk).toHaveAttribute("aria-disabled", "true");
     await userEvent.type(canvas.getByRole("textbox", { name: /Minimum card value/ }), "1{Enter}");

@@ -95,7 +95,7 @@ export const MARKETPLACES: Record<MarketplaceId, Marketplace> = {
   },
   cardtrader: {
     id: "cardtrader",
-    label: "Card trader",
+    label: "CardTrader",
     currency: "eur",
     priced: false,
     feed: false,

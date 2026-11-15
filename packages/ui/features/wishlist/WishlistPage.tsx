@@ -657,9 +657,9 @@ export function WishlistPage() {
   const onRemove = useCallback(
     (row: WishRow) =>
       void removeAsync(row).then(
-        () => notify.success(`Removed “${row.name}” from the wishlist`),
+        () => notify.success(`Removed “${row.name}” from your wishlist`),
         (error: unknown) =>
-          notify.error(`Couldn't remove “${row.name}” from the wishlist`, {
+          notify.error(`Couldn't remove “${row.name}” from your wishlist`, {
             body: ipcError(error),
           }),
       ),
@@ -1337,7 +1337,7 @@ export function WishlistPage() {
             id: "move-up",
             label: "Move up",
             Icon: ArrowUp,
-            ...(at <= 0 ? { disabled: true, reason: "Already first" } : {}),
+            ...(at <= 0 ? { disabled: true, reason: "already first" } : {}),
             onSelect: () => stepFolder(folder, -1),
           },
           {
@@ -1346,7 +1346,7 @@ export function WishlistPage() {
             label: "Move down",
             Icon: ArrowDown,
             ...(at < 0 || at === siblings.length - 1
-              ? { disabled: true, reason: "Already last" }
+              ? { disabled: true, reason: "already last" }
               : {}),
             onSelect: () => stepFolder(folder, 1),
           },
@@ -1379,7 +1379,7 @@ export function WishlistPage() {
             // press that would have worked.
             ...(folders.summaryQuery.data !== undefined &&
             (folders.summary.get(folder.id)?.wishes ?? 0) === 0
-              ? { disabled: true, reason: "No cards directly in this folder" }
+              ? { disabled: true, reason: "no cards directly in this folder" }
               : {}),
             onSelect: () => {
               clearReset();
@@ -1559,8 +1559,8 @@ export function WishlistPage() {
           onSuccess: () => {
             done.onSuccess();
             // The half of the confirmation's sentence the reader feared for: the wishes stay.
-            notify.success(`Folder “${name}” deleted`, {
-              body: "Its cards went back to your wishlist",
+            notify.success(`Deleted folder “${name}”`, {
+              body: "Its cards moved back to your wishlist",
             });
           },
           onError: (error) => notify.error(`Couldn't delete “${name}”`, { body: ipcError(error) }),
@@ -1577,7 +1577,7 @@ export function WishlistPage() {
           // The command answers how many wishes went — the count the heading showed, now gone.
           onSuccess: (gone) => {
             done.onSuccess();
-            notify.success(`Folder “${name}” deleted`, {
+            notify.success(`Deleted folder “${name}”`, {
               ...(gone > 0 ? { body: `Removed ${plural(gone, "card")} from your wishlist` } : {}),
             });
           },
@@ -2698,7 +2698,7 @@ function statusOf(
 
   if (empty) {
     if (failure) return failure;
-    if (pending) return "Loading wishlist…";
+    if (pending) return "Loading your wishlist…";
     // A wall with anything on it — headings, or the empty folder's own box — is the answer to
     // "what is here", and the box already says the folder is empty. `CollectionPage`'s order. That
     // includes a deck's managed folder: `layoutShelves` draws its box too, holding the sentence for
@@ -2711,7 +2711,7 @@ function statusOf(
     // anything on yet, and the root's instruction would answer the wrong question inside a
     // folder they have just made.
     return inFolder
-      ? "No cards in this folder yet."
+      ? "This folder is empty."
       : "Your wishlist is empty. Add cards from search with the + button.";
   }
 

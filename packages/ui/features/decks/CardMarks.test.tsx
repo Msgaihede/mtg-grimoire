@@ -140,19 +140,19 @@ describe("theoryMatchLabel", () => {
   const label = (tier: TheoryTier, delta: number, anyPrinting = false) =>
     theoryMatchLabel(planMark(tier, delta, anyPrinting));
 
-  it("names the exact tier Exact Match", () => {
-    expect(label("exact", 0)).toBe("Exact Match");
+  it("names the exact tier Exact match", () => {
+    expect(label("exact", 0)).toBe("Exact match");
   });
 
   it("says which one a name match is", () => {
-    expect(label("name", 0)).toBe("Art Mismatch");
+    expect(label("name", 0)).toBe("Art mismatch");
     // The constant is the same name — issue #502 named the three tiers in the reader's words.
-    expect(THEORY_MATCH_NAME_LABEL).toBe("Art Mismatch");
+    expect(THEORY_MATCH_NAME_LABEL).toBe("Art mismatch");
   });
 
   /**
    * **With `Matching printing` off the name tier says `Match`** (managed tokens spec §3.10): the
-   * reader has asked not to be told printings apart, so "Art Mismatch" would be telling them the
+   * reader has asked not to be told printings apart, so "Art mismatch" would be telling them the
    * one thing they switched off. The count clause is the tier's and follows it unchanged.
    */
   it("says Match on the name tier when the deck asks for any printing", () => {
@@ -168,10 +168,10 @@ describe("theoryMatchLabel", () => {
    * tiers, because a `Math.abs` with the words swapped would pass half of these.
    */
   it("words the count as the action to take, after the tier's own clause, on both tiers", () => {
-    expect(label("exact", 2)).toBe("Exact Match · 2 to add");
-    expect(label("exact", -3)).toBe("Exact Match · 3 to remove");
-    expect(label("name", 6)).toBe("Art Mismatch · 6 to add");
-    expect(label("name", -1)).toBe("Art Mismatch · 1 to remove");
+    expect(label("exact", 2)).toBe("Exact match · 2 to add");
+    expect(label("exact", -3)).toBe("Exact match · 3 to remove");
+    expect(label("name", 6)).toBe("Art mismatch · 6 to add");
+    expect(label("name", -1)).toBe("Art mismatch · 1 to remove");
   });
 
   /** The glyph and the sentence must point the same way: the characters the mark draws for a
@@ -191,11 +191,11 @@ describe("theoryMatchLabel", () => {
    * component or a story that hands it something else must still get the one sentence.
    */
   it("says the third tier's one sentence at every count", () => {
-    expect(label("unplanned", 0)).toBe("No Match");
-    expect(label("unplanned", 3)).toBe("No Match");
-    expect(label("unplanned", -8)).toBe("No Match");
+    expect(label("unplanned", 0)).toBe("No match");
+    expect(label("unplanned", 3)).toBe("No match");
+    expect(label("unplanned", -8)).toBe("No match");
     // The constant is the same literal, and never assembled out of the exact tier's name.
-    expect(THEORY_UNPLANNED_LABEL).toBe("No Match");
+    expect(THEORY_UNPLANNED_LABEL).toBe("No match");
   });
 });
 
@@ -296,14 +296,14 @@ describe("TheoryMatchMark", () => {
     }
   });
 
-  it("keeps Art Mismatch in the tooltip with the exact switch on", async () => {
+  it("keeps Art mismatch in the tooltip with the exact switch on", async () => {
     const { container } = render(
       <TooltipProvider>
         <TheoryMatchMark mark={planMark("name")} />
       </TooltipProvider>,
     );
     expect(await tooltipOf(container.querySelector(`[${THEORY_MATCH_ATTR}]`)!)).toHaveTextContent(
-      /^Art Mismatch$/,
+      /^Art mismatch$/,
     );
   });
 });

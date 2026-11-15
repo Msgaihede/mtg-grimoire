@@ -146,13 +146,13 @@ export const LOAD_DEADLINE_MS = 120_000;
 
 /** What everything in flight is refused with when the Worker stopped under it. */
 export const STOPPED =
-  "The card scanner stopped unexpectedly. It starts again with the next frame.";
+  "The card scanner stopped and will restart by itself.";
 
 /** What a call in flight is refused with when the session was let go under it to be built again. */
-export const RELOADING = "The card scanner is starting again.";
+export const RELOADING = "The card scanner is restarting.";
 
 /** What a session command is refused with when the scanner's module did not arrive. */
-export const COULD_NOT_LOAD = "The card scanner could not be loaded. Check your connection.";
+export const COULD_NOT_LOAD = "Couldn't load the card scanner. Check your connection.";
 
 /**
  * What a session command is refused with while a build that failed is waited out: the module
@@ -160,20 +160,20 @@ export const COULD_NOT_LOAD = "The card scanner could not be loaded. Check your 
  * load that never ended. Not the reader's connection, and not theirs to fix: it says so.
  */
 export const COULD_NOT_START =
-  "The card scanner could not start on this device. It will try again in a moment.";
+  "Couldn't start the card scanner on this device. It will retry in a moment.";
 
 /**
  * What a frame is refused with when the Worker trapped, or passed its deadline, taking the
  * recogniser's files — and while that is waited out. Not the reader's connection: the files came.
  */
 export const NEURAL_COULD_NOT_START =
-  "The card recognizer could not start on this device. It will try again in a moment.";
+  "Couldn't start the Neural scanner on this device. It will retry in a moment.";
 
 /** The start of what a frame says when the module refused the recogniser's files, before its words. */
-export const NEURAL_REFUSED = "The card recognizer's files would not load:";
+export const NEURAL_REFUSED = "Couldn't load the Neural scanner's files:";
 
 /** `scanner_capture` on a page: the Developer panel's capture writes files, and a page has none. */
-export const CAPTURE_REFUSED = "A browser keeps no files, so a frame cannot be captured here.";
+export const CAPTURE_REFUSED = "Frame capture isn't available in a browser.";
 
 /**
  * Thirty-one bytes: a module with one function that uses a SIMD instruction. `WebAssembly.validate`

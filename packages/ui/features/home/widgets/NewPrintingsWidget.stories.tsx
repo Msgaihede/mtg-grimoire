@@ -153,7 +153,7 @@ export const Band: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "New printings" }));
 
-    await expect(await card.findByText("A year")).toBeInTheDocument();
+    await expect(await card.findByText("1 year")).toBeInTheDocument();
     await expect(
       await card.findByText("Marvel Super Heroes Commander · Surge Foil"),
     ).toBeInTheDocument();
@@ -206,8 +206,8 @@ export const NoDecks: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "New printings" }));
 
-    await expect(await card.findByText(/^No decks selected/)).toBeInTheDocument();
-    await expect(card.queryByText(/has been reprinted in the last/)).not.toBeInTheDocument();
+    await expect(await card.findByText(/^No decks chosen/)).toBeInTheDocument();
+    await expect(card.queryByText(/^No reprints in the last/)).not.toBeInTheDocument();
   },
 };
 
@@ -228,10 +228,10 @@ export const NothingReprinted: Story = {
 
     await expect(
       await card.findByText(
-        "Nothing in the 4 decks you watch has been reprinted in the last 30 days. New printings arrive with each card data sync.",
+        "No reprints in the last 30 days for the 4 decks you watch. New printings arrive with each card data sync.",
       ),
     ).toBeInTheDocument();
-    await expect(card.queryByText(/^No decks selected/)).not.toBeInTheDocument();
+    await expect(card.queryByText(/^No decks chosen/)).not.toBeInTheDocument();
   },
 };
 

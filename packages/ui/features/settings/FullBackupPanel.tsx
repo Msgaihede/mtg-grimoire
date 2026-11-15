@@ -33,7 +33,7 @@ export function FullBackupPanel({ onRestored = reloadAfterRestore }: { onRestore
     onSuccess: (completed, action) => {
       if (!completed) {
         setNote(
-          action === "export" ? "Export cancelled." : "Import cancelled. Your data is unchanged.",
+          action === "export" ? "Export canceled." : "Import canceled. Your data is unchanged.",
         );
         return;
       }
@@ -58,17 +58,13 @@ export function FullBackupPanel({ onRestored = reloadAfterRestore }: { onRestore
     <div className="space-y-3">
       <h3 className="text-sm font-medium">Complete backup</h3>
       <p className="text-sm text-dim">
-        Export all your app data to a ZIP file, including collection, decks, wishlist, notes,
-        settings and dashboard layout. Import a ZIP backup to restore it.
+        Export all your app data to a ZIP file, or import one to restore it.
       </p>
       <p className="text-sm text-dim">
-        Import replaces all current app data. You will be asked to confirm before anything is
-        replaced. Export a backup first if you want to keep your current data.
+        Importing replaces all current app data, after you confirm.
       </p>
       <p className="text-xs text-dim">
-        A complete backup is also saved automatically in data/backups before app updates and
-        restores. Restoring requires a backup with the same database schema version and
-        disconnects device sync; pair your devices again afterwards.
+        A backup is also saved to data/backups before each app update and restore. Restoring needs a backup from a compatible app version and disconnects sync. Pair your devices again afterwards.
       </p>
       <div className="flex flex-wrap gap-3">
         <button

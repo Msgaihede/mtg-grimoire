@@ -97,7 +97,7 @@ describe("LocalMcpSection", () => {
 
     expect(screen.getByText(MCP_SENTENCE)).toBeInTheDocument();
     // Pinned in its own words too: the export would agree with any paraphrase of itself.
-    expect(screen.getByText(/Nothing leaves this computer, and it's free\.$/)).toBeInTheDocument();
+    expect(screen.getByText(/Free, and nothing leaves this computer\.$/)).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(toggle).toHaveAccessibleDescription(MCP_OFF);
     expect(screen.queryByText("Token")).toBeNull();
@@ -144,13 +144,13 @@ describe("LocalMcpSection", () => {
     expect(screen.queryByText(TOKEN)).toBeNull();
     expect(document.body.textContent).not.toContain(TOKEN);
 
-    await userEvent.click(screen.getByRole("button", { name: "Copy the token" }));
+    await userEvent.click(screen.getByRole("button", { name: "Copy token" }));
     expect(copyText).toHaveBeenCalledWith(TOKEN);
-    expect(await screen.findByRole("button", { name: "Copied the token" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied token" })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Show the token" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show token" }));
     expect(screen.getByText(TOKEN)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Hide the token" }));
+    await userEvent.click(screen.getByRole("button", { name: "Hide token" }));
     expect(screen.queryByText(TOKEN)).toBeNull();
   });
 
@@ -161,7 +161,7 @@ describe("LocalMcpSection", () => {
     await theSwitch();
 
     await userEvent.click(await screen.findByRole("button", { name: "New token" }));
-    const question = screen.getByRole("dialog", { name: "Replace the token" });
+    const question = screen.getByRole("dialog", { name: "Replace the token?" });
     expect(question).toHaveTextContent(/stop working/);
     expect(mcpRotateToken).not.toHaveBeenCalled();
 
@@ -170,7 +170,7 @@ describe("LocalMcpSection", () => {
     // The caret goes back to the button that asked.
     expect(screen.getByRole("button", { name: "New token" })).toHaveFocus();
 
-    await userEvent.click(screen.getByRole("button", { name: "Show the token" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show token" }));
     expect(await screen.findByText(NEXT_TOKEN)).toBeInTheDocument();
   });
 
@@ -197,7 +197,7 @@ describe("LocalMcpSection", () => {
       "true",
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "Copy the Claude Desktop configuration" }),
+      screen.getByRole("button", { name: "Copy Claude Desktop configuration" }),
     );
 
     expect(copyText).toHaveBeenCalledWith(clientSnippet("claude-desktop", ON.url, TOKEN));
@@ -221,7 +221,7 @@ describe("LocalMcpSection", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(EXTENSION_OPENED));
     // The file's snippet stays, for a reader who would rather edit the config.
     expect(
-      screen.getByRole("button", { name: "Copy the Claude Desktop configuration" }),
+      screen.getByRole("button", { name: "Copy Claude Desktop configuration" }),
     ).toBeInTheDocument();
   });
 
@@ -264,12 +264,12 @@ describe("LocalMcpSection", () => {
     setup();
     await theSwitch();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Copy the address" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Copy address" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't copy: The clipboard is not available.",
+      "Couldn't copy — The clipboard is not available.",
     );
-    expect(screen.queryByRole("button", { name: "Copied the address" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copied address" })).toBeNull();
   });
 
   it("sends a new port, and draws the address it answers", async () => {

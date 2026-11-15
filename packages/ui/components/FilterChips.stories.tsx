@@ -345,7 +345,7 @@ export const WithHintExplaining: Story = {
   args: {
     label: "Other",
     pressed: true,
-    hint: "changes this version of the app has no name for",
+    hint: "changes this app version doesn't recognize",
   },
 };
 
@@ -419,7 +419,7 @@ export const ColoursExact: Story = {
     await expect(exact.querySelector("svg.lucide-squares-unite")).not.toBeNull();
     await expect(exact.querySelector("svg.lucide-squares-intersect")).toBeNull();
     await expect(exact).toHaveAccessibleName(
-      "Within — cards whose color identity fits within these colors",
+      "Within: color identity fits within these colors",
     );
   },
 };
@@ -526,7 +526,7 @@ export const NothingToReset: Story = {
     const canvas = within(canvasElement);
     const reset = canvas.getByRole("button", { name: /^Reset all/ });
     await expect(reset).toHaveAttribute("aria-disabled", "true");
-    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+    await expect(reset).toHaveAccessibleName("Reset all: 0 filters active");
     // The word is `Reset` and the pill reads `0` — the name is the longer sentence.
     await expect(within(reset).getByText("Reset")).toBeInTheDocument();
     await expect(reset.querySelector("[data-count-pill]")).toHaveTextContent("0");
@@ -603,7 +603,7 @@ export const Disclosures: Story = {
     // Pressing the quiet one opens its panel and lights the button without inventing a count.
     await userEvent.click(quiet);
     await expect(quiet).toHaveClass("bg-surface", ...on);
-    await expect(quiet).toHaveAccessibleName("Hide filters — 0 active");
+    await expect(quiet).toHaveAccessibleName("Hide filters, 0 active");
     await expect(quiet.querySelector("[data-count-pill]")).toHaveTextContent("0");
   },
 };

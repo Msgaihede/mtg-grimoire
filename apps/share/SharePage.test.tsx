@@ -50,10 +50,10 @@ describe("SharePage", () => {
       screen.getByRole("heading", { level: 1, name: "Giradeli’s Trade binder" }),
     ).toBeInTheDocument();
     expect(screen.getByText(/read-only/i)).toBeInTheDocument();
-    // "anyone with this link" in words — spec §5.1 requires the privacy claim be worded this
+    // "anyone with the link" in words — spec §5.1 requires the privacy claim be worded this
     // way and never "private" or "encrypted", because the relay stores these snapshots in the
     // clear and the app must not tell a reader otherwise.
-    expect(screen.getByText(/anyone with this link/i)).toBeInTheDocument();
+    expect(screen.getByText(/anyone with the link/i)).toBeInTheDocument();
   });
 
   it("dates the snapshot rather than implying it is live", () => {
@@ -282,7 +282,7 @@ describe("SharePage", () => {
     expect(() => mount(bare as unknown as ShareSnapshot)).not.toThrow();
     expect(tiles()).toHaveLength(2);
     // The privacy sentence is the one thing that may never fall off the page.
-    expect(screen.getByText(/anyone with this link/i)).toBeInTheDocument();
+    expect(screen.getByText(/anyone with the link/i)).toBeInTheDocument();
     // No money column was asked for, so none is drawn — and no `NaN` figure either.
     expect(screen.getByText(/prices were not shared/i)).toBeInTheDocument();
     expect(screen.queryByText(/NaN|Invalid Date|undefined/)).not.toBeInTheDocument();

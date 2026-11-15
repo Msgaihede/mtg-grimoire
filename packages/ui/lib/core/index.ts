@@ -31,7 +31,7 @@ export function pickHost(scope: object): Host {
 }
 
 /** What the gate is told when the web host's own chunk never arrived. */
-const HOST_UNLOADED = "MTG Grimoire could not finish loading. Check your connection, then reload.";
+const HOST_UNLOADED = "MTG Grimoire couldn't finish loading. Check your connection, then reload.";
 
 /**
  * The implementation every command goes through — **the one place a build chooses its host** (the

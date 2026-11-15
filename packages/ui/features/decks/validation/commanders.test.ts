@@ -650,7 +650,7 @@ describe("eligibility by rule", () => {
   it("takes a legendary creature and refuses one that is not legendary (edh)", () => {
     expect(commanderIneligibility(commander(), "edh", spec("commander"))).toBeNull();
     expect(commanderIneligibility(GRIZZLY_BEARS, "edh", spec("commander"))).toBe(
-      `Grizzly Bears is not a legal commander in Commander: ${EDH_REQUIREMENT}.`,
+      `Grizzly Bears isn't a legal commander in Commander: ${EDH_REQUIREMENT}.`,
     );
   });
 
@@ -660,7 +660,7 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(SHORIKAI, "edh", spec("commander"))).toBeNull();
     expect(commanderIneligibility(ENTERPRISE_D, "edh", spec("commander"))).toBeNull();
     expect(commanderIneligibility(ETERNITY_ELEVATOR, "edh", spec("commander"))).toBe(
-      "The Eternity Elevator has no power and toughness, so it cannot be your commander in " +
+      "The Eternity Elevator has no power and toughness, so it can't be your commander in " +
         "Commander; a legendary Spacecraft needs one.",
     );
   });
@@ -669,7 +669,7 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(TEFERI_TEMPORAL_ARCHMAGE, "edh", spec("commander"))).toBeNull();
     // The same card type without the sentence is not a commander in EDH.
     expect(commanderIneligibility(TEFERI_HERO_OF_DOMINARIA, "edh", spec("commander"))).toBe(
-      `Teferi, Hero of Dominaria is not a legal commander in Commander: ${EDH_REQUIREMENT}.`,
+      `Teferi, Hero of Dominaria isn't a legal commander in Commander: ${EDH_REQUIREMENT}.`,
     );
   });
 
@@ -682,7 +682,7 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(GRIST, "oathbreaker", spec("oathbreaker"))).toBeNull();
     // The sentence makes it a creature, not an uncommon: Pauper Commander's rarity rule stands.
     expect(commanderIneligibility(GRIST, "pdh", spec("paupercommander"))).toBe(
-      "Grist, the Hunger Tide has never been printed at uncommon, so it cannot be your " +
+      "Grist, the Hunger Tide has never been printed at uncommon, so it can't be your " +
         "commander in Pauper Commander.",
     );
     // And the deck check agrees with the predicate.
@@ -703,7 +703,7 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(TEFERI_HERO_OF_DOMINARIA, "brawl", spec("brawl"))).toBeNull();
     expect(commanderIneligibility(commander(), "brawl", spec("brawl"))).toBeNull();
     expect(commanderIneligibility(GRIZZLY_BEARS, "brawl", spec("brawl"))).toContain(
-      "is not a legal commander in Brawl",
+      "isn't a legal commander in Brawl",
     );
   });
 
@@ -729,7 +729,7 @@ describe("eligibility by rule", () => {
   it("takes only a planeswalker in oathbreaker", () => {
     expect(commanderIneligibility(NAHIRI, "oathbreaker", spec("oathbreaker"))).toBeNull();
     expect(commanderIneligibility(commander(), "oathbreaker", spec("oathbreaker"))).toBe(
-      "Kenrith, the Returned King is not a legal oathbreaker in Oathbreaker: an oathbreaker " +
+      "Kenrith, the Returned King isn't a legal oathbreaker in Oathbreaker: an oathbreaker " +
         "must be a planeswalker.",
     );
   });
@@ -745,18 +745,18 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(PARADISE_DRUID, "pdh", spec("paupercommander"))).toBeNull();
 
     expect(commanderIneligibility(GRIZZLY_BEARS, "pdh", spec("paupercommander"))).toBe(
-      "Grizzly Bears has never been printed at uncommon, so it cannot be your commander in " +
+      "Grizzly Bears has never been printed at uncommon, so it can't be your commander in " +
         "Pauper Commander.",
     );
     // Uncommon, but not a creature: the type rule still applies.
     expect(commanderIneligibility(SWORDS_TO_PLOWSHARES, "pdh", spec("paupercommander"))).toBe(
-      "Swords to Plowshares is not a legal commander in Pauper Commander: a commander must be " +
+      "Swords to Plowshares isn't a legal commander in Pauper Commander: a commander must be " +
         "a creature, Vehicle or Spacecraft that has been printed at uncommon.",
     );
     // The P/T clause reaches Pauper Commander too — **without** the word "legendary", which
     // this format has never asked for and which the sentence would otherwise invent.
     expect(commanderIneligibility(ETERNITY_ELEVATOR, "pdh", spec("paupercommander"))).toBe(
-      "The Eternity Elevator has no power and toughness, so it cannot be your commander in " +
+      "The Eternity Elevator has no power and toughness, so it can't be your commander in " +
         "Pauper Commander; a Spacecraft needs one.",
     );
   });
@@ -776,7 +776,7 @@ describe("eligibility by rule", () => {
       "has no power and toughness",
     );
     expect(commanderIneligibility(GRIZZLY_BEARS, "tlr", spec("tlr"))).toContain(
-      "is not a legal commander in Tiny Leaders: Reborn",
+      "isn't a legal commander in Tiny Leaders: Reborn",
     );
   });
 
@@ -845,7 +845,7 @@ describe("partners and pairing (702.124)", () => {
         code: "commander-partner",
         message:
           "Nikara, Lair Scavenger partners only with Yannik, Scavenging Sentinel; Krav, the " +
-          "Unredeemed is not that card.",
+          "Unredeemed isn't that card.",
         cardIds: ["c-Nikara, Lair Scavenger", "c-Krav, the Unredeemed"],
       },
     ]);
@@ -878,7 +878,7 @@ describe("partners and pairing (702.124)", () => {
 
     expect(pairingMessage(zone(NIKARA, impostor))).toBe(
       "Yannik, Scavenging Sentinel partners only with Regna, the Redeemer; Nikara, Lair " +
-        "Scavenger is not that card.",
+        "Scavenger isn't that card.",
     );
   });
 
@@ -908,13 +908,13 @@ describe("partners and pairing (702.124)", () => {
         code: "commander-partner",
         message:
           "Far Traveler and Haunted One are both Backgrounds; a Background is a second " +
-          'commander beside a card that says "Choose a Background".',
+          "commander beside a card that says “Choose a Background”.",
         cardIds: ["c-Far Traveler", "c-Haunted One"],
       },
     ]);
     expect(pairingMessage(zone(LULU, commander()))).toBe(
-      'Lulu, Loyal Hollyphant says "Choose a Background", so the other commander must be a ' +
-        "legendary Background; Kenrith, the Returned King is not one.",
+      "Lulu, Loyal Hollyphant says “Choose a Background”, so the other commander must be a " +
+        "legendary Background; Kenrith, the Returned King isn't one.",
     );
   });
 
@@ -936,7 +936,7 @@ describe("partners and pairing (702.124)", () => {
         code: "commander-eligibility",
         message:
           "Far Traveler is a Background, so it can only be a second commander beside a card " +
-          'that says "Choose a Background".',
+          "that says “Choose a Background”.",
         cardIds: ["c-Far Traveler"],
       },
     ]);
@@ -950,13 +950,13 @@ describe("partners and pairing (702.124)", () => {
 
     expect(pairingMessage(zone(ROSE_TYLER, SUSAN_FOREMAN))).toBe(
       "Rose Tyler has Doctor's companion, so the other commander must be a legendary Time Lord " +
-        "Doctor; Susan Foreman is not one.",
+        "Doctor; Susan Foreman isn't one.",
     );
   });
 
   it("says so when neither commander has any partner ability", () => {
     expect(pairingMessage(zone(commander(), KOZILEK))).toBe(
-      "Kenrith, the Returned King and Kozilek, Butcher of Truth cannot both be commanders; a " +
+      "Kenrith, the Returned King and Kozilek, Butcher of Truth can't both be commanders; a " +
         "second commander needs a partner ability.",
     );
   });
@@ -998,7 +998,7 @@ describe("the oathbreaker zone", () => {
         severity: "error",
         code: "commander-missing",
         message:
-          "Oathbreaker decks need an oathbreaker and a signature spell; the commander zone is " +
+          "Oathbreaker decks need an oathbreaker and a signature spell; the command zone is " +
           "empty.",
       },
     ]);
@@ -1029,7 +1029,7 @@ describe("the oathbreaker zone", () => {
     expect(zone(NAHIRI, SWORDS_TO_PLOWSHARES, commander())[0]).toMatchObject({
       code: "commander-eligibility",
       message:
-        "Kenrith, the Returned King is not a legal oathbreaker in Oathbreaker: an oathbreaker " +
+        "Kenrith, the Returned King isn't a legal oathbreaker in Oathbreaker: an oathbreaker " +
         "must be a planeswalker.",
     });
   });
@@ -1052,8 +1052,7 @@ describe("the oathbreaker zone", () => {
       severity: "error",
       code: "commander-count",
       message:
-        "Oathbreaker decks have one signature spell for each oathbreaker and at most two " +
-        "oathbreakers, so at most two; you have 3.",
+        "Oathbreaker decks have one signature spell per oathbreaker, so at most two; you have 3.",
     });
   });
 
@@ -1072,8 +1071,7 @@ describe("the oathbreaker zone", () => {
 
     expect(issues.map((i) => i.message)).toEqual([
       "Oathbreaker decks have at most two oathbreakers, and only with a partner ability; you have 3.",
-      "Oathbreaker decks have one signature spell for each oathbreaker and at most two " +
-        "oathbreakers, so at most two; you have 3.",
+      "Oathbreaker decks have one signature spell per oathbreaker, so at most two; you have 3.",
     ]);
   });
 
@@ -1193,7 +1191,7 @@ describe("in the engine", () => {
       {
         severity: "error",
         code: "commander-missing",
-        message: "Commander decks need a commander; the commander zone is empty.",
+        message: "Commander decks need a commander; the command zone is empty.",
       },
     ]);
   });

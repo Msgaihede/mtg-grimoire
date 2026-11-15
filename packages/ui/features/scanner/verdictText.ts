@@ -15,7 +15,7 @@ export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
  * above it does.
  */
 export const SCANNER_OPENS_HERE_LATER =
-  "It will open here once that window closes or leaves the scanner.";
+  "It opens here when that window closes or leaves the scanner.";
 
 /**
  * What the engine answers when a scanner session is asked of it on a web page —
@@ -119,5 +119,5 @@ export function neuralSentence(status: ScannerStatus | null): string | null {
   if (status === null) return null;
   const neural = status.neural;
   if (neural.loaded || neural.error === null) return null;
-  return `The card recognizer did not load: ${neural.error}.`;
+  return `The Neural scanner didn't load: ${neural.error}.`;
 }

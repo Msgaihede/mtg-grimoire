@@ -436,7 +436,7 @@ function quickAddLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLin
   if (kind !== "move") return null;
   const wishes = numberField(p.wishes);
   return {
-    text: `Recorded ${plural(numberField(p.copies), "copy", "copies")} for this deck`,
+    text: `Quick-added ${plural(numberField(p.copies), "copy", "copies")} for this deck`,
     detail: wishes > 0 ? `${plural(wishes, "copy", "copies")} off your wishlist` : null,
   };
 }
@@ -792,7 +792,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       // `"custom"` is the literal the backend writes for an uploaded image; anything else is
       // a card id, which is not a thing to print at a reader.
       return {
-        text: to === "custom" ? "Set a custom deck cover" : "Set the deck cover",
+        text: to === "custom" ? "Set a custom deck image" : "Set the deck image",
         detail: null,
       };
     // ⚠️ **`notes` is a reader for old rows and must stay in this file for good.** The column
@@ -948,7 +948,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       const before = numberField(p.from);
       const name = (n: number) => (n === 0 ? "Auto" : `bracket ${n}`);
       return {
-        text: now === 0 ? "Set the bracket to Auto" : `Set the deck to bracket ${now}`,
+        text: now === 0 ? "Set the bracket to Auto" : `Set the bracket to ${now}`,
         detail: before === now ? null : `was ${name(before)}`,
       };
     }

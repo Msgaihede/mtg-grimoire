@@ -109,8 +109,8 @@ export function BuildPanel({
             nothing here touches the collection. */}
         <p className="m-0 max-w-[60ch] text-sm text-dim">
           {commander
-            ? "Name your deck — you’ll add basic lands, and put your commander in its Commander pile, in the editor."
-            : "Name your deck — you’ll add basic lands in the editor."}
+            ? "Name your deck. In the editor, add basic lands and move your commander to the Commander pile."
+            : "Name your deck. Add basic lands in the editor."}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">

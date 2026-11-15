@@ -222,14 +222,14 @@ export function ActivityWidget({ widget, fit, still }: WidgetBodyProps): ReactEl
   if (query.isError) {
     return (
       <Notice title="Couldn't load recent activity." tone="destructive">
-        {ipcError(query.error)} It will retry after your next change.
+        {ipcError(query.error)} Retries after your next change.
       </Notice>
     );
   }
   if (query.isPending) return <Notice title="Loading activity…" />;
   return (
     <Notice title="No activity yet.">
-      Your collection and deck changes will show up here. Collection and wishlist activity is recorded on this device.
+      Your changes show up here. Collection and wishlist activity stays on this device.
     </Notice>
   );
 }

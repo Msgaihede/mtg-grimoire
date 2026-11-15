@@ -385,7 +385,7 @@ export function FilterQuickBar<SortKey extends string>({
               </div>
               <div className={cn("shrink-0", MV_FOLDED[manaValuesFrom])}>
                 <AnchoredPopup
-                  label={`Mana value — ${mvSummary || "any"}`}
+                  label={`Mana value: ${mvSummary || "any"}`}
                   panelLabel="Mana value"
                   align="start"
                   triggerContent={

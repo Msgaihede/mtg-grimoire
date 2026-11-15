@@ -68,7 +68,7 @@ export const COMBOS_PAGE_SIZE = 50;
  * `DeckBracket`'s, in this surface's own words: the feed is fetched at launch, there is no button
  * for it anywhere in the app, so the honest instruction is that nothing needs a press.
  */
-export const COMBOS_NEVER_FETCHED = "Combo data is still downloading. Check back shortly.";
+export const COMBOS_NEVER_FETCHED = "Combo data is still downloading.";
 
 /** An empty answer from a feed that *is* here: Spellbook lists no combo naming this card. The
  *  other half of {@link COMBOS_NEVER_FETCHED}'s split, and the claim that needs the status row. */
@@ -281,5 +281,5 @@ export function emptyCombosSentence(status: ComboStatus | undefined): string {
 
 /** A refused read, in the backend's words — the one state that is neither a list nor an empty. */
 export function combosReadFailed(error: string): string {
-  return `Couldn't read the combos — ${error}.`;
+  return `Couldn't read the combos — ${error}`;
 }

@@ -119,7 +119,7 @@ export function TagPicker({ tags }: { tags: TagFilter }) {
         notify.error(`Couldn't hide “${hit.label}”`, { body: ipcError(e) });
         throw e;
       }
-      notify.success(`Hid “${hit.label}”`, { body: "Unhide tags in Settings" });
+      notify.success(`Hid “${hit.label}”`, { body: "Unhide tags in Settings › Tags" });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tag-children"] }),
         queryClient.invalidateQueries({ queryKey: ["tag-search"] }),

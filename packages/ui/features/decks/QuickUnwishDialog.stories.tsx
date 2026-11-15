@@ -124,7 +124,7 @@ export const Ambiguous: Story = {
 
     // The affirmative quotes the number the menu row quoted, so a reader who pressed
     // `Quick add 4 and remove from wishlist` meets the same 4 here.
-    await userEvent.click(canvas.getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Add 4 copies" }));
     await expect(args.onConfirm).toHaveBeenCalledWith(31);
   },
 };
@@ -165,7 +165,7 @@ export const EveryPrinting: Story = {
     await userEvent.click(
       canvas.getByRole("radio", { name: "Wishlist · Any printing · Any finish · 3 copies" }),
     );
-    await userEvent.click(canvas.getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Add 4 copies" }));
     await expect(args.onConfirm).toHaveBeenCalledWith(34);
   },
 };
@@ -188,7 +188,7 @@ export const PickingTheOtherLine: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` }));
-    await userEvent.click(canvas.getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Add 4 copies" }));
 
     await expect(args.onConfirm).toHaveBeenCalledWith(32);
     await expect(args.onConfirm).toHaveBeenCalledTimes(1);
@@ -229,7 +229,7 @@ export const OneCopy: Story = {
     await waitFor(
       async () =>
         await expect(
-          await canvas.findByRole("button", { name: "Record 1 copy" }),
+          await canvas.findByRole("button", { name: "Add 1 copy" }),
         ).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
@@ -257,9 +257,9 @@ export const Refused: Story = {
     );
 
     await expect(canvas.getByRole("alert")).toHaveTextContent(
-      "Couldn't record those copies — That wishlist line is not there any more.",
+      "Couldn't add those copies — That wishlist line is not there any more.",
     );
-    await expect(canvas.getByRole("button", { name: "Record 4 copies" })).toBeEnabled();
+    await expect(canvas.getByRole("button", { name: "Add 4 copies" })).toBeEnabled();
   },
 };
 
@@ -274,9 +274,9 @@ export const Recording: Story = {
   args: { pending: true },
   play: async ({ canvas }) => {
     await waitFor(
-      async () => await expect(await canvas.findByRole("button", { name: "Recording…" })).toBeVisible(),
+      async () => await expect(await canvas.findByRole("button", { name: "Adding…" })).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
-    await expect(canvas.getByRole("button", { name: "Recording…" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Adding…" })).toBeDisabled();
   },
 };

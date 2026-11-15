@@ -103,7 +103,7 @@ describe("ChromeStatus", () => {
     // keeps that break, and a normalized comparison would pass even if the join lost it.
     fireHover(line());
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "D:\\app\\data\n12 card images couldn't be saved to the cache — the data folder may be read-only or full.",
+      "D:\\app\\data\n12 card images couldn't be saved. The data folder may be read-only or full.",
       { normalizeWhitespace: false },
     );
     fireLeave(line());
@@ -117,7 +117,7 @@ describe("ChromeStatus", () => {
     );
     fireHover(line());
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "D:\\app\\data\n1 card image couldn't be saved to the cache — the data folder may be read-only or full.",
+      "D:\\app\\data\n1 card image couldn't be saved. The data folder may be read-only or full.",
       { normalizeWhitespace: false },
     );
     fireLeave(line());
@@ -151,7 +151,7 @@ describe("ChromeStatus", () => {
 
   it("says a Refresh found nothing, and only when there is nothing louder to say", async () => {
     const { rerender } = render(<ChromeStatus {...props({ upToDate: true })} />);
-    expect(screen.getByText(/already up to date/i)).toBeInTheDocument();
+    expect(screen.getByText(/^up to date$/i)).toBeInTheDocument();
 
     // An error banner is showing below; repeating a cheerful line beside it is noise.
     rerender(<ChromeStatus {...props({ upToDate: true, hasError: true })} />);
@@ -159,7 +159,7 @@ describe("ChromeStatus", () => {
     // vanishing: `AnimatePresence` holds the element until its exit finishes, so it is still
     // in the document for the frame after the rerender. The claim is unchanged — a line that
     // never left would still time out here — only the moment it is read.
-    await waitFor(() => expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/^up to date$/i)).not.toBeInTheDocument());
   });
 
   /**
@@ -314,7 +314,7 @@ describe("ChromeStatus", () => {
     render(<ChromeStatus {...props({ deviceSync: "offline" })} />);
     const marker = screen.getByLabelText("Sync is offline");
     expect(marker).toHaveAttribute("aria-live", "polite");
-    const said = within(marker).getByText(/Sync disconnected/i);
+    const said = within(marker).getByText(/Sync is offline/i);
     expect(said).toHaveClass("sr-only");
   });
 

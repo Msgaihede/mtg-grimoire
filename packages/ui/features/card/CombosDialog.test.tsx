@@ -468,21 +468,21 @@ it("says a refused card read was refused, in the backend's words", async () => {
   render(wrap(<CombosDialog />));
 
   expect(
-    await screen.findByText("Couldn't read this card — the database is locked."),
+    await screen.findByText("Couldn't read this card — the database is locked"),
   ).toBeInTheDocument();
-  expect(screen.queryByText(/no longer in the card database/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no longer in the card data/i)).not.toBeInTheDocument();
   expect(combosForCard).not.toHaveBeenCalled();
 });
 
 /** The other half: `card_detail` answering `null` is the real "not in the corpus" state. */
-it("says a printing the corpus has dropped is no longer in the card database", async () => {
+it("says a printing the corpus has dropped is no longer in the card data", async () => {
   useAppStore.setState({ selectedCardId: "c1" });
   useAppStore.getState().openCardOverlay("combos");
   cardDetail.mockResolvedValue(null);
   render(wrap(<CombosDialog />));
 
   expect(
-    await screen.findByText("This printing is no longer in the card database."),
+    await screen.findByText("This printing is no longer in the card data."),
   ).toBeInTheDocument();
 });
 
@@ -799,7 +799,7 @@ it("says a combo also needs something no card list can name", async () => {
   renderWithCard();
   await combosList();
 
-  expect(screen.getByText(/can't be matched to a specific card/i)).toBeInTheDocument();
+  expect(screen.getByText(/not tied to a specific card/i)).toBeInTheDocument();
 });
 
 it("marks a piece the reader does not own, in words, in the pane and in the rail", async () => {

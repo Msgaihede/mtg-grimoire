@@ -229,8 +229,8 @@ function SandboxButton({
       disabled={onSandbox === undefined}
       title={
         on
-          ? "Sandbox on: move, tap and change any card by hand, outside the rules"
-          : "Sandbox off: only the rules' plays. Turn it on to change cards by hand"
+          ? "Sandbox on: change any card by hand, outside the rules"
+          : "Sandbox off: only legal plays. Turn it on to change cards by hand"
       }
       onClick={() => onSandbox?.(!on)}
       className={cn(
@@ -296,7 +296,7 @@ function StopsButton({
             LAYER.header,
           )}
         >
-          <span className="text-xs text-dim">Stop for me at these steps, to respond.</span>
+          <span className="text-xs text-dim">Stop at these steps so you can respond.</span>
           {(["you", "opponent"] as GameSeat[]).map((seat) => (
             <div
               key={seat}

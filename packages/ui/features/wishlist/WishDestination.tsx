@@ -554,7 +554,7 @@ function NewFolderPanel({
             `EditWish.tsx`'s composition, and the only thing that differs is which question the
             list is answering — there, where a wish goes; here, where a folder goes. */}
         <MoveToFolder
-          label="Where the new folder goes"
+          label="Parent folder"
           nodes={nodes}
           // The parent chosen so far, which `MoveToFolder` draws as `Here now` and makes inert.
           // Re-picking it would write nothing anyway, and the mark is what says which row the

@@ -236,7 +236,7 @@ export const AmbiguousWish: Story = {
     await expect(canvas.queryByRole("alert")).toBeNull();
 
     await userEvent.click(
-      canvas.getByRole("checkbox", { name: "Also take these off my wishlist" }),
+      canvas.getByRole("checkbox", { name: "Also remove these from your wishlist" }),
     );
     await expect(canvas.queryByText("2 wishlist items match (unchanged)")).toBeNull();
   },
@@ -275,7 +275,7 @@ export const Reading: Story = {
       async () => expect(await canvas.findByText("Finding missing cards…")).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
-    await expect(canvas.queryByText(/None of the missing cards are in the card database/)).toBeNull();
+    await expect(canvas.queryByText(/None of the missing cards are in your card data/)).toBeNull();
   },
 };
 
@@ -312,7 +312,7 @@ export const NothingToRecord: Story = {
   play: async ({ canvas }) => {
     await waitFor(
       async () =>
-        expect(await canvas.findByText(/None of the missing cards are in the card database/)).toBeVisible(),
+        expect(await canvas.findByText(/None of the missing cards are in your card data/)).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
 
@@ -345,12 +345,12 @@ export const Recorded: Story = {
       async () =>
         expect(
           await canvas.findByText(
-            "Recorded 7 copies of 3 cards into Boros Burn. 2 copies off your wishlist.",
+            "Added 7 copies of 3 cards to Boros Burn. 2 copies off your wishlist.",
           ),
         ).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     // The empty list under it is explained rather than left looking like a failed read.
-    await expect(canvas.getByText(/None of the missing cards are in the card database/)).toBeVisible();
+    await expect(canvas.getByText(/None of the missing cards are in your card data/)).toBeVisible();
   },
 };

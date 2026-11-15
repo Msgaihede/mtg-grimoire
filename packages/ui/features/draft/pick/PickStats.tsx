@@ -42,7 +42,7 @@ export function PickStats({ cards }: { cards: readonly DraftCard[] }): JSX.Eleme
           </span>
         </div>
         <p className="m-0 text-xs text-dim">
-          Your deck’s picks only — the sideboard isn’t counted.
+          Counts your deck only, not the sideboard.
         </p>
       </div>
       <Curve curve={stats.curve} creatures={stats.curveCreatures} average={stats.average} />
@@ -202,7 +202,7 @@ function Colors({
         </div>
       )}
       <p className="text-[0.6875rem] text-dim">
-        Nonland cards. A card of two colors is a slice of its own, striped in both.
+        Nonland cards. Two-color cards get their own striped slice.
       </p>
     </StatsCard>
   );

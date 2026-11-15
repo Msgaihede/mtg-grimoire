@@ -350,7 +350,7 @@ function placeLine(look: ZoneLook, opponent: boolean, index: number | null): str
 }
 
 function emptyLine(look: ZoneLook, total: number, filtering: boolean): string {
-  if (filtering) return "No card in the library has that in its name.";
+  if (filtering) return "No cards in the library match.";
   if (look.zone === "graveyard") return "The graveyard is empty.";
   if (look.zone === "exile") return "Nothing is in exile.";
   if (total === 0) return "The library is empty.";

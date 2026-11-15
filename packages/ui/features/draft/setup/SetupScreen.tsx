@@ -233,7 +233,7 @@ export function SetupScreen({
     const list = readCubeList(held.cube.list);
     if (list.lines.length === 0) {
       setError(
-        "Nothing in the list reads as a card — write one per line, like “1 Lightning Bolt”.",
+        "No cards found in the list. Write one per line, like “1 Lightning Bolt”.",
       );
       return;
     }
@@ -330,7 +330,7 @@ export function SetupScreen({
           <ConfirmDialog
             open={replacing !== null}
             title="Replace the draft in progress?"
-            confirmLabel={mode === "sealed" ? "Open the new pool" : "Start the new draft"}
+            confirmLabel={mode === "sealed" ? "Open new pool" : "Start new draft"}
             // Nothing typed: the question is one press away from the start it guards, and what
             // it costs is named in the sentence.
             typeToConfirm={false}
@@ -344,7 +344,7 @@ export function SetupScreen({
             onClose={() => setReplacing(null)}
           >
             {replacing !== null &&
-              `${replacing.saved.label || MODE_TITLE[replacing.saved.mode]} (${MODE_TITLE[replacing.saved.mode]} · ${whereOf(replacing.saved)}) is waiting to be resumed. The app keeps one draft at a time: starting this one abandons it for good.`}
+              `${replacing.saved.label || MODE_TITLE[replacing.saved.mode]} (${MODE_TITLE[replacing.saved.mode]} · ${whereOf(replacing.saved)}) is in progress. Only one draft is kept: starting this one abandons it for good.`}
           </ConfirmDialog>
           <div className="mt-auto flex flex-col gap-2 pt-2">
             <PrimaryButton ready={ready} busy={busy} onPress={() => void start()}>
@@ -378,8 +378,8 @@ function ModeRules({
   return (
     <p className="m-0 text-xs leading-relaxed text-dim">
       {mode === "commander"
-        ? `You and ${bots} ${bots === 1 ? "bot" : "bots"}, three packs each, two cards a pick. Build a ${COMMANDER_DECK_SIZE}-card deck and put your commander in its Commander pile. Commander Legends' sets are made for it; any set works.`
-        : "You and one bot, three packs each, shuffled into one face-down stack dealt into three piles. On your turn look at a pile: take it, or decline it and look at the next. Declining the last takes the stack's top card."}
+        ? `You and ${bots} ${bots === 1 ? "bot" : "bots"}, three packs each, two cards a pick. Build a ${COMMANDER_DECK_SIZE}-card deck with a commander. Any set works; Commander Legends sets are made for it.`
+        : "You and one bot share a face-down stack of six packs, dealt into three piles. On your turn, take a pile or decline it and look at the next. Decline the last and you take the stack's top card."}
     </p>
   );
 }
@@ -445,8 +445,7 @@ function CubeList({
         className={cn(FIELD, "h-auto min-h-80 flex-1 resize-none py-2 font-mono leading-relaxed")}
       />
       <p className="m-0 text-xs text-dim">
-        One card per line — “1 Lightning Bolt”, a set hint like “(M10) 146” if you want a printing.
-        Lists from Moxfield, Arena and CubeCobra paste as they are.
+        One card per line, like “1 Lightning Bolt” or “1 Lightning Bolt (M10) 146” for a printing. Moxfield, Arena and CubeCobra lists work as pasted.
       </p>
     </div>
   );
@@ -556,8 +555,7 @@ function CubeFields({
         />
       </div>
       <p className="m-0 text-xs text-dim">
-        You and {cube.seats - 1} {cube.seats === 2 ? "bot" : "bots"}; the deal takes{" "}
-        <span className="font-mono tabular-nums">{need}</span> cards from the list.
+        You and {cube.seats - 1} {cube.seats === 2 ? "bot" : "bots"}. Uses <span className="font-mono tabular-nums">{need}</span> cards from the list.
       </p>
     </div>
   );

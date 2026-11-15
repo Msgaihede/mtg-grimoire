@@ -305,7 +305,7 @@ function SharedView() {
                was. Swapping the binder for the refusal would take the cards away mid-read for a
                blip; the sentence says what happened and the copy on screen stays. */
             <p role="status" className="mt-4 text-sm text-dim">
-              Couldn't check for an update: {ipcError(share.error)}
+              Couldn't check for an update — {ipcError(share.error)}
             </p>
           )}
           <Binder
@@ -387,8 +387,7 @@ function Empty({ onPaste }: { onPaste: () => void }) {
         onClick={onPaste}
         className={cn(BUTTON, "mt-6 border-accent/50 text-accent")}
       >
-        <Link2 className="size-4" aria-hidden />
-        Open a shared collection
+        <Link2 className="size-4" aria-hidden />Open a shared collection…
       </button>
     </div>
   );
@@ -463,8 +462,7 @@ function Switcher({
         onClick={onPaste}
         className={cn(BUTTON, "ml-auto border-border text-dim hover:text-text")}
       >
-        <Link2 className="size-4" aria-hidden />
-        Open another
+        <Link2 className="size-4" aria-hidden />Open another…
       </button>
     </div>
   );
@@ -493,8 +491,7 @@ function Refused({
     <div className="max-w-[46ch] py-14">
       <p className="font-heading text-[1.375rem] leading-snug">{sentence}</p>
       <p className="mt-3 text-sm text-dim">
-        A shared collection becomes unavailable when its owner withdraws it or their subscription
-        ends.
+        A shared collection stops working when its owner withdraws it or their membership ends.
       </p>
       <div className="mt-6 flex flex-wrap gap-2">
         <button type="button" onClick={onRetry} className={cn(BUTTON, "border-border")}>
@@ -502,8 +499,7 @@ function Refused({
           Try again
         </button>
         <button type="button" onClick={onClose} className={cn(BUTTON, "border-border")}>
-          <X className="size-4" aria-hidden />
-          Close this collection
+          <X className="size-4" aria-hidden />Close collection
         </button>
       </div>
     </div>
@@ -677,8 +673,7 @@ function Binder({
               onClick={onClose}
               className={cn(BUTTON, "border-border text-dim hover:text-text")}
             >
-              <X className="size-4" aria-hidden />
-              Close this collection
+              <X className="size-4" aria-hidden />Close collection
             </button>
           </div>
         </div>
@@ -805,8 +800,7 @@ function Binder({
             onClick={() => setSending(true)}
             className={cn(BUTTON, "ml-auto border-accent/50 text-accent")}
           >
-            <Heart className="size-4" aria-hidden />
-            Add to wishlist
+            <Heart className="size-4" aria-hidden />Add to wishlist…
           </button>
           <button
             type="button"
@@ -834,7 +828,7 @@ function Binder({
 
       {shown.length === 0 ? (
         <p className="mt-8 text-sm text-dim">
-          No matching cards found. Try widening your search or choosing another folder.
+          No cards match. Try a broader search or another folder.
         </p>
       ) : (
         <ul

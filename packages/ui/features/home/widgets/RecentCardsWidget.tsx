@@ -74,7 +74,7 @@ export const TILE_GAP_PX = 6;
 export const MIN_TILE_PX = 40;
 
 const PENDING = "Loading recent cards…";
-export const EMPTY = "Cards you open will show up here.";
+export const EMPTY = "Cards you open show up here.";
 
 /**
  * How many tiles a card of this footprint draws — the design's rule, verbatim: the reader's

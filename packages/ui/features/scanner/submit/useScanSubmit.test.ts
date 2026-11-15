@@ -194,7 +194,7 @@ describe("useScanSubmit", () => {
       expect(result.current.run).toBeNull();
       expect(result.current.error).toBe(SCAN_TOO_SHORT);
       expect(SCAN_TOO_SHORT).toBe(
-        "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+        "Not enough scanned yet. Hold the card under the camera, then press again.",
       );
     },
   );

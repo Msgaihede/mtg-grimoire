@@ -132,9 +132,9 @@ export type TheoryTier = "exact" | "name" | "unplanned";
  * import a component file to get them.
  */
 export const THEORY_TIER_NAMES: Readonly<Record<TheoryTier, string>> = {
-  exact: "Exact Match",
-  name: "Art Mismatch",
-  unplanned: "No Match",
+  exact: "Exact match",
+  name: "Art mismatch",
+  unplanned: "No match",
 };
 
 /** What the plan says about one live row: which tier it is in and how far it is from the plan

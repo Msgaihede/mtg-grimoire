@@ -226,7 +226,7 @@ describe("PlaytestingPage as a lobby's host", () => {
     await seatAndStart();
     await screen.findByRole("region", { name: "Playtest" });
     await screen.findByRole("button", { name: /keep/i });
-    await userEvent.click(screen.getByRole("button", { name: "Back to the playtest setup" }));
+    await userEvent.click(screen.getByRole("button", { name: "Back to setup" }));
     await userEvent.click(await screen.findByRole("button", { name: "End game" }));
     await waitFor(() => expect(ipcMock.lobbyLeave).toHaveBeenCalledTimes(1));
   });
@@ -264,8 +264,8 @@ describe("GoldfishPage over a kept lobby game", () => {
     const game = await hostGame();
     const client = goldfish();
     const dialog = await screen.findByRole("dialog", { name: "Close your lobby game?" });
-    expect(dialog).toHaveTextContent("ends that game for everyone, and the lobby closes");
-    await userEvent.click(screen.getByRole("button", { name: "Close it and goldfish" }));
+    expect(dialog).toHaveTextContent("ends it for everyone and closes the lobby");
+    await userEvent.click(screen.getByRole("button", { name: "Close and goldfish" }));
     await waitFor(() => expect(ipcMock.lobbyLeave).toHaveBeenCalledTimes(1));
     expect(game.live()).toBe(false);
     await waitFor(() => expect(client.getQueryData(LOBBY_KEY)).toBeNull());

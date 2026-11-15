@@ -68,7 +68,7 @@ export const Phone: Story = {
     // The paragraph for a browser that was one of the reader's paired devices: an *if*, because
     // the page cannot know, and where the old device's entry is removed.
     await expect(alert).toHaveTextContent(/If this browser was paired with your other devices/);
-    await expect(alert).toHaveTextContent(/Remove the old entry in Settings, under Sync/);
+    await expect(alert).toHaveTextContent(/remove the old entry in Settings › Sync/);
     await expect(canvas.getByRole("region")).toHaveAccessibleName(
       "Your browser cleared MTG Grimoire's saved data",
     );

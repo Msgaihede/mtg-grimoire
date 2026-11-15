@@ -122,11 +122,11 @@ export const Docked: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const reset = await canvas.findByRole("button", { name: "Reset all — 3 filters active" });
+    const reset = await canvas.findByRole("button", { name: "Reset all: 3 filters active" });
     await expect(reset.querySelector("[data-count-pill]")).toHaveTextContent("3");
     await expect(
       canvas
-        .getByRole("button", { name: "Show filters — 3 active" })
+        .getByRole("button", { name: "Show filters, 3 active" })
         .querySelector("[data-count-pill]"),
     ).toHaveTextContent("3");
     await expect(canvas.getByRole("button", { name: STACK_PRINTINGS })).toHaveAttribute(

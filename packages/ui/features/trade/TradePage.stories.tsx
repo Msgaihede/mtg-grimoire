@@ -156,8 +156,8 @@ export const Finished: Story = {
 
     const section = await canvas.findByRole("region", { name: "Trade 2" });
     await expect(section).toHaveTextContent(
-      "Finished and archived, so nothing here can be edited. Finishing it took 3 cards out of " +
-        "your collection, added 3 cards to your collection and took 1 card off your wishlist.",
+      "Finished and archived, so it can't be edited. Finishing it removed 3 cards from " +
+        "your collection, added 3 cards to your collection and removed 1 card from your wishlist.",
     );
     await expect(within(section).getByRole("region", { name: "You gave" })).toBeVisible();
     await expect(within(section).getByRole("region", { name: "They gave" })).toBeVisible();
@@ -187,7 +187,7 @@ export const ArchivedUnfinished: Story = {
 
     const section = await canvas.findByRole("region", { name: "Trade 1" });
     await expect(section).toHaveTextContent(
-      "Archived without finishing, so nothing here can be edited.",
+      "Archived without finishing, so it can't be edited.",
     );
     await expect(within(section).getByRole("region", { name: "You give" })).toBeVisible();
     await expect(within(section).getByText("You owe them")).toBeVisible();
@@ -208,19 +208,19 @@ export const FinishDialog: Story = {
 
     const dialog = await canvas.findByRole("dialog", { name: "Finish trade" });
     const box = (name: string) => within(dialog).getByRole("checkbox", { name });
-    await expect(box("Take the cards you gave out of your collection")).toBeChecked();
+    await expect(box("Remove the cards you gave from your collection")).toBeChecked();
     await expect(box("Add the cards you received to your collection")).toBeChecked();
-    await expect(box("Take the cards you received off your wishlist")).toBeChecked();
-    await expect(box("Put the cards you gave on your wishlist")).not.toBeChecked();
+    await expect(box("Remove the cards you received from your wishlist")).toBeChecked();
+    await expect(box("Add the cards you gave to your wishlist")).not.toBeChecked();
 
     await expect(
-      box("Take the cards you gave out of your collection"),
+      box("Remove the cards you gave from your collection"),
     ).toHaveAccessibleDescription("6 cards. All of them are in your collection.");
     await expect(
       box("Add the cards you received to your collection"),
     ).toHaveAccessibleDescription("5 cards, in the printing and finish shown in the trade.");
     await expect(
-      box("Take the cards you received off your wishlist"),
+      box("Remove the cards you received from your wishlist"),
     ).toHaveAccessibleDescription("2 of them are on it: Urza's Saga, Tarmogoyf.");
     await expect(dialog).toHaveTextContent("You give$64.396 cards");
     await expect(dialog).toHaveTextContent("They give$87.095 cards");
@@ -245,8 +245,8 @@ export const FinishingATrade: Story = {
     await expect(await within(section).findByRole("button", { name: "Reopen" })).toBeVisible();
     // Six out, five in, and the two that were wished for are no longer wished for.
     await expect(section).toHaveTextContent(
-      "Finishing it took 6 cards out of your collection, added 5 cards to your collection " +
-        "and took 2 cards off your wishlist.",
+      "Finishing it removed 6 cards from your collection, added 5 cards to your collection " +
+        "and removed 2 cards from your wishlist.",
     );
     const pane = canvas.getByRole("complementary", { name: "Trades" });
     await waitFor(() => expect(within(pane).getByText("Open · 1")).toBeVisible());

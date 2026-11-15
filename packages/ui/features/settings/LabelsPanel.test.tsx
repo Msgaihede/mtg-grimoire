@@ -211,7 +211,7 @@ describe("LabelsPanel", () => {
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
         tone: "success",
-        title: "Label “Cut candidate” deleted",
+        title: "Deleted label “Cut candidate”",
       }),
     );
   });

@@ -168,7 +168,7 @@ export const HOME_CANVAS_ATTR = "data-home-canvas";
 
 /** The sentence under the header while Customize is on — the design's, word for word. */
 export const CUSTOMIZE_HINT =
-  "Drag a widget to move it, pull a corner to resize, or add widgets from the catalogue.";
+  "Drag a widget to move it. Pull a corner to resize.";
 
 /**
  * The page's own header controls — Add widget, Reset and Customize share one box so the row reads
@@ -855,7 +855,7 @@ export function HomePage(): ReactElement {
       */}
       {ready && empty && (
         <p className="text-sm text-dim">
-          Your home page is empty. Add a widget or reset to default widgets.
+          Your Home page is empty. Add a widget or reset to the defaults.
         </p>
       )}
 

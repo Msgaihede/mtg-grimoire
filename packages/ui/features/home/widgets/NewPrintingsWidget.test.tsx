@@ -437,7 +437,7 @@ describe("the sentences", () => {
     draw();
 
     expect(await screen.findByText(NO_DECKS)).toBeInTheDocument();
-    expect(screen.queryByText(/has been reprinted/)).toBeNull();
+    expect(screen.queryByText(/^No reprints in the last/)).toBeNull();
   });
 
   it("says nothing was reprinted when decks are watched and the list is empty", async () => {
@@ -447,7 +447,7 @@ describe("the sentences", () => {
 
     expect(
       await screen.findByText(
-        "Nothing in the 3 decks you watch has been reprinted in the last 90 days. New printings arrive with each card data sync.",
+        "No reprints in the last 90 days for the 3 decks you watch. New printings arrive with each card data sync.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(NO_DECKS)).toBeNull();
@@ -462,7 +462,7 @@ describe("the sentences", () => {
 
     expect(
       await screen.findByText(
-        "Nothing in the 1 deck you watch has been reprinted in the last 30 days. New printings arrive with each card data sync.",
+        "No reprints in the last 30 days for the 1 deck you watch. New printings arrive with each card data sync.",
       ),
     ).toBeInTheDocument();
   });
@@ -483,7 +483,7 @@ describe("the sentences", () => {
         "Couldn't load new printings — BUSY: the database is being written to",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/has been reprinted/)).toBeNull();
+    expect(screen.queryByText(/^No reprints in the last/)).toBeNull();
     expect(screen.queryByText(NO_DECKS)).toBeNull();
     expect(screen.queryByText("Loading new printings…")).toBeNull();
   });

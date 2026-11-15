@@ -69,7 +69,7 @@ import { WishlistPage } from "./WishlistPage";
 import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 
-/** Wishes for cards of one colour — `Colour: Red`. */
+/** Wishes for cards of one colour — `Color: Red`. */
 const REDS: WishlistFolder = {
   id: 1,
   parentId: null,
@@ -216,7 +216,7 @@ describe("WishlistPage — folder rules", () => {
     const { container } = wrap(<WishlistPage />);
     const reds = await findHeading("Reds");
     const badge = await waitFor(() =>
-      within(reds).getByRole("img", { name: /This folder's rules: Colour: Red\./ }),
+      within(reds).getByRole("img", { name: /This folder's rules: Color: Red\./ }),
     );
     await waitFor(() =>
       expect(badge).toHaveAccessibleName(expect.stringContaining("3 cards don't match")),

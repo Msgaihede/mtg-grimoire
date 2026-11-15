@@ -312,7 +312,7 @@ Maybeboard
 
     expect(plan.parseIssues).toEqual(parsed.issues);
     expect(plan.parseIssues).toEqual([
-      { lineNumber: 2, raw: "0 Shock", reason: "Quantity can't be zero." },
+      { lineNumber: 2, raw: "0 Shock", reason: "quantity can't be zero" },
     ]);
   });
 

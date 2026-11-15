@@ -710,7 +710,7 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
     return {
       ...row,
       disabled: true,
-      reason: "this printing has left the card database",
+      reason: "this printing is no longer in the card data",
       onSelect: () => {},
     };
   }
@@ -721,7 +721,7 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
     return {
       ...row,
       disabled: true,
-      reason: "you are already looking at them",
+      reason: "already open",
       onSelect: () => {},
     };
   }

@@ -41,7 +41,7 @@ describe("ScanSoundsPanel", () => {
     expect(screen.getByRole("region", { name: "Scan sounds" })).toBeInTheDocument();
     await waitFor(() => expect(box("Jackpot")).toHaveValue("1000"));
     expect(box("Tier 1")).toHaveValue("1");
-    expect(screen.getByText(/TCGplayer \(USD\)/)).toBeInTheDocument();
+    expect(screen.getByText(/TCGplayer’s \(USD\)/)).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /Play a sound/ })).toHaveAttribute(
       "aria-checked",
       "true",

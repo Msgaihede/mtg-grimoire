@@ -331,7 +331,7 @@ export const DeckNotesPanel = memo(function DeckNotesPanel({
         const gone = notes.notes.find((note) => note.id === id);
         notes.remove.mutate(id, {
           onSuccess: () =>
-            notify.success(gone ? `Deleted the note “${noteTitle(gone)}”` : "Deleted the note"),
+            notify.success(gone ? `Deleted note “${noteTitle(gone)}”` : "Deleted note"),
         });
       }}
       onAttach={(noteId, oracleId) => notes.attach.mutate({ noteId, oracleId })}

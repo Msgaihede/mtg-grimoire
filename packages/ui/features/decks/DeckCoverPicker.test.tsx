@@ -238,7 +238,7 @@ describe("DeckCoverPicker", () => {
     await userEvent.type(screen.getByLabelText("Search every card"), "bolt");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't search the cards — Database is busy.",
+      "Couldn't search — Database is busy.",
     );
     // And it does not also claim the word matched nothing — one sentence per thing that happened.
     expect(screen.queryByText(/No card matches/)).toBeNull();

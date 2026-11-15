@@ -345,7 +345,7 @@ describe("DecksWidget", () => {
 
       draw(null, { fit: fitFor(4, 3) });
 
-      expect(screen.getByText(/3 copies have no price listed\./)).toBeInTheDocument();
+      expect(screen.getByText(/3 copies unpriced\./)).toBeInTheDocument();
     });
 
     it("draws no price note on a panel narrower than a band", () => {
@@ -501,7 +501,7 @@ describe("DecksWidget", () => {
       draw();
 
       expect(
-        screen.getByText(/No decks found\. Build a deck on the Decks page/),
+        screen.getByText(/No decks yet\. Build one on the Decks page/),
       ).toBeInTheDocument();
     });
 
@@ -577,7 +577,7 @@ describe("DecksWidget", () => {
 
       expect(screen.queryByRole("button", { name: "Decks to pin" })).toBeNull();
       expect(
-        screen.getByText("Choose Pinned under Which decks to pick the decks this widget shows."),
+        screen.getByText("Set Which decks to Pinned to pick decks."),
       ).toBeInTheDocument();
     });
 

@@ -282,7 +282,7 @@ export function TrayBar({
                   label={folder.name}
                   current={folder.id === folderId}
                   indent={depth}
-                  note={folder.locked ? "set aside" : undefined}
+                  note={folder.locked ? "locked" : undefined}
                   onPick={() => {
                     onFolder(folder.id);
                     closeFolders();

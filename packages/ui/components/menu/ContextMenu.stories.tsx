@@ -245,7 +245,7 @@ const WISH_FOLDERS: WishlistFolder[] = [
  *  rather than reached by index, because two stories are *about* which of the two they are. */
 const COMMANDER_ZONE: DeckCategory = deckCategory("commander");
 /**
- * **`cardCount` is spelled out because `Clear stack…` reads it** — every copy this pile holds,
+ * **`cardCount` is spelled out because `Clear category…` reads it** — every copy this pile holds,
  * which since user schema v53 is one list's and the same number the delete confirmation quotes.
  * A pile at zero draws a greyed row, which is {@link EmptyPileCannotBeCleared}'s subject; this
  * one holds cards, so the row is live here.
@@ -317,7 +317,7 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     labels: LABELS,
     addLabel: (cards) => act(`add-label:${cards.map((card) => card.cardId).join(",")}`),
     // The stepper's zero by another road — there is no `remove` mutation in this app, because
-    // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
+    // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear category…`: one
     // card is one add to put back.
     remove: (card) => act(`remove:${card.cardId}`),
     // Issue #592's row, as a deck that keeps a plan wires it: `DECK_CARD` is on the Actual list,
@@ -678,7 +678,7 @@ export const GreyedPrintings: Story = {
     await expect(row).toHaveAttribute("aria-disabled", "true");
     await expect(row).not.toHaveAttribute("disabled");
     await expect(
-      within(row).getByText("this printing has left the card database"),
+      within(row).getByText("this printing is no longer in the card data"),
     ).toBeInTheDocument();
 
     // **Read, and never landed on** — `menuRowsIn` filters on exactly that attribute, so the
@@ -1010,7 +1010,7 @@ export const Category: Story = {
       "Import cards…",
       "Export cards…",
       "Deactivate",
-      "Clear stack…",
+      "Clear category…",
       "Delete…",
     ]) {
       await expect(canvas.getByRole("menuitem", { name })).toBeVisible();
@@ -1051,7 +1051,7 @@ export const PredefinedZone: Story = {
     // And the clear is present too, which is the row that shows the absences above are the
     // *backend's* answer rather than a rule about predefined zones: nothing refuses a clear, so
     // nothing takes it away. Emptying the Sideboard between two rounds is the obvious case.
-    await expect(canvas.getByRole("menuitem", { name: "Clear stack…" })).toBeVisible();
+    await expect(canvas.getByRole("menuitem", { name: "Clear category…" })).toBeVisible();
   },
 };
 
@@ -1076,7 +1076,7 @@ export const EmptyPileCannotBeCleared: Story = {
   },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
-    const row = await canvas.findByRole("menuitem", { name: /Clear stack…/ });
+    const row = await canvas.findByRole("menuitem", { name: /Clear category…/ });
     await waitFor(async () => await expect(row).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(row).toHaveAttribute("aria-disabled", "true");
@@ -1101,7 +1101,7 @@ export const ClearingAPileAsksFirst: Story = {
   },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
-    const row = await canvas.findByRole("menuitem", { name: "Clear stack…" });
+    const row = await canvas.findByRole("menuitem", { name: "Clear category…" });
     await waitFor(async () => await expect(row).toBeVisible(), { timeout: FRAME_WAIT });
 
     await userEvent.click(row);

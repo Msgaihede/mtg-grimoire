@@ -160,7 +160,7 @@ export interface TrayPanelProps {
  * the trade page's Archive is the only other one in the app and a trade is not the collection.
  */
 export const ARCHIVE_TIP =
-  "Keep these scans in Scan history without adding them to your collection";
+  "Save to Scan history without adding to your collection";
 
 /** The collection's own word for its top level — `AddToCollection`'s `rootLabel`, one tree over. */
 const ROOT_LABEL = "Collection";

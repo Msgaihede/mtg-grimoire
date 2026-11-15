@@ -89,10 +89,10 @@ export const FinishDefaults: Story = {
     const box = (name: string) => within(dialog).getByRole("checkbox", { name });
 
     await expect(dialog).toHaveTextContent("Trade 5 · opened 2 Oct 2026");
-    await expect(box("Take the cards you gave out of your collection")).toBeChecked();
-    await expect(box("Put the cards you gave on your wishlist")).not.toBeChecked();
+    await expect(box("Remove the cards you gave from your collection")).toBeChecked();
+    await expect(box("Add the cards you gave to your wishlist")).not.toBeChecked();
     await expect(
-      box("Take the cards you received off your wishlist"),
+      box("Remove the cards you received from your wishlist"),
     ).toHaveAccessibleDescription("2 of them are on it: Urza's Saga, Tarmogoyf.");
 
     // The folder list is the reader's own drawers under the collection's root, and unticking
@@ -118,16 +118,16 @@ export const NothingToTake: Story = {
 
     await expect(
       within(dialog).getByRole("checkbox", {
-        name: "Take the cards you gave out of your collection",
+        name: "Remove the cards you gave from your collection",
       }),
     ).toHaveAccessibleDescription(
-      "2 cards. None of them are in your collection, so nothing is taken.",
+      "2 cards. None are in your collection, so nothing is removed.",
     );
     await expect(
       within(dialog).getByRole("checkbox", {
-        name: "Take the cards you received off your wishlist",
+        name: "Remove the cards you received from your wishlist",
       }),
-    ).toHaveAccessibleDescription("None of them are on your wishlist.");
+    ).toHaveAccessibleDescription("None are on your wishlist.");
   },
 };
 
@@ -152,7 +152,7 @@ export const FinishFromADeck: Story = {
 
     await expect(
       within(dialog).getByRole("checkbox", {
-        name: "Take the cards you gave out of your collection",
+        name: "Remove the cards you gave from your collection",
       }),
     ).toHaveAccessibleDescription(`7 cards. All of them are in your collection. ${note}`);
     await expect(within(dialog).getByText(note)).toBeVisible();
@@ -182,7 +182,9 @@ export const FinishedBefore: Story = {
     const dialog = await canvas.findByRole("dialog", { name: "Finish trade" });
 
     for (const box of within(dialog).getAllByRole("checkbox")) await expect(box).not.toBeChecked();
-    await expect(dialog).toHaveTextContent("This trade was finished once before");
+    await expect(dialog).toHaveTextContent(
+      "This trade was finished before, so every step starts off.",
+    );
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Finish trade" }));
     await waitFor(() => expect(canvas.getByRole("status")).toHaveTextContent("Finished."));

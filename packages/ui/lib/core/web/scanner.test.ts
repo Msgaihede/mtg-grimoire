@@ -780,7 +780,7 @@ describe("the recogniser's files", () => {
         down ? answered("no", { status: 503 }) : answered(NEURAL_TEST_FILES["embedder.onnx"]),
     };
     const s = await scanning(flaky);
-    const sentence = "The Neural scanner's files could not be downloaded: the server answered 503.";
+    const sentence = "Couldn't download the Neural scanner's files: the server returned 503.";
     expect(await s.refusedFrame()).toBe(sentence);
     expect(kinds(s.ports[0])).toEqual(["load"]);
     expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({
@@ -813,18 +813,18 @@ describe("the recogniser's files", () => {
       [PATHS[2]]: () => answered("<!doctype html>", { type: "text/html" }),
     });
     expect(await page.refusedFrame()).toBe(
-      "The Neural scanner's files could not be downloaded: the server answered a page, not the file.",
+      "Couldn't download the Neural scanner's files: the server returned a page, not the file.",
     );
     const longer = new Uint8Array(NEURAL_TEST_FILES["embedder.onnx"].byteLength + 1);
     const long = await scanning({ [PATHS[1]]: () => answered(longer) });
     expect(await long.refusedFrame()).toBe(
-      "The Neural scanner's files could not be downloaded: embedder.onnx is longer than the 600 bytes this version expects.",
+      "Couldn't download the Neural scanner's files: embedder.onnx is longer than the 600 bytes this version expects.",
     );
     const short = await scanning({
       [PATHS[2]]: () => answered(NEURAL_TEST_FILES["gallery.bin"].slice(1)),
     });
     expect(await short.refusedFrame()).toBe(
-      "The Neural scanner's files could not be downloaded: gallery.bin arrived as 899 bytes where 900 were expected.",
+      "Couldn't download the Neural scanner's files: gallery.bin arrived as 899 bytes where 900 were expected.",
     );
     for (const s of [gone, redeployed, page, long, short])
       expect(kinds(s.ports[0])).toEqual(["load"]);

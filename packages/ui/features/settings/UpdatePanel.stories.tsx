@@ -355,7 +355,7 @@ export const CannotUpdateItself: Story = {
     await expect(canvas.queryByRole("button", { name: /^Download/ })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "View on GitHub" })).toBeNull();
     await expect(
-      canvas.getAllByRole("button", { name: "Open the release page" }),
+      canvas.getAllByRole("button", { name: "Open release page" }),
     ).toHaveLength(1);
   },
 };

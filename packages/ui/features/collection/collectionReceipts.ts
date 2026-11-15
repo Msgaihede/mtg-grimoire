@@ -26,7 +26,7 @@ function cardsOf(entries: number, name: string | null): string {
 
 /** `Removed “Sol Ring” from the collection` / `Removed 3 cards from the collection`. */
 export function removedReceipt(entries: number, name: string | null): string {
-  return `Removed ${cardsOf(entries, name)} from the collection`;
+  return `Removed ${cardsOf(entries, name)} from your collection`;
 }
 
 /** `Moved “Sol Ring” to “Trade binder”` / `Moved 3 cards to “Trade binder”`. */

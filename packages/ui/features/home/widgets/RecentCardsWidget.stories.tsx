@@ -139,7 +139,7 @@ export const NothingOpenedYet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText("Cards you open will show up here."),
+      await canvas.findByText("Cards you open show up here."),
     ).toBeInTheDocument();
   },
 };

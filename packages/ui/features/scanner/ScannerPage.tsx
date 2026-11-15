@@ -972,7 +972,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         open={deckRows !== null}
         create={scannedDeck}
         defaultFormatKey={newDeckFormat}
-        intro={`${totalCopies(deckRows ?? [])} scanned copies will be filed into automatic categories. The scans stay in the tray so you can also add them to your collection.`}
+        intro={`${totalCopies(deckRows ?? [])} scanned copies go into automatic categories. They stay in the tray, so you can add them to your collection too.`}
         // A deck made out of the tray is a deck write, and the owner's rule says it out loud,
         // once, with the count — through the dialog's own receipt, so the create is one toast
         // rather than the dialog's `Deck “X” created` and this beside it.

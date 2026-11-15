@@ -8,7 +8,7 @@ import { neuralSentence } from "./verdictText";
  * which come from the card database, and a session with none has nothing to build a filter from.
  */
 export const FILTERS_NEED_NAMES =
-  "Filters need the card database, which the scanner could not read card names from.";
+  "Filters need card names, which the scanner couldn't read from the card data.";
 
 /**
  * The same, **on a host that fetches the scanner's files into a store of its own** (a status
@@ -17,7 +17,7 @@ export const FILTERS_NEED_NAMES =
  * card database had cards, whose cure is that they arrive.
  */
 export const FILTERS_NEED_NAMES_STORE =
-  "Filters need card names, which the scanner does not have yet.";
+  "Filters need card names, which the scanner doesn't have yet.";
 
 /** Why a status with no labels cannot filter, in the words its host's kind of storage allows. */
 function filtersNeedNames(status: ScannerStatus): string {

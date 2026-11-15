@@ -571,7 +571,7 @@ describe("the phone's Scanner page", () => {
       (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     const order = [
       trayBar(),
-      screen.getByRole("group", { name: "How scanning runs" }),
+      screen.getByRole("group", { name: "Scan mode" }),
       cameraBox(),
       startPress,
       screen.getByRole("button", { name: /^Scanned cards, 0 copies/ }),
@@ -655,7 +655,7 @@ describe("the phone's Scanner page", () => {
     // Before a hold, the picture says how it is pressed.
     expect(await within(cameraBox()).findByText(HOLD_TITLE, {}, SETTLE)).toBeInTheDocument();
     expect(
-      within(cameraBox()).getByText("Scanning pauses the moment you let go."),
+      within(cameraBox()).getByText("Scanning pauses when you let go."),
     ).toBeInTheDocument();
     expect(within(cameraBox()).queryByText(SCANNING_CHIP)).toBeNull();
     await act(() => new Promise((r) => setTimeout(r, 150)));
@@ -1076,7 +1076,7 @@ describe("the phone's Scanner page", () => {
       }),
     );
     const dialog = await screen.findByRole("dialog", { name: "New deck" }, SETTLE);
-    expect(within(dialog).getByText(/5 scanned copies will be filed/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/5 scanned copies go into automatic categories/)).toBeInTheDocument();
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Scanned pile");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create deck" }));
 
@@ -1105,7 +1105,7 @@ describe("the phone's Scanner page", () => {
       }),
     );
     const question = await screen.findByRole("dialog", { name: "Clear the tray" }, SETTLE);
-    expect(question).toHaveTextContent("5 scanned copies will leave the tray");
+    expect(question).toHaveTextContent("5 scanned copies will be removed without being added");
     // Nothing has gone yet.
     expect(trayRows()).toHaveLength(3);
 
@@ -1561,7 +1561,7 @@ describe("sending a scan from the Scanner page", () => {
     );
     const shown = picture(dialog).getAttribute("src") ?? "";
     expect(shown).toMatch(/^data:image\/jpeg;base64,/);
-    expect(dialog).toHaveTextContent(`These ${pictures} pictures — the last couple of seconds`);
+    expect(dialog).toHaveTextContent(`these ${pictures} pictures (the last couple of seconds`);
 
     const send = within(dialog).getByRole("button", { name: "Send scan" });
     expect(send).toHaveAttribute("aria-disabled", "true");
@@ -1580,7 +1580,7 @@ describe("sending a scan from the Scanner page", () => {
     expect(send.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
     await userEvent.click(send);
 
-    expect(await within(dialog).findByText("Sent — thank you.", {}, SETTLE)).toBeInTheDocument();
+    expect(await within(dialog).findByText("Sent. Thank you.", {}, SETTLE)).toBeInTheDocument();
     expect(dialog).toHaveTextContent(`Reference: ${FAKE_SCAN_ID}`);
     // One call, of one argument: the submission, with the whole run inside it.
     expect(sent).toHaveLength(1);
@@ -1652,7 +1652,7 @@ describe("sending a scan from the Scanner page", () => {
       () => expect(within(dialog).getByRole("alert")).toHaveTextContent(SCAN_INBOX_FULL),
       SETTLE,
     );
-    expect(within(dialog).queryByText("Sent — thank you.")).toBeNull();
+    expect(within(dialog).queryByText("Sent. Thank you.")).toBeNull();
     expect(lea).toHaveAttribute("aria-checked", "true");
     expect(within(dialog).getByRole("button", { name: "Send scan" })).not.toHaveAttribute(
       "aria-disabled",
@@ -1861,7 +1861,7 @@ describe("sending a scan from the Scanner page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
     const box = view.container.querySelector<HTMLElement>("[data-camera-box]");
     expect(within(box as HTMLElement).getByRole("alert")).toHaveTextContent(
-      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+      "Not enough scanned yet. Hold the card under the camera, then press again.",
     );
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(sent).toEqual([]);
@@ -1870,7 +1870,7 @@ describe("sending a scan from the Scanner page", () => {
     await userEvent.click(screen.getByRole("button", { name: STOP }));
     expect(within(box as HTMLElement).getByText(STOPPED_TITLE)).toBeInTheDocument();
     expect(within(box as HTMLElement).getByRole("alert")).toBeEmptyDOMElement();
-    expect(screen.queryByText(/Not enough of the scan yet/)).toBeNull();
+    expect(screen.queryByText(/Not enough scanned yet/)).toBeNull();
   });
 
   /**
@@ -1990,7 +1990,7 @@ describe("sending a scan from the Scanner page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
     const box = view.container.querySelector<HTMLElement>("[data-camera-box]");
     expect(within(box as HTMLElement).getByRole("alert")).toHaveTextContent(
-      "Not enough of the scan yet. Hold the card under the camera a moment and press again.",
+      "Not enough scanned yet. Hold the card under the camera, then press again.",
     );
     expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
     // The line goes on naming the card: this was the run's break, not the evidence's.
@@ -2140,7 +2140,7 @@ describe("what the Scanner page says when it cannot scan", () => {
     const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
     // A greyed row's name includes its reason.
     expect(
-      within(sheet).getByRole("button", { name: /^Filters\s*Filters need the card database/ }),
+      within(sheet).getByRole("button", { name: /^Filters\s*Filters need card names, which the scanner couldn't read from the card data/ }),
     ).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -2151,7 +2151,7 @@ describe("what the Scanner page says when it cannot scan", () => {
     const slot = () => view.container.querySelector("[data-scanner-data-slot]");
     await waitFor(
       () =>
-        expect(slot()).toHaveTextContent("The card recognizer did not load: gallery: bad magic."),
+        expect(slot()).toHaveTextContent("The Neural scanner didn't load: gallery: bad magic."),
       SETTLE,
     );
     expect(within(slot() as HTMLElement).queryByRole("button")).toBeNull();
@@ -2218,7 +2218,7 @@ describe("what the Scanner page says when it cannot scan", () => {
     const { getUserMedia } = camera();
     const { seen } = mount({ fake: { seed: "starter", fault: "scannerElsewhere" } });
     expect(await screen.findByText(SCANNER_OPEN_ELSEWHERE, {}, SETTLE)).toBeInTheDocument();
-    expect(screen.getByText(/It will open here once that window closes/)).toBeInTheDocument();
+    expect(screen.getByText(/It opens here when that window closes/)).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull();
     expect(getUserMedia).not.toHaveBeenCalled();
     expect(seen.holds).toBe(0);
@@ -2260,7 +2260,7 @@ describe("what the Scanner page says when it cannot scan", () => {
     });
     await start();
     expect(
-      await screen.findByText(/It will open here once that window closes/, {}, SETTLE),
+      await screen.findByText(/It opens here when that window closes/, {}, SETTLE),
     ).toBeInTheDocument();
     expect(stop).toHaveBeenCalled();
     expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull();

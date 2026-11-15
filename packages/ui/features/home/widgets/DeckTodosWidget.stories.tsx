@@ -103,10 +103,10 @@ export const Default: Story = {
     ).toBeInTheDocument();
     await expect(card.getByRole("heading", { level: 5, name: "To-do" })).toBeInTheDocument();
     await expect(
-      card.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }),
+      card.getByRole("checkbox", { name: 'Mark “Add a Treasure maker” done' }),
     ).toBeInTheDocument();
     await expect(
-      card.queryByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' }),
+      card.queryByRole("checkbox", { name: 'Mark “Sleeve the deck” not done' }),
     ).not.toBeInTheDocument();
   },
 };
@@ -128,7 +128,7 @@ export const Lists: Story = {
     await expect(
       card.getAllByRole("heading", { level: 5 }).map((el) => el.textContent),
     ).toEqual(["To-do", "Mana", "To-do"]);
-    await expect(card.getByRole("checkbox", { name: 'Mark "Cut a land" done' })).toBeInTheDocument();
+    await expect(card.getByRole("checkbox", { name: 'Mark “Cut a land” done' })).toBeInTheDocument();
     await expect(card.queryByText(/Some notes about/)).not.toBeInTheDocument();
   },
 };
@@ -140,7 +140,7 @@ export const Wide: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To-dos" }));
     await expect(
-      await card.findByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }),
+      await card.findByRole("checkbox", { name: 'Mark “Add a Treasure maker” done' }),
     ).toBeInTheDocument();
   },
 };
@@ -152,10 +152,10 @@ export const CompletedShown: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To-dos" }));
     await expect(
-      await card.findByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' }),
+      await card.findByRole("checkbox", { name: 'Mark “Sleeve the deck” not done' }),
     ).toBeChecked();
     await expect(
-      card.getByRole("checkbox", { name: 'Mark "Cut Clue tokens" not done' }),
+      card.getByRole("checkbox", { name: 'Mark “Cut Clue tokens” not done' }),
     ).toBeChecked();
   },
 };

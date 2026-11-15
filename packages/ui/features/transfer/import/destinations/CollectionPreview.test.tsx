@@ -139,7 +139,7 @@ describe("CollectionPreview", () => {
     mount("Quantity,Name,Purchase price\n1,Sol Ring,4.25\n1,Lightning Bolt,1.125\n");
 
     expect(screen.getByText(CAPTION)).toBeInTheDocument();
-    expect(screen.getByText(`line 3 · Lightning Bolt — "1.125"`)).toBeInTheDocument();
+    expect(screen.getByText(`line 3 · Lightning Bolt — “1.125”`)).toBeInTheDocument();
     expect(screen.getByText(/2 cards will be added/)).toBeInTheDocument();
   });
 
@@ -178,7 +178,7 @@ describe("CollectionPreview under set", () => {
 
     expect(
       await screen.findByText(
-        "Updates quantities for 2 cards: 5 new, 20 changed, 2 removed — 12 more copies than now.",
+        "Updates quantities for 2 cards: 5 new, 20 changed, 2 removed; 12 more copies than now.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/will be added/)).toBeNull();
@@ -205,7 +205,7 @@ describe("CollectionPreview under set", () => {
 
     expect(
       await screen.findByText(
-        "Updates quantities for 1 card: 1 changed — 3 fewer copies than now.",
+        "Updates quantities for 1 card: 1 changed; 3 fewer copies than now.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -221,7 +221,7 @@ describe("CollectionPreview under set", () => {
 
     expect(
       await screen.findByText(
-        "Updates quantities for 1 card: all quantities already match. Nothing to change.",
+        "Updates quantities for 1 card: all quantities already match.",
       ),
     ).toBeInTheDocument();
     // Nothing is filed beyond the file's number, so there is nothing to say about folders.
@@ -286,7 +286,7 @@ describe("CollectionPreview's own warnings", () => {
     expect(
       screen.getByText("1 line had an unknown language and was matched without it"),
     ).toBeInTheDocument();
-    expect(screen.getByText(`line 3 · Sol Ring — "Klingon"`)).toBeInTheDocument();
+    expect(screen.getByText(`line 3 · Sol Ring — “Klingon”`)).toBeInTheDocument();
   });
 
   it("lists every line it merged into an earlier one", () => {
@@ -312,12 +312,12 @@ describe("CollectionPreview's own warnings", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(`line 3 → line 2 · Lightning Bolt — "3" in EUR, kept in USD`),
+      screen.getByText(`line 3 → line 2 · Lightning Bolt — “3” in EUR, kept in USD`),
     ).toBeInTheDocument();
     expect(
       screen.getByText("1 line had an invalid tradelist quantity, and will be added without one"),
     ).toBeInTheDocument();
-    expect(screen.getByText(`line 4 · Sol Ring — "2.5"`)).toBeInTheDocument();
+    expect(screen.getByText(`line 4 · Sol Ring — “2.5”`)).toBeInTheDocument();
   });
 });
 

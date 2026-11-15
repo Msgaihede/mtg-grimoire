@@ -128,26 +128,26 @@ function Body({
         {card.isError ? (
           // **Before every other arm and in a colour of its own** — `NotesOverlay`'s rule: a
           // failed card read used to draw "Loading card…" for as long as the panel stood open.
-          <ReadFailed>Couldn't read this card — {ipcError(card.error)}.</ReadFailed>
+          <ReadFailed>Couldn't read this card — {ipcError(card.error)}</ReadFailed>
         ) : card.isPending ? (
           <Note>Loading card…</Note>
         ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
         // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
         (card.data ?? null) === null ? (
-          <Note>This printing is no longer in the card database.</Note>
+          <Note>This printing is no longer in the card data.</Note>
         ) : oracleId === null ? (
           <Note>{ORACLE_TAGS_NO_ORACLE_CARD}</Note>
         ) : tags.isError ? (
           // Before the pending arm, and never the empty sentence below: "No oracle tags for this
           // card" over a read that never answered (a database busy with a sync) is a false claim
           // about the card. The status read keeps its own quiet fallback — see the last arm.
-          <ReadFailed>Couldn't read this card's oracle tags — {ipcError(tags.error)}.</ReadFailed>
+          <ReadFailed>Couldn't read this card's oracle tags — {ipcError(tags.error)}</ReadFailed>
         ) : tags.isPending || status.isPending ? (
           // Both reads, not just the tag one: the sentence an empty answer gets is *decided* by
           // the status row, so drawing before it lands would flash whichever of the two claims
           // the default happened to be — and one of them is about the reader's database rather
           // than about their card.
-          <Note>Loading tags…</Note>
+          <Note>Loading oracle tags…</Note>
         ) : slugs.length > 0 ? (
           <section aria-labelledby={headingId} className="space-y-2">
             <h3 id={headingId} className="text-xs uppercase tracking-wide text-dim">

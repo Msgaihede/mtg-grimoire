@@ -777,7 +777,7 @@ export async function pair(first: Device, second: Device) {
     30_000,
   );
   await second.openSync();
-  await second.page.press("Enter a code", buttonSaying("Enter a code from another device"));
+  await second.page.press("Enter a code", buttonSaying("Enter a code"));
   await second.page.press("the code box", `document.querySelector("textarea")`);
   await second.page.type(code);
   await second.page.press("Read the code", buttonSaying("Read the code"));

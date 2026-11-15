@@ -577,8 +577,8 @@ function setSentence(cardCount: number, outcome: ImportCommitOutcome): string {
     outcome.updated > 0 ? `${count(outcome.updated)} changed` : null,
     outcome.removed > 0 ? `${count(outcome.removed)} removed` : null,
   ].filter((part) => part !== null);
-  if (parts.length === 0) return `${head}: all quantities already match. Nothing to change.`;
-  return `${head}: ${parts.join(", ")} — ${copiesClause(outcome.copies)}.`;
+  if (parts.length === 0) return `${head}: all quantities already match.`;
+  return `${head}: ${parts.join(", ")}; ${copiesClause(outcome.copies)}.`;
 }
 
 function copiesClause(copies: number): string {
@@ -656,7 +656,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
         <ProblemList
           caption={`${plural(plan.unknownConditions.length, "line")} had an unknown condition, so the default was used`}
           lines={plan.unknownConditions.map(
-            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+            (u) => `line ${u.lineNumber} · ${u.name} — “${u.said}”`,
           )}
         />
       )}
@@ -666,7 +666,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
       {plan.unknownLanguages.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unknownLanguages.length, "line")} had an unknown language and ${verb(plan.unknownLanguages.length, "was", "were")} matched without it`}
-          lines={plan.unknownLanguages.map((u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`)}
+          lines={plan.unknownLanguages.map((u) => `line ${u.lineNumber} · ${u.name} — “${u.said}”`)}
         />
       )}
 
@@ -689,7 +689,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
       {plan.unreadablePrices.length > 0 && (
         <ProblemList
           caption={`${plural(plan.unreadablePrices.length, "line")} had an unreadable purchase price, and will be added without one`}
-          lines={plan.unreadablePrices.map((u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`)}
+          lines={plan.unreadablePrices.map((u) => `line ${u.lineNumber} · ${u.name} — “${u.said}”`)}
         />
       )}
 
@@ -697,7 +697,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
         <ProblemList
           caption={`${plural(plan.unreadableTradelists.length, "line")} had an invalid tradelist quantity, and will be added without one`}
           lines={plan.unreadableTradelists.map(
-            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+            (u) => `line ${u.lineNumber} · ${u.name} — “${u.said}”`,
           )}
         />
       )}
@@ -717,7 +717,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
           caption={`${plural(plan.droppedPrices.length, "merged line")} had a price in a different currency, and ${verb(plan.droppedPrices.length, "that price was", "those prices were")} dropped`}
           lines={plan.droppedPrices.map(
             (d) =>
-              `line ${d.lineNumber} → line ${d.into} · ${d.name} — "${d.said}" ${inCurrency(d.currency)}, kept ${inCurrency(d.kept)}`,
+              `line ${d.lineNumber} → line ${d.into} · ${d.name} — “${d.said}” ${inCurrency(d.currency)}, kept ${inCurrency(d.kept)}`,
           )}
         />
       )}

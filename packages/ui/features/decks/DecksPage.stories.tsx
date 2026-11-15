@@ -975,7 +975,7 @@ export const Busy: Story = {
     await userEvent.click(
       await canvas.findByRole("button", { name: "Rename the Modern Goodstuff deck" }),
     );
-    const field = await canvas.findByLabelText("Rename Modern Goodstuff");
+    const field = await canvas.findByRole("textbox", { name: "Rename Modern Goodstuff" });
     await userEvent.clear(field);
     await userEvent.type(field, "Modern Goodstuff II");
     await userEvent.click(canvas.getByRole("button", { name: "Save name" }));
@@ -986,7 +986,7 @@ export const Busy: Story = {
         "Try that again in a moment.",
     );
     // Nothing was renamed, and the field is still up with the reader's text in it.
-    await expect(canvas.getByLabelText("Rename Modern Goodstuff")).toHaveValue(
+    await expect(canvas.getByRole("textbox", { name: "Rename Modern Goodstuff" })).toHaveValue(
       "Modern Goodstuff II",
     );
     await expect(canvas.getByText("Kenrith Two-Drops")).toBeInTheDocument();

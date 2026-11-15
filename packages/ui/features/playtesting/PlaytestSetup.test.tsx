@@ -212,7 +212,7 @@ describe("PlaytestSetup", () => {
 
   it("seats three opponents at a four-player table, and starts only once each has a deck", async () => {
     const { onStart } = setup();
-    const modes = screen.getByRole("group", { name: "Gamemode" });
+    const modes = screen.getByRole("group", { name: "Game mode" });
     expect(within(modes).getByRole("button", { name: /^Duel/ })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -248,7 +248,7 @@ describe("PlaytestSetup", () => {
   // The goldfish is no deck and plays no skill: only the reader's deck is asked for.
   it("plays the goldfish with the reader's deck alone, and asks for nothing else", async () => {
     const { onStart } = setup();
-    const modes = screen.getByRole("group", { name: "Gamemode" });
+    const modes = screen.getByRole("group", { name: "Game mode" });
     expect(within(modes).getAllByRole("button")).toHaveLength(3);
     await userEvent.click(within(modes).getByRole("button", { name: /^Goldfish/ }));
     expect(screen.queryByRole("button", { name: /^Opponent:/ })).not.toBeInTheDocument();
@@ -391,14 +391,14 @@ describe("PlaytestSetup", () => {
     await userEvent.click(tile("Boros Aggro"));
     expect(
       await screen.findByRole("img", {
-        name: "The cards could not be checked against the rules engine.",
+        name: "Couldn't check the cards against the rules engine.",
       }),
     ).toBeInTheDocument();
   });
 
   it("asks for a deck when there is none", () => {
     setup([]);
-    expect(screen.getByText(/needs a deck to play/)).toBeInTheDocument();
+    expect(screen.getByText(/No decks yet\. Make one in Decks to playtest\./)).toBeInTheDocument();
   });
 });
 
@@ -464,7 +464,7 @@ describe("PlaytestSetup with friends", () => {
     setup(DECKS, FOLDERS, null);
     const friends = screen.getByRole("region", { name: "Play with friends" });
     expect(
-      await within(friends).findByText("Hosting a game is for supporters; anybody can join one."),
+      await within(friends).findByText("Hosting is for supporters. Anyone can join."),
     ).toBeInTheDocument();
     await userEvent.type(within(friends).getByLabelText("Your name at the table"), "Bea");
     await userEvent.type(within(friends).getByLabelText("Join with a code"), "k7q x2m");
@@ -477,7 +477,7 @@ describe("PlaytestSetup with friends", () => {
     expect(screen.getByRole("complementary", { name: "Game lobby" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Lobby code" })).toHaveTextContent("K7QX2M");
     expect(
-      screen.getByText("Share the code: a game needs someone to join it."),
+      screen.getByText("Share the code. A game needs another player."),
     ).toBeInTheDocument();
     await userEvent.click(tile("Simic Tempo"));
     rerender(hosting({ peers: [guestPeer("Bea")] }));
@@ -540,11 +540,11 @@ describe("PlaytestSetup with friends", () => {
   it("sends a guest's deck to the host on each pick, and waits for the host's Start", async () => {
     setup(DECKS, FOLDERS, joined());
     expect(
-      screen.getByRole("heading", { name: "Lobby K7QX2M — hosted by Ada" }),
+      screen.getByRole("heading", { name: "Lobby K7QX2M · hosted by Ada" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Waiting for Ada to start the game.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start game" })).toBeNull();
-    expect(screen.getByText("Pick the deck you bring to the table.")).toBeInTheDocument();
+    expect(screen.getByText("Pick the deck you'll play.")).toBeInTheDocument();
     await userEvent.click(tile("Boros Aggro"));
     expect(lobbyIpc.lobbyDeck).toHaveBeenLastCalledWith(2, "live");
     expect(await screen.findByText("Ada has your deck: Boros Aggro.")).toBeInTheDocument();
@@ -561,7 +561,7 @@ describe("PlaytestSetup with friends", () => {
     expect(lobbyIpc.lobbyDeck).not.toHaveBeenCalled();
     rerender(joined({ kind: "draft" }));
     expect(
-      screen.getByText("That code is a draft’s lobby — join it from Draft & Packs."),
+      screen.getByText("That code is for a draft. Join it from Draft & Packs."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Leave lobby" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Game setup" })).toBeInTheDocument();
@@ -569,6 +569,6 @@ describe("PlaytestSetup with friends", () => {
 
   it("says why the last game lobby closed", () => {
     setup(DECKS, FOLDERS, hosting({ phase: "closed", closedReason: "The lobby expired." }));
-    expect(screen.getByText("The lobby K7QX2M closed: The lobby expired.")).toBeInTheDocument();
+    expect(screen.getByText("Lobby K7QX2M closed: The lobby expired.")).toBeInTheDocument();
   });
 });

@@ -147,7 +147,7 @@ export function setsLabel(names: readonly string[]): string {
 export function dealSetPacks(rounds: readonly BoosterSet[], seats: number, rng: Rng): string[][][] {
   const products = rounds.map((set) => {
     const product = draftProduct(set);
-    if (product === null) throw new Error(`${set.name} has no booster to draft from.`);
+    if (product === null) throw new Error(`${set.name} has no boosters to draft.`);
     const colors = new Map(set.cards.map((c) => [c.cardId, c.colors]));
     return {
       product: playable(product, set),
@@ -206,7 +206,7 @@ export function dealCube(cards: readonly string[], shape: CubeShape, rng: Rng): 
   const need = shape.seats * shape.packs * shape.packSize;
   if (cards.length < need) {
     throw new Error(
-      `A cube of ${shape.seats} seats × ${shape.packs} packs × ${shape.packSize} cards needs ${need} cards; the list has ${cards.length}.`,
+      `${shape.seats} seats × ${shape.packs} packs × ${shape.packSize} cards needs ${need} cards. The list has ${cards.length}.`,
     );
   }
   const deck = shuffled(cards, rng);

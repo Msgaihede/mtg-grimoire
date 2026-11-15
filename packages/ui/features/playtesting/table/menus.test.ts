@@ -486,7 +486,7 @@ describe("gameMenu", () => {
     const items = gameMenu({
       ...base,
       view: menuView(),
-      backLabel: "Back to the deck",
+      backLabel: "Back to deck",
       onAct,
       onNewGame,
       onBack,
@@ -495,7 +495,7 @@ describe("gameMenu", () => {
     expect(onAct).toHaveBeenLastCalledWith({ type: "untapAll" });
     act(items, "New game").onSelect();
     expect(onNewGame).toHaveBeenCalled();
-    act(items, "Back to the deck").onSelect();
+    act(items, "Back to deck").onSelect();
     expect(onBack).toHaveBeenCalled();
   });
 });

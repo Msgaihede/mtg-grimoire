@@ -379,7 +379,7 @@ export const NothingToMake: Story = {
   args: { deckId: 3 },
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByText("Nothing in this deck makes a token or an emblem."),
+      await canvas.findByText("This deck makes no tokens or emblems."),
     ).toBeInTheDocument();
 
     // The heading is still there — it is the area's name, not a control — and it is not a button.
@@ -400,7 +400,7 @@ export const NothingToMake: Story = {
 export const AddToADeckThatMakesNothing: Story = {
   args: { deckId: 3 },
   play: async ({ canvas, canvasElement }) => {
-    await canvas.findByText("Nothing in this deck makes a token or an emblem.");
+    await canvas.findByText("This deck makes no tokens or emblems.");
     await userEvent.click(canvas.getByRole("button", { name: "Add printing" }));
 
     const dialog = await within(canvasElement.ownerDocument.body).findByRole("dialog", {
@@ -427,7 +427,7 @@ export const AddToADeckThatMakesNothing: Story = {
     const tile = art.closest("li") as HTMLElement;
     await expect(within(tile).getByText("NOT MADE BY DECK")).toBeInTheDocument();
     await expect(within(tile).getByRole("spinbutton")).toHaveValue(1);
-    await expect(canvas.queryByText("Nothing in this deck makes a token or an emblem.")).toBeNull();
+    await expect(canvas.queryByText("This deck makes no tokens or emblems.")).toBeNull();
   },
 };
 

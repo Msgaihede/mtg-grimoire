@@ -35,9 +35,7 @@ const ROWS: readonly Row[] = [
     summary: "Every card you own, with its condition, purchase price, tags and notes.",
     warning: (
       <>
-        Deletes every card in your collection, along with its condition, purchase price, tags,
-        notes and acquisition details. Your decks are kept, but their cards are no longer marked
-        as owned. This can&rsquo;t be undone.
+        Deletes every card in your collection with all its details. Decks are kept, but their cards are no longer marked as owned. This can&rsquo;t be undone.
       </>
     ),
   },
@@ -47,8 +45,7 @@ const ROWS: readonly Row[] = [
     summary: "Every card and folder on your wishlist, with finishes and notes.",
     warning: (
       <>
-        Deletes every card and folder on your wishlist, along with their finishes and notes. Your
-        collection and decks aren&rsquo;t touched. This can&rsquo;t be undone.
+        Deletes every card and folder on your wishlist. Your collection and decks aren&rsquo;t touched. This can&rsquo;t be undone.
       </>
     ),
   },
@@ -58,8 +55,7 @@ const ROWS: readonly Row[] = [
     summary: "Every deck and folder, with cards, categories, labels, covers and history.",
     warning: (
       <>
-        Deletes every deck and folder, with each deck&rsquo;s cards, categories, labels, cover
-        and edit history. Your collection and wishlist are kept. This can&rsquo;t be undone.
+        Deletes every deck and folder with its cards, categories, labels, cover and edit history. Your collection and wishlist are kept. This can&rsquo;t be undone.
       </>
     ),
   },
@@ -125,8 +121,7 @@ export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element
           better warning on its own merits, and it stopped being a compromise rather than
           becoming wrong. Restoring it is a decision about this paragraph, not a rot fix. */}
       <p className="text-sm text-dim">
-        These can&rsquo;t be undone, and there&rsquo;s no backup. Each one permanently deletes
-        part of your data.
+        Each one permanently deletes part of your data. There&rsquo;s no undo and no backup.
       </p>
 
       <ul className="space-y-3">

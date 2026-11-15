@@ -190,7 +190,7 @@ export function LabelsPanel(): JSX.Element {
           a label belongs to no deck, so the word and the colour a reader sets here are the word
           and the colour it has everywhere. The deck dialog says the same thing in its subtitle. */}
       <p className="text-sm text-dim">
-        Labels are shared across decks, and each card can have one. Changes apply everywhere.
+        Labels are shared across all decks. Each card can have one.
       </p>
 
       {/* Making one comes first, and this panel opens on it — `LabelsDialog`'s own rule, kept for
@@ -273,7 +273,7 @@ export function LabelsPanel(): JSX.Element {
                 deleteLabel.mutate(id, {
                   onSuccess: () => {
                     done();
-                    notify.success(`Label “${label.name}” deleted`);
+                    notify.success(`Deleted label “${label.name}”`);
                   },
                 })
               }
@@ -490,11 +490,10 @@ function DeleteLabel({
     <div {...confirm}>
       <p className="text-xs">Delete “{label.name}” everywhere?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        {label.deckCount === 0 ? "No deck is using it." : wearing} This takes it out of your label
-        list for good.
+        {label.deckCount === 0 ? "No deck is using it." : wearing} This removes it from your label list for good.
       </p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        Deleting a label here can’t be undone, even with Ctrl+Z in a deck.
+        This can’t be undone, even with Ctrl+Z in a deck.
       </p>
       <div className="mt-2 flex gap-2">
         <button

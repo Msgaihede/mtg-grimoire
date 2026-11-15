@@ -1672,7 +1672,7 @@ describe("CardStack marks", () => {
 
     // …and its sentence is still one hover away — `describes: false`, redundant with the
     // button's own name, so the panel carries no `role="tooltip"` and is found by its id.
-    expect(await openTooltip(ticks[0])).toHaveTextContent("Exact Match");
+    expect(await openTooltip(ticks[0])).toHaveTextContent("Exact match");
 
     // …and the rule break is at the other end of the card.
     expect(screen.getByText("RULE BREAK").className).toContain("left-");
@@ -1730,7 +1730,7 @@ describe("CardStack marks", () => {
     // so this is the assertion that would fail if the two were rendered together.
     expect(marks[0].querySelector("svg")).toBeNull();
 
-    expect(await openTooltip(marks[0])).toHaveTextContent("Exact Match · 2 to add");
+    expect(await openTooltip(marks[0])).toHaveTextContent("Exact match · 2 to add");
 
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
       expect.stringContaining("exact match · 2 to add"),
@@ -1792,7 +1792,7 @@ describe("CardStack marks", () => {
 
     // …and its sentence, on the hover and on the button, exactly where the other two tiers put
     // theirs. Lowercased in the button's name, because `deckCardName` folds it into a sentence.
-    expect(await openTooltip(cross)).toHaveTextContent("No Match");
+    expect(await openTooltip(cross)).toHaveTextContent("No match");
     expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
       expect.stringContaining("no match"),
     );

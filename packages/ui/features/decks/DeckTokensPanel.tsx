@@ -453,7 +453,7 @@ export function DeckTokensPanel({
         {canOpen && <CountPill count={copies} words={tokenCountWords(copies)} />}
 
         {answered && rows.length === 0 && (
-          <p className="text-xs text-dim">Nothing in this deck makes a token or an emblem.</p>
+          <p className="text-xs text-dim">This deck makes no tokens or emblems.</p>
         )}
 
         {readFailure !== null && (

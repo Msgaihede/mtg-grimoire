@@ -54,7 +54,7 @@ function ViewFailure({ message, onRetry }: { message: string; onRetry: () => voi
     <div className="flex h-full min-h-60 flex-col items-center justify-center gap-4 text-center">
       <TriangleAlert className="size-8 text-destructive" aria-hidden="true" />
       <div role="alert" className="flex max-w-prose flex-col gap-1">
-        <p className="text-base text-destructive">This view could not be drawn.</p>
+        <p className="text-base text-destructive">Couldn't display this page.</p>
         {message && <p className="text-sm break-words text-dim">{message}</p>}
       </div>
       <div className="flex gap-2">

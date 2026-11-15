@@ -1094,14 +1094,14 @@ describe("the theory difference dialog", () => {
   /**
    * The footer's answer, **as a toast** (2026-10-12) — said by the dialog itself, now that the
    * editor's self-clearing line is gone. It names **where to**, because out on the editor a bare
-   * "Sent." is about nothing on screen; the root is `the wishlist`. Zero is not "already wished
+   * "Sent." is about nothing on screen; the root is `your wishlist`. Zero is not "already wished
    * for" — the fold never skips a wish that is already there — so it says the two things a zero
    * can actually mean, and names no drawer as having received anything.
    */
   it("says the footer's answer as a toast, at the root, in a folder and at zero", () => {
     notifyWishesSent({ wishes: 3, destination: null });
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Sent 3 cards to the wishlist",
+      title: "Sent 3 cards to your wishlist",
       tone: "success",
     });
     notifyWishesSent({ wishes: 1, destination: "Ordered" });
@@ -1109,8 +1109,8 @@ describe("the theory difference dialog", () => {
     notifyWishesSent({ wishes: 0, destination: "Ordered" });
     const zero = useNotifications.getState().notices[0];
     expect(zero).toMatchObject({
-      title: "Nothing sent to the wishlist",
-      body: "These cards are no longer missing or no longer in the card database",
+      title: "Nothing was sent to your wishlist",
+      body: "These cards are no longer missing, or aren't in your card data",
       tone: "info",
     });
     // Nothing was filed, so no drawer is named as having received it.
@@ -1123,7 +1123,7 @@ describe("the theory difference dialog", () => {
     wrap(<TheoryDiffDialog {...props} />);
     await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
     await waitFor(() =>
-      expect(useNotifications.getState().notices[0]?.title).toBe("Sent 3 cards to the wishlist"),
+      expect(useNotifications.getState().notices[0]?.title).toBe("Sent 3 cards to your wishlist"),
     );
     // One press, one notice.
     expect(useNotifications.getState().notices).toHaveLength(1);
@@ -1136,7 +1136,7 @@ describe("the theory difference dialog", () => {
     await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Couldn't send 3 cards to the wishlist",
+        title: "Couldn't send 3 cards to your wishlist",
         body: "the database is busy; try again",
         tone: "error",
       }),

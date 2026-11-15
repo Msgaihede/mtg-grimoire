@@ -1102,7 +1102,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
 
     expect(
-      await screen.findByText(/nothing here yet\. add cards from search, or import a collection/i),
+      await screen.findByText(/your collection is empty\. add cards from search or import a file/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/match these filters/i)).not.toBeInTheDocument();
   });
@@ -1111,13 +1111,13 @@ describe("CollectionPage", () => {
   it("blames the filters when a filtered collection comes back empty", async () => {
     collectionList.mockResolvedValue(page([]));
     wrap(<CollectionPage />);
-    await screen.findByText(/nothing here yet/i);
+    await screen.findByText(/your collection is empty/i);
 
     await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
 
     expect(
-      await screen.findByText(/no cards in your collection match these filters/i),
+      await screen.findByText(/no cards match these filters/i),
     ).toBeVisible();
   });
 
@@ -1145,7 +1145,7 @@ describe("CollectionPage", () => {
   it("does not warm anything for an empty collection", async () => {
     collectionList.mockResolvedValue(page([]));
     wrap(<CollectionPage />);
-    await screen.findByText(/nothing here yet/i);
+    await screen.findByText(/your collection is empty/i);
 
     expect(prewarmCollection).not.toHaveBeenCalled();
   });
@@ -1449,7 +1449,7 @@ describe("CollectionPage", () => {
     // seats the write `toasted`, so it does not say the same sentence twice.
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Couldn't remove “Lightning Bolt” from the collection",
+        title: "Couldn't remove “Lightning Bolt” from your collection",
         body: "That collection entry is not there any more.",
         tone: "error",
       }),
@@ -2739,7 +2739,7 @@ describe("CollectionPage", () => {
    * **Fix round 1's marketplace ruling.** `marketplace` sits inside the same `filters` object as
    * every row-narrowing field (`useCollection.ts`), but it decides which *price* a row is quoted
    * at rather than which rows match, and it is not one of the filter bar's own controls — so
-   * "Export everything, ignoring the filters" must not also silently reprice the export at the
+   * "Export everything, ignoring your filters" must not also silently reprice the export at the
    * backend's default (TCGplayer) for a reader who had picked another marketplace. A regression
    * to `scope.ts`'s old `{}` for the "everything" case fails this the moment `getMarketplace`
    * answers anything but the default.
@@ -2764,7 +2764,7 @@ describe("CollectionPage", () => {
     collectionList.mockClear();
 
     await user.click(
-      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+      screen.getByRole("checkbox", { name: "Export everything, ignoring your filters" }),
     );
 
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
@@ -2798,7 +2798,7 @@ describe("CollectionPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await user.click(
-      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+      screen.getByRole("checkbox", { name: "Export everything, ignoring your filters" }),
     );
     // The first sweep, at the marketplace the reader had when they ticked the box.
     await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(0));
@@ -2840,7 +2840,7 @@ describe("CollectionPage", () => {
 
     refuse = false;
     const before = sweepCallsAt("tcgplayer");
-    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await user.click(within(dialog).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(before));
     await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
   });
@@ -3369,7 +3369,7 @@ describe("the card menu", () => {
       // and the undo bar above stays the inline way back.
       expect(useNotifications.getState().notices).toHaveLength(1);
       expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Removed 2 cards from the collection",
+        title: "Removed 2 cards from your collection",
         tone: "success",
       });
       await user.click(within(notice).getByRole("button", { name: "Undo" }));
@@ -3420,7 +3420,7 @@ describe("the card menu", () => {
 
       await waitFor(() =>
         expect(useNotifications.getState().notices[0]).toMatchObject({
-          title: "Couldn't remove 2 cards from the collection",
+          title: "Couldn't remove 2 cards from your collection",
           body: "That collection entry is not there any more.",
           tone: "error",
         }),
@@ -3482,7 +3482,7 @@ describe("the card menu", () => {
       );
       // The menu has closed, so the receipt is a toast, by name.
       expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Removed “Lightning Bolt” from the collection",
+        title: "Removed “Lightning Bolt” from your collection",
         tone: "success",
       });
     });
@@ -3537,7 +3537,7 @@ describe("clearing Recently removed", () => {
     expect(question).toHaveTextContent(
       "Remove all 3 cards in Recently removed from your collection?",
     );
-    expect(question).toHaveTextContent("This cannot be undone.");
+    expect(question).toHaveTextContent("This can't be undone.");
 
     await user.click(within(question).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("group", { name: "Clear Recently removed" })).toBeNull();
@@ -4502,7 +4502,7 @@ describe("the collection's shelves", () => {
 
     const dialog = await screen.findByRole("dialog", { name: /export/i });
     expect(within(dialog).getByText(/in Trade binder/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/ignoring the filters and folders/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/ignoring your filters and folders/)).toBeInTheDocument();
   });
 
   /**
@@ -4545,7 +4545,7 @@ describe("the collection's shelves", () => {
 
     await waitFor(() => expect(container.querySelector(`[${EMPTY_SHELF_ATTR}]`)).not.toBeNull());
     expect(screen.queryByText("This folder is empty.")).toBeNull();
-    expect(screen.queryByText(/Nothing here yet/)).toBeNull();
+    expect(screen.queryByText(/Your collection is empty/)).toBeNull();
   });
 
   describe("a folder another page asked for", () => {
@@ -5224,7 +5224,7 @@ describe("exporting a folder from its heading", () => {
       else rightClick(heading("Trade binder"));
       await user.click(await screen.findByRole("menuitem", { name: "Export…" }));
 
-      const dialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+      const dialog = await screen.findByRole("dialog", { name: "Export “Trade binder”" });
       expect(standingIn()).toBeNull();
       expect(within(dialog).queryByRole("checkbox", { name: /Export everything/ })).toBeNull();
       await within(dialog).findByRole("button", { name: "Show decklist (502 lines)" });
@@ -5263,7 +5263,7 @@ describe("exporting a folder from its heading", () => {
     const headerDialog = await screen.findByRole("dialog", { name: /Export/ });
     await user.click(
       within(headerDialog).getByRole("checkbox", {
-        name: "Export everything, ignoring the filters",
+        name: "Export everything, ignoring your filters",
       }),
     );
     await within(headerDialog).findByRole("button", { name: "Show decklist (3 lines)" });
@@ -5280,7 +5280,7 @@ describe("exporting a folder from its heading", () => {
 
     await shelfMenu(user, "Trade binder");
     await user.click(screen.getByRole("menuitem", { name: "Export…" }));
-    const folderDialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+    const folderDialog = await screen.findByRole("dialog", { name: "Export “Trade binder”" });
     await within(folderDialog).findByRole("button", { name: "Show decklist (2 lines)" });
     expect(within(folderDialog).queryByRole("checkbox", { name: /Export everything/ })).toBeNull();
     expect(collectionList).toHaveBeenCalledWith({
@@ -5299,7 +5299,7 @@ describe("exporting a folder from its heading", () => {
     const laterHeaderDialog = await screen.findByRole("dialog", { name: /Export/ });
     expect(
       within(laterHeaderDialog).getByRole("checkbox", {
-        name: "Export everything, ignoring the filters",
+        name: "Export everything, ignoring your filters",
       }),
     ).toBeChecked();
     await within(laterHeaderDialog).findByRole("button", { name: "Show decklist (3 lines)" });
@@ -5323,7 +5323,7 @@ describe("exporting a folder from its heading", () => {
     await findHeading("Trade binder");
     await shelfMenu(user, "Trade binder");
     await user.click(screen.getByRole("menuitem", { name: "Export…" }));
-    const dialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+    const dialog = await screen.findByRole("dialog", { name: "Export “Trade binder”" });
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Couldn't load the cards to export — The database is busy.",
     );
@@ -5338,7 +5338,7 @@ describe("exporting a folder from its heading", () => {
 
     refuse = false;
     const before = sweepCallsAt("tcgplayer");
-    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await user.click(within(dialog).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(before));
     await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
     expect(lastQuery()).toEqual({
@@ -5366,7 +5366,7 @@ describe("exporting a folder from its heading", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "Export…" }));
 
-    const dialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+    const dialog = await screen.findByRole("dialog", { name: "Export “Trade binder”" });
     await within(dialog).findByRole("button", { name: "Show decklist (0 lines)" });
     await waitFor(() =>
       expect(collectionList).toHaveBeenCalledWith({
@@ -6598,7 +6598,7 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
     await waitFor(() => expect(manageOf("Trade binder")).toHaveFocus());
     // Destructive: a receipt naming the folder, read before the write took it off the list.
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Folder “Foils” deleted",
+      title: "Deleted folder “Foils”",
       tone: "success",
     });
   });
@@ -6858,7 +6858,7 @@ describe("locking a folder", () => {
    * unconditionally, `OWNED_SPARE_SQL` still drops those copies from what a plan can count on,
    * and a share still refuses to publish them.
    *
-   * **So absence stopped saying "set aside", and a mark had to start.** Every case here is about
+   * **So absence stopped saying "locked", and a mark had to start.** Every case here is about
    * that swap, and they come in pairs: the copy is *there*, and it is *marked*. A test that
    * asserted only the mark would go green over a wall that had lost the row it was marking, and
    * one that asserted only the row would go green over the #365 behaviour with the mark bolted
@@ -8666,7 +8666,7 @@ describe("a needs-review hand-off over a filed cabinet", () => {
       expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
       expect(screen.getByText("Mox Sapphire")).toBeInTheDocument();
     });
-    const chip = onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" }));
+    const chip = onPage(screen.getAllByRole("button", { name: "Remove filter, Needs review" }));
     // Stated in the path row, beside the shelf toolbar — not on a line of its own under the bar
     // (2026-09-27): the chip's line and the toolbar share one row.
     expect(chip.parentElement!.parentElement).toContainElement(
@@ -8704,7 +8704,7 @@ describe("a needs-review hand-off over a filed cabinet", () => {
   /** The filter is what opened the shut shelves: take it away, by its chip or by Reset all, and the
    *  page is the root it was before the hand-off — every card back, the deck group shut again. */
   it.each([
-    ["its chip", "Remove filter — Needs review"],
+    ["its chip", "Remove filter, Needs review"],
     ["Reset all", /^Reset all/],
   ] as const)(
     "keeps the root, and its folds, when the filter is cleared by %s",

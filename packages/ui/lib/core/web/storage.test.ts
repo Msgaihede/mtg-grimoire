@@ -392,7 +392,7 @@ describe("what a reader is told", () => {
     // fourth for the reader whose browser was one of their paired devices.
     expect(CLEARED_LINES).toHaveLength(4);
     expect(CLEARED_LINES[1]).toMatch(/downloads again by itself/);
-    expect(CLEARED_LINES[2]).toMatch(/nothing to restore it from/);
+    expect(CLEARED_LINES[2]).toMatch(/can't be restored here/);
   });
 
   /**
@@ -404,9 +404,9 @@ describe("what a reader is told", () => {
   it("tells a reader who may have been paired where the old device's entry is removed", () => {
     const line = CLEARED_LINES[3];
     expect(line).toMatch(/^If this browser was paired/);
-    expect(line).toMatch(/new device now/);
-    expect(line).toMatch(/still counts toward the group's five/);
-    expect(line).toMatch(/Remove the old entry in Settings, under Sync, on one of the others/);
+    expect(line).toMatch(/now counts as a new device/);
+    expect(line).toMatch(/still takes one of the group's five places/);
+    expect(line).toMatch(/On another device, remove the old entry in Settings › Sync/);
     expect(line).toMatch(/pair this browser again/);
     // Nothing that claims the pairing as a fact.
     expect(line).not.toMatch(/\byou were paired\b|\bwas removed from\b/i);
@@ -420,10 +420,10 @@ describe("what a reader is told", () => {
   it("tells a paired browser what clearing its site data costs, and both ways out", () => {
     // What clearing does, and what the old entry goes on costing.
     expect(SITE_DATA_WARNING).toMatch(/^Clearing this browser's site data makes it a new device/);
-    expect(SITE_DATA_WARNING).toMatch(/still counts toward the group's five until it is removed/);
+    expect(SITE_DATA_WARNING).toMatch(/keeps one of the group's five places until it is removed/);
     // Leave first, or remove the old entry from another device afterwards — in that order.
     expect(SITE_DATA_WARNING).toMatch(
-      /Leave the group here first, or remove the old entry from another device afterwards\.$/,
+      /Leave the group here first, or remove the old entry from another device afterward\.$/,
     );
     // The app's voice: no code, no key, no API name.
     expect(SITE_DATA_WARNING).not.toMatch(/OPFS|localStorage|persist|evict|quota|slot/i);

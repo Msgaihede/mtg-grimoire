@@ -346,7 +346,7 @@ type Story = StoryObj<typeof meta>;
 export const PlainText: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "Ramp"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “Ramp”" });
 
     // The panel's arrival, waited out once — everything under it lands in the same tick. See
     // {@link FRAME_WAIT}.
@@ -763,7 +763,7 @@ export const InactiveCategoriesLeftOut: Story = {
   args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "Atraxa"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “Atraxa”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     // The format the dialog opens on, untouched — the whole point is that no press was needed
@@ -916,10 +916,10 @@ export const OnlyCardsArenaHas: Story = {
     );
 
     // One format offers it. Plain text is what the dialog opens on, and it has no such question.
-    await expect(canvas.queryByRole("checkbox", { name: "Only cards MTG Arena has" })).toBeNull();
+    await expect(canvas.queryByRole("checkbox", { name: "Only cards on MTG Arena" })).toBeNull();
 
     await userEvent.click(canvas.getByRole("radio", { name: "Arena" }));
-    const box = canvas.getByRole("checkbox", { name: "Only cards MTG Arena has" });
+    const box = canvas.getByRole("checkbox", { name: "Only cards on MTG Arena" });
     await expect(box).toBeVisible();
     await expect(box).not.toBeChecked();
 
@@ -928,7 +928,7 @@ export const OnlyCardsArenaHas: Story = {
     await expect(preview(canvasElement)).toHaveTextContent(
       "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
     );
-    await expect(canvas.queryByText(/on MTG Arena/)).toBeNull();
+    await expect(canvas.queryByText(/(isn't|aren't) on MTG Arena/)).toBeNull();
 
     await userEvent.click(box);
     // Lightning Bolt stays: it is banned in Historic and legal in Timeless, and Arena plainly
@@ -946,13 +946,13 @@ export const OnlyCardsArenaHas: Story = {
 
     // Leaving the format takes the question with it, and nothing else's export is narrowed.
     await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
-    await expect(canvas.queryByRole("checkbox", { name: "Only cards MTG Arena has" })).toBeNull();
+    await expect(canvas.queryByRole("checkbox", { name: "Only cards on MTG Arena" })).toBeNull();
     await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
 
     // And coming back finds it still ticked — unlike the field set, which is re-derived from
     // each format's own defaults.
     await userEvent.click(canvas.getByRole("radio", { name: "Arena" }));
-    const again = canvas.getByRole("checkbox", { name: "Only cards MTG Arena has" });
+    const again = canvas.getByRole("checkbox", { name: "Only cards on MTG Arena" });
     await expect(again).toBeChecked();
 
     // Put it back, and it is the *store* being put back rather than this canvas: `exportPrefs`
@@ -1030,7 +1030,7 @@ export const Saved: Story = {
 
     // A saved export does not close the dialog either — the reader may want another format.
     await expect(args.onDismiss).not.toHaveBeenCalled();
-    await expect(canvas.getByRole("dialog", { name: 'Export "Ramp"' })).toBeVisible();
+    await expect(canvas.getByRole("dialog", { name: "Export “Ramp”" })).toBeVisible();
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt");
   },
@@ -1084,7 +1084,7 @@ export const EmptyPile: Story = {
   args: { subject: "Sideboard", cards: [], suggestedFileName: "Sideboard" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "Sideboard"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “Sideboard”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     // The toggle says so before it is pressed: nothing is showing *and* there is nothing there.
@@ -1129,7 +1129,7 @@ export const Collection: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “your collection”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(canvas.getByRole("radio", { name: "CSV" })).toHaveAttribute(
@@ -1172,7 +1172,7 @@ export const Wishlist: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "your wishlist"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “your wishlist”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(canvas.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
@@ -1225,7 +1225,7 @@ export const StillSweeping: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “your collection”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(canvas.getByText("1,500 cards matching your filters")).toBeInTheDocument();
@@ -1267,7 +1267,7 @@ export const SweepFailed: Story = {
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “your collection”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(canvas.getByRole("alert")).toHaveTextContent(
@@ -1285,7 +1285,7 @@ export const SweepFailed: Story = {
     await expect(canvas.queryByText("Copied.")).toBeNull();
     await expect(canvas.getAllByRole("alert")).toHaveLength(1);
 
-    await userEvent.click(canvas.getByRole("button", { name: "Retry" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }));
     await expect(args.scope?.onRetry).toHaveBeenCalledTimes(1);
   },
 };
@@ -1313,7 +1313,7 @@ export const EveryFieldOn: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    const dialog = await canvas.findByRole("dialog", { name: "Export “your collection”" });
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
     await expect(canvas.getByRole("radio", { name: "CSV" })).toHaveAttribute(
       "aria-checked",

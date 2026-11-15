@@ -717,7 +717,7 @@ export function PlaytestBoard({
   const goldfish = view?.goldfish ?? false;
   /** The goldfish's life has reached 0 on this turn of the reader's; `null` while it is above. */
   const deadOn = goldfish ? (opponent?.deadOn ?? null) : null;
-  const backLabel = returnTo === "deck" ? "Back to the deck" : "Back to setup";
+  const backLabel = returnTo === "deck" ? "Back to deck" : "Back to setup";
   /** Who a lobby game waits on, by their plate's name — a person's, or an AI seat's deck. */
   const waitingOn =
     view?.deciding == null
@@ -942,7 +942,7 @@ export function PlaytestBoard({
           <button
             type="button"
             aria-label={
-              returnTo === "deck" ? `Back to the ${deckName} deck` : "Back to the playtest setup"
+              returnTo === "deck" ? `Back to ${deckName}` : "Back to setup"
             }
             onClick={onBack}
             className={cn(CHROME_BUTTON, "h-9 gap-1 rounded-full pr-3 pl-2 text-[13px]")}
@@ -1344,7 +1344,7 @@ export function PlaytestBoard({
         />
 
         {panel === "help" && (
-          <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
+          <HelpPanel heading="How to play" onClose={() => setPanel(null)}>
             <PlaytestHelp sandbox={sandboxOn} goldfish={goldfish} lobby={view?.lobby ?? false} />
           </HelpPanel>
         )}
@@ -1549,59 +1549,47 @@ function PlaytestHelp({
   return (
     <>
       <span>
-        Double-click a card in hand, or drag it onto your battlefield, to play it by the rules.
+        Double-click a card in hand, or drag it to your battlefield, to play it.
       </span>
       <span>
-        Right-click a permanent to activate an ability. Or drag the card onto a card or a player to
-        play or activate it with that target: an Aura, a removal spell, an equip.
+        Right-click a permanent to activate an ability. Drag a card onto a card or player to use it on that target.
       </span>
       <span>
-        To attack, click each creature that should (it moves forward, ringed red), or drag it onto
-        the opponent or a planeswalker, then press Attack.
+        To attack, click each attacker, or drag it onto an opponent or planeswalker. Then press Attack.
       </span>
       {!goldfish && (
         <span>
-          To block, click one of your creatures, then the attacker it blocks, or drag it onto the
-          attacker; both get a number. Click a blocker again, or drag it back, to take it off.
+          To block, click your creature, then the attacker, or drag it onto the attacker. Click a blocker again to take it off.
         </span>
       )}
       <span>When the engine asks, click a highlighted card or pick an answer in the panel.</span>
       <span>
-        Click a land to tap it for mana: the mana waits in your pool for your next spell, until the
-        step ends.
+        Click a land to tap it for mana. Mana stays in your pool until the step ends.
       </span>
       {lobby ? (
         <span className="text-dim">
-          Other people at the table decide for their own seats: while one does, the board waits for
-          them. A game with people has no sandbox and no undo.
+          The board waits while other players decide. Games with people have no sandbox and no undo.
         </span>
       ) : sandbox ? (
         <>
           <span className="text-dim">
-            The sandbox is on: whenever the game waits on you — your main phase, a response, your
-            attackers or blockers — drag any of your cards anywhere, click a permanent to tap it
-            (Shift-click taps the pile; a land is tapped for mana), right-click any card on the
-            table for counters, copies and moves, and set any life total. A card the rules cannot
-            play is put down unpaid. To change things in a step the game passes, stop there (the
-            Stops button); answer a question before changing the table.
+            The sandbox is on. When the game waits on you, drag your cards anywhere, click a permanent to tap it (Shift-click taps the pile) and right-click any card for counters, copies and moves. Set any life total. Cards the rules can't play are put down unpaid. To change a step the game passes, add a stop there. Answer an open question first.
           </span>
           <span className="text-dim">
-            Point at one of your cards and press T, G, E or H to tap it, bury it, exile it or return
-            it to hand.
+            Point at one of your cards and press T to tap, G for graveyard, E to exile or H for hand.
           </span>
         </>
       ) : (
         <span className="text-dim">
-          The sandbox is off: only the rules’ plays. Turn it on (the Sandbox button, or the game
-          menu) to move, tap and change cards by hand.
+          The sandbox is off: only legal plays. Turn it on with the Sandbox button or the game menu to change cards by hand.
         </span>
       )}
       <span className="text-dim">
-        Press Space for the button at the bottom right: to combat, end the turn, attack or block.
+        Space presses the bottom-right button: to combat, end turn, attack or block.
       </span>
       {!lobby && (
         <span className="text-dim">
-          Press Ctrl+Z to undo back to your last decision and Ctrl+Y to redo, or use the game menu.
+          Press Ctrl+Z to undo to your last decision, Ctrl+Y to redo. Both are in the game menu.
         </span>
       )}
     </>

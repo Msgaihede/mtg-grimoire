@@ -190,7 +190,7 @@ describe("DeckBracket", () => {
   it("says the estimate is one, in the name the glyph cannot carry", () => {
     wrap(<Harness cards={DECK} />);
 
-    expect(trigger()).toHaveAccessibleName("Bracket 2, an estimate");
+    expect(trigger()).toHaveAccessibleName("Bracket 2, estimated");
   });
 
   /**
@@ -222,7 +222,7 @@ describe("DeckBracket", () => {
 
     expect(trigger()).toHaveTextContent("Bracket 2 · ~4");
     expect(trigger()).toHaveAccessibleName(
-      "Bracket 2, set for this deck — the cards read as bracket 4 or higher",
+      "Bracket 2, set for this deck. The cards suggest bracket 4 or higher",
     );
   });
 
@@ -310,7 +310,7 @@ describe("DeckBracket", () => {
     const dialog = await panel();
 
     expect(within(dialog).getByText("Bracket ~3 · 2 Game Changers")).toBeInTheDocument();
-    expect(within(dialog).getByText(/Estimated minimum bracket/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/The lowest bracket these cards allow/)).toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole("button", { name: /how this was estimated/i }));
 
@@ -439,7 +439,7 @@ describe("DeckBracket", () => {
       within(dialog).getByText("Thassa's Oracle + Demonic Consultation"),
     ).toBeInTheDocument();
     expect(
-      within(dialog).getByText("Ruthless — for competitive decks at brackets 4+"),
+      within(dialog).getByText("Ruthless — for competitive decks in bracket 4+"),
     ).toBeInTheDocument();
     expect(within(dialog).getByText("Win the game")).toBeInTheDocument();
   });
@@ -466,8 +466,8 @@ describe("DeckBracket", () => {
     await userEvent.click(trigger());
     const dialog = await panel();
 
-    expect(within(dialog).getByText(/Possible combos \(not counted\)/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/can’t be checked automatically/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Possible combos, not counted\./)).toBeInTheDocument();
+    expect(within(dialog).getByText(/a sac outlet, that can’t be checked\./)).toBeInTheDocument();
     expect(
       within(dialog).getByText("Kenrith, the Returned King + Sol Ring"),
     ).toBeInTheDocument();
@@ -499,7 +499,7 @@ describe("DeckBracket", () => {
     expect(within(dialog).getByText(/downloads automatically after launch/)).toBeInTheDocument();
     // Never a press to go and find: the panel it pointed at does not exist any more.
     expect(within(dialog).queryByText(/Settings/)).toBeNull();
-    expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
+    expect(within(dialog).queryByText(/No known two-card combo in this deck/)).toBeNull();
   });
 
   /**
@@ -516,7 +516,7 @@ describe("DeckBracket", () => {
     const dialog = await screen.findByRole("dialog");
 
     expect(await within(dialog).findByText("Loading combos…")).toBeInTheDocument();
-    expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
+    expect(within(dialog).queryByText(/No known two-card combo in this deck/)).toBeNull();
   });
 
   /** And the positive claim only where it can be made honestly: a list that answered, with
@@ -526,7 +526,7 @@ describe("DeckBracket", () => {
     await userEvent.click(trigger());
 
     expect(
-      within(await panel()).getByText("No two-card combo in the list matches this deck."),
+      within(await panel()).getByText("No known two-card combo in this deck."),
     ).toBeInTheDocument();
   });
 
@@ -540,7 +540,7 @@ describe("DeckBracket", () => {
     const dialog = await screen.findByRole("dialog");
 
     expect(await within(dialog).findByText(/Couldn’t load combo data/)).toBeInTheDocument();
-    expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
+    expect(within(dialog).queryByText(/No known two-card combo in this deck/)).toBeNull();
   });
 
   /**
@@ -744,7 +744,7 @@ describe("BracketAdvisory, drawn without a picker", () => {
       />,
     );
     expect(screen.queryByRole("radiogroup")).toBeNull();
-    expect(screen.getByText(/^Auto — read from the cards/)).toBeInTheDocument();
+    expect(screen.getByText(/^Auto — estimated from the cards/)).toBeInTheDocument();
   });
 
   it("names a rung the reader set, and still leads with the mismatch", () => {

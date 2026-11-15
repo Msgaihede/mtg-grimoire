@@ -205,7 +205,7 @@ export const TwoCurrencies: Story = {
     await userEvent.click(within(wall).getAllByRole("button")[0]);
     const box = await canvas.findByRole("combobox", { name: "Prices from" });
     await userEvent.type(box, "cardm{Enter}");
-    const chips = canvas.getByRole("list", { name: "Marketplaces priced at" });
+    const chips = canvas.getByRole("list", { name: "Selected marketplaces" });
     await expect(within(chips).getAllByRole("listitem")).toHaveLength(2);
     await expect(await canvas.findByText(/converted at €1 = \$1\.0800/)).toBeVisible();
   },

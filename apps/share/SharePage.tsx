@@ -25,7 +25,7 @@ import { ShareTile } from "./ShareTile";
  * Word for word the shell's own `<noscript>` (`infrastructure/share-worker/src/page.ts`), so a reader with
  * scripting off and one with it on are told the same thing.
  */
-export const READ_ONLY_NOTICE = "This is a read-only snapshot. Anyone with this link can see it.";
+export const READ_ONLY_NOTICE = "Read-only snapshot. Anyone with the link can see it.";
 
 /**
  * Metadata posted, blob never uploaded — the state a publish that died between its two steps
@@ -35,7 +35,7 @@ export const READ_ONLY_NOTICE = "This is a read-only snapshot. Anyone with this 
  * page draws it in the app's own chrome and takes that fallback out of the document, so it is
  * never said twice.
  */
-export const SNAPSHOT_PENDING = "This shared collection is not ready yet.";
+export const SNAPSHOT_PENDING = "This shared collection isn't ready yet.";
 
 /** The blob did not arrive at all — the network, or an R2 object the D1 row outlived. */
 export const SNAPSHOT_OFFLINE = "Couldn't load this shared collection.";

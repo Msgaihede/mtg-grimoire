@@ -65,8 +65,8 @@ export function PoolZones({
     cn("-m-1.5 rounded-xl p-1.5", target.armed && DROP_RING, target.over && DROP_OVER);
   const sideEmpty =
     drop === undefined
-      ? "Nothing in your sideboard. Click a card in your deck to move it here."
-      : "Drop a card here to pick it into your sideboard, or click a card in your deck to move it here.";
+      ? "Sideboard is empty. Click a deck card to move it here."
+      : "Drop a card here to pick it to your sideboard, or click a deck card to move it.";
 
   if (layout === "side") {
     // The two trays one after the other at their whole height: the panel round them is the one

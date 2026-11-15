@@ -130,7 +130,7 @@ const deckCategoryReorder = vi.hoisted(() => vi.fn());
 const deckCategoryRename = vi.hoisted(() => vi.fn());
 const deckCategorySetActive = vi.hoisted(() => vi.fn());
 const deckCategoryDelete = vi.hoisted(() => vi.fn());
-/** `Clear stack…`'s write, and it is a **card** command through `useDeck` rather than one of
+/** `Clear category…`'s write, and it is a **card** command through `useDeck` rather than one of
  *  the three above — a clear empties a pile and changes nothing about the category itself. */
 const deckCategoryClear = vi.hoisted(() => vi.fn());
 const deckAuditList = vi.hoisted(() => vi.fn());
@@ -844,7 +844,7 @@ const COPIES = "Copies of Lightning Bolt in Main deck";
  *  out once because three tests address the control, and a regex over its two-word label alone
  *  would keep passing on the day the sentence went missing — which is the half of the name that
  *  has to stand up read out of context, with no Group by picker beside it. */
-const SPLIT_X = "Split X — group X-cost cards separately instead of counting X as 0";
+const SPLIT_X = "Split X: group X-cost cards separately instead of counting X as 0";
 
 /** `VIEWS`' own `id → label` map, read back here because it is not exported: the two
  *  `it.each(["stacks", "table", "text", "grid"])` sweeps below pass the id as both the test's
@@ -2593,7 +2593,7 @@ describe("DeckEditor", () => {
     await writeToDeck();
 
     expect(
-      await screen.findByText(/this deck no longer exists\. it may have been deleted/i),
+      await screen.findByText(/^this deck no longer exists\.$/i),
     ).toBeInTheDocument();
     expect(useAppStore.getState().selectedCardId).not.toBeNull();
   });
@@ -3084,7 +3084,7 @@ describe("DeckEditor", () => {
       "Companion",
       // Seeded switched off, and offered like any other: `isActive` decides what a pile counts
       // toward and never whether a card may be filed into it.
-      "Maybeboard (off)",
+      "Maybeboard (inactive)",
     ]);
     // The default, and the whole of the fix that came with the sentinel: it used to be
     // `categories[0]`, which on a deck with no user category of its own is the seeded
@@ -3924,7 +3924,7 @@ describe("DeckEditor", () => {
    */
   it.each([
     ["Import cards", "Import cards"],
-    ["Export deck", 'Export "Burn"'],
+    ["Export deck", "Export “Burn”"],
     ["Categories", "Categories"],
     ["Labels", "Labels"],
     ["History", "History"],
@@ -4399,7 +4399,7 @@ describe("DeckEditor", () => {
    */
   it.each([
     ["Import cards", "Import cards", null],
-    ["Export deck", 'Export "Burn"', null],
+    ["Export deck", "Export “Burn”", null],
     ["Categories", "Categories", null],
     ["Labels", "Labels", null],
     ["History", "History", null],
@@ -4583,7 +4583,7 @@ describe("DeckEditor", () => {
   /**
    * **The export's deck scope, which is what the header button is for.**
    *
-   * The dialog is titled for the *deck* — `Export "Burn"` — where the category menu's row titles
+   * The dialog is titled for the *deck* — `Export “Burn”` — where the category menu's row titles
    * it for the pile, and that title is the whole of what tells the two presses apart on screen.
    * The cards are the deck's own list, so a card in a pile nothing filtered to is in the text: a
    * whole-deck export that quietly exported one column would look identical to this one at the
@@ -4597,7 +4597,7 @@ describe("DeckEditor", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Export deck" }));
 
-    const dialog = await screen.findByRole("dialog", { name: 'Export "Burn"' });
+    const dialog = await screen.findByRole("dialog", { name: "Export “Burn”" });
     // The preview opens shut and is **unmounted** while it is — the press is what a reader makes
     // to read the text, and this suite has to make it too. See `ExportDialog.tsx`.
     await userEvent.click(within(dialog).getByRole("button", { name: /Show decklist/ }));
@@ -4632,7 +4632,7 @@ describe("DeckEditor", () => {
 
     // The count is the variant's own copies, not the deck's: 2 Bolts and 1 Bear.
     expect(
-      await screen.findByLabelText("Replace — remove the 3 cards in Theory first"),
+      await screen.findByLabelText("Replace: remove the 3 cards in Theory first"),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
@@ -4915,7 +4915,7 @@ describe("DeckEditor", () => {
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1);
     // A toast (the dialog's own `notifyWishesSent`), where the editor drew a self-clearing line.
     await waitFor(() =>
-      expect(useNotifications.getState().notices[0]?.title).toMatch(/^Sent .* to the wishlist$/),
+      expect(useNotifications.getState().notices[0]?.title).toMatch(/^Sent .* to your wishlist$/),
     );
   });
 
@@ -5034,8 +5034,8 @@ describe("DeckEditor", () => {
     await open();
 
     await pickOption(user, "Group by", "Matches theory");
-    expect(await screen.findByRole("list", { name: "Exact Match" })).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "No Match" })).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: "Exact match" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "No match" })).toBeInTheDocument();
     expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "theory" });
 
     await user.click(screen.getByRole("button", { name: "Theory" }));
@@ -5047,7 +5047,7 @@ describe("DeckEditor", () => {
     expect(deckSetViewState).not.toHaveBeenLastCalledWith(4, { groupBy: "category" });
 
     await user.click(screen.getByRole("button", { name: "Actual" }));
-    expect(await screen.findByRole("list", { name: "Exact Match" })).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: "Exact match" })).toBeInTheDocument();
   });
 
   /**
@@ -6218,7 +6218,7 @@ describe("DeckEditor — a card's menu", () => {
    * rather than a second way to take a card out. It gets that write's hand-off for free: the
    * caret goes to the pile the card just left, which is what the tray and the stepper already do.
    *
-   * **No confirmation**, unlike the pile's `Clear stack…`: one card is one add to put back.
+   * **No confirmation**, unlike the pile's `Clear category…`: one card is one add to put back.
    */
   it("removes a card straight from its menu, with nothing to confirm", async () => {
     await open();
@@ -6600,7 +6600,7 @@ describe("DeckEditor — a card's menu", () => {
    * what the three cases here are actually about.
    *
    * **That dialog became a picker with a create in it at schema v21**, and the chain is still
-   * untouched: the row is "More labels…", the field is "Find or name a label", and the button says
+   * untouched: the row is "More labels…", the field is "Find or create a label", and the button says
    * the name back. What is new is the *other* press — see the case below this one, where an
    * existing label goes on the card with no create at all.
    */
@@ -6615,7 +6615,7 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
     await screen.findByRole("dialog", { name: "Add label" });
 
-    await userEvent.type(screen.getByLabelText("Find or name a label"), "Cut candidate");
+    await userEvent.type(screen.getByLabelText("Find or create a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Slate" }));
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
@@ -6652,7 +6652,7 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Label card/);
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
-    await userEvent.type(await screen.findByLabelText("Find or name a label"), "Cut candidate");
+    await userEvent.type(await screen.findByLabelText("Find or create a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
@@ -6683,7 +6683,7 @@ describe("DeckEditor — a card's menu", () => {
     await expand(/Label card/);
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
-    await userEvent.type(await screen.findByLabelText("Find or name a label"), "Cut candidate");
+    await userEvent.type(await screen.findByLabelText("Find or create a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
     await waitFor(() =>
@@ -7339,7 +7339,7 @@ describe("DeckEditor — the Collection submenu", () => {
     ).toBeChecked();
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add 4 copies" }));
 
     await waitFor(() =>
       expect(deckQuickAddToCollection).toHaveBeenCalledWith(
@@ -7397,7 +7397,7 @@ describe("DeckEditor — the Collection submenu", () => {
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
 
     await userEvent.click(within(dialog).getByRole("radio", { name: /Modern staples/ }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add 4 copies" }));
 
     await waitFor(() =>
       expect(deckQuickAddToCollection).toHaveBeenCalledWith(
@@ -7653,10 +7653,10 @@ describe("DeckEditor — the Collection submenu", () => {
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
     const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add 4 copies" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Couldn't record those copies — that wishlist line is not there",
+      "Couldn't add those copies — that wishlist line is not there",
     );
     expect(screen.getByRole("dialog", { name: "Which wishlist item?" })).toBeInTheDocument();
   });
@@ -7714,9 +7714,9 @@ describe("DeckEditor — the Collection submenu", () => {
     const row = "Quick add 4 and remove from wishlist";
     await userEvent.click(screen.getByRole("menuitem", { name: row }));
     let dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add 4 copies" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Couldn't record those copies",
+      "Couldn't add those copies",
     );
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
@@ -7962,9 +7962,9 @@ describe("DeckEditor — a category's menu", () => {
     expect(screen.getByRole("menuitem", { name: "Export cards…" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Deactivate" })).toBeInTheDocument();
     // A regex, because these fixture piles hold no cards and a greyed row's `reason` is part of
-    // its accessible name — "Clear stack… already empty" is deliberately one sentence. The
+    // its accessible name — "Clear category… already empty" is deliberately one sentence. The
     // greying itself is asserted below, where a pile with cards is seeded to sit beside it.
-    expect(screen.getByRole("menuitem", { name: /Clear stack…/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Clear category…/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeInTheDocument();
     // Hide is the Stacks view's row and nobody else's (issue #618): the other three draw every
     // card of a hidden stack, so the row would change nothing there.
@@ -8023,7 +8023,7 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
-   * The deck the fixtures build has `cardCount: 0` on every pile, so `Clear stack…` is greyed
+   * The deck the fixtures build has `cardCount: 0` on every pile, so `Clear category…` is greyed
    * there — this is the deck the four cases below need: a Main deck holding four copies of one
    * card in the live list.
    */
@@ -8035,7 +8035,7 @@ describe("DeckEditor — a category's menu", () => {
   }
 
   /**
-   * **`Clear stack…` asks rather than writing**, exactly as `Delete…` does and for the same
+   * **`Clear category…` asks rather than writing**, exactly as `Delete…` does and for the same
    * reason: `CategoryMenuDeps` carries no clear mutation at all, so the menu structurally cannot
    * reach the command without the reader passing through the question.
    */
@@ -8044,7 +8044,7 @@ describe("DeckEditor — a category's menu", () => {
     await open();
     await rightClickGroup(MAIN);
 
-    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear category…" }));
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     expect(deckCategoryClear).not.toHaveBeenCalled();
@@ -8065,7 +8065,7 @@ describe("DeckEditor — a category's menu", () => {
     withCardsInMain();
     await open();
     await rightClickGroup(MAIN);
-    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear category…" }));
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -8086,7 +8086,7 @@ describe("DeckEditor — a category's menu", () => {
     withCardsInMain();
     await open();
     await rightClickGroup(MAIN);
-    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear category…" }));
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await waitFor(() =>
@@ -8105,12 +8105,12 @@ describe("DeckEditor — a category's menu", () => {
     deckCategoryClear.mockRejectedValue("The database is busy");
     await open();
     await rightClickGroup(MAIN);
-    await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear category…" }));
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove 4 cards" }));
 
-    expect(await within(dialog).findByText(/Couldn't clear that stack/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Couldn't clear that category/)).toBeInTheDocument();
   });
 
   /** Nothing to clear, so the row stays where the reader last found it and greys — `aria-disabled`
@@ -8119,7 +8119,7 @@ describe("DeckEditor — a category's menu", () => {
     await open();
     await rightClickGroup(SIDE);
 
-    const row = screen.getByRole("menuitem", { name: /Clear stack…/ });
+    const row = screen.getByRole("menuitem", { name: /Clear category…/ });
     expect(row).toHaveAttribute("aria-disabled", "true");
 
     await userEvent.click(row);
@@ -8943,7 +8943,7 @@ describe("DeckEditor multi-select", () => {
     expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, 9, null, "live", null);
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
-        title: "Created “Removal” and filed 2 cards in it",
+        title: "Created “Removal” and moved 2 cards into it",
         tone: "success",
       }),
     );

@@ -50,16 +50,16 @@ describe("unreleased", () => {
   });
 
   it("says the date in words", () => {
-    expect(unreleasedLabel("2026-11-14")).toBe("Unreleased — out 2026-11-14");
+    expect(unreleasedLabel("2026-11-14")).toBe("Unreleased, out 2026-11-14");
   });
 
   /** Issue #1458: the chin's mark is an icon, so its tooltip carries both dates. */
   it("says the release date, then the image's day when the stamp has one", () => {
     expect(unreleasedLines({ set: "TLA", date: "2026-11-14" })).toEqual([
-      "Unreleased — out 2026-11-14",
+      "Unreleased, out 2026-11-14",
     ]);
     expect(unreleasedLines({ set: "TLA", date: "2026-11-14", imageUpdated: "2026-10-09" })).toEqual(
-      ["Unreleased — out 2026-11-14", "Image updated 2026-10-09"],
+      ["Unreleased, out 2026-11-14", "Image updated 2026-10-09"],
     );
   });
 });

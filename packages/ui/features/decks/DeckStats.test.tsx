@@ -1727,7 +1727,7 @@ describe("DeckStats", () => {
     const options = vi.mocked(send.mutate).mock.lastCall?.[1];
     options?.onSuccess?.(3);
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Sent 3 cards to the wishlist",
+      title: "Sent 3 cards to your wishlist",
       tone: "success",
     });
   });
@@ -1808,7 +1808,7 @@ describe("DeckStats", () => {
     await press(short(), sender({ isSuccess: true, data: 0 }));
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Nothing to add. The missing cards are already covered or no longer in the card database.",
+      "Nothing to add. The missing cards are already covered or no longer in your card data.",
     );
     expect(screen.getByRole("status")).not.toHaveTextContent(/already on your wishlist/i);
   });
@@ -2473,7 +2473,7 @@ describe("DeckStats", () => {
       await pressAt(short(), "Pick Ordered", sender({ isSuccess: true, data: 0 }));
 
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Nothing to add. The missing cards are already covered or no longer in the card database.",
+        "Nothing to add. The missing cards are already covered or no longer in your card data.",
       );
       expect(screen.getByRole("status")).not.toHaveTextContent(/Ordered/);
     });
@@ -2492,7 +2492,7 @@ describe("DeckStats", () => {
       );
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Couldn't add to the wishlist — That folder is not there any more.",
+        "Couldn't add to your wishlist — That folder is not there any more.",
       );
       // And the press is available again: a refusal spends nothing, so the reader can pick
       // another drawer and try. `spent` is `!send.isError`'s own arm, which the destination

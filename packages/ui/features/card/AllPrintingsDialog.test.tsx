@@ -1259,7 +1259,7 @@ describe("AllPrintingsDialog", () => {
       openOwned();
 
       expect(
-        await screen.findByText("Your collection holds no copy of this card a trade can take."),
+        await screen.findByText("No copies in your collection to trade."),
       ).toBeInTheDocument();
     });
   });
@@ -1271,7 +1271,7 @@ describe("AllPrintingsDialog", () => {
    * the tile right-clicked is a different printing from the one the modal was opened on, and it
    * is still the same list.
    */
-  it("greys its own tiles' View all printings, because you are already looking at them", async () => {
+  it("greys its own tiles' View all printings, because they are already open", async () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
     renderDialog();
     open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
@@ -1282,7 +1282,7 @@ describe("AllPrintingsDialog", () => {
     // label — an exact-string query here fails and reads as "the row is missing".
     const row = await screen.findByRole("menuitem", { name: /View all printings/ });
     expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(row).toHaveAccessibleName(/you are already looking at them/);
+    expect(row).toHaveAccessibleName(/already open/);
   });
 
   /**

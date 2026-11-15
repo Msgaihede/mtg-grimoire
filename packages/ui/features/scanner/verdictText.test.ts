@@ -63,7 +63,7 @@ describe("the sentences", () => {
    */
   it("says the recogniser did not load in the load's words, and nothing else", () => {
     expect(neuralSentence(STATUS.corrupt)).toBe(
-      "The card recognizer did not load: gallery: bad magic.",
+      "The Neural scanner didn't load: gallery: bad magic.",
     );
     for (const status of [STATUS.present, STATUS.missing, STATUS.unlabelled, STATUS.store, null]) {
       expect(neuralSentence(status)).toBeNull();

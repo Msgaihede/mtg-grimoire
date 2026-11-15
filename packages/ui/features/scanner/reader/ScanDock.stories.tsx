@@ -141,7 +141,7 @@ export const PointAndShoot: Story = {
   args: { scanning: false },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    const runs = canvas.getByRole("group", { name: "How scanning runs" });
+    const runs = canvas.getByRole("group", { name: "Scan mode" });
     await userEvent.click(within(runs).getByRole("button", { name: "Point & shoot" }));
     await expect(args.onPointAndShoot).toHaveBeenCalledWith(true);
     await expect(canvas.queryByRole("button", { name: "Start" })).toBeNull();
@@ -164,7 +164,7 @@ export const FinishDetect: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Finish: Detect" }));
     await expect(
       await canvas.findByText(
-        "A card printed in one finish takes it. One printed in several waits in the tray for you to pick.",
+        "Cards with one finish get it. Others wait in the tray for you to pick.",
       ),
     ).toBeInTheDocument();
     const group = canvas.getByRole("radiogroup", { name: "New cards land as" });
@@ -207,7 +207,13 @@ export const WithFilters: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.queryByRole("group", { name: "Scan mode" })).toBeNull();
+    // *Scan mode* names How scanning runs now: the one group by that name is Continuous | Point &
+    // shoot, and no recognition mode is offered beside it.
+    await expect(
+      canvas
+        .getAllByRole("group", { name: "Scan mode" })
+        .map((group) => within(group).getAllByRole("button").map((b) => b.textContent)),
+    ).toEqual([["Continuous", "Point & shoot"]]);
     await expect(
       canvas.getByRole("button", { name: "Filters: HOB, LTR · 2023-06-23 – 2024-12-31" }),
     ).toBeInTheDocument();

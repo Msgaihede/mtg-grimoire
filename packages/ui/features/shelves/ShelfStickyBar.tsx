@@ -116,7 +116,7 @@ export function ShelfStickyBar({
           type="button"
           onClick={onTop}
           className={SHELF_TEXT_BUTTON}
-          {...tip("Scroll back to the top")}
+          {...tip("Scroll to top")}
         >
           <ArrowUp className="size-3.5" aria-hidden="true" />
           Top

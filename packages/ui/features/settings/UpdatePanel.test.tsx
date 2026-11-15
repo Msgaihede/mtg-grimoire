@@ -147,9 +147,9 @@ describe("UpdatePanel", () => {
     expect(screen.getByText(/is available/)).toHaveTextContent("0.3.0 is available");
     expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
     expect(screen.getByText(/can.t update itself/i)).toBeInTheDocument();
-    expect(screen.getByText(/your data stays put/i)).toBeInTheDocument();
+    expect(screen.getByText(/your data is kept/i)).toBeInTheDocument();
 
-    await userEvent.click(primary(/^Open the release page$/));
+    await userEvent.click(primary(/^Open release page$/));
     expect(openReleasePage).toHaveBeenCalledOnce();
   });
 
@@ -289,7 +289,7 @@ describe("UpdatePanel", () => {
   it.each<[UpdateAction, RegExp]>([
     ["download", /^Download/],
     ["install", /^Restart to finish$/],
-    ["unavailable", /^Open the release page$/],
+    ["unavailable", /^Open release page$/],
   ])("shows exactly one primary control for %s", (action, name) => {
     render(
       panel(

@@ -272,7 +272,7 @@ export function DraftSession({
             role="status"
             className="m-0 mb-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm"
           >
-            The host is offline — your pick waits until they are back.
+            The host is offline. Your pick waits until they return.
           </p>
         )}
         {notice !== null && (

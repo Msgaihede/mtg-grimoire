@@ -23,7 +23,7 @@ import { toggleTodo, type TodoBlock, type TodoItem } from "./todoMarkdown";
  *  not in a name. */
 export function todoTickName(item: TodoItem): string {
   const text = item.text.replace(/\s+/g, " ").trim() || "empty to-do";
-  return `Mark "${text}" ${item.done ? "not done" : "done"}`;
+  return `Mark “${text}” ${item.done ? "not done" : "done"}`;
 }
 
 /**

@@ -211,7 +211,7 @@ describe("DeckHistoryDialog", () => {
     it("offers the five bands, every one pressed", async () => {
       await drawn();
 
-      const group = screen.getByRole("group", { name: "Filter the history by kind" });
+      const group = screen.getByRole("group", { name: "Filter history by kind" });
       const chips = within(group).getAllByRole("button");
       expect(chips.map((chip) => chip.textContent)).toEqual([
         "Adds",
@@ -261,9 +261,9 @@ describe("DeckHistoryDialog", () => {
       await screen.findByText("Added 2 × Lightning Bolt");
 
       await userEvent.click(screen.getByRole("button", { name: "Adds" }));
-      expect(screen.getByText("Nothing matches these filters.")).toBeInTheDocument();
+      expect(screen.getByText("No matching changes.")).toBeInTheDocument();
 
-      await userEvent.click(screen.getByRole("button", { name: "Show everything" }));
+      await userEvent.click(screen.getByRole("button", { name: "Show all" }));
       expect(screen.getByText("Added 2 × Lightning Bolt")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Adds" })).toHaveAttribute("aria-pressed", "true");
     });
@@ -292,7 +292,7 @@ describe("DeckHistoryDialog", () => {
         "aria-pressed",
         "false",
       );
-      expect(screen.getByText("Nothing matches these filters.")).toBeInTheDocument();
+      expect(screen.getByText("No matching changes.")).toBeInTheDocument();
     });
 
     /**
@@ -307,7 +307,7 @@ describe("DeckHistoryDialog", () => {
       await drawn();
 
       const other = await screen.findByRole("button", {
-        name: "Other, changes this version of the app has no name for",
+        name: "Other, changes this app version doesn't recognize",
       });
       expect(other).toHaveAttribute("aria-pressed", "true");
       // `auditText` is total over unknown kinds too, so the row still lists with a date and a
@@ -316,7 +316,7 @@ describe("DeckHistoryDialog", () => {
 
       await userEvent.click(other);
       expect(screen.queryByText("Changed the deck")).toBeNull();
-      expect(screen.getByText("Nothing matches these filters.")).toBeInTheDocument();
+      expect(screen.getByText("No matching changes.")).toBeInTheDocument();
     });
 
     /** And it is absent the rest of the time: a filter for a thing that has never happened is
@@ -389,7 +389,7 @@ describe("DeckHistoryDialog", () => {
       deckAuditList.mockResolvedValue([]);
       await drawn();
 
-      expect(await screen.findByText("No changes recorded yet.")).toBeInTheDocument();
+      expect(await screen.findByText("No changes yet.")).toBeInTheDocument();
       expect(screen.queryByText(/changes since/)).toBeNull();
     });
 
@@ -411,7 +411,7 @@ describe("DeckHistoryDialog", () => {
 
       expect(await screen.findByText("Couldn't load this deck's history.")).toBeInTheDocument();
       expect(screen.getByText(/BUSY: the database is being written to/)).toBeInTheDocument();
-      expect(screen.queryByText("No changes recorded yet.")).toBeNull();
+      expect(screen.queryByText("No changes yet.")).toBeNull();
     });
 
     /**

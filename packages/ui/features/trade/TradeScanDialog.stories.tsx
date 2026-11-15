@@ -144,7 +144,7 @@ export const TheirSide: Story = {
       within(tray).getByRole("button", { name: "Add 5 to their side" }),
     ).not.toHaveAttribute("aria-disabled");
     await expect(within(tray).getByRole("note")).toHaveTextContent(
-      /^5 cards were already in the scanner's tray\./,
+      /^5 cards were already in the tray\./,
     );
     await expect(within(tray).getByText("Scanned so far")).toBeInTheDocument();
     await expect(within(dialog).queryByRole("button", { name: /^Folder:/ })).toBeNull();

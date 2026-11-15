@@ -1427,7 +1427,7 @@ describe("NoteEditor in checklist mode", () => {
     // Read as a string rather than through `toHaveAttribute(name, value)`, which checks only that
     // the attribute exists when the value it is handed is `undefined`.
     expect(empty.querySelector("[data-placeholder]")?.getAttribute("data-placeholder")).toBe(
-      "Write, or add a to-do — Enter for the next, Tab to nest.",
+      "Write, or add a to-do. Enter adds the next, Tab nests.",
     );
     // An empty list opens on one empty to-do, not on a line of text: the schema would fill an
     // empty document with a paragraph, since that is what its content expression names first.
@@ -1435,7 +1435,7 @@ describe("NoteEditor in checklist mode", () => {
   });
 
   it("says what a list holds, and what Enter and Tab do", () => {
-    expect(TODO_PLACEHOLDER).toBe("Write, or add a to-do — Enter for the next, Tab to nest.");
+    expect(TODO_PLACEHOLDER).toBe("Write, or add a to-do. Enter adds the next, Tab nests.");
   });
 
   /**

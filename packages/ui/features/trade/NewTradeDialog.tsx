@@ -51,7 +51,7 @@ export function NewTradeDialog({
     <Dialog
       open={open}
       title="New trade"
-      subtitle="It opens empty. Cards go on once it is open."
+      subtitle="Starts empty. Add cards once it's open."
       // Not `Cancel`: the footer has a button of that name, and two controls answering to one
       // name on one panel is a control nobody can address.
       closeLabel="Close"
@@ -104,7 +104,7 @@ function Body({
       .then((id) => {
         // A receipt for a dialog that writes and closes. A name left blank is the backend's to
         // choose, and this does not have it, so that receipt names no trade.
-        notify.success(trimmed ? `Trade “${trimmed}” created` : "Trade created");
+        notify.success(trimmed ? `Created “${trimmed}”` : "Trade created");
         onCreated(id);
       })
       .catch((e: unknown) => {
@@ -138,7 +138,7 @@ function Body({
             className={cn(FIELD, "h-9 px-3")}
           />
           <span id={`${id}-name-hint`} className="text-xs text-dim">
-            Optional. Left empty, the trade is named by its number.
+            Optional. Unnamed trades are numbered.
           </span>
         </div>
 

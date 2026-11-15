@@ -91,7 +91,7 @@ import {
  * sentence promising the *card* back would be wrong for exactly the rows a reader is least sure
  * about.
  */
-export const CUT_CARDS_NOTE = "Copies you cut from this deck go to Recently removed.";
+export const CUT_CARDS_NOTE = "Copies you remove go to Recently removed.";
 
 export function PriceStrip({
   marketplace,

@@ -338,7 +338,7 @@ export function autoCategoryIfKnown(card: {
  * `Auto (by what it does)` in Deck settings is being told that this press is that setting at work.
  * The control's accessible *name* stays `Add <card>` — the card is what tells two of them apart.
  */
-export const UNNAMED_PILE_TIP = "Add — filed by what it does";
+export const UNNAMED_PILE_TIP = "Add, filed by what it does";
 
 /**
  * Where a bucket sorts **on screen** — {@link AUTO_CATEGORY_DISPLAY_ORDER}, with the fallback

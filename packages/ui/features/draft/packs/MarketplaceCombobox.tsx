@@ -16,7 +16,7 @@ const CURRENCY_CODE = { usd: "USD", eur: "EUR" } as const;
 function disabledReason(m: Marketplace): string {
   return m.priced
     ? `${m.label}'s prices can't be read here.`
-    : `${m.label} has no prices this app can read.`;
+    : `${m.label} has no prices in this app.`;
 }
 
 /**
@@ -135,7 +135,7 @@ export function MarketplaceCombobox({
           "bg-surface px-1.5 py-1 text-sm text-text focus-within:border-accent",
         )}
       >
-        <ul aria-label="Marketplaces priced at" className="contents">
+        <ul aria-label="Selected marketplaces" className="contents">
           {picked.map((m) => (
             <li
               key={m.id}
@@ -148,7 +148,7 @@ export function MarketplaceCombobox({
               {removable && (
                 <button
                   type="button"
-                  aria-label={`Stop pricing at ${m.label}`}
+                  aria-label={`Remove ${m.label}`}
                   onClick={() => {
                     onToggle(m.id);
                     inputRef.current?.focus();

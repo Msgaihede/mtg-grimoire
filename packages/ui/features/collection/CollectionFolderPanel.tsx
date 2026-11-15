@@ -121,7 +121,7 @@ export const CollectionFolderPanel = memo(function CollectionFolderPanel({
             // cycle is a graph SQLite would walk forever the day the folder is deleted — and
             // that refusal is a fence rather than the affordance.
             forbidden={new Set([panel.folderId, ...folderDescendants(userFolders, panel.folderId)])}
-            forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
+            forbiddenReason="A folder can't go inside itself or its own subfolders."
             // Drawn **into** the strip rather than as a popup of its own: the strip is the
             // layer, and a second box with its own shadow and its own z-index over it would be
             // a second Escape rung for one decision.
@@ -309,7 +309,7 @@ function DeleteFolderConfirm({
     >
       <p>Delete “{name}”?</p>
       <p className="mt-1 leading-relaxed text-dim">
-        Its cards move back to your collection; folders inside it are deleted.
+        Its cards move back to your collection. Its subfolders are deleted.
       </p>
       <div className="mt-2 flex gap-2">
         <button
@@ -399,7 +399,7 @@ function ClearRemovedConfirm({
       }}
     >
       <p>Remove {which} from your collection?</p>
-      <p className="mt-1 leading-relaxed text-dim">This cannot be undone.</p>
+      <p className="mt-1 leading-relaxed text-dim">This can't be undone.</p>
       <div className="mt-2 flex gap-2">
         <button
           type="button"

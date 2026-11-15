@@ -98,7 +98,7 @@ export function facetTitle(label: string, count: number | undefined): string | u
   // The unit is spelled here rather than through `plural`, which writes its number plainly:
   // a facet count is the one figure in this app that genuinely reaches five digits, so it
   // wants its separators. Only the numeral is shared.
-  return `${label} — ${numeral(count)} printing${count === 1 ? "" : "s"}`;
+  return `${label}: ${numeral(count)} printing${count === 1 ? "" : "s"}`;
 }
 
 /**

@@ -217,7 +217,7 @@ describe("an engine event, read by what both faces mount", () => {
     // answers the generic sentence over an indeterminate bar rather than nothing at all.
     const status = await ipc.syncStatus();
     expect(syncActivity(result.current, status.syncing)).toMatchObject({
-      label: "Syncing card data",
+      label: "Updating card data",
       value: null,
     });
 
@@ -249,12 +249,12 @@ describe("an engine event, read by what both faces mount", () => {
     render(
       <SyncProgress progress={result.current} cardCount={0} error={null} busy onRetry={() => {}} />,
     );
-    const gate = screen.getByRole("dialog", { name: "Setting up your card database" });
+    const gate = screen.getByRole("dialog", { name: "Setting up card data" });
     expect(gate).toHaveTextContent("Downloading card data");
     expect(gate).toHaveTextContent("31 / 77 MB");
     expect(screen.getByRole("status")).toHaveTextContent("Downloading card data");
     // Nothing to retry while it runs.
-    expect(screen.queryByRole("button", { name: "Retry download" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     unmount();
   });
 
@@ -281,7 +281,7 @@ describe("an engine event, read by what both faces mount", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(
       "Couldn't reach Scryfall: the request was blocked.",
     );
-    expect(screen.getByRole("button", { name: "Retry download" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     unmount();
   });
 });

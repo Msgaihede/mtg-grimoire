@@ -41,7 +41,7 @@ export function EntryTagsDialog({
     <Dialog
       open={target !== null}
       title="Tags"
-      closeLabel="Close the tags"
+      closeLabel="Close"
       size="w-[26rem]"
       onDismiss={onDismiss}
       onClose={onClose}

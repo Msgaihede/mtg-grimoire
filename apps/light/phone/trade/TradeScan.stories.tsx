@@ -181,7 +181,7 @@ export const TheirSide: Story = {
       within(sheet).getByRole("button", { name: "Add 5 to their side" }),
     ).not.toHaveAttribute("aria-disabled");
     await expect(within(sheet).getByRole("note")).toHaveTextContent(
-      /^5 cards were already in the scanner's tray\./,
+      /^5 cards were already in the tray\./,
     );
     await expect(within(sheet).getByText("Scanned so far")).toBeInTheDocument();
     await expect(within(sheet).queryByRole("button", { name: /^Folder:/ })).toBeNull();

@@ -604,8 +604,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Double-click a card to pick it into your deck, or drag it onto your deck or sideboard · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard · Rest on a card to see it large"
-            : `Click ${need} cards to choose them, then double-click the last or drag it onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard · Rest on a card to see it large`}
+            ? "Double-click or drag a card to pick it · Click to choose · ← → ↑ ↓ move · Enter picks to deck, Shift+Enter to sideboard · Hover to enlarge"
+            : `Click ${need} cards, then double-click or drag the last to pick · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter to sideboard · Hover to enlarge`}
         </p>
       </div>
     </div>

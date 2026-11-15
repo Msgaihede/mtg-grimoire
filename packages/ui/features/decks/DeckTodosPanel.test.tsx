@@ -161,10 +161,10 @@ describe("the cards", () => {
     expect(await within(band).findByText("Lands")).toBeInTheDocument();
     expect(within(band).getByText("why")).toBeInTheDocument();
     expect(
-      within(band).getByRole("checkbox", { name: 'Mark "Cut a land" done' }),
+      within(band).getByRole("checkbox", { name: "Mark “Cut a land” done" }),
     ).not.toBeChecked();
     expect(
-      within(band).getByRole("checkbox", { name: 'Mark "Check curve" not done' }),
+      within(band).getByRole("checkbox", { name: "Mark “Check curve” not done" }),
     ).toBeChecked();
     // Reading a list loads no editor.
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -182,7 +182,7 @@ describe("the cards", () => {
 describe("a tick", () => {
   it("writes the list's body with the box flipped, against the body the card drew", async () => {
     renderBand({ lists: [MANA] });
-    const box = await screen.findByRole("checkbox", { name: 'Mark "Cut a land" done' });
+    const box = await screen.findByRole("checkbox", { name: "Mark “Cut a land” done" });
 
     await userEvent.click(box);
 
@@ -193,7 +193,7 @@ describe("a tick", () => {
     });
     // A success writes the new body into the cache, so the box is ticked at once.
     expect(
-      await screen.findByRole("checkbox", { name: 'Mark "Cut a land" not done' }),
+      await screen.findByRole("checkbox", { name: "Mark “Cut a land” not done" }),
     ).toBeChecked();
     // Ticking in place opens nothing.
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -202,21 +202,21 @@ describe("a tick", () => {
   it("refuses every box on the card while its tick is on the wire", async () => {
     deckTodoListUpdate.mockImplementation(() => new Promise<void>(() => {}));
     renderBand({ lists: [MANA, TOKENS] });
-    const box = await screen.findByRole("checkbox", { name: 'Mark "Cut a land" done' });
+    const box = await screen.findByRole("checkbox", { name: "Mark “Cut a land” done" });
 
     await userEvent.click(box);
 
     expect(box).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("checkbox", { name: 'Mark "Check curve" not done' })).toHaveAttribute(
+    expect(screen.getByRole("checkbox", { name: "Mark “Check curve” not done" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
     // Another card's boxes are not this tick's business.
-    expect(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' })).not.toHaveAttribute(
+    expect(screen.getByRole("checkbox", { name: "Mark “Revise tokens” done" })).not.toHaveAttribute(
       "aria-disabled",
     );
 
-    await userEvent.click(screen.getByRole("checkbox", { name: 'Mark "Check curve" not done' }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Mark “Check curve” not done" }));
     expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
   });
 
@@ -228,7 +228,7 @@ describe("a tick", () => {
     deckTodoListUpdate.mockRejectedValue(TODOS_CHANGED);
     renderBand({ lists: [MANA] });
     const band = await region();
-    const box = await within(band).findByRole("checkbox", { name: 'Mark "Cut a land" done' });
+    const box = await within(band).findByRole("checkbox", { name: "Mark “Cut a land” done" });
     expect(deckTodoLists).toHaveBeenCalledTimes(1);
 
     await userEvent.click(box);
@@ -285,7 +285,7 @@ describe("deleting a list", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Delete Mana" }));
 
     const question = await screen.findByRole("dialog", { name: "Delete “Mana”?" });
-    expect(question).toHaveTextContent("Its to-dos go with it.");
+    expect(question).toHaveTextContent("Its to-dos are deleted too.");
     expect(deckTodoListDelete).not.toHaveBeenCalled();
 
     await userEvent.click(within(question).getByRole("button", { name: "Delete list" }));

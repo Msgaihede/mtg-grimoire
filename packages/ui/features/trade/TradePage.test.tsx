@@ -555,7 +555,7 @@ describe("which trade the page opens on", () => {
     });
     await tradeSection("Friday swaps");
     expect(useNotifications.getState().notices[0]).toMatchObject({
-      title: "Trade “Friday swaps” created",
+      title: "Created “Friday swaps”",
       tone: "success",
     });
   });
@@ -568,7 +568,7 @@ describe("which trade the page opens on", () => {
     // not for the element.
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Couldn't read your trades — database is locked",
+        "Couldn't load your trades — database is locked",
       ),
     );
     expect(screen.queryByText("No trades yet")).not.toBeInTheDocument();
@@ -606,7 +606,7 @@ describe("which trade the page opens on", () => {
     // The region was there, empty, beside the trade: the sentence is swapped into it.
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Couldn't read this trade — database is locked",
+        "Couldn't load this trade — database is locked",
       ),
     );
     // Trade 5 was held while the read was out. It is not Trade 4, and is not left standing as it.
@@ -805,7 +805,7 @@ describe("whose prices a new trade can use", () => {
     expect(options()).toEqual(["TCGplayerUSD", "CardmarketEUR", "Card KingdomUSD ✗", "Mana PoolUSD ✗"]);
     await user.hover(screen.getByRole("option", { name: /^Card Kingdom/ }));
     expect(await screen.findByRole("tooltip", undefined, { timeout: 2000 })).toHaveTextContent(
-      "Switch the app to Card Kingdom in Settings to trade in its prices.",
+      "Switch to Card Kingdom in Settings to use its prices.",
     );
 
     // A press on it is refused: the trade is still the app's own marketplace's.
@@ -1237,7 +1237,7 @@ describe("an open trade", () => {
 
     const question = screen.getByRole("dialog", { name: "Delete this trade?" });
     expect(question).toHaveTextContent(
-      "“Trade 5” and the cards listed on both of its sides will be deleted. " +
+      "Deletes “Trade 5” and the cards listed on both sides. " +
         "Your collection and your wishlist are not touched.",
     );
     expect(ipcMock.tradeDelete).not.toHaveBeenCalled();
@@ -1433,7 +1433,7 @@ describe("a side's import and export", () => {
     expect(within(section).queryByRole("button", { name: /^Import cards/ })).not.toBeInTheDocument();
     const opener = within(section).getByRole("button", { name: "Export their side" });
     await user.click(opener);
-    const dialog = await screen.findByRole("dialog", { name: "Export \"Trade 5 — They give\"" });
+    const dialog = await screen.findByRole("dialog", { name: "Export “Trade 5 — They give”" });
     await user.click(within(dialog).getByRole("button", { name: /Copy/ }));
 
     await waitFor(() => expect(copyText).toHaveBeenCalledOnce());
@@ -1783,10 +1783,10 @@ describe("adding a card", () => {
     const heading = within(group).getByText("In your decks");
     expect(heading.classList.contains("text-destructive")).toBe(true);
     expect(group).toHaveAccessibleDescription(
-      "A finished trade takes these out of their decks, once your copies outside any deck have run out.",
+      "Finishing the trade takes these from their decks once your other copies run out.",
     );
     expect(
-      within(group).getByText(/A finished trade takes these/).classList.contains("text-destructive"),
+      within(group).getByText(/Finishing the trade takes these/).classList.contains("text-destructive"),
     ).toBe(true);
 
     // Each deck row names its deck and draws its words in that colour; an ordinary row does not.
@@ -1917,10 +1917,10 @@ describe("finishing a trade", () => {
     expect(dialog).toHaveTextContent("They give$87.095 cards");
     expect(within(dialog).getByText("$22.70")).toBeVisible();
 
-    const remove = box(dialog, "Take the cards you gave out of your collection");
+    const remove = box(dialog, "Remove the cards you gave from your collection");
     const add = box(dialog, "Add the cards you received to your collection");
-    const unwish = box(dialog, "Take the cards you received off your wishlist");
-    const wish = box(dialog, "Put the cards you gave on your wishlist");
+    const unwish = box(dialog, "Remove the cards you received from your wishlist");
+    const wish = box(dialog, "Add the cards you gave to your wishlist");
     expect(remove).toBeChecked();
     expect(add).toBeChecked();
     expect(unwish).toBeChecked();
@@ -1932,7 +1932,7 @@ describe("finishing a trade", () => {
       "5 cards, in the printing and finish shown in the trade.",
     );
     expect(unwish).toHaveAccessibleDescription("2 of them are on it: Urza's Saga, Tarmogoyf.");
-    expect(wish).toHaveAccessibleDescription("For the ones you want back one day.");
+    expect(wish).toHaveAccessibleDescription("For cards you want back.");
 
     await openDropdown(user, "Folder for the cards you received");
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
@@ -1957,8 +1957,8 @@ describe("finishing a trade", () => {
     // The page behind is the same trade, read-only, saying what the finish did.
     expect(await within(section).findByRole("button", { name: "Reopen" })).toBeVisible();
     expect(section).toHaveTextContent(
-      "Finished and archived, so nothing here can be edited. Finishing it took 6 cards out of " +
-        "your collection, added 5 cards to your collection and took 2 cards off your wishlist.",
+      "Finished and archived, so it can't be edited. Finishing it removed 6 cards from " +
+        "your collection, added 5 cards to your collection and removed 2 cards from your wishlist.",
     );
     expect(section).toHaveFocus();
     // One toast for the whole finish, however many cards it moved, saying what moved where.
@@ -1966,8 +1966,8 @@ describe("finishing a trade", () => {
     expect(useNotifications.getState().notices[0]).toMatchObject({
       title: "Finished “Trade 5”",
       body:
-        "Finishing it took 6 cards out of your collection, added 5 cards to your collection " +
-        "and took 2 cards off your wishlist.",
+        "Finishing it removed 6 cards from your collection, added 5 cards to your collection " +
+        "and removed 2 cards from your wishlist.",
       tone: "success",
     });
   });
@@ -2022,14 +2022,14 @@ describe("finishing a trade", () => {
     await user.click(within(section).getByRole("button", { name: "Finish trade" }));
     const dialog = screen.getByRole("dialog", { name: "Finish trade" });
 
-    expect(box(dialog, "Take the cards you gave out of your collection")).toHaveAccessibleDescription(
+    expect(box(dialog, "Remove the cards you gave from your collection")).toHaveAccessibleDescription(
       "6 cards. 1 of them is in your collection; the rest are left alone.",
     );
     expect(box(dialog, "Add the cards you received to your collection")).toHaveAccessibleDescription(
-      "There is nothing on their side.",
+      "Nothing on their side.",
     );
-    expect(box(dialog, "Take the cards you received off your wishlist")).toHaveAccessibleDescription(
-      "None of them are on your wishlist.",
+    expect(box(dialog, "Remove the cards you received from your wishlist")).toHaveAccessibleDescription(
+      "None are on your wishlist.",
     );
   });
 
@@ -2059,7 +2059,7 @@ describe("finishing a trade", () => {
 
     await user.click(within(section).getByRole("button", { name: "Finish trade" }));
     const dialog = screen.getByRole("dialog", { name: "Finish trade" });
-    const remove = box(dialog, "Take the cards you gave out of your collection");
+    const remove = box(dialog, "Remove the cards you gave from your collection");
 
     // Read with the box it is confirmed against, after the count.
     expect(remove).toHaveAccessibleDescription(
@@ -2101,7 +2101,7 @@ describe("finishing a trade", () => {
     await user.click(within(section).getByRole("button", { name: "Finish trade" }));
     const dialog = screen.getByRole("dialog", { name: "Finish trade" });
 
-    expect(box(dialog, "Take the cards you gave out of your collection")).toHaveAccessibleDescription(
+    expect(box(dialog, "Remove the cards you gave from your collection")).toHaveAccessibleDescription(
       "1 card. It is in your collection.",
     );
     expect(dialog).not.toHaveTextContent("out of a deck");
@@ -2158,7 +2158,7 @@ describe("finishing a trade", () => {
     const dialog = screen.getByRole("dialog", { name: "Finish trade" });
 
     for (const each of within(dialog).getAllByRole("checkbox")) expect(each).not.toBeChecked();
-    expect(dialog).toHaveTextContent("This trade was finished once before");
+    expect(dialog).toHaveTextContent("This trade was finished before, so every step starts off.");
     // A folder for cards that are not being added is not a question.
     expect(
       within(dialog).getByRole("button", { name: "Folder for the cards you received" }),
@@ -2241,11 +2241,11 @@ describe("a closed trade", () => {
     const section = await tradeSection("Trade 2");
 
     expect(
-      within(section).getByText("Finished 6 Sep 2026 · Prices kept from that day, in USD"),
+      within(section).getByText("Finished 6 Sep 2026 · Prices from that day, in USD"),
     ).toBeVisible();
     expect(section).toHaveTextContent(
-      "Finished and archived, so nothing here can be edited. Finishing it took 3 cards out of " +
-        "your collection, added 3 cards to your collection and took 1 card off your wishlist.",
+      "Finished and archived, so it can't be edited. Finishing it removed 3 cards from " +
+        "your collection, added 3 cards to your collection and removed 1 card from your wishlist.",
     );
 
     // Past tense, on the headings and on the balance: 64.39 against 69.68.
@@ -2309,11 +2309,11 @@ describe("a closed trade", () => {
     const section = await tradeSection("Trade 1");
 
     expect(
-      within(section).getByText("Archived 23 Aug 2026 · Prices kept from that day, in USD"),
+      within(section).getByText("Archived 23 Aug 2026 · Prices from that day, in USD"),
     ).toBeVisible();
     expect(section).toHaveTextContent(
-      "Archived without finishing, so nothing here can be edited. " +
-        "Archiving it changed nothing in your collection or your wishlist.",
+      "Archived without finishing, so it can't be edited. " +
+        "Nothing changed in your collection or wishlist.",
     );
     // Nothing changed hands, so nothing is in the past tense.
     expect(side(section, "You give")).toBeVisible();
@@ -2357,8 +2357,8 @@ describe("a closed trade", () => {
     const section = await tradeSection("Trade 2");
 
     expect(section).toHaveTextContent(
-      "Finished and archived, so nothing here can be edited. " +
-        "Finishing it took 2 cards out of your collection (1 from a deck).",
+      "Finished and archived, so it can't be edited. " +
+        "Finishing it removed 2 cards from your collection (1 from a deck).",
     );
     const ring = lineOf(side(section, "You gave"), "Sol Ring");
     expect(deckMark(ring)).toBeNull();

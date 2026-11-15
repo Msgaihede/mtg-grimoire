@@ -624,7 +624,7 @@ function DefaultCategoryRow({
     { value: String(AUTO_CATEGORY), label: AUTO_CATEGORY_LABEL },
     ...categories.map((category) => ({
       value: String(category.id),
-      label: category.isActive ? category.name : `${category.name} (off)`,
+      label: category.isActive ? category.name : `${category.name} (inactive)`,
     })),
   ];
 
@@ -649,7 +649,7 @@ function DefaultCategoryRow({
             ? "Cards are sorted into Removal, Ramp, Draw and more by what they do."
             : picked.isActive
               ? `New cards go to ${picked.name}.`
-              : `New cards go to ${picked.name}, which is inactive and doesn't count.`}
+              : `New cards go to ${picked.name}, which is inactive.`}
         </p>
       </div>
       <div className="w-44 shrink-0">

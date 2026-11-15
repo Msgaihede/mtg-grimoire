@@ -260,7 +260,7 @@ export function NoteCard({
             // The position is in the name because the only other way to know where a note landed
             // is to look at it — `CategoriesDialog`'s grip, one feature over.
             aria-label={`Move ${title}, ${reorder.index + 1} of ${reorder.total}`}
-            {...tip("Drag to reorder, or press the arrow keys")}
+            {...tip("Drag or use the arrow keys to reorder")}
             className={cn(
               "-ml-1 shrink-0 cursor-grab rounded-sm text-dim",
               "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
@@ -359,7 +359,7 @@ export function NoteCard({
  * while the chip beside it gets it right.
  */
 function namesSentence(cards: readonly DeckNoteCard[]): string {
-  return `Names ${plural(cards.length, "card")}: ${cards.map((card) => card.name).join("; ")}.`;
+  return `Linked to ${plural(cards.length, "card")}: ${cards.map((card) => card.name).join("; ")}.`;
 }
 
 /** The frame itself — one box at one size, so the two branches below cannot come to draw two. */

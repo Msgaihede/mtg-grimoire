@@ -160,7 +160,7 @@ const PENDING = "Loading new printings…";
  * `DecksWidget.NOTHING_PINNED` says the same thing the same way for the same reason.
  */
 export const NO_DECKS =
-  "No decks selected. Choose decks in this widget's settings.";
+  "No decks chosen. Choose decks in this widget's settings.";
 
 /** An explicit locale and an explicit UTC time zone, `printings.ts`' rule and its reason:
  *  `releasedAt` is a calendar date, so a formatter left on the local zone prints the day before
@@ -339,8 +339,7 @@ export function emptySentence(answer: NewPrintings, days: number): string | null
   if (answer.decksWatched === 0) return NO_DECKS;
   if (answer.printings.length > 0) return null;
   return (
-    `Nothing in the ${plural(answer.decksWatched, "deck")} you watch has been reprinted in the ` +
-    `last ${plural(days, "day")}. New printings arrive with each card data sync.`
+    `No reprints in the last ${plural(days, "day")} for the ${plural(answer.decksWatched, "deck")} you watch. New printings arrive with each card data sync.`
   );
 }
 
@@ -1004,7 +1003,7 @@ function DeckPicker({ widget, onConfig }: WidgetSettingsProps): ReactElement {
   if (scopeOf(widget) !== "chosen") {
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.option} under {words.row} to pick the decks this widget tracks.
+        Set {words.row} to {words.option} to pick decks.
       </p>
     );
   }

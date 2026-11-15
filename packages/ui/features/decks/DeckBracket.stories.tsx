@@ -133,7 +133,7 @@ export const ThreeGameChangers: Story = {
     const canvas = within(canvasElement);
     // The readout says the number; the `~` is drawn and is not spoken, so the name says the word
     // the glyph stands for instead.
-    const readout = canvas.getByRole("button", { name: "Bracket 3, an estimate" });
+    const readout = canvas.getByRole("button", { name: "Bracket 3, estimated" });
     await expect(readout).toHaveTextContent("Bracket ~3");
 
     const panel = canvas.getByRole("dialog", { name: "Bracket estimate" });
@@ -141,10 +141,10 @@ export const ThreeGameChangers: Story = {
     // read back: a fact split across elements is one nothing — screen reader, test, or reader
     // skimming — puts together.
     await expect(panel).toHaveTextContent("Bracket ~3 · 3 Game Changers");
-    await expect(panel).toHaveTextContent(/Your playgroup decides the real bracket/);
+    await expect(panel).toHaveTextContent(/Your playgroup decides the real one/);
     // The one sentence a panel may only write once a list has actually answered.
     await expect(
-      await within(panel).findByText("No two-card combo in the list matches this deck."),
+      await within(panel).findByText("No known two-card combo in this deck."),
     ).toBeInTheDocument();
 
     // The disclosure is closed until asked, and **what it says is the reason the number is worth
@@ -222,7 +222,7 @@ export const SetByTheReader: Story = {
     await expect(within(group).getByRole("radio", { name: "4 Optimized" })).toBeChecked();
     // A digit is not a name, so the scale is spelled out where a reader who does not know it by
     // number can read it: in each radio's own name, and in the caption under the row.
-    await expect(panel).toHaveTextContent(/Optimized — nothing restricted/);
+    await expect(panel).toHaveTextContent(/Optimized — no restrictions/);
 
     // Back to Auto is a real value in the patch — `AUTO_BRACKET`, `0` — and not the absence of
     // one, which is the whole reason the column is a sentinel rather than nullable.
@@ -263,7 +263,7 @@ export const BelowTheFloor: Story = {
     // `getByRole` here asserts about that first frame and fails naming bracket 3, which reads
     // exactly like the combo never matching at all. What this waits for is the floor *moving*.
     const readout = await canvas.findByRole("button", {
-      name: "Bracket 2, set for this deck — the cards read as bracket 4 or higher",
+      name: "Bracket 2, set for this deck. The cards suggest bracket 4 or higher",
     });
     await expect(readout).toHaveTextContent("Bracket 2 · ~4");
     // The same accent edge the control wears everywhere else, filled rather than recoloured.
@@ -285,7 +285,7 @@ export const BelowTheFloor: Story = {
     // on the combo that raises nothing are the same letter, so what separates the two rows is
     // which list they are in and the sentence above it — never their tag.
     await expect(
-      within(panel).getAllByText("Ruthless — for competitive decks at brackets 4+"),
+      within(panel).getAllByText("Ruthless — for competitive decks in bracket 4+"),
     ).toHaveLength(2);
     // …and the two lower ones, which is what makes "highest wins" visible rather than asserted.
     await expect(
@@ -296,7 +296,7 @@ export const BelowTheFloor: Story = {
     ).toBeInTheDocument();
 
     // The possible one, on its own line, said in words rather than left to a heading.
-    await expect(within(panel).getByText(/Possible combos \(not counted\)/)).toBeInTheDocument();
+    await expect(within(panel).getByText(/Possible combos, not counted\./)).toBeInTheDocument();
     await expect(
       within(panel).getByText("Thrasios, Triton Hero + Sol Ring"),
     ).toBeInTheDocument();
@@ -339,11 +339,11 @@ export const CombosNeverFetched: Story = {
     await expect(panel).toHaveTextContent(/downloads automatically after launch/);
     // Never this, on a database that has looked at nothing.
     await expect(
-      within(panel).queryByText("No two-card combo in the list matches this deck."),
+      within(panel).queryByText("No known two-card combo in this deck."),
     ).toBeNull();
 
     // Three signals rather than four, and the floor is the two Game Changers' own.
-    await expect(canvas.getByRole("button", { name: "Bracket 3, an estimate" })).toHaveTextContent(
+    await expect(canvas.getByRole("button", { name: "Bracket 3, estimated" })).toHaveTextContent(
       "Bracket ~3",
     );
   },
@@ -364,7 +364,7 @@ export const Shut: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const readout = canvas.getByRole("button", { name: /^Bracket \d, an estimate$/ });
+    const readout = canvas.getByRole("button", { name: /^Bracket \d, estimated$/ });
 
     await expect(readout).toHaveAttribute("aria-expanded", "false");
     await expect(readout.className).toContain("border-accent");

@@ -28,13 +28,13 @@ export function reductionLine(settings: PackReduction, currency: Currency): stri
 }
 
 const REFUSED = {
-  sellPercent: "Sell at has to be above 0 and at most 100%.",
-  minimumValue: "Minimum has to be a price of zero or more.",
-  bulkPrice: "Bulk has to be a price of zero or more.",
+  sellPercent: "Sell at must be above 0 and at most 100%.",
+  minimumValue: "Minimum must be zero or more.",
+  bulkPrice: "Bulk must be zero or more.",
 };
 
 /** Why the Bulk box is greyed: a bulk price is what a card under the minimum is worth. */
-const BULK_NEEDS_MINIMUM = "Set a Minimum first: Bulk is what each card under it is worth.";
+const BULK_NEEDS_MINIMUM = "Set a Minimum first. Bulk prices the cards under it.";
 
 /** `PackFigures`' What you paid box, narrower and right-aligned like the Settings boxes. */
 const BOX = cn(

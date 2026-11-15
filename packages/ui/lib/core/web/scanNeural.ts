@@ -122,19 +122,18 @@ export interface NeuralEvidenceFiles {
 
 /** What a fetch that could not reach the origin says. */
 export const NEURAL_UNREACHABLE =
-  "The Neural scanner's files could not be downloaded. Check your connection.";
+  "Couldn't download the Neural scanner's files. Check your connection.";
 
 /**
  * What a 404 says: the page names a set the server no longer has — a deploy since this page
  * loaded put another there. A reload takes the update, and its set.
  */
 export const NEURAL_OTHER_SET =
-  "The Neural scanner's files on the server are for another version of MTG Grimoire. " +
-  "Reload to update, then try again.";
+  "The Neural scanner's files belong to another version of MTG Grimoire. Reload to update, then try again.";
 
 /** What one file's failure says, after the shared start. */
 const failed = (why: string): string =>
-  `The Neural scanner's files could not be downloaded: ${why}`;
+  `Couldn't download the Neural scanner's files: ${why}`;
 
 /** One file, read to its end and held to its length. Rejects with one sentence. */
 async function one(
@@ -154,12 +153,12 @@ async function one(
     throw NEURAL_UNREACHABLE;
   }
   if (response.status === 404) throw NEURAL_OTHER_SET;
-  if (!response.ok) throw failed(`the server answered ${response.status}.`);
+  if (!response.ok) throw failed(`the server returned ${response.status}.`);
   if ((response.headers.get("Content-Type") ?? "").includes("text/html")) {
-    throw failed("the server answered a page, not the file.");
+    throw failed("the server returned a page, not the file.");
   }
   const reader = response.body?.getReader();
-  if (!reader) throw failed("the server answered nothing.");
+  if (!reader) throw failed("the server returned nothing.");
   const expected = source.bytes[name];
   // Read into the room the file should fill when its length is known — refused at the byte that
   // runs past it — and gathered otherwise.

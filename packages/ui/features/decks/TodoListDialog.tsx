@@ -460,7 +460,7 @@ export function DeleteTodoListDialog({
       onClose={onClose}
     >
       <div className="px-5 py-4">
-        <p className="text-xs leading-relaxed text-dim">Its to-dos go with it.</p>
+        <p className="text-xs leading-relaxed text-dim">Its to-dos are deleted too.</p>
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
         <button type="button" disabled={pending} onClick={onDelete} className={CONFIRM_DESTRUCTIVE}>

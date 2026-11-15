@@ -206,7 +206,7 @@ export function syncActivity(progress: SyncProgressEvent | null, busy: boolean):
   const phase: SyncPhase | null =
     progress && progress.phase !== "done" && progress.phase !== "error" ? progress.phase : null;
   if (!phase || !progress) {
-    return { key: "sync", rank: RANK.sync, label: "Syncing card data", detail: null, value: null };
+    return { key: "sync", rank: RANK.sync, label: "Updating card data", detail: null, value: null };
   }
   return {
     key: "sync",

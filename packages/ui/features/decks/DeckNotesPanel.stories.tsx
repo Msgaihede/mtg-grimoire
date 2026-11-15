@@ -583,7 +583,7 @@ export const NamingFourCards: Story = {
     ).toBeInTheDocument();
     await expect(
       within(region).getByText(
-        "Names 4 cards: Eidolon of the Great Revel; Goblin Guide; Lightning Bolt; " +
+        "Linked to 4 cards: Eidolon of the Great Revel; Goblin Guide; Lightning Bolt; " +
           "Monastery Swiftspear.",
       ),
     ).toBeInTheDocument();

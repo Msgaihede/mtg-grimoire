@@ -213,7 +213,7 @@ export function StickyNoteDialog({
     <Dialog
       open
       title="Note"
-      closeLabel="Close the note"
+      closeLabel="Close note"
       // No `max-h` here: `cn`'s tailwind-merge would delete the shell's own `max-h-full` and the
       // panel would outgrow the window with its footer on it. `packages/ui/CLAUDE.md` carries that one.
       size="w-[34rem]"
@@ -700,7 +700,7 @@ function DeleteNote({
     <div {...confirm}>
       <p className="text-xs">Delete “{title}”?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        This note will be permanently deleted across all synced devices.
+        The note is deleted for good on every synced device.
       </p>
       <div className="mt-2 flex gap-2">
         <button type="button" onClick={onDelete} className={CONFIRM_DESTRUCTIVE}>

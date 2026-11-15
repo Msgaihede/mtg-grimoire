@@ -488,7 +488,7 @@ export const PairedInABrowser: Story = {
     // The web host's sentence, word for word, from where that host keeps it.
     const warning = await canvas.findByText(SITE_DATA_WARNING);
     await expect(warning).toHaveTextContent(/clearing this browser's site data/i);
-    await expect(warning).toHaveTextContent(/still counts toward the group's five/i);
+    await expect(warning).toHaveTextContent(/keeps one of the group's five places/i);
     await expect(warning).toHaveTextContent(/leave the group here first/i);
     // A standing paragraph and not an alert: nothing has gone wrong.
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
@@ -904,7 +904,7 @@ export const AFirstExchange: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: /sync now/i }));
 
     const line = await canvas.findByText(/first sync with a new device/i);
-    await expect(line).toHaveTextContent(/\d+ rows synced/i);
+    await expect(line).toHaveTextContent(/\d+ items synced/i);
     await expect(line).not.toHaveTextContent(/deck history/i);
 
     await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
@@ -965,14 +965,14 @@ export const SocketDropsAfterASync: Story = {
 
     await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
     // A working socket is not news, and this is the panel's resting state until it drops.
-    await expect(canvas.queryByText(/not connected to the relay/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/^not connected\. changes sync when the connection is back\.$/i)).not.toBeInTheDocument();
 
     emitFake("sync:live", { state: "offline" });
 
     await expect(
-      await canvas.findByText(/not connected to the relay/i),
+      await canvas.findByText(/^not connected\. changes sync when the connection is back\.$/i),
     ).toBeInTheDocument();
     // The one clause that matters: nothing was lost, only queued.
-    await expect(canvas.getByText(/changes will sync when it's back/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/changes sync when the connection is back/i)).toBeInTheDocument();
   },
 };

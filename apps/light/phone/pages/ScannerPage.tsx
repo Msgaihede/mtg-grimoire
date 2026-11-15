@@ -809,9 +809,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         }}
         onClose={() => setClearing(null)}
       >
-        {plural(clearing === null ? 0 : totalCopies(clearing), "scanned copy", "scanned copies")}{" "}
-        will leave the tray without being added to {destination?.name ?? "your collection"}. Cards
-        you scan while this is open stay.
+        {plural(clearing === null ? 0 : totalCopies(clearing), "scanned copy", "scanned copies")} will be removed without being added to {destination?.name ?? "your collection"}. Cards scanned while this is open stay.
       </ConfirmDialog>
 
       <HistorySheet
@@ -849,7 +847,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           open={deckRows !== null}
           create={scannedDeck}
           defaultFormatKey={newDeckFormat}
-          intro={`${totalCopies(deckRows ?? [])} scanned copies will be filed into automatic categories. The scans stay in the tray so you can also add them to your collection.`}
+          intro={`${totalCopies(deckRows ?? [])} scanned copies go into automatic categories. They stay in the tray, so you can add them to your collection too.`}
           onCreated={(deck) => {
             setDeckRows(null);
             // The new deck's own page, a push — Back is the scanner it was made from.

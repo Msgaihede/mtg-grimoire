@@ -217,7 +217,7 @@ const VALUE_HISTORY_PICKS: readonly WidgetPick[] = [
 const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   summary: {
     label: "Summary",
-    description: "Copies and value across your collection, your decks and your wishlist.",
+    description: "Copies and value of your collection, decks, and wishlist.",
     def: [4, 2],
     min: [2, 1],
     max: [8, 3],
@@ -226,7 +226,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   collectionValue: {
     label: "Collection value",
-    description: "Collection value broken down by rarity, color, set, or finish.",
+    description: "Collection value by rarity, color, set, or finish.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -250,7 +250,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   valueHistory: {
     label: "Collection value graph",
-    description: "Collection value over time, in total or broken down by card type, color, or set.",
+    description: "Collection value over time, in total or by card type, color, or set.",
     def: [6, 3],
     min: [2, 2],
     max: [8, 6],
@@ -263,7 +263,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   wishlistValue: {
     label: "Wishlist value",
-    description: "Estimated wishlist cost, broken down by rarity, color, set, or finish.",
+    description: "Wishlist cost by rarity, color, set, or finish.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -280,7 +280,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   wishlistValueHistory: {
     label: "Wishlist value graph",
-    description: "Wishlist value over time, in total or broken down by card type, color, or set.",
+    description: "Wishlist value over time, in total or by card type, color, or set.",
     def: [6, 3],
     min: [2, 2],
     max: [8, 6],
@@ -293,7 +293,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   decks: {
     label: "Decks",
-    description: "Pinned and recently modified decks.",
+    description: "Pinned and recently edited decks.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -333,7 +333,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   activity: {
     label: "Activity",
-    description: "Recent collection changes grouped by day.",
+    description: "Recent changes, grouped by day.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 8],
@@ -359,7 +359,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   priceMovers: {
     label: "Price movers",
     description:
-      "Largest price increases and decreases in your collection, or in the folders and cards you choose.",
+      "Biggest price rises and drops in your collection, or in folders and cards you choose.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -396,7 +396,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   setCompletion: {
     label: "Set completion",
-    description: "Collection progress across sets.",
+    description: "How much of each set you own.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -416,7 +416,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   recentCards: {
     label: "Recently viewed",
-    description: "Recently viewed cards.",
+    description: "Cards you opened recently.",
     def: [4, 2],
     min: [2, 2],
     max: [8, 3],
@@ -453,7 +453,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   stickyNotes: {
     label: "Notes",
-    description: "Custom notes on your dashboard.",
+    description: "Sticky notes for your Home page.",
     def: [4, 3],
     min: [3, 2],
     max: [8, 6],
@@ -489,7 +489,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   deckTodos: {
     label: "To-dos",
-    description: "Open to-dos from every deck's To-do band, ticked off where they stand.",
+    description: "Open to-dos from your decks. Tick them off here.",
     def: [3, 3],
     min: [2, 2],
     max: [6, 6],
@@ -544,7 +544,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         options: [
           { id: 30, label: "30 days" },
           { id: 90, label: "90 days" },
-          { id: 365, label: "A year" },
+          { id: 365, label: "1 year" },
         ],
       },
       {
@@ -586,7 +586,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   changeNotes: {
     label: "Latest change notes",
-    description: "What changed in the latest releases of MTG Grimoire.",
+    description: "What changed in recent MTG Grimoire releases.",
     def: [3, 3],
     min: [2, 2],
     max: [6, 8],
@@ -637,7 +637,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   deckCompletion: {
     label: "Deck completion",
     description:
-      "How close your decks are to complete, against your collection or their theory lists.",
+      "How complete your decks are, against your collection or their theory lists.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -732,7 +732,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   comingSoon: {
     label: "Coming soon",
-    description: "Upcoming set releases, preview progress, and relevant reprints.",
+    description: "Upcoming sets, their previews, and reprints of your deck cards.",
     def: [4, 2],
     min: [2, 2],
     max: [8, 4],
@@ -744,7 +744,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         options: [
           { id: 30, label: "30 days" },
           { id: 90, label: "90 days" },
-          { id: 365, label: "A year" },
+          { id: 365, label: "1 year" },
         ],
       },
     ],
@@ -758,7 +758,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   custom: {
     label: "Custom widget",
     description:
-      "One of your own widgets: a query over your data, drawn from the app's own parts.",
+      "A widget of your own, built from your data.",
     def: [4, 3],
     min: [2, 2],
     max: [12, 8],

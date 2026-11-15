@@ -137,7 +137,7 @@ describe("dealSetPacks", () => {
   it("refuses a set with nothing to draft from", () => {
     const collectorOnly = { ...SET, name: "Shiny", products: [{ ...SET.products[1] }] };
     expect(() => dealSetPacks([collectorOnly], 8, mulberry32(1))).toThrow(
-      "Shiny has no booster to draft from.",
+      "Shiny has no boosters to draft.",
     );
   });
 });
@@ -157,7 +157,7 @@ describe("dealCube", () => {
 
   it("says how many cards a cube too short is missing", () => {
     expect(() => dealCube(cards, { seats: 8, packs: 3, packSize: 15 }, mulberry32(3))).toThrow(
-      "needs 360 cards; the list has 40",
+      "needs 360 cards. The list has 40",
     );
   });
 

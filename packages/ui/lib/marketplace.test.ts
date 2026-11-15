@@ -28,7 +28,7 @@ describe("the marketplace table", () => {
       "Cardmarket",
       "Card Kingdom",
       "Mana Pool",
-      "Card trader",
+      "CardTrader",
     ]);
   });
 

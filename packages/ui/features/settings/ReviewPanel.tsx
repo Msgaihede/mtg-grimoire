@@ -213,9 +213,7 @@ export function ReviewPanel(): JSX.Element {
   return (
     <SettingsSection id="review" title="Needs review">
       <p className="text-sm text-dim">
-        When two devices change the same thing and it can&rsquo;t be merged automatically, your
-        data is kept and the conflict is listed here. Mark each one as fine once you&rsquo;ve
-        checked it.
+        Sync conflicts that couldn&rsquo;t be merged automatically. Your data is kept. Mark each one once you&rsquo;ve checked it.
       </p>
 
       {rows === null ? (

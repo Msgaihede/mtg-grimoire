@@ -964,7 +964,7 @@ export function CollectionPage() {
     (row: CollectionRow) =>
       report(removeAsync(row), {
         done: () => removedReceipt(1, row.name),
-        failed: `Couldn't remove “${row.name ?? row.cardId}” from the collection`,
+        failed: `Couldn't remove “${row.name ?? row.cardId}” from your collection`,
       }),
     [removeAsync],
   );
@@ -1701,7 +1701,7 @@ export function CollectionPage() {
               // A receipt although the heading is drawn right where the field was: the reader's
               // cabinet changed and the inbox should say so. A refusal keeps the field open with
               // the banner's sentence, so it adds no toast of its own.
-              notify.success(`Folder “${name}” created`);
+              notify.success(`Created folder “${name}”`);
               if (storedFolds[String(made.id)] !== undefined) setFold(made.id, null);
               setPanel((current) =>
                 current?.kind === "newFolder"
@@ -1832,7 +1832,7 @@ export function CollectionPage() {
               id: "up",
               label: "Move up",
               Icon: ArrowUp,
-              ...(up === null ? { disabled: true, reason: "Already first" } : {}),
+              ...(up === null ? { disabled: true, reason: "already first" } : {}),
               onSelect: () => {
                 if (up !== null) step(up);
               },
@@ -1845,7 +1845,7 @@ export function CollectionPage() {
               id: "down",
               label: "Move down",
               Icon: ArrowDown,
-              ...(down === null ? { disabled: true, reason: "Already last" } : {}),
+              ...(down === null ? { disabled: true, reason: "already last" } : {}),
               onSelect: () => {
                 if (down !== null) step(down);
               },
@@ -2222,7 +2222,7 @@ export function CollectionPage() {
         // the `UndoNotice` under the header as the way back.
         report(removeManyAsync({ entryIds, name }), {
           done: (outcome) => removedReceipt(outcome.removed, name),
-          failed: `Couldn't remove “${name ?? "that card"}” from the collection`,
+          failed: `Couldn't remove “${name ?? "that card"}” from your collection`,
         });
         return;
       }
@@ -2489,7 +2489,7 @@ export function CollectionPage() {
           setPanel(null);
           land();
         },
-        done: () => `Folder “${name}” deleted`,
+        done: () => `Deleted folder “${name}”`,
         failed: `Couldn't delete “${name}”`,
       });
     },
@@ -2513,7 +2513,7 @@ export function CollectionPage() {
       report(removeManyAsync({ entryIds, name: null }), {
         then: dismiss,
         done: (outcome) => removedReceipt(outcome.removed, null),
-        failed: `Couldn't remove ${plural(entryIds.length, "card")} from the collection`,
+        failed: `Couldn't remove ${plural(entryIds.length, "card")} from your collection`,
       }),
     [removeManyAsync, dismiss],
   );
@@ -3581,7 +3581,7 @@ export function CollectionPage() {
       <Dialog
         open={picking !== null}
         title="Which copies?"
-        closeLabel="Close the copy picker"
+        closeLabel="Close copy picker"
         size="w-[30rem]"
         onDismiss={() => setPicking(null)}
         onClose={() => setPicking(null)}
@@ -3753,10 +3753,10 @@ function statusOf(
     if (failure) return failure;
     if (query.isPending || counts === null) return "Loading your collection…";
     if (drawn) return "";
-    if (activeCount > 0) return "No cards in your collection match these filters.";
+    if (activeCount > 0) return "No cards match these filters.";
     return inFolder
       ? "This folder is empty."
-      : "Nothing here yet. Add cards from search, or import a collection file.";
+      : "Your collection is empty. Add cards from search or import a file.";
   }
 
   // With rows on screen the headings caption the wall and the header above counts it, so the only

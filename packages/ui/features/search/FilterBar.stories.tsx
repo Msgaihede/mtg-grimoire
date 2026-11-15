@@ -171,7 +171,7 @@ export const Default: Story = {
     );
     // **The count pill is drawn at 0** (the Filter bar board: a button never changes width when
     // it is used), grey until something is on — so a quiet row's Filters reads `Filters 0`.
-    const filters = canvas.getByRole("button", { name: "Show filters — 0 active" });
+    const filters = canvas.getByRole("button", { name: "Show filters, 0 active" });
     await expect(filters).toHaveTextContent("Filters");
     await expect(filters.querySelector("[data-count-pill]")).toHaveTextContent("0");
     // Stack printings is on the bar and pressed — one tile per card is the default wall.
@@ -235,7 +235,7 @@ export const AllFiltersActive: Story = {
     // from the first render now, so a bare `/^Reset all/` would resolve against the row *before*
     // the preset and every assertion below would read a state this story is not about. The pill
     // is drawn rather than spoken; the visible label still leads the name (WCAG 2.5.3).
-    const reset = await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
+    const reset = await canvas.findByRole("button", { name: "Reset all: 6 filters active" });
     await expect(reset).toHaveTextContent("6");
     // Three chips pressed against a pill reading 6: this is the whole of "kinds, not values",
     // and it is invisible in a screenshot of a row full of gold.
@@ -250,7 +250,7 @@ export const AllFiltersActive: Story = {
     }
     // The count the tray's own button carries is the *search's*, not the tray's — the same six
     // Reset all wears, so the two cannot disagree about how much is on while the tray is shut.
-    await expect(canvas.getByRole("button", { name: "Show filters — 6 active" })).toHaveTextContent(
+    await expect(canvas.getByRole("button", { name: "Show filters, 6 active" })).toHaveTextContent(
       "6",
     );
     // Six chips under the rule for six kinds on, each stating its filter in words rather than in
@@ -264,7 +264,7 @@ export const AllFiltersActive: Story = {
       "Owned",
     ]) {
       await expect(
-        canvas.getByRole("button", { name: `Remove filter — ${label}` }),
+        canvas.getByRole("button", { name: `Remove filter, ${label}` }),
       ).toBeInTheDocument();
     }
 
@@ -294,14 +294,14 @@ export const Cleared: Story = {
     const canvas = within(canvasElement);
     // Waited on the count, not on the button: the button is drawn before the preset lands, and
     // pressing it then would clear nothing and prove nothing.
-    const reset = await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
+    const reset = await canvas.findByRole("button", { name: "Reset all: 6 filters active" });
     await openTray(canvas);
     await userEvent.click(reset);
 
     // The button is still under the cursor that pressed it, greyed rather than gone — which is
     // the whole of why it is drawn at zero. Nothing on the row moved.
     await expect(reset).toHaveAttribute("aria-disabled", "true");
-    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+    await expect(reset).toHaveAccessibleName("Reset all: 0 filters active");
     await expect(canvas.getByLabelText("Search cards")).toHaveValue("");
     await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     // Prefix matches throughout: every chip's accessible name now ends in the count the fake's
@@ -368,7 +368,7 @@ export const SomeUnavailable: Story = {
     // state this passes through is also called "Red — N printings". 47 is the answer for a
     // red search: pressing Red again would clear the filter, so its own chip counts the whole
     // searchable corpus — paper and playable — rather than the red part of it.
-    await canvas.findByRole("button", { name: "Red — 47 printings" }, { timeout: 5000 });
+    await canvas.findByRole("button", { name: "Red: 47 printings" }, { timeout: 5000 });
 
     // Empty over a red search, and saying so where a reader can hover it. The count rides in
     // the accessible name as well as the tooltip (`ValueChip`'s own rule), so the exact name —
@@ -459,7 +459,7 @@ export const MostlyUnavailable: Story = {
     // as it stands for the third of a second before the term lands, and every assertion below
     // then read a live chip and failed. That is the same window a reader can press into; the
     // live pass measured it at ~300–330 ms.
-    await canvas.findByRole("button", { name: "White — 1 printing" }, { timeout: 5000 });
+    await canvas.findByRole("button", { name: "White: 1 printing" }, { timeout: 5000 });
 
     // Only a nought is castable.
     await expect(canvas.getByRole("button", { name: /^Mana value 0\b/ })).not.toHaveAttribute(
@@ -476,7 +476,7 @@ export const MostlyUnavailable: Story = {
     // because there *is* something there — it just would not move; the exact accessible name
     // (`ManaChip`'s own `aria-label` and tooltip, one string spent twice) is what proves it.
     for (const colour of ["White", "Blue", "Black", "Red", "Green", "Colorless"]) {
-      const chip = canvas.getByRole("button", { name: `${colour} — 1 printing` });
+      const chip = canvas.getByRole("button", { name: `${colour}: 1 printing` });
       await expect(chip).toHaveAttribute("aria-disabled", "true");
     }
 
@@ -530,7 +530,7 @@ export const IndexCold: Story = {
     // **on the count in the name, not on the button.** The button itself is drawn from the
     // first render now, so `/^Reset all/` would resolve against the row *before* the preset
     // and every assertion below would read a state this story is not about.
-    await canvas.findByRole("button", { name: "Reset all — 1 filter active" });
+    await canvas.findByRole("button", { name: "Reset all: 1 filter active" });
     // The tray's chips are swept too — the rarity row is faceted like the rest of the row, so a
     // cold index has to leave those live as well.
     await openTray(canvas);
@@ -661,7 +661,7 @@ export const DockedPanel: Story = {
     await expect(canvas.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ })).toBeDisabled();
     // On the count, because the button no longer appears with the preset — it is already there.
     await expect(
-      await canvas.findByRole("button", { name: "Reset all — 6 filters active" }),
+      await canvas.findByRole("button", { name: "Reset all: 6 filters active" }),
     ).toHaveTextContent("6");
   },
 };
@@ -789,18 +789,18 @@ export const StrictColours: Story = {
     const toggle = await within(
       canvas.getByRole("group", { name: "Color identity" }),
     ).findByRole("button", {
-      name: "Exact — cards whose color identity is exactly these colors",
+      name: "Exact: color identity is exactly these colors",
     });
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
 
     // One kind on, said twice and counted once — the whole of why this is not a chip of its own.
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Color: exactly White, Blue" }),
+      canvas.getByRole("button", { name: "Remove filter, Color: exactly White, Blue" }),
     ).toBeInTheDocument();
     await expect(
       // Singular: `ResetAll` words its own count through `plural`, so a hard-coded "filters"
       // here passes only at the counts nobody reaches first.
-      canvas.getByRole("button", { name: "Reset all — 1 filter active" }),
+      canvas.getByRole("button", { name: "Reset all: 1 filter active" }),
     ).toHaveTextContent("1");
   },
 };
@@ -854,7 +854,7 @@ export const TypeChips: Story = {
     ).toHaveAttribute("aria-pressed", "true");
     // One kind however many chips are pressed, the colours' and the rarities' rule.
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Type: Creature" }),
+      canvas.getByRole("button", { name: "Remove filter, Type: Creature" }),
     ).toBeInTheDocument();
   },
 };
@@ -900,10 +900,10 @@ export const BorderAndFinish: Story = {
 
     // One chip per kind under the rule, in the tray's words.
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Border: Borderless" }),
+      canvas.getByRole("button", { name: "Remove filter, Border: Borderless" }),
     ).toBeInTheDocument();
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Finish: Foil" }),
+      canvas.getByRole("button", { name: "Remove filter, Finish: Foil" }),
     ).toBeInTheDocument();
   },
 };
@@ -969,7 +969,7 @@ export const TrayOpen: Story = {
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label"))
       .filter((n): n is string => !!n && /^(Common|Uncommon|Rare|Mythic)\b/.test(n))
-      .map((n) => n.split(/[ —]/)[0]);
+      .map((n) => n.split(/[ :]/)[0]);
     await expect(rarities).toEqual(["Common", "Uncommon", "Rare", "Mythic"]);
   },
 };
@@ -988,7 +988,7 @@ export const PriceBand: Story = {
     const canvas = within(canvasElement);
     // The chip states the band before the tray is opened, which is the whole point of the row:
     // with the tray shut this filter has no control on screen at all.
-    await canvas.findByRole("button", { name: "Remove filter — Price: $2.00 – $40.00" });
+    await canvas.findByRole("button", { name: "Remove filter, Price: $2.00 – $40.00" });
 
     await openTray(canvas);
     await expect(canvas.getByLabelText("Lowest price")).toHaveValue("2");
@@ -1005,11 +1005,11 @@ export const PriceBand: Story = {
     // way a reader has to, and look again.
     await userEvent.click(canvas.getByRole("button", { name: /^Hide filters/ }));
     await userEvent.click(
-      canvas.getByRole("button", { name: "Remove filter — Price: $2.00 – $40.00" }),
+      canvas.getByRole("button", { name: "Remove filter, Price: $2.00 – $40.00" }),
     );
     await waitFor(async () => {
       await expect(
-        canvas.queryByRole("button", { name: /^Remove filter — Price/ }),
+        canvas.queryByRole("button", { name: /^Remove filter, Price/ }),
       ).not.toBeInTheDocument();
     });
     await openTray(canvas);
@@ -1030,12 +1030,12 @@ export const StatedFilters: Story = {
   args: { preset: everything },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
+    await canvas.findByRole("button", { name: "Reset all: 6 filters active" });
 
     const labels = () =>
       canvas
-        .queryAllByRole("button", { name: /^Remove filter — / })
-        .map((b) => b.getAttribute("aria-label")!.replace("Remove filter — ", ""));
+        .queryAllByRole("button", { name: /^Remove filter, / })
+        .map((b) => b.getAttribute("aria-label")!.replace("Remove filter, ", ""));
 
     // Five chips against a pill of six: the sixth kind is the text in the box, which is on
     // screen with the words still in it and is the one filter a chip would only repeat.
@@ -1048,7 +1048,7 @@ export const StatedFilters: Story = {
     ]);
 
     await userEvent.click(
-      canvas.getByRole("button", { name: "Remove filter — Color: White, Blue, Black" }),
+      canvas.getByRole("button", { name: "Remove filter, Color: White, Blue, Black" }),
     );
 
     // The whole kind went, not one colour of it — and the pill followed.
@@ -1061,7 +1061,7 @@ export const StatedFilters: Story = {
       ]);
     });
     await expect(
-      canvas.getByRole("button", { name: "Reset all — 5 filters active" }),
+      canvas.getByRole("button", { name: "Reset all: 5 filters active" }),
     ).toBeInTheDocument();
   },
 };
@@ -1081,21 +1081,21 @@ export const StackPrintings: Story = {
   args: { preset: (search) => search.setText("bolt") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const reset = await canvas.findByRole("button", { name: "Reset all — 1 filter active" });
+    const reset = await canvas.findByRole("button", { name: "Reset all: 1 filter active" });
     const stack = canvas.getByRole("button", { name: STACK_PRINTINGS });
     await expect(stack).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(stack);
     await expect(stack).toHaveAttribute("aria-pressed", "false");
     // Not counted: the pills still read the one filter the text is.
-    await expect(reset).toHaveAccessibleName("Reset all — 1 filter active");
+    await expect(reset).toHaveAccessibleName("Reset all: 1 filter active");
     await expect(
-      canvas.getByRole("button", { name: "Show filters — 1 active" }),
+      canvas.getByRole("button", { name: "Show filters, 1 active" }),
     ).toBeInTheDocument();
 
     // And not cleared: Reset takes the word and leaves the wall un-stacked.
     await userEvent.click(reset);
-    await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+    await expect(reset).toHaveAccessibleName("Reset all: 0 filters active");
     await expect(stack).toHaveAttribute("aria-pressed", "false");
 
     // No second copy in the popup — the switch has no cell there at any width.
@@ -1122,7 +1122,7 @@ export const TokensAndExtras: Story = {
   args: { preset: (search) => search.setFormat("modern") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("button", { name: "Remove filter — Format: Modern" });
+    await canvas.findByRole("button", { name: "Remove filter, Format: Modern" });
     await openTray(canvas);
 
     const format = canvas.getByRole("button", { name: "Format" });
@@ -1135,19 +1135,19 @@ export const TokensAndExtras: Story = {
     // The format went back to `Any format` with the press — the two never stand on at once.
     await expect(format).toHaveTextContent("Any format");
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Showing: Tokens & extras" }),
+      canvas.getByRole("button", { name: "Remove filter, Showing: Tokens & extras" }),
     ).toBeInTheDocument();
-    await expect(canvas.queryByRole("button", { name: /^Remove filter — Format:/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Remove filter, Format:/ })).toBeNull();
     // One filter for one filter: the format's place in the count, not a second one beside it.
     await expect(
-      canvas.getByRole("button", { name: "Reset all — 1 filter active" }),
+      canvas.getByRole("button", { name: "Reset all: 1 filter active" }),
     ).toBeInTheDocument();
 
     // The picker has no row for it, and picking a format turns it off.
     await pickOption(userEvent.setup(), "Format", /^Modern\b/);
     await waitFor(() => expect(extras).toHaveAttribute("aria-pressed", "false"));
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Format: Modern" }),
+      canvas.getByRole("button", { name: "Remove filter, Format: Modern" }),
     ).toBeInTheDocument();
   },
 };
@@ -1221,7 +1221,7 @@ export const BandWidest: Story = {
   beforeEach: reportStoryWidth,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const filters = await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    const filters = await canvas.findByRole("button", { name: "Show filters, 1 active" });
     await expectWord(filters, "Filters", true);
     await expectWord(canvas.getByRole("button", { name: STACK_PRINTINGS }), STACK_PRINTINGS, true);
     await expectWord(canvas.getByRole("button", { name: /^Reset all/ }), "Reset", true);
@@ -1250,7 +1250,7 @@ export const BandRoomy: Story = {
   beforeEach: reportStoryWidth,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const filters = await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    const filters = await canvas.findByRole("button", { name: "Show filters, 1 active" });
     // Waited on: the band arrives with the first measurement, after the first render.
     await waitFor(() => expectWord(filters, "Filters", false));
     await expectWord(canvas.getByRole("button", { name: STACK_PRINTINGS }), STACK_PRINTINGS, false);
@@ -1273,7 +1273,7 @@ export const BandNormal: Story = {
   beforeEach: reportStoryWidth,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    await canvas.findByRole("button", { name: "Show filters, 1 active" });
     await waitFor(() => expect(canvas.queryByRole("group", { name: "Result layout" })).toBeNull());
     await expect(canvas.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
 
@@ -1299,7 +1299,7 @@ export const BandTight: Story = {
   beforeEach: reportStoryWidth,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    await canvas.findByRole("button", { name: "Show filters, 1 active" });
     await waitFor(() => expect(canvas.queryByRole("button", { name: "Sort results" })).toBeNull());
     await expect(canvas.getByRole("button", { name: STACK_PRINTINGS })).toBeInTheDocument();
 
@@ -1326,7 +1326,7 @@ export const BandPanel: Story = {
   beforeEach: reportStoryWidth,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("button", { name: "Show filters — 1 active" });
+    await canvas.findByRole("button", { name: "Show filters, 1 active" });
     // The colour line is the panel's own arrangement: spread edge to edge.
     await waitFor(() =>
       expect(canvas.getByRole("group", { name: "Color identity" })).toHaveClass("justify-between"),

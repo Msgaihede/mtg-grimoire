@@ -482,7 +482,7 @@ describe("WidgetCard", () => {
       const question = await screen.findByRole("dialog", { name: `Remove ${TITLE}?` });
       expect(question).toHaveTextContent(`Remove ${TITLE}?`);
       expect(question).toHaveTextContent(
-        "Its settings are removed too. You can add it back from the catalogue.",
+        "Its settings are removed too. Add it back from the catalog.",
       );
 
       await user.click(within(question).getByRole("button", { name: "Cancel" }));

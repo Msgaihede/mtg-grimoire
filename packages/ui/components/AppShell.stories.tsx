@@ -571,12 +571,12 @@ export const FirstRun: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("dialog")).toHaveTextContent(
-      "Setting up your card database",
+      "Setting up card data",
     );
     // Not `aria-modal`: the app behind is not inert, and claiming otherwise would hide a
     // perfectly reachable window from assistive technology.
     await expect(canvas.getByRole("dialog")).not.toHaveAttribute("aria-modal");
-    await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();
+    await expect(canvas.getByRole("button", { name: "Try again" })).toBeEnabled();
     // The ribbon is still mounted underneath, which is exactly why the overlay needs a Retry of
     // its own: this button is on screen and unreachable.
     await expect(canvas.getByRole("button", { name: "Refresh data" })).toBeInTheDocument();
@@ -733,7 +733,7 @@ export const DroppedOnWishlist: Story = {
       await held.drop(wishlist);
 
       await waitFor(async () => {
-        await expect(canvas.getByText(/^Added .+ to the wishlist$/)).toBeInTheDocument();
+        await expect(canvas.getByText(/^Added .+ to your wishlist$/)).toBeInTheDocument();
       });
     } finally {
       await held.cancel();
@@ -760,7 +760,7 @@ export const DroppedOnCollapsedRail: Story = {
       await held.drop(wishlist);
 
       await waitFor(async () => {
-        await expect(canvas.getByText(/^Added .+ to the wishlist$/)).toBeInTheDocument();
+        await expect(canvas.getByText(/^Added .+ to your wishlist$/)).toBeInTheDocument();
       });
     } finally {
       await held.cancel();

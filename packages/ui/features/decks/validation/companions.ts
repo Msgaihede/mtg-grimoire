@@ -663,7 +663,7 @@ function eligibility(
     {
       severity: "error",
       code: "companion-eligibility",
-      message: `${companion.name} has no companion ability, so it cannot be your companion.`,
+      message: `${companion.name} has no companion ability, so it can't be your companion.`,
       cardIds: [companion.cardId],
     },
   ];

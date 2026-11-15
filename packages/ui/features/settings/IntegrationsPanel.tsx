@@ -37,9 +37,7 @@ export const CLOUD_HEADING = "Copy for cloud integrations";
  * the sentence the panel draws rather than a paraphrase of it.
  */
 export const PRIVACY_SENTENCE =
-  "If you enable an integration, our servers hold a copy of the parts of your collection you " +
-  "chose, so integrations can answer when your devices are off. They cannot change your " +
-  "collection; they can only propose changes that your own devices apply.";
+  "Our servers hold a copy of the parts of your collection you choose, so integrations work while your devices are off. They can only propose changes, which your devices apply.";
 
 /**
  * The five opt-ins, in the format's own order (plan §3.1: `condition`, `lang`, `value`, `tags`,
@@ -71,7 +69,7 @@ const NO_FIELDS: IntegrationFields = {
  * (plan `2026-10-29-integrations-intents.md`), but Discord and a remote MCP server — the first
  * integrations to connect — are later PRs of issue #1396.
  */
-export const NONE_CONNECTED = "No integration is connected to this copy yet.";
+export const NONE_CONNECTED = "No integration connected yet.";
 
 /** Why the switch cannot be pressed in a build with no store address (plan §2). */
 export const NOT_AVAILABLE = "This build can't reach the integrations service yet.";
@@ -82,8 +80,7 @@ export const NOT_AVAILABLE = "This build can't reach the integrations service ye
  * alone (`LIGHT_SETTINGS`). The membership is the group's, so any device's will do.
  */
 export const NOT_ENTITLED =
-  "Integrations need a supporter membership, like sync. Connect Patreon under Sync — any " +
-  "device in your group will do.";
+  "Integrations need a supporter membership. Connect Patreon under Sync on any device in your group.";
 
 /**
  * When this device last sent its copy — `Last sent from this device: 2 hours ago.`
@@ -120,13 +117,12 @@ export const SENDING = "Sending this device's copy…";
  * ends. The membership named the way the Sync panel names it on the desktop.
  */
 export const STRANDED =
-  "This device can't switch it off without sync: the copy stays on our servers until this " +
-  "device is back in your sync group, or until it is removed when your group's membership ends.";
+  "This device can't turn it off without sync. The copy stays on our servers until this device rejoins your sync group or the group's membership ends.";
 
 /** When the store was last asked whether it exists — the answer above is as of then, since
  *  another device in the group can switch it. `null` when it never has been. */
 export function checkedLine(checkedAt: number | null, nowMs: number = Date.now()): string | null {
-  return checkedAt === null ? null : `Checked with the service ${ago(checkedAt, nowMs)}.`;
+  return checkedAt === null ? null : `Checked ${ago(checkedAt, nowMs)}.`;
 }
 
 /**
@@ -326,8 +322,7 @@ export function IntegrationsPanel(): JSX.Element {
           <fieldset className="space-y-2">
             <legend className="text-sm">What the copy includes</legend>
             <p className="text-xs leading-snug text-dim">
-              Always your cards, folders, wishlist and decks — names, printings, finishes and
-              quantities. These are off until you tick them:
+              Always included: your cards, folders, wishlist and decks, with names, printings, finishes and quantities. Optional:
             </p>
             <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
               {FIELD_ROWS.map(({ key, label }) => (
@@ -355,19 +350,16 @@ export function IntegrationsPanel(): JSX.Element {
               ))}
             </div>
             <p className="text-xs leading-snug text-dim">
-              Changing these while the copy is on deletes it from the server, and your devices send
-              it again under the new choice.
+              Changing these deletes the copy, and your devices send a new one.
             </p>
             {/* Absent from the format rather than switched off in it (plan §3.1), so there is no
               box that could ever send one. Saying so is the point: a reader deciding about this
               copy is deciding about what they paid. */}
             <p className="text-xs leading-snug text-dim">
-              Purchase price, purchase currency, acquired date and acquisition source are never
-              included.
+              Never included: purchase price and currency, acquired date and source.
             </p>
             <p className="text-xs leading-snug text-dim">
-              Locked folders are included — this copy is private to your integrations, not a public
-              share.
+              Locked folders are included. The copy is private to your integrations.
             </p>
           </fieldset>
         </div>
@@ -384,16 +376,15 @@ export function IntegrationsPanel(): JSX.Element {
 
       <ConfirmDialog
         open={asking}
-        title="Turn off integrations"
-        confirmLabel="Delete the copy"
+        title="Turn off integrations?"
+        confirmLabel="Delete copy"
         typeToConfirm={false}
         pending={disable.isPending}
         onConfirm={confirmDisable}
         onDismiss={dismiss}
         onClose={() => setAsking(false)}
       >
-        This deletes the copy our servers hold for every device in your sync group. Nothing on your
-        devices changes, and you can switch it on again at any time.
+        Deletes the copy on our servers for every device in your sync group. Nothing on your devices changes.
       </ConfirmDialog>
     </SettingsSection>
   );
@@ -491,10 +482,10 @@ export const sourceLabel = (source: string): string => SOURCE_LABELS[source] ?? 
 export const kindLabel = (kind: string): string => KIND_LABELS[kind] ?? kind;
 
 /** What the review list says with nothing parked. */
-export const NOTHING_WAITING = "Nothing is waiting for your review.";
+export const NOTHING_WAITING = "Nothing to review.";
 
 /** Why Discord's two rows cannot be switched off: the reader already confirmed each one. */
-export const DISCORD_FIXED = "Always — you confirm each one in Discord.";
+export const DISCORD_FIXED = "Always. You confirm each one in Discord.";
 
 /**
  * Where a parked intent's copies go, as a phrase after "to": the folder by name in curly quotes,
@@ -601,7 +592,7 @@ function ReviewSection({ pressable: panelPressable }: { pressable: boolean }) {
           Waiting for your review
         </h3>
         <p className="mt-0.5 text-xs leading-snug text-dim">
-          Changes an integration proposed that this device waits for you to approve.
+          Changes proposed by an integration, waiting for your approval.
         </p>
       </div>
 
@@ -695,7 +686,7 @@ function ReviewSection({ pressable: panelPressable }: { pressable: boolean }) {
             );
           })}
           <p className="text-xs leading-snug text-dim">
-            Anything else waits here. Your other devices keep their own choice.
+            Everything else waits here. Other devices have their own setting.
           </p>
         </fieldset>
       )}

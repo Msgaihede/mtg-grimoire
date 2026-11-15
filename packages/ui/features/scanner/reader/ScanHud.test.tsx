@@ -151,7 +151,7 @@ describe("ScanHud", () => {
   it("says the strip's error sentence in the note chip", () => {
     render(<ScanHud {...props({ strip: cantIdentify, note: "A busy database" })} />);
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "The card recognizer isn't loaded, so cards can't be identified.",
+      "The Neural scanner isn't loaded.",
     );
   });
 

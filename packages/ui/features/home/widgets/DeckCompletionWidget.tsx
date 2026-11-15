@@ -185,7 +185,7 @@ const PENDING = "Loading decks…";
  *  an archived choice is kept and the reader has decks by definition: that is
  *  {@link CHOSEN_UNMEASURABLE}. */
 export const NO_DECKS =
-  "No decks yet. Build a deck on the Decks page to track completion.";
+  "No decks yet. Build one on the Decks page.";
 /** `All decks` under `Theory` with nothing to compare — which is every reader who has never set a
  *  deck's kind to `Theory + Actual`, so it names the setting that makes one. */
 export const NO_PLANS =
@@ -193,7 +193,7 @@ export const NO_PLANS =
 export const NOTHING_CHOSEN = "No decks chosen. Choose decks in this widget's settings.";
 export const CHOSEN_UNMEASURABLE =
   "These decks can't be compared this way. Choose different decks in this widget's settings.";
-export const ALL_COMPLETE = `All decks are complete. Enable ${completeWord()} in settings to view them.`;
+export const ALL_COMPLETE = `All decks are complete. Turn on ${completeWord()} in this widget's settings to show them.`;
 
 /** What `All decks` says when nothing is in scope, by comparison. */
 export function emptyAll(compare: DeckCompletionCompare): string {
@@ -428,12 +428,12 @@ export function rowHint(
   if (row.list === "theory") {
     parts.push(
       match === "missing"
-        ? "This deck's actual list, compared to its theory list. A card in any printing counts."
+        ? "This deck's actual list, compared to its theory list. Any printing counts."
         : "This deck's actual list, compared to its theory list.",
     );
   }
   if (row.missing > 0 && row.missingCost === null) {
-    parts.push(`Nothing on this deck's list has a price at ${marketplace.label}.`);
+    parts.push(`No card on this deck's list has a ${marketplace.label} price.`);
   } else if (row.unpricedMissing > 0) {
     const n = row.unpricedMissing;
     parts.push(
@@ -648,7 +648,7 @@ export function DeckCompletionWidgetSettings({
   if (completionScope(widget) !== "chosen") {
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.option} under {words.row} to pick the decks this widget tracks.
+        Set {words.row} to {words.option} to pick decks.
       </p>
     );
   }

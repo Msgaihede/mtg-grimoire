@@ -520,7 +520,7 @@ export function CardModalArt({
             <button
               type="button"
               onClick={() => onShowSet(card.setCode)}
-              {...tip("Search every card in this set")}
+              {...tip("Search this set")}
               className={cn(
                 "ml-auto min-w-0 truncate rounded-sm hover:text-text hover:underline",
                 FOCUS,
@@ -594,7 +594,7 @@ export function CardModalArt({
                 className={cn(ART_CONTROL, FOCUS)}
               >
                 <Combine className="size-3.5 shrink-0" aria-hidden="true" />
-                <span className="min-w-0 truncate">Meld — {meldResult.name}</span>
+                <span className="min-w-0 truncate">Meld: {meldResult.name}</span>
               </button>
               <button
                 type="button"
@@ -619,7 +619,7 @@ export function CardModalArt({
               className={cn(ART_CONTROL, FOCUS)}
             >
               <ArrowRight className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 truncate">Meld part — {part.name}</span>
+              <span className="min-w-0 truncate">Meld part: {part.name}</span>
             </button>
           ))}
           {/* Not while a meld view is up: the sheen and the chip are a statement about **this

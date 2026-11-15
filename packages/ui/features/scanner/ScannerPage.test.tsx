@@ -414,7 +414,7 @@ describe("ScannerPage", () => {
     const opener = await trayActions();
     await userEvent.click(screen.getByRole("button", { name: "Create deck…" }));
     const dialog = await screen.findByRole("dialog", { name: "New deck" });
-    expect(within(dialog).getByText(/scans stay in the tray/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/They stay in the tray, so you can add them/)).toBeInTheDocument();
     expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
@@ -668,7 +668,7 @@ describe("ScannerPage", () => {
       await screen.findByText("MTG Grimoire needs camera access to scan a card."),
     ).toBeInTheDocument();
     expect(
-      await screen.findByText("The card recognizer did not load: gallery: bad magic."),
+      await screen.findByText("The Neural scanner didn't load: gallery: bad magic."),
     ).toBeInTheDocument();
     // The reader's view: the tray beside the camera, and no developer panel until asked for.
     expect(tray()).toBeInTheDocument();
@@ -798,7 +798,7 @@ describe("ScannerPage", () => {
     for (const name of ["Start", "Filters: Any set", "Finish: Detect", "Camera: Default"]) {
       expect(within(column).getByRole("button", { name })).toBeInTheDocument();
     }
-    expect(within(column).getByRole("group", { name: "How scanning runs" })).toBeInTheDocument();
+    expect(within(column).getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Defaults/ })).toBeNull();
 
     // The header: before the layout row, beside the title, and in neither column.
@@ -936,7 +936,7 @@ describe("ScannerPage", () => {
       const match = await screen.findByRole("region", { name: "Match" });
       await waitFor(() => expect(match).toHaveTextContent("this frame: Storm of Saruman"));
       await userEvent.type(
-        screen.getByRole("textbox", { name: "What it actually is" }),
+        screen.getByRole("textbox", { name: "Actual card" }),
         "Storm of Saruman",
       );
       await userEvent.click(screen.getByRole("button", { name: "Add frame to dataset" }));
@@ -1100,10 +1100,10 @@ describe("ScannerPage", () => {
     }
   });
 
-  it("stores point and shoot from How scanning runs, and lands stopped", async () => {
+  it("stores point and shoot from Scan mode, and lands stopped", async () => {
     refused();
     mount();
-    const runs = await screen.findByRole("group", { name: "How scanning runs" });
+    const runs = await screen.findByRole("group", { name: "Scan mode" });
     const toggle = within(runs).getByRole("button", { name: "Point & shoot" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(toggle);
@@ -1868,7 +1868,7 @@ describe("ScannerPage", () => {
     await trayActions(user);
     await user.click(screen.getByRole("button", { name: "Archive" }));
     expect(
-      await within(tray()).findByText(/still waiting for a printing to be picked/),
+      await within(tray()).findByText(/still waiting for a printing\./),
     ).toBeInTheDocument();
     expect(ipc.scannerTrayArchive).not.toHaveBeenCalled();
   });
@@ -1886,7 +1886,7 @@ describe("ScannerPage", () => {
     expect(container.querySelector(".\\@container\\/scan")?.contains(dialog)).toBe(false);
     expect(
       await within(dialog).findByText(
-        "Scans you add to your collection or archive will appear here.",
+        "Scans you add or archive appear here.",
       ),
     ).toBeInTheDocument();
 
@@ -1968,7 +1968,7 @@ describe("ScannerPage", () => {
     expect(useNotifications.getState().notices).toHaveLength(1);
     expect(useNotifications.getState().notices[0]).toMatchObject({
       title: "Put 3 cards from “Friday pile” back in the tray",
-      body: "1 card is no longer in the card database and was left out.",
+      body: "1 card is no longer in the card data and was left out.",
       tone: "success",
     });
     // Stored behind the reader like any tray change, and filed nowhere.
@@ -1996,7 +1996,13 @@ describe("ScannerPage", () => {
       const call = vi.mocked(ipc.scannerFrame).mock.calls[0] ?? [];
       expect(call).toHaveLength(1);
       expect(call[0]).toBeInstanceOf(Uint8Array);
-      expect(screen.queryByRole("group", { name: "Scan mode" })).toBeNull();
+      // *Scan mode* names How scanning runs now: the one group by that name is Continuous |
+      // Point & shoot, and no recognition mode is offered beside it.
+      expect(
+        screen
+          .getAllByRole("group", { name: "Scan mode" })
+          .map((group) => within(group).getAllByRole("button").map((b) => b.textContent)),
+      ).toEqual([["Continuous", "Point & shoot"]]);
       for (const name of ["Fast", "Exact", "Neural"]) {
         expect(screen.queryByRole("button", { name })).toBeNull();
       }
@@ -2145,7 +2151,7 @@ describe("ScannerPage sending a scan", () => {
       expect(picture(dialog)).toHaveAttribute("src", `data:image/jpeg;base64,${text(14)}`);
       expect(picture(dialog)).toHaveAttribute("alt", "Picture 7 of 7 that will be sent");
       expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
-      expect(dialog).toHaveTextContent("These 7 pictures — the last couple of seconds");
+      expect(dialog).toHaveTextContent("these 7 pictures (the last couple of seconds");
       // The search opens on the card the strip was naming, and nothing is chosen.
       expect(within(dialog).getByRole("searchbox")).toHaveValue("Storm of Saruman");
       const printing = await within(dialog).findByRole("radio", {
@@ -2211,7 +2217,7 @@ describe("ScannerPage sending a scan", () => {
       // Nothing was written to the developer's dataset: that is another press.
       expect(ipc.scannerCapture).not.toHaveBeenCalled();
 
-      expect(await within(dialog).findByText("Sent — thank you.")).toBeInTheDocument();
+      expect(await within(dialog).findByText("Sent. Thank you.")).toBeInTheDocument();
       expect(dialog).toHaveTextContent(`Reference: ${REFERENCE}`);
       await user.click(within(dialog).getByRole("button", { name: "Done" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -3216,7 +3222,7 @@ describe("ScannerPage with a destination", () => {
     mountOver(destination);
     const region = await screen.findByRole("region", { name: "Scanned for their side" });
     expect(await within(region).findByRole("note")).toHaveTextContent(
-      /^5 cards were already in the scanner's tray\./,
+      /^5 cards were already in the tray\./,
     );
     await trayActions(user, region);
     await user.click(screen.getByRole("button", { name: "Clear all…" }));
@@ -3300,7 +3306,7 @@ describe("ScannerPage's pack opener", () => {
       ]) {
         expect(within(stage).getAllByRole("button", { name })).toHaveLength(1);
       }
-      expect(within(stage).getByRole("group", { name: "How scanning runs" })).toBeInTheDocument();
+      expect(within(stage).getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
       // Neither the stopped veil nor the developer column: the light says stopped.
       expect(screen.queryByText(STOPPED_TITLE)).toBeNull();
       expect(screen.queryByRole("region", { name: "Match" })).toBeNull();

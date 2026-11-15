@@ -294,15 +294,10 @@ export const CLEARED_TITLE = "Your browser cleared MTG Grimoire's saved data";
  * is something to press. Last, because it is the one of the four most readers have no use for.
  */
 export const CLEARED_LINES: readonly string[] = [
-  "Browsers can remove what a site has stored — when the device runs low on space, or when the " +
-    "site's data is cleared. That has happened here since you last opened the app.",
+  "Browsers can remove a site's stored data, for example when the device runs low on space. That happened since you last opened the app.",
   "The card data downloads again by itself.",
-  "Anything you had added in this browser — your collection, wishlist and decks — was removed " +
-    "with it, and this browser has nothing to restore it from. If you exported them, you can " +
-    "import those files again.",
-  "If this browser was paired with your other devices, it is a new device now, and its old " +
-    "entry still counts toward the group's five. Remove the old entry in Settings, under Sync, " +
-    "on one of the others, then pair this browser again.",
+  "Your collection, wishlist and decks in this browser were removed and can't be restored here. If you exported them, import those files again.",
+  "If this browser was paired with your other devices, it now counts as a new device, and its old entry still takes one of the group's five places. On another device, remove the old entry in Settings › Sync, then pair this browser again.",
 ];
 
 /**
@@ -331,9 +326,7 @@ export const CLEARED_LINES: readonly string[] = [
  * the old entry afterwards is what is left to a reader who has already cleared. Five lines there.
  */
 export const SITE_DATA_WARNING =
-  "Clearing this browser's site data makes it a new device, and the old entry still counts " +
-  "toward the group's five until it is removed. Leave the group here first, or remove the old " +
-  "entry from another device afterwards.";
+  "Clearing this browser's site data makes it a new device, and the old entry keeps one of the group's five places until it is removed. Leave the group here first, or remove the old entry from another device afterward.";
 
 /**
  * The console's line for the same thing, where a bug report can carry it. What the open then

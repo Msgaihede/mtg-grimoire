@@ -165,7 +165,7 @@ export const PastedReferenceList: Story = {
     await waitFor(async () => {
       await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
     });
-    await expect((await canvas.findAllByText(/^line \d+ · "/)).length).toBeGreaterThan(50);
+    await expect((await canvas.findAllByText(/^line \d+ · “/)).length).toBeGreaterThan(50);
   },
 };
 
@@ -206,7 +206,7 @@ export const WithUnmatchedLines: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
     await userEvent.type(await canvas.findByLabelText("Name"), "Burn");
 
-    await expect(await canvas.findByText('line 3 · "1 Lightning Bolth"')).toBeInTheDocument();
+    await expect(await canvas.findByText("line 3 · “1 Lightning Bolth”")).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },
 };
@@ -273,14 +273,14 @@ export const IntoExistingDeck: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
     await expect(await canvas.findByLabelText(/^Merge/)).toBeChecked();
-    const replace = canvas.getByLabelText(/^Replace — remove the \d+ cards in Actual first/);
+    const replace = canvas.getByLabelText(/^Replace: remove the \d+ cards in Actual first/);
     await expect(replace).toBeInTheDocument();
 
     // Merge is the mode that clears nothing, so it promises nothing.
     await expect(canvas.queryByText(/Recently removed/)).toBeNull();
     await userEvent.click(replace);
     await expect(
-      canvas.getByText("Any copies you own go back to Recently removed."),
+      canvas.getByText("Copies you own go back to Recently removed."),
     ).toBeInTheDocument();
   },
 };
@@ -322,7 +322,7 @@ export const WithArchidektLabels: Story = {
     await expect(keeper).toBeChecked();
     await expect(canvas.getByRole("checkbox", { name: "Cut candidate" })).toBeChecked();
     // The label the reader already has says so, and the one they do not says the other thing.
-    await expect(canvas.getByText("already yours")).toBeInTheDocument();
+    await expect(canvas.getByText("existing label")).toBeInTheDocument();
     await expect(canvas.getByText("new label")).toBeInTheDocument();
 
     // Unticking is what the boxes are for, and the sentence above them counts what is left.

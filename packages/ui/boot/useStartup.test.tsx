@@ -21,7 +21,7 @@ const READY: StartupStatus = { state: "ready" };
 /** What the web host says when its engine's Worker dies under an open app. */
 const STOPPED: StartupStatus = {
   state: "failed",
-  message: "MTG Grimoire's card engine stopped. Reload to start it again.",
+  message: "MTG Grimoire stopped working. Reload to restart it.",
   reload: true,
 };
 

@@ -81,26 +81,26 @@ beforeEach(() => {
 describe("the trade lobby's words", () => {
   it("names the other reader, or says who is missing", () => {
     expect(readerLine(lobby({ peers: [] }))).toBe(
-      "Waiting for the other reader — share the code with them.",
+      "Waiting for the other person. Share the code with them.",
     );
     expect(readerLine(lobby())).toBe("Trading with Bo");
     expect(readerLine(lobby({ role: "guest", hostOnline: false }))).toBe(
-      "Trading with Ada, who is away",
+      "Trading with Ada (away)",
     );
     expect(readerLine(lobby({ phase: "closed", closedReason: "The host closed the lobby." }))).toBe(
-      "The lobby K7QX2M closed: The host closed the lobby.",
+      "Lobby K7QX2M closed: The host closed the lobby.",
     );
   });
 
   it("says where the deal stands from this reader's seat", () => {
     expect(dealLine(lobby({}, { hostAccepted: true }))).toBe("You accepted. Waiting for Bo.");
     expect(dealLine(lobby({}, { guestAccepted: true }))).toBe(
-      "Bo accepted this trade. Look it over and accept it too.",
+      "Bo accepted. Review the trade and accept it too.",
     );
     expect(dealLine(lobby({ role: "guest" }, { hostAccepted: true }))).toBe(
-      "Ada accepted this trade. Look it over and accept it too.",
+      "Ada accepted. Review the trade and accept it too.",
     );
-    expect(dealLine(lobby({ phase: "agreed" }))).toMatch(/^You have both accepted\. Finish/);
+    expect(dealLine(lobby({ phase: "agreed" }))).toMatch(/^You both accepted\. Finish/);
     expect(unknownLine(0)).toBeNull();
     expect(unknownLine(1)).toMatch(/^1 card they offer is not in your card data/);
     expect(unknownLine(3)).toMatch(/^3 cards they offer are/);
@@ -152,7 +152,7 @@ describe("the band", () => {
 
   it("offers the take-back once this reader has accepted", async () => {
     band(lobby({}, { hostAccepted: true }));
-    await userEvent.click(screen.getByRole("button", { name: "Take back" }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo accept" }));
     expect(ipcMock.lobbyTradeAccept).toHaveBeenCalledWith(3, false);
   });
 
@@ -221,7 +221,7 @@ describe("the dialog", () => {
     ipcMock.syncSupporterStatus.mockResolvedValue({ entitled: false, status: null });
     dialog();
     expect(
-      await screen.findByText(/Starting a trade online is for supporters; anybody can join/),
+      await screen.findByText(/Starting an online trade is for supporters\. Anyone can join/),
     ).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Your name in the lobby"), "Ada");
     await userEvent.click(screen.getByRole("button", { name: /Create lobby/ }));

@@ -258,7 +258,7 @@ function MainPage({
           value={`${line.setName ?? line.setCode.toUpperCase()} · #${line.collectorNumber}`}
           Icon={Layers}
           opens
-          reason={line.oracleId === null ? "this card has left the card database" : null}
+          reason={line.oracleId === null ? "this card is no longer in the card data" : null}
           onPress={onPrinting}
         />
         <SheetRow

@@ -85,7 +85,7 @@ export function TradeLobbyBand({
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {!showing && !closed && (
             <button type="button" onClick={onShow} className={TRADE_BUTTON}>
-              Show the trade
+              Show trade
             </button>
           )}
           {agreed ? (
@@ -107,7 +107,7 @@ export function TradeLobbyBand({
                 ) : (
                   <Handshake className="size-4" aria-hidden="true" />
                 )}
-                {yours ? "Take back" : "Accept trade"}
+                {yours ? "Undo accept" : "Accept trade"}
               </button>
             )
           )}
@@ -146,7 +146,7 @@ function CodeChip({ code }: { code: string }): JSX.Element {
       </output>
       <button
         type="button"
-        aria-label={copied ? "Copied" : "Copy the code"}
+        aria-label={copied ? "Copied" : "Copy code"}
         onClick={() => {
           copyText(code).then(
             () => setCopied(true),
@@ -171,14 +171,14 @@ function CodeChip({ code }: { code: string }): JSX.Element {
  */
 export function MisplacedLobby({ kind }: { kind: "draft" | "game" }): JSX.Element {
   const client = useQueryClient();
-  const where = kind === "draft" ? "a draft’s, on Draft & Packs" : "a game’s, on Playtesting";
+  const where = kind === "draft" ? "a draft, on Draft & Packs" : "a game, on Playtesting";
   return (
     <section
       aria-label="Online trade"
       className="flex shrink-0 flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-sm"
     >
       <p role="status" className="m-0 min-w-0 flex-1">
-        That lobby is {where}, not a trade’s.
+        That lobby is for {where}, not a trade.
       </p>
       <button
         type="button"

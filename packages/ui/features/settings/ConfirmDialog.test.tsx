@@ -123,7 +123,7 @@ describe("ConfirmDialog", () => {
    * stands and the button is armed from the first frame.
    */
   it("arms immediately and asks for nothing when the word is not required", () => {
-    open({ typeToConfirm: false, title: "Clear local cache", confirmLabel: "Clear cache" });
+    open({ typeToConfirm: false, title: "Clear local cache?", confirmLabel: "Clear cache" });
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(confirmButton("Clear cache")).toBeEnabled();

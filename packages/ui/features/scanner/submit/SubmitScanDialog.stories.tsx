@@ -171,7 +171,7 @@ export const Sent: Story = {
     );
     await userEvent.click(within(dialog).getByRole("button", { name: "Send scan" }));
 
-    await expect(await within(dialog).findByText("Sent — thank you.")).toBeInTheDocument();
+    await expect(await within(dialog).findByText("Sent. Thank you.")).toBeInTheDocument();
     await expect(within(dialog).getByText(FAKE_SCAN_ID)).toBeInTheDocument();
     const done = within(dialog).getByRole("button", { name: "Done" });
     await waitFor(() => expect(done).toHaveFocus());
@@ -195,7 +195,7 @@ export const InboxFull: Story = {
 
     await expect(await within(dialog).findByRole("alert")).toHaveTextContent(SCAN_INBOX_FULL);
     // Still the form, with the answers in it: nothing was sent, so there is nothing to thank for.
-    await expect(within(dialog).queryByText("Sent — thank you.")).toBeNull();
+    await expect(within(dialog).queryByText("Sent. Thank you.")).toBeNull();
     await expect(
       within(printings).getByRole("radio", { name: "Lightning Bolt — LEA 161" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -222,7 +222,7 @@ export const MembershipEnded: Story = {
     await expect(refusal.textContent).not.toMatch(
       /patreon|supporter|membership|pledge|subscri|payment/i,
     );
-    await expect(within(dialog).queryByText("Sent — thank you.")).toBeNull();
+    await expect(within(dialog).queryByText("Sent. Thank you.")).toBeNull();
   },
 };
 

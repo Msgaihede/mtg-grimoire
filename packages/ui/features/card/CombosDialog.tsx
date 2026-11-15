@@ -335,13 +335,13 @@ function Body({
       </Filler>
     ) : cardError !== null ? (
       <Filler>
-        <p className="text-sm text-destructive">Couldn't read this card — {cardError}.</p>
+        <p className="text-sm text-destructive">Couldn't read this card — {cardError}</p>
       </Filler>
     ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
     // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
     card === null ? (
       <Filler>
-        <Note>This printing is no longer in the card database.</Note>
+        <Note>This printing is no longer in the card data.</Note>
       </Filler>
     ) : oracleId === null ? (
       <Filler>
@@ -803,8 +803,7 @@ function Pane({ combo }: { combo: CardCombo }) {
           surface over. */}
       {combo.templateCount > 0 && (
         <p className="mt-4 text-xs leading-snug text-dim">
-          Also needs {plural(combo.templateCount, "piece")} that can't be matched to a specific card
-          (e.g. a creature with flying or a sacrifice outlet).
+          Also needs {plural(combo.templateCount, "piece")} not tied to a specific card, such as a sacrifice outlet.
         </p>
       )}
 
@@ -864,7 +863,7 @@ function SearchField({ value, onChange }: { value: string; onChange: (text: stri
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Search these combos by piece…"
+        placeholder="Search by piece…"
         className={cn(
           FILTER_FIELD,
           FOCUS,

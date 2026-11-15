@@ -99,8 +99,8 @@ export function AddLabelDialog({
         cardName === null
           ? undefined
           : cardCount > 1
-            ? `Put a label on ${cardCount} cards.`
-            : `Put a label on “${cardName}”.`
+            ? `Label ${cardCount} cards.`
+            : `Label “${cardName}”.`
       }
       closeLabel="Close"
       size="w-[26rem]"
@@ -173,14 +173,14 @@ function AddLabelBody({
     >
       <div>
         <label htmlFor="add-label-dialog-name" className="sr-only">
-          Find or name a label
+          Find or create a label
         </label>
         <input
           ref={ref}
           id="add-label-dialog-name"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Find or name a label…"
+          placeholder="Find or create a label…"
           className={cn(META_FIELD, "w-full flex-none")}
         />
       </div>
@@ -218,7 +218,7 @@ function AddLabelBody({
       {shown.length === 0 && (
         <p className="text-[0.6875rem] text-dim">
           {choices.length === 0
-            ? "All your labels are already in this list. Type a name above to create one."
+            ? "All your labels are in this list. Type a name to create one."
             : `No label named “${trimmed}”. Create it below.`}
         </p>
       )}
@@ -232,7 +232,7 @@ function AddLabelBody({
 
       {clash !== undefined && (
         <p className="text-[0.6875rem] text-dim" role="status">
-          “{clash.name}” already exists — pick it from the list above.
+          “{clash.name}” already exists. Pick it from the list.
         </p>
       )}
 
