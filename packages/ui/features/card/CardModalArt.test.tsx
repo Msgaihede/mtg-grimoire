@@ -341,6 +341,27 @@ describe("CardModalArt", () => {
     expect(onPickFinish.mock.calls).toEqual([["nonfoil"], ["foil"], ["etched"]]);
   });
 
+  it("shows the finish the host was asked for, over its own seed (issue #1679)", () => {
+    // The modal's right-click menu offers the same finishes, and a pick there reaches this column
+    // only as `viewing`. It wins over the seed, and the sheen follows it.
+    const three = card({ finishes: '["nonfoil","foil","etched"]' });
+    const { rerender } = render(<CardModalArt card={three} {...rest} />);
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    rerender(<CardModalArt card={three} {...rest} viewing="etched" />);
+    expect(screen.getByRole("button", { name: "View as etched" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("tells the host nothing when the finish already on screen is pressed", async () => {
     const onPickFinish = vi.fn();
     render(<CardModalArt card={card({})} {...rest} onPickFinish={onPickFinish} />);
