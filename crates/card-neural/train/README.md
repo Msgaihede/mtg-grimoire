@@ -287,6 +287,13 @@ machine short of memory, lower `--workers` before `--prefetch`.
 python -m unittest discover crates/card-neural/train/tests
 ```
 
+The `test_deliver*.py` suites, which use the standard library alone, also run in two places with
+nobody at a desk: `ci.yml`'s `neural` job, on a pull request that changes this folder, `models/` or
+`packages/ui/lib/core/web/assets.ts`, and `neural-deliver.yml`'s `build` job, before it builds. The
+rest are run by hand. **A test never pins a number out of `models/training.json` or the README's
+rows**: a delivery rewrites both, so such a test is red from the delivery on (seven were, from the
+first one). A run is set beside the tests' own record (`test_deliver_readme.LAB`).
+
 ## Running it from GitHub
 
 Two workflows run all of the above with nobody at a desk: `.github/workflows/neural-train.yml`

@@ -33,7 +33,16 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** Every job a `changes` output gates, in the order the outputs are printed. */
-export const JOBS = ["frontend", "rust", "core", "powershell", "storybook", "android", "web"];
+export const JOBS = [
+  "frontend",
+  "rust",
+  "core",
+  "powershell",
+  "storybook",
+  "android",
+  "web",
+  "neural",
+];
 
 /**
  * The two jobs a Rust source can break: `rust`, which compiles it, and `frontend`, whose tests
@@ -65,7 +74,8 @@ const PAGE_SIDE = ["frontend", "storybook", "web"];
 
 /**
  * Every job that builds something **for every change it cannot place**. The fail-safe sets these
- * and not `powershell` — **and not `android`**, which builds the light app's APK (phase 4,
+ * and not `powershell`, nor `neural` (the delivery's Python suites: what they read is three named
+ * arms) — **and not `android`**, which builds the light app's APK (phase 4,
  * 2026-10-03): its inputs are the host in `apps/light/src-tauri`, the cargo workspace's shared files
  * and the frontend bundle, each of which has an arm that names it, and an unrecognised path is
  * none of them. It is also the slowest job here — a release build of the whole engine for
@@ -171,7 +181,10 @@ export const ARMS = [
   // fetched by the browser's — and its README with them, which is no prose: its table is the web
   // build's pin on the four files (`apps/light/vite.config.ts`), and `assets.test.ts` reads it.
   // **Above the prose arm**, whose `*.md` would take the README and skip the build that reads it.
-  { match: ["crates/card-neural/models/*"], jobs: CORE_SIDE },
+  // **And `neural`** (2026-11-10): the delivery's suites read the README, `training.json` and the
+  // eight files, and a delivery is a pull request that changes nothing else — the 2026-11 one
+  // merged with seven of those tests red, because no job here ran them.
+  { match: ["crates/card-neural/models/*"], jobs: [...CORE_SIDE, "neural"] },
 
   // **Every CLAUDE.md** (issue #1196). `scripts/claude-md.test.ts` requires the ones it names and
   // holds each to a line budget, so one deleted is red in `frontend` and nowhere else — the
@@ -195,12 +208,14 @@ export const ARMS = [
   },
 
   // **The Neural training pipeline** (2026-10-20): Python that runs on Modal and on the two
-  // `neural-*.yml` workflows' runners, and nowhere in this gate — no crate compiles it, no job
-  // here has Python, and no test reads it (the census would send a file a test read to that
-  // test's job, and fail here first). Its own unit tests run where it runs: `neural-deliver.yml`'s
-  // `build` job runs the delivery's before it builds. **Above `crates/*`**, which would send a
-  // Python change through every Rust build to prove nothing about it.
-  { match: ["crates/card-neural/train/*"], jobs: [] },
+  // `neural-*.yml` workflows' runners — no crate compiles it, and no vitest or Rust test reads it
+  // (the census would send a file one read to that test's job, and fail here first). **`neural`
+  // alone** (2026-11-10), which runs the delivery's own suites, `tests/test_deliver*.py`, as
+  // `neural-deliver.yml`'s `build` job does before it builds: until this arm that job was their
+  // only run, a month after the change that broke them. The suites that need torch stay by hand.
+  // **Above `crates/*`**, which would send a Python change through every Rust build to prove
+  // nothing about it.
+  { match: ["crates/card-neural/train/*"], jobs: ["neural"] },
 
   // **The MCP server's skills** (`apps/desktop/src-tauri/src/mcp/prompts/*.md`), Markdown that is no
   // prose: compiled into the desktop as its MCP prompts (`include_str!`), and every `graphql`
@@ -273,6 +288,13 @@ export const ARMS = [
     ],
     jobs: ["rust", ...PAGE_SIDE],
   },
+
+  // **The web build's reader of the model table**, `neuralTable`: the delivery's suites read its
+  // row pattern out of this file (`test_deliver_readme.py`, by a path Python computes, which the
+  // census cannot see) and hold the README that `update_readme.py` writes to it — so a pattern
+  // changed here is a delivery whose README the web build refuses. `packages/ui/*`'s jobs and
+  // `neural`. **Above `packages/ui/*`**, which would take it and skip that job.
+  { match: ["packages/ui/lib/core/web/assets.ts"], jobs: [...PAGE_SIDE, "neural"] },
 
   // **The light app's Android host** (phase 4, 2026-10-03): a workspace member, so `rust`
   // compiles it for the desktop and runs its tests; `android` builds it into an APK, which is the

@@ -1794,6 +1794,15 @@ What changed:
   Prettier would. `models/training.json` keeps the current files' training metrics, which the next
   pull request is compared against. `cargo test -p card-neural` holds a gallery to at least
   70 000 looks rather than to the first pair's 70 402.
+- **The delivery's tests run on pull requests** (2026-11-10): `ci.yml`'s `neural` job runs
+  `tests/test_deliver*.py` — the command `build` runs before it builds, on the same image — for a
+  change to `crates/card-neural/train/`, `crates/card-neural/models/` or
+  `packages/ui/lib/core/web/assets.ts`. Until then `build` was their only run. Seven of them
+  pinned the numbers `training.json` held for the lab's files; the first delivery (run `2026-11`,
+  PR 1447) rewrote that file and merged green, and they were found red on 2026-11-10, by hand —
+  the December delivery would have stopped at its test step and opened no pull request. The tests
+  now set a run beside a record of their own (`test_deliver_readme.LAB`), and were run on a tree
+  one made-up delivery further on, with and without a new detector, before the job was added.
 - **Proved before the first real run** (2026-10-20, locally): a dry run of `deliver.py` over a
   folder laid out as the Volume, built from the scanner lab's export of the shipped embedder
   (`qd-e`), rebuilt `gallery.bin` byte for byte (`40278b05…95a617d4`), so the rewritten table kept

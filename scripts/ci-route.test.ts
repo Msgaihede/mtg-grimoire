@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { findClaudeFiles } from "./check-claude-md.ts";
 import { ARMS, JOBS, armFor, route } from "./ci-route.ts";
 import ciYml from "../.github/workflows/ci.yml?raw";
+import neuralDeliverYml from "../.github/workflows/neural-deliver.yml?raw";
 
 // Vite needs both glob arguments as literals, so the options repeat.
 // Mirrors the projects' globs in `vitest.config.ts`: every file vitest collects.
@@ -247,10 +248,12 @@ describe("the census", () => {
 describe("the arms", () => {
   const T = true;
   const F = false;
-  // [path, frontend, rust, core, powershell, storybook, android, web]
+  // [path, frontend, rust, core, powershell, storybook, android, web, neural]. The last is the
+  // delivery's Python suites, which three arms and the gate itself set: a row that leaves it out
+  // says F.
   it.each([
-    [".github/workflows/ci.yml", T, T, T, T, T, T, T],
-    ["scripts/ci-route.ts", T, T, T, T, T, T, T],
+    [".github/workflows/ci.yml", T, T, T, T, T, T, T, T],
+    ["scripts/ci-route.ts", T, T, T, T, T, T, T, T],
     ["rust-toolchain.toml", T, T, T, F, F, T, T],
     [".github/actions/rust-toolchain/action.yml", T, T, T, F, F, T, T],
     ["Cargo.toml", T, T, T, F, F, T, T],
@@ -374,20 +377,26 @@ describe("the arms", () => {
     ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
     // The Neural mode's crate, by `crates/*`; its model files by their own arm, the README with
     // them — the web build's pin table, not prose — and the crate's CLAUDE.md by the budget's arm.
+    // The model files are `neural`'s too: the delivery's suites read them, and a delivery is a
+    // pull request of nothing else.
     ["crates/card-neural/src/gallery.rs", T, T, T, F, F, F, T],
-    ["crates/card-neural/models/gallery.bin", T, T, T, F, F, F, T],
-    ["crates/card-neural/models/README.md", T, T, T, F, F, F, T],
+    ["crates/card-neural/models/gallery.bin", T, T, T, F, F, F, T, T],
+    ["crates/card-neural/models/README.md", T, T, T, F, F, F, T, T],
     ["crates/card-neural/CLAUDE.md", T, F, F, F, F, F, F],
-    // Its training pipeline: Python no job in this gate runs, above `crates/*` so no Rust build
-    // runs for it either. The models it delivers are the arm above's.
-    ["crates/card-neural/train/deliver.py", F, F, F, F, F, F, F],
-    ["crates/card-neural/train/modal_app.py", F, F, F, F, F, F, F],
-    ["crates/card-neural/train/requirements-ci.txt", F, F, F, F, F, F, F],
-    ["crates/card-neural/train/tests/test_deliver.py", F, F, F, F, F, F, F],
-    ["crates/card-neural/train/README.md", F, F, F, F, F, F, F],
+    // Its training pipeline: Python, above `crates/*` so no Rust build runs for it — `neural`
+    // alone, which runs the delivery's own suites. The models it delivers are the arm above's.
+    ["crates/card-neural/train/deliver.py", F, F, F, F, F, F, F, T],
+    ["crates/card-neural/train/modal_app.py", F, F, F, F, F, F, F, T],
+    ["crates/card-neural/train/requirements-ci.txt", F, F, F, F, F, F, F, T],
+    ["crates/card-neural/train/tests/test_deliver.py", F, F, F, F, F, F, F, T],
+    ["crates/card-neural/train/README.md", F, F, F, F, F, F, F, T],
     // A CLAUDE.md there would still be the budget's: its arm is above the pipeline's.
     ["crates/card-neural/train/CLAUDE.md", T, F, F, F, F, F, F],
-    ["crates/card-neural/models/training.json", T, T, T, F, F, F, T],
+    ["crates/card-neural/models/training.json", T, T, T, F, F, F, T, T],
+    // `neuralTable`, whose row pattern those suites read out of this file: the page's jobs, and
+    // `neural`. Any other file of the shared UI is the page's alone.
+    ["packages/ui/lib/core/web/assets.ts", T, F, F, F, T, F, T, T],
+    ["packages/ui/lib/core/web/assets.test.ts", T, F, F, F, T, F, T],
     ["infrastructure/share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
     // The sync relay: tested by `frontend`, read as text by Rust tests, and **run** by `web`,
     // whose sync smoke starts it under workerd. Out of the fail-safe: not `core`, not `storybook`.
@@ -449,8 +458,17 @@ describe("the arms", () => {
     ["apps/light/index.html", T, F, F, F, T, F, T],
     ["apps/light/phone/CardSheet.tsx", T, F, F, F, T, F, T],
     ["apps/light/host.test.ts", T, F, F, F, T, F, T],
-  ])("%s", (path, frontend, rust, core, powershell, storybook, android, web) => {
-    expect(route([path])).toEqual({ frontend, rust, core, powershell, storybook, android, web });
+  ])("%s", (path, frontend, rust, core, powershell, storybook, android, web, neural = F) => {
+    expect(route([path])).toEqual({
+      frontend,
+      rust,
+      core,
+      powershell,
+      storybook,
+      android,
+      web,
+      neural,
+    });
   });
 
   it("routes an empty diff nowhere, skipping blank lines as the `case` loop did", () => {
@@ -467,6 +485,7 @@ describe("the arms", () => {
       storybook: true,
       android: false,
       web: true,
+      neural: false,
     });
   });
 
@@ -543,6 +562,23 @@ describe("the arms", () => {
     expect(arms.filter((arm) => !arm.jobs.includes("rust"))).toEqual([]);
   });
 
+  // The delivery's Python suites read three places, by paths Python computes, so the census
+  // cannot hold these arms: the order is held here, and the command to the one the delivery
+  // itself runs — a job that ran a different one would prove nothing about the next delivery.
+  it("routes what the delivery's suites read to `neural`, which runs them as the delivery does", () => {
+    const at = (pattern: string) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    expect(at("crates/card-neural/train/*")).toBeLessThan(at("crates/*"));
+    expect(at("crates/card-neural/models/*")).toBeLessThan(at("crates/*"));
+    expect(at("packages/ui/lib/core/web/assets.ts")).toBeGreaterThan(-1);
+    expect(at("packages/ui/lib/core/web/assets.ts")).toBeLessThan(at("packages/ui/*"));
+    const command = /^ +run: (python3 .*test_deliver.*)$/m;
+    const here = command.exec(
+      ciYml.slice(ciYml.indexOf("\n  neural:"), ciYml.indexOf("\n  ci-ok:")),
+    );
+    expect(here?.[1]).toBeTruthy();
+    expect(here?.[1]).toBe(command.exec(neuralDeliverYml)?.[1]);
+  });
+
   it("puts the light host's arm above the light app's", () => {
     const at = (pattern: string) => ARMS.findIndex((arm) => arm.match.includes(pattern));
     expect(at("apps/light/src-tauri/*")).toBeGreaterThan(-1);
@@ -610,7 +646,10 @@ describe("ci.yml", () => {
   // A job gated on a `changes` output belongs in every list of jobs. In `needs` alone its failure
   // is a result the gate never reads; in neither, it is a job the gate does not wait for.
   it.each(JOBS)("checks, and gates `ci-ok` on, `%s`", (job) => {
-    const needs = /^ {4}needs: \[([^\]]*)\]$/m.exec(ciYml.slice(ciYml.indexOf("\n  ci-ok:")))?.[1];
+    // `\s*`: with ten names the list is past the formatter's width, and it breaks after `needs:`.
+    const needs = /^ {4}needs:\s*\[([^\]]*)\]$/m.exec(
+      ciYml.slice(ciYml.indexOf("\n  ci-ok:")),
+    )?.[1];
     expect(needs?.split(",").map((s) => s.trim())).toContain(job);
     const env = job.toUpperCase();
     expect(ciYml).toContain(`${env}: \${{ needs.${job}.result }}`);

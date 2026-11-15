@@ -36,6 +36,24 @@ NEURAL_TABLE = _neural_table_pattern()
 EVIDENCE = ("symbol.onnx", "band.onnx", "symbols.bin", "bands.bin")
 SYMBOL_CLASSES, SYMBOL_PRINTINGS, BAND_FACES = 2004, 106100, 108000
 
+# What `training.json` held for the lab's files, before the first delivery (run `2026-11`) rewrote
+# it. **The record the tests set a run beside is this one, never the file in git**: every delivery
+# rewrites that file, and a test pinning its numbers is red from that delivery on — seven were,
+# from the first, and stopped nothing until `ci.yml`'s `neural` job ran these suites.
+LAB = {
+    "about": "What the files in this folder scored when they were trained, by network.",
+    "embedder": {"run": "qd-mnv4-e", "where": "scanner lab", "finished_at": None, "git_sha": None, "looks": 70402,
+                 "metrics": {"retrieval_top1": 0.9997, "epochs": 30}},
+    "detector": {"run": "det-a", "where": "scanner lab", "finished_at": None, "git_sha": None,
+                 "metrics": {"found": 0.993, "corner_err": 0.0277, "corner_err_p90": 0.0483, "wrong_way": 0.0033,
+                             "steps": 30000}},
+    "symbol": {"run": "ev-symbol-3", "where": "scanner lab", "finished_at": None, "git_sha": None, "classes": 1999,
+               "metrics": {"within_top1": 0.927, "epochs": 16}},
+    "band": {"run": "ev-band-2", "where": "scanner lab", "finished_at": None, "git_sha": None, "classes": 107109,
+             "metrics": {"within_top1": 0.946, "epochs": 20}},
+    "last_run": None,
+}
+
 
 def neural_table(readme: str) -> dict:
     return {m[1]: (int(m[2].replace(" ", "")), m[3], m[4]) for m in NEURAL_TABLE.finditer(readme)}
@@ -70,13 +88,14 @@ def bands_json(faces=BAND_FACES) -> dict:
 
 
 class Scratch(unittest.TestCase):
-    """A copy of `models/`'s README and training.json beside eight made-up files."""
+    """A copy of `models/`'s README beside eight made-up files and the lab's record (`LAB`): the
+    README as the script will find it, the numbers a run is set beside the tests' own."""
 
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.dir)
-        for name in (ur.README, ur.TRAINING_JSON):
-            shutil.copyfile(MODELS / name, self.dir / name)
+        shutil.copyfile(MODELS / ur.README, self.dir / ur.README)
+        (self.dir / ur.TRAINING_JSON).write_text(json.dumps(LAB, indent=2) + "\n", encoding="utf-8")
         for i, name in enumerate(ur.FILES):
             (self.dir / name).write_bytes(bytes([i]) * (1000 + 37 * i))
         self.gallery = self.dir / "gallery.json"
@@ -284,21 +303,39 @@ class OneSet(unittest.TestCase):
             self.assertEqual(((models / ur.README).read_bytes(), (models / ur.TRAINING_JSON).read_bytes()), before)
 
 
-class Seed(unittest.TestCase):
-    def test_training_json_holds_the_labs_numbers_for_the_shipped_pair(self):
-        seed = json.loads((MODELS / ur.TRAINING_JSON).read_text(encoding="utf-8"))
-        self.assertEqual(seed["embedder"]["metrics"]["retrieval_top1"], 0.9997)
-        self.assertEqual(seed["embedder"]["metrics"]["epochs"], 30)
-        self.assertEqual(seed["embedder"]["looks"], 70402)
-        self.assertEqual(seed["detector"]["metrics"], {"found": 0.993, "corner_err": 0.0277, "corner_err_p90": 0.0483,
-                                                       "wrong_way": 0.0033, "steps": 30000})
+class Shipped(unittest.TestCase):
+    """`training.json` as it is in git. Its numbers are the last delivery's, and no test's to pin;
+    what the next delivery reads out of it is."""
 
-    def test_training_json_holds_the_labs_numbers_for_the_shipped_evidence(self):
-        seed = json.loads((MODELS / ur.TRAINING_JSON).read_text(encoding="utf-8"))
-        self.assertEqual((seed["symbol"]["run"], seed["symbol"]["classes"]), ("ev-symbol-3", 1999))
-        self.assertEqual(seed["symbol"]["metrics"], {"within_top1": 0.927, "epochs": 16})
-        self.assertEqual((seed["band"]["run"], seed["band"]["classes"]), ("ev-band-2", 107109))
-        self.assertEqual(seed["band"]["metrics"], {"within_top1": 0.946, "epochs": 20})
+    def test_training_json_names_a_run_and_its_scores_for_each_network(self):
+        shipped = json.loads((MODELS / ur.TRAINING_JSON).read_text(encoding="utf-8"))
+        for net in ("embedder", "detector", *ur.EVIDENCE):
+            record = shipped[net]
+            self.assertTrue(record.get("run"), net)
+            self.assertTrue(record.get("where"), net)
+            self.assertTrue(record.get("metrics"), net)
+        self.assertIsInstance(shipped["embedder"]["looks"], int)
+        for kind in ur.EVIDENCE:
+            self.assertIsInstance(shipped[kind]["classes"], int, kind)
+
+    def test_the_rewrite_takes_the_shipped_record_as_it_is(self):
+        # The pair a delivery finds: the README and `training.json` in git, and a run that leaves
+        # the detector and the evidence alone, so their records must come through untouched.
+        shipped = json.loads((MODELS / ur.TRAINING_JSON).read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as d:
+            models = Path(d)
+            for name in (*ur.FILES, ur.README, ur.TRAINING_JSON):
+                shutil.copyfile(MODELS / name, models / name)
+            gallery = models / "gallery.json"
+            gallery.write_text(json.dumps({"entries": [{}] * 3}), encoding="utf-8")
+            new = ur.update(models, done_for(run="2099-01", detector=False, evidence=False), gallery)
+            line = next(line for line in (models / ur.README).read_text(encoding="utf-8").split("\n")
+                        if line.startswith("**Last trained**"))
+        self.assertEqual(new["embedder"]["run"], "2099-01")
+        for net in ("detector", *ur.EVIDENCE):
+            self.assertEqual(new[net], shipped[net], net)
+        self.assertIn(f"detector not retrained (still run `{shipped['detector']['run']}`'s)", line)
+        self.assertIn(f"(still runs `{shipped['symbol']['run']}` and `{shipped['band']['run']}`)", line)
 
 
 if __name__ == "__main__":

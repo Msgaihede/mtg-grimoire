@@ -49,6 +49,7 @@ jobs:
       storybook: ${{ steps.classify.outputs.storybook }}
       android: ${{ steps.classify.outputs.android }}
       web: ${{ steps.classify.outputs.web }}
+      neural: ${{ steps.classify.outputs.neural }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
@@ -102,7 +103,7 @@ jobs:
           # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
           # as a pass — so a router that printed nothing would take the gate green having run
           # nothing. Fail here instead.
-          for job in frontend rust core powershell storybook android web; do
+          for job in frontend rust core powershell storybook android web neural; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
               || { echo "ci-route.ts printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
@@ -1008,10 +1009,36 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File .claude/skills/running-the-app/lock.test.ps1
 
+  # The Neural delivery's own tests (`crates/card-neural/train/tests/test_deliver*.py`): what
+  # `neural-deliver.yml` does to `models/README.md` and `training.json`, and the pull request it
+  # writes. That workflow's `build` job runs them before it builds, and until 2026-11-10 that was
+  # their only run — so the first delivery, which rewrote the numbers seven of them pinned, merged
+  # green, and the next delivery would have stopped at its test step a month later. Here they run
+  # on the pull request that changes what they read: the training's Python, the model files and
+  # their README, and `assets.ts`, whose row pattern they hold the README to.
+  neural:
+    name: neural
+    needs: changes
+    if: needs.changes.outputs.neural == 'true'
+    # The image and the Python `neural-deliver.yml`'s `build` job has, so a pass here is a pass there.
+    runs-on: ubuntu-24.04
+    # Warm: seconds — a checkout and four seconds of tests.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner's own Python and no install: these two suites use the standard library alone.
+      # The other suites in that folder need torch and OpenCV, and are run by hand.
+      - name: The delivery's own tests
+        run: python3 -B -m unittest discover -s crates/card-neural/train/tests -p "test_deliver*.py"
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, rust-windows, core, powershell, storybook, android, web]
+    needs:
+      [changes, frontend, rust, rust-windows, core, powershell, storybook, android, web, neural]
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -1026,8 +1053,9 @@ jobs:
           STORYBOOK: ${{ needs.storybook.result }}
           ANDROID: ${{ needs.android.result }}
           WEB: ${{ needs.web.result }}
+          NEURAL: ${{ needs.neural.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST rust-windows=$RUST_WINDOWS core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID web=$WEB"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST rust-windows=$RUST_WINDOWS core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID web=$WEB neural=$NEURAL"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -1037,7 +1065,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$RUST_WINDOWS" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID" "$WEB"; do
+          for result in "$FRONTEND" "$RUST" "$RUST_WINDOWS" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID" "$WEB" "$NEURAL"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

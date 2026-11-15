@@ -106,4 +106,6 @@ file's boxes, so a box can be judged by eye before any network is trained for it
   (`docs/reference/card-scanner.md` §10, _The card finder on readers' frames_). Its own
   drawn-scene figures said nothing was wrong.
 - `python -m unittest discover crates/card-neural/train/tests` — no GPU, no network; not part of
-  `pnpm verify`.
+  `pnpm verify`. `ci.yml`'s `neural` job runs the `test_deliver*.py` suites on a pull request that
+  changes `train/` or `models/`; **they never pin a number out of `models/training.json`**, which
+  every delivery rewrites (`train/README.md`, "Tests").
