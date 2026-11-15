@@ -6,13 +6,20 @@ import {
   Gem,
   RotateCcw,
   RotateCw,
+  RectangleVertical,
   Sparkles,
 } from "lucide-react";
 import { FoilOverlay } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
 import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
+import {
+  FINISH_LABEL,
+  parseFinishes,
+  recordableFinishes,
+  soleFinish,
+  type Finish,
+} from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { CardDetail, DeckFinish, MeldRelation } from "@/lib/ipc";
@@ -65,29 +72,53 @@ const TURNED_CARD_ASPECT = CARD_ASPECT.split("/")
   .join(" / ");
 
 /**
- * The finish this printing's foil toggle is *about*, or `null` where there is nothing to toggle.
+ * The finishes this printing's finish row offers a button for — every finish it lists, or none.
  *
- * Copied from `CardDetailPane`'s `foilViewFinish` before that file was deleted, and it answers only
- * where a printing is sold **both** ways: a foil-only printing has nothing to switch to, and
- * `soleFinish` — which states what the cardboard simply *is* — already speaks for it. The return
- * is `DeckFinish` rather than `Finish | null` because the two arms answer `foil` and `etched` and
- * nothing else, which is exactly `deck_cards.finish`'s vocabulary, so the toggle can ask for what
- * it shows without a cast.
+ * **One button per finish, and only where there are two or more** (issue #1679). The row used to
+ * be a single foil toggle, which could only ever be about one shiny finish: a printing sold
+ * nonfoil, foil *and* etched had to pick one of its two shiny answers for the toggle to be about
+ * (issue #1561's `own`), and a foil+etched printing — no plain copy to toggle back to — had no
+ * control at all. A button per finish answers both, in the printing's own order (Scryfall's,
+ * which is `FINISHES`': plain, then the premium treatments).
  *
- * **`own` is the copy's own shiny finish, and it wins wherever the printing lists it** (issue
- * #1561). A printing sold nonfoil, foil *and* etched has two shiny answers, and "foil if listed"
- * drew an etched deck row as Foil and turned it into foil on a `Set as regular` → `Set as foil`
- * round trip. The row (or the tile that opened the card) says which one this copy is, so the
- * toggle is about that one; with nothing said, foil is still the default.
+ * A single-finish printing gets none: there is nothing to switch to, and `soleFinish` — which
+ * states what the cardboard simply *is* — already speaks for it. An unknown list (`[]`) gets none
+ * either, because nothing is known to offer.
  */
-function foilViewFinish(finishesJson: string | null, own: Finish | null = null): DeckFinish {
+function switchableFinishes(finishesJson: string | null): Finish[] {
   const finishes = parseFinishes(finishesJson);
-  if (!finishes.includes("nonfoil")) return null;
-  if ((own === "foil" || own === "etched") && finishes.includes(own)) return own;
-  if (finishes.includes("foil")) return "foil";
-  if (finishes.includes("etched")) return "etched";
-  return null;
+  return finishes.length >= 2 ? finishes : [];
 }
+
+/**
+ * The finish the column opens showing.
+ *
+ * The deck row's (or the copy's) own finish first — `null` there is the regular copy — then the
+ * finish the opening surface named, where this printing was made in it, then the most ordinary
+ * finish the printing is sold in, which is `recordableFinishes`' first answer: `nonfoil` for
+ * nearly every printing and `foil` for a foil+etched one.
+ */
+function seededFinish(
+  finishesJson: string | null,
+  deckRow: { finish: DeckFinish } | null,
+  openedAs: Finish | null,
+): Finish {
+  if (deckRow !== null) return deckRow.finish ?? "nonfoil";
+  const listed = parseFinishes(finishesJson);
+  if (openedAs !== null && (listed.length === 0 || listed.includes(openedAs))) return openedAs;
+  return recordableFinishes(finishesJson)[0];
+}
+
+/**
+ * The glyph a finish button draws: `FinishMark`'s own two for the shiny finishes, and a plain
+ * card for the regular one, which has no mark of its own anywhere else because nothing needs to
+ * say a card is ordinary — but a button beside two glyphed ones needs a picture too.
+ */
+const FINISH_GLYPH: Record<Finish, typeof Sparkles> = {
+  nonfoil: RectangleVertical,
+  foil: Sparkles,
+  etched: Gem,
+};
 
 /**
  * The meld half of the row under the art — what the counterparts are, which one is being looked
@@ -159,7 +190,7 @@ export function CardModalArt({
   marketplace,
   deckRow,
   openedAs,
-  onToggleFoil,
+  onPickFinish,
   meld,
   onShowSet,
   onContextMenu,
@@ -191,19 +222,22 @@ export function CardModalArt({
    * plain for as long as the prop was missing.
    *
    * `Finish` and not `DeckFinish`, because `nonfoil` is a real answer here and a meaningful one:
-   * it is a surface saying "the copy they pressed is the plain one", which seeds nothing, and it
-   * is a different statement from "nobody knew".
+   * it is a surface saying "the copy they pressed is the plain one", which seeds the plain view
+   * even on a printing whose most ordinary finish is something else, and it is a different
+   * statement from "nobody knew".
    */
   openedAs: Finish | null;
   /**
-   * The reader pressed the foil toggle, and this is the finish they are asking the deck row to
-   * play — `null` for the regular copy.
+   * The reader pressed one of the finish buttons, and this is the finish they asked for —
+   * `nonfoil` for the regular copy.
    *
-   * The argument is what the brief's bare `() => void` could not carry: the press is a *view*
-   * change everywhere and a **write** where there is a row, and the host cannot tell which way
-   * the toggle went without being told. A handler that ignores it still typechecks.
+   * The press is a *view* change everywhere and a **write** where there is a row, and the host
+   * cannot tell which finish was picked without being told. Called only for a finish other than
+   * the one already shown: pressing the pressed button is not a change. `Finish` rather than
+   * `DeckFinish`, because the column now names every finish a printing has and the host converts
+   * at its own boundary (`deck_cards.finish` spells the regular copy `null`).
    */
-  onToggleFoil: (next: DeckFinish) => void;
+  onPickFinish: (next: Finish) => void;
   /** The meld counterparts and what a press does about them — see {@link MeldTarget}. */
   meld: MeldTarget;
   /**
@@ -226,29 +260,21 @@ export function CardModalArt({
   const tip = useTooltip();
   const sides = faceCount(card.layout, card.faces.length);
   const finishes = parseFinishes(card.finishes);
-  /**
-   * The shiny finish this copy was opened as — the deck row's, else the one the opening surface
-   * named — **held from mount** rather than re-read, because the toggle's own write changes it:
-   * `Set as regular` re-reads the row as `null`, and a toggle re-derived from that would offer
-   * `Set as foil` to an etched copy the reader had only just set regular. The column is keyed on
-   * the card, so a step to another printing seeds afresh.
-   */
-  const [ownShiny] = useState<Finish | null>(() => deckRow?.finish ?? openedAs);
-  const foilable = foilViewFinish(card.finishes, ownShiny);
+  /** The finishes the row draws a button for — see {@link switchableFinishes}. */
+  const switchable = switchableFinishes(card.finishes);
 
   /**
    * This printing is sold **only** as a regular card — what the greyed control states, and
-   * deliberately narrower than `foilable === null`.
+   * deliberately narrower than `switchable.length === 0`.
    *
-   * `foilViewFinish` answers `null` for four different printings and only one of them has no
-   * foil, which is why this is its own question rather than the toggle's gate read backwards:
+   * `switchableFinishes` answers `[]` for four different printings and only one of them has no
+   * foil, which is why this is its own question rather than the row's gate read backwards:
    *
    * - `["nonfoil"]` — no shiny copy exists. This one, and the whole of issue #167.
    * - `["foil"]` / `["etched"]` — 12 366 and 892 printings, which answer `null` because there is
    *   nothing to switch *to*. `soleFinish` is already drawing "this cardboard is foil" over the
    *   art for them, so a `No foil` control under that sheen would be the two halves of this file
    *   contradicting each other about one piece of cardboard.
-   * - `["foil","etched"]` — no plain copy to return to, and two foils.
    * - `[]` — nothing is known about this printing's finishes, which is not the same claim as
    *   knowing there is no foil. The price grid below draws no cells for it either.
    */
@@ -257,12 +283,16 @@ export function CardModalArt({
   // The src that failed, so a flip or a new card clears it without an effect. The host keys this
   // column on the card, so browsing away throws the whole subtree out.
   const [broken, setBroken] = useState<string | null>(null);
-  // Opened showing the copy the reader actually has, where the surface knew of one — a deck row
-  // that plays a foil, or a collection tile that *is* one. `nonfoil` and `null` both seed
-  // nothing, which is right: regular is the finish a card is assumed to be.
-  const [foilView, setFoilView] = useState(
-    deckRow?.finish != null || openedAs === "foil" || openedAs === "etched",
-  );
+  /**
+   * The finish on screen — opened showing the copy the reader actually has, where the surface
+   * knew of one (a deck row that plays a foil, a collection tile that *is* one), else the
+   * printing's most ordinary finish. See {@link seededFinish}.
+   *
+   * **Held from mount** rather than re-derived from `deckRow`, because the press's own write
+   * changes the row: the host re-reads it after a `Set as …`, and the column already knows the
+   * answer. The host keys this column on the card, so a step to another printing seeds afresh.
+   */
+  const [shown, setShown] = useState<Finish>(() => seededFinish(card.finishes, deckRow, openedAs));
 
   /**
    * How far this card has to be turned to be read, and whether the reader has asked for it.
@@ -271,7 +301,7 @@ export function CardModalArt({
    * them: a `transform` still gets its flip and nothing else, because a second *side* and a
    * sideways *printing* are different problems and the flip control already solved the first.
    *
-   * The state needs no reset for `foilView`'s reason — the host keys this column on the card.
+   * The state needs no reset for `shown`'s reason — the host keys this column on the card.
    */
   const turn = cardTurn(card.layout, card.faces);
   const [turned, setTurned] = useState(false);
@@ -294,32 +324,37 @@ export function CardModalArt({
   const pictured = meld.melded?.name || card.faces[face]?.name || card.name;
 
   // What the sheen is asked for. `soleFinish` is the *statement* — this printing is foil — and
-  // the toggle is the only thing that ever adds to it; the two cannot both answer, because
-  // `soleFinish` speaks only for a printing with one finish and `foilable` only for one with at
-  // least two.
+  // the finish buttons are the only thing that ever adds to it; the two cannot both answer,
+  // because `soleFinish` speaks only for a printing with one finish and the buttons only for one
+  // with at least two. The regular copy draws no sheen.
   //
   // **Nothing at all while a meld view is up**, and that is not the same rule as hiding the
-  // button below: the statement arm survives a hidden toggle, so a foil-only printing would
+  // buttons below: the statement arm survives hidden buttons, so a foil-only printing would
   // otherwise go on drawing "this cardboard is foil" over a photograph of the *other* card. Both
   // halves are needed or the mark outlives the control that explains it.
-  const marked = meld.melded ? null : foilView && foilable ? foilable : soleFinish(card.finishes);
-  const FoilGlyph = foilable === "etched" ? Gem : Sparkles;
+  const marked = meld.melded
+    ? null
+    : switchable.length > 0
+      ? shown === "nonfoil"
+        ? null
+        : shown
+      : soleFinish(card.finishes);
 
   /**
-   * What the foil button says, and it says what the press **does** rather than what it shows.
+   * What a finish button says, and it says what the press **does** — always naming the finish
+   * it is the button for (issue #1679).
    *
-   * `Set as …` behind a deck row and `View as …` without one, because those are two different
-   * acts and a label naming only the visible half would be a control that quietly edits a deck.
-   * **`regular` rather than `FINISH_LABEL.nonfoil`** on the write arm: "set as nonfoil" is not a
-   * thing anybody says, and `Regular` is the word the deck card's own menu uses for the same
-   * choice. The view arm keeps the wording the pane shipped with.
+   * `Set as …` behind a deck row (or a copy being edited) and `View as …` without one, because
+   * those are two different acts and a label naming only the visible half would be a control
+   * that quietly edits a deck. **`regular` rather than `FINISH_LABEL.nonfoil`** on the write arm:
+   * "set as nonfoil" is not a thing anybody says, and `Regular` is the word the deck card's own
+   * menu uses for the same choice. The view arm keeps the wording the pane shipped with.
    */
-  const foilLabel = (() => {
-    if (foilable === null) return "";
-    const shiny = FINISH_LABEL[foilable].toLowerCase();
-    if (deckRow !== null) return foilView ? "Set as regular" : `Set as ${shiny}`;
-    return foilView ? `View as ${FINISH_LABEL.nonfoil.toLowerCase()}` : `View as ${shiny}`;
-  })();
+  const finishLabel = (f: Finish): string => {
+    if (deckRow !== null)
+      return `Set as ${f === "nonfoil" ? "regular" : FINISH_LABEL[f].toLowerCase()}`;
+    return `View as ${FINISH_LABEL[f].toLowerCase()}`;
+  };
 
   /**
    * What the turn button says, and — like the foil button above — it says what the press
@@ -351,17 +386,18 @@ export function CardModalArt({
   })();
 
   /**
-   * The press: a view toggle always, **and a write where there is a row behind the modal**.
+   * The press: a view change always, **and a write where there is a row behind the modal**.
    *
-   * Both halves, not one or the other. The sheen turns on at the press — the reader asked to see
+   * Both halves, not one or the other. The sheen changes at the press — the reader asked to see
    * it, and a control that waited on a round trip to change anything would read as broken — and
    * the host's write goes out beside it. A refused write is the host's banner to draw; there is
-   * nothing here to roll back, because the *view* really did change.
+   * nothing here to roll back, because the *view* really did change. The pressed button is the
+   * finish already on screen, so pressing it again is not a change and tells the host nothing.
    */
-  const pressFoil = () => {
-    const next = !foilView;
-    setFoilView(next);
-    onToggleFoil(next ? foilable : null);
+  const pickFinish = (f: Finish) => {
+    if (f === shown) return;
+    setShown(f);
+    onPickFinish(f);
   };
 
   return (
@@ -567,7 +603,7 @@ export function CardModalArt({
           them a third of a column, so the row breaks and the odd one out takes a line of its own.
           `min-w-0` and a truncating label throughout, because these name *cards* and half a
           column is not enough for "Hanweir, the Writhing Township". */}
-      {(foilable !== null ||
+      {(switchable.length > 0 ||
         noFoil ||
         sides === 2 ||
         turn !== null ||
@@ -591,7 +627,7 @@ export function CardModalArt({
           {turn !== null && (
             <button
               type="button"
-              // A toggle, on the foil control's terms below: the state is `aria-pressed` rather
+              // A toggle, on the finish buttons' terms below: the state is `aria-pressed` rather
               // than two buttons swapping places, and the visible words change with it because
               // they *are* the accessible name.
               aria-pressed={turned}
@@ -651,34 +687,45 @@ export function CardModalArt({
               printing's** cardboard, and the picture in the frame is another card's. A control
               that stayed and marked the wrong card would be the artist-credit bug drawn instead
               of written. */}
-          {foilable !== null && meld.melded === null && (
-            <button
-              type="button"
-              // A **toggle**, so the state is `aria-pressed` and not two buttons swapping places
-              // — a reader who tabbed onto it is told both what it does and whether it is on. The
-              // visible words change with it, because they *are* the accessible name here, and a
-              // name that no longer contains the visible label is a control voice control can no
-              // longer press (WCAG 2.5.3).
-              aria-pressed={foilView}
-              onClick={pressFoil}
-              className={cn(ART_CONTROL, FOCUS)}
-            >
-              {/* The glyph straight from lucide rather than through `FinishMark`, deliberately:
-                  that component is a `role="img"` carrying the finish as its accessible name, and
-                  a labelled image inside a button *joins* the button's name — this control would
-                  be called "Foil View as foil". */}
-              <FoilGlyph className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 truncate">{foilLabel}</span>
-            </button>
+          {switchable.length > 0 && meld.melded === null && (
+            // **One button per finish, in a group of their own** (issue #1679) — a full line of
+            // the row, so the finishes stay together rather than one of them pairing off with
+            // `Flip card`. Each button keeps the row's half basis, so a third finish wraps onto a
+            // line of its own rather than squeezing "View as nonfoil" into a third of a column.
+            <div role="group" aria-label="Finish" className="flex basis-full flex-wrap gap-2">
+              {switchable.map((f) => {
+                const Glyph = FINISH_GLYPH[f];
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    // **`aria-pressed` on the finish on screen**, so a reader who tabbed onto the
+                    // group is told which one is showing as well as what each does. The visible
+                    // words *are* the accessible name, and they never change with the state, so
+                    // voice control can always press what it reads (WCAG 2.5.3).
+                    aria-pressed={shown === f}
+                    onClick={() => pickFinish(f)}
+                    className={cn(ART_CONTROL, FOCUS)}
+                  >
+                    {/* The glyph straight from lucide rather than through `FinishMark`,
+                        deliberately: that component is a `role="img"` carrying the finish as its
+                        accessible name, and a labelled image inside a button *joins* the button's
+                        name — this control would be called "Foil View as foil". */}
+                    <Glyph className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 truncate">{finishLabel(f)}</span>
+                  </button>
+                );
+              })}
+            </div>
           )}
           {/* **A printing with no shiny copy says so, rather than losing its control** (issue
               #167). A row that simply drops a button cannot be told from an app that forgot to
               draw one: the reader's question is "is there a foil of this?", and silence answers
               it the same way a bug would. The greyed control is the answer, in the slot the
-              toggle would have occupied.
+              finish buttons would have occupied.
 
-              Not while a meld view is up, and **the two conditions stay two** — the toggle above
-              is hidden there because the sheen it explains would be marking another card's
+              Not while a meld view is up, and **the two conditions stay two** — the buttons above
+              are hidden there because the sheen it explains would be marking another card's
               photograph, which is a statement about the *picture*. This one is a statement about
               *this printing's cardboard*, and it is withheld for the same reason the price cells
               would be if they were about the frame: while the frame holds a counterpart, nothing
@@ -705,7 +752,7 @@ export function CardModalArt({
                 "disabled:opacity-40 disabled:hover:text-dim",
               )}
             >
-              {/* The glyph the toggle would have drawn, greyed with the rest of the control. It
+              {/* The glyph the foil button would have drawn, greyed with the rest of the control. It
                   names what this control is *about* and does not claim the copy is foil —
                   `FoilOverlay`'s chip is what makes that claim, and on this printing it is
                   drawing nothing. */}

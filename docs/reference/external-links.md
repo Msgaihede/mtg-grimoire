@@ -250,13 +250,15 @@ there the same press writes `deck_cards.finish` and the row the fold reads comes
 `CardDetailModal`'s `viewedFinish` is the new top rung of that fold, fed by the press the art
 column already reported and reset with the face and the meld view when the card changes.
 
-**The `null`s are what makes this a precedence and not a third `??` term.** `onToggleFoil` carries
-a `DeckFinish`, whose `null` means *the regular copy*; the fold's other rungs use `null` for
-*nobody said*. The host spells the press's `null` as `"nonfoil"` at the boundary, which is what
-lets a foil tile viewed as regular reach `Normal` — folded raw, the tile's own `foil` would have
-won and the link would have been wrong in the mirror direction.
+**The `null`s are what makes this a precedence and not a third `??` term.** `onPickFinish` carries
+a `Finish` (issue #1679 — it was `onToggleFoil` with a `DeckFinish` before the column drew one
+button per finish), so the regular copy arrives as `"nonfoil"`; the fold's other rungs use `null`
+for *nobody said*. That spelling is what lets a foil tile viewed as regular reach `Normal` —
+folded as a deck row's `null`, the tile's own `foil` would have won and the link would have been
+wrong in the mirror direction. The host turns `"nonfoil"` back into `null` only at the deck
+write, where `deck_cards.finish` spells the regular copy that way.
 
-**Two things a future reader should not re-derive.** `CardModalArt` calls `onToggleFoil` on
+**Two things a future reader should not re-derive.** `CardModalArt` calls `onPickFinish` on
 **every** press and always did — only the *write* was ever gated on a deck row — so nothing new
 had to be produced for this; and `railFinish` has exactly one consumer, the rail's `finish` prop,
 so nothing else in the panel moved. The tests are `CardDetailModal.test.tsx`'s two new

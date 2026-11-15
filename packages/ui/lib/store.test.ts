@@ -723,8 +723,8 @@ describe("the finish a card was opened as", () => {
 
   /**
    * `viewPrinting` leaves it alone: the reader is browsing printings **inside** the pane and the
-   * foil view is theirs to keep. `foilViewFinish` already answers `null` for a printing with no
-   * shiny finish, so a seed carried onto a nonfoil-only printing cannot draw a chip.
+   * foil view is theirs to keep. `CardModalArt` draws no finish buttons for a printing with one
+   * finish, so a seed carried onto a nonfoil-only printing cannot draw a chip.
    */
   it("keeps the finish while browsing printings inside the pane", () => {
     useAppStore.getState().openCardAsFinish("bolt-lea", "foil");

@@ -1,12 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { waitFor } from "@testing-library/react";
 import { useNotifications } from "@/lib/notifications";
-import type {
-  MenuAction,
-  MenuItem,
-  MenuRadio,
-  MenuSubmenu,
-} from "@/components/menu/types";
+import type { MenuAction, MenuItem, MenuRadio, MenuSubmenu } from "@/components/menu/types";
 import type { CardMenuDeps } from "@/features/card/cardMenu";
 import type { DeckCard, DeckCategory, DeckLabel, DeckNote } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -284,22 +279,35 @@ describe("buildDeckCardMenu", () => {
       expect(setFinish).toHaveBeenCalledWith(card, null);
     });
 
-    it("offers a submenu of the printing's own finishes when it is sold in three", () => {
+    it("offers every other finish as its own row when it is sold in three (issue #1679)", () => {
+      const setFinish = vi.fn();
       const card = bolt({ finishes: '["nonfoil","foil","etched"]', finish: "foil" });
-      const row = finishRow(buildDeckCardMenu(card, deps()));
+      const items = buildDeckCardMenu(card, deps({ setFinish }));
+      const rows = items.filter(
+        (i): i is MenuAction => i.kind === "action" && /^finish(-|$)/.test(i.id),
+      );
 
-      expect(row.kind).toBe("submenu");
-      if (row.kind !== "submenu") return;
       // Scryfall's order — plain, then the premium treatments — and deliberately not
-      // `sortOptions`': the order *is* the information here.
-      expect(labels(row.items)).toEqual(["Regular", "Foil", "Etched"]);
-      // The finish it already is, drawn and greyed rather than dropped, so the list keeps its
-      // length and its positions.
-      expect(row.items.map((i) => i.kind === "action" && i.disabled === true)).toEqual([
-        false,
-        true,
-        false,
-      ]);
+      // `sortOptions`': the order *is* the information here. The finish the row already plays is
+      // not offered: a press on it would write nothing.
+      expect(rows.map((r) => r.label)).toEqual(["Set as regular", "Set as etched"]);
+      expect(rows.map((r) => r.id)).toEqual(["finish", "finish-etched"]);
+      // Flat rows, side by side in the `Set as` group — no `Finish ▸` submenu to open.
+      const at = items.indexOf(rows[0]);
+      expect(items[at + 1]).toBe(rows[1]);
+
+      rows[1].onSelect();
+      expect(setFinish).toHaveBeenCalledWith(card, "etched");
+      rows[0].onSelect();
+      expect(setFinish).toHaveBeenLastCalledWith(card, null);
+    });
+
+    it("offers both shiny finishes to a regular row of a three-finish printing", () => {
+      const card = bolt({ finishes: '["nonfoil","foil","etched"]', finish: null });
+      const labelsOf = buildDeckCardMenu(card, deps())
+        .filter((i): i is MenuAction => i.kind === "action" && /^finish(-|$)/.test(i.id))
+        .map((r) => r.label);
+      expect(labelsOf).toEqual(["Set as foil", "Set as etched"]);
     });
 
     /**
@@ -616,7 +624,10 @@ describe("buildDeckCardMenu", () => {
   it("draws no commander row when the deck has no command zone to move into", () => {
     const items = buildDeckCardMenu(
       bolt(),
-      deps({ spec: spec("commander"), categories: CATEGORIES.filter((c) => c.kind !== "commander") }),
+      deps({
+        spec: spec("commander"),
+        categories: CATEGORIES.filter((c) => c.kind !== "commander"),
+      }),
     );
     expect(has(items, "Set as commander")).toBe(false);
   });
@@ -880,7 +891,9 @@ describe("buildDeckCardMenu", () => {
 
       expect(parent.kind).toBe("submenu");
       expect(labels(stocked).indexOf("Missing copies")).toBe(
-        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Missing copies"),
+        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf(
+          "Missing copies",
+        ),
       );
     });
 
@@ -1161,7 +1174,9 @@ describe("deckCardNoteRows", () => {
     const rows = deckCardNoteRows(bolt(), [note({}, ["Lightning Bolt"])], vi.fn(), vi.fn());
     const submenu = find(rows, "Notes");
     expect(submenu.kind).toBe("submenu");
-    expect(submenu.kind === "submenu" && submenu.items.every((i) => i.kind === "action")).toBe(true);
+    expect(submenu.kind === "submenu" && submenu.items.every((i) => i.kind === "action")).toBe(
+      true,
+    );
   });
 
   /**
@@ -1356,9 +1371,9 @@ describe("buildDeckCardMenu with a picked set", () => {
     const there = card({ name: "Ponder", quantity: 1, categoryId: 2 });
     const items = buildDeckCardMenu(here, deps({ picked: [here, there] }));
 
-    expect((find(rowsOf(find(items, "Category for 2 cards")), "Sideboard") as MenuAction).disabled).toBe(
-      true,
-    );
+    expect(
+      (find(rowsOf(find(items, "Category for 2 cards")), "Sideboard") as MenuAction).disabled,
+    ).toBe(true);
   });
 
   /**
@@ -1440,7 +1455,9 @@ describe("buildDeckCardMenu with a picked set", () => {
     const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, setLabel }));
     (find(rowsOf(find(items, "Label 3 cards")), "Budget swap") as MenuRadio).onSelect();
 
-    expect(setLabel.mock.calls.map((call) => [(call[0] as DeckCard).name, call[1] as number])).toEqual([
+    expect(
+      setLabel.mock.calls.map((call) => [(call[0] as DeckCard).name, call[1] as number]),
+    ).toEqual([
       ["Lightning Bolt", 8],
       ["Bear", 8],
       ["Ponder", 8],
@@ -1459,8 +1476,7 @@ describe("the other list's row", () => {
 
   const otherRow = (items: MenuItem[]) =>
     items.find((item) => item.kind !== "separator" && item.id === "add-to-other-list") as
-      | MenuAction
-      | undefined;
+      MenuAction | undefined;
 
   /** A deck with no plan has no other list, and the surface says so by wiring nothing. */
   it("draws no row where the surface wired no other list", () => {
@@ -1498,8 +1514,9 @@ describe("the other list's row", () => {
     const pressed = Promise.resolve();
     const add = vi.fn(() => pressed);
     const batch = vi.fn();
-    otherRow(buildDeckCardMenu(clicked, intoActual({ otherList: { variant: "live", add }, batch })))!
-      .onSelect();
+    otherRow(
+      buildDeckCardMenu(clicked, intoActual({ otherList: { variant: "live", add }, batch })),
+    )!.onSelect();
 
     expect(add.mock.calls).toEqual([[clicked]]);
     expect(batch.mock.calls).toEqual([[[pressed]]]);
@@ -1511,12 +1528,19 @@ describe("the other list's row", () => {
     const add = vi.fn((row: DeckCard) => Promise.resolve(row.name));
     const batch = vi.fn();
     const item = otherRow(
-      buildDeckCardMenu(clicked, intoActual({ otherList: { variant: "live", add }, batch, picked })),
+      buildDeckCardMenu(
+        clicked,
+        intoActual({ otherList: { variant: "live", add }, batch, picked }),
+      ),
     )!;
 
     expect(item.label).toBe("Add 3 cards to actual");
     item.onSelect();
-    expect(add.mock.calls.map((call) => call[0].name)).toEqual(["Lightning Bolt", "Bear", "Ponder"]);
+    expect(add.mock.calls.map((call) => call[0].name)).toEqual([
+      "Lightning Bolt",
+      "Bear",
+      "Ponder",
+    ]);
     // Every promise the three writes answered, so a refusal in the middle is still said.
     expect(batch).toHaveBeenCalledTimes(1);
     expect(batch.mock.calls[0][0]).toHaveLength(3);

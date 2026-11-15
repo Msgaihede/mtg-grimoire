@@ -614,7 +614,8 @@ interface AppState {
    * reader is browsing printings of whatever is open, so the context (and with it the pane's
    * "Use this printing" offers) must survive the click. The finish the pane was opened as
    * survives it for the same reason — the foil view is the reader's, and a seed carried onto a
-   * printing with no shiny finish draws nothing, because `foilViewFinish` answers `null` there.
+   * printing with no shiny finish draws nothing, because `CardModalArt`'s `switchableFinishes`
+   * offers no finish buttons there and `soleFinish` marks no plain-only printing.
    */
   viewPrinting: (cardId: string) => void;
   /**
