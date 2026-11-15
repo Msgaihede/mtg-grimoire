@@ -68,13 +68,14 @@ const TILE_BASE = 150;
 const COLLECTION_TRAY: readonly TrayCell[] = [
   "set",
   "format",
-  "decks",
-  "rarity",
-  "type",
-  "border",
   "universe",
+  "type",
+  "rarity",
   "price",
   "finish",
+  "border",
+  "decks",
+  "include",
 ];
 
 /**

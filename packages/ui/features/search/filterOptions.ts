@@ -297,17 +297,17 @@ export function activeChips<SortKey extends string>(
   }
 
   if (search.format.length > 0) {
-    const label =
-      search.format === ANY_CARD
-        ? "Any card"
-        : (search.formats.find((f) => f.value === search.format)?.label ?? search.format);
-    // `Showing:` and not `Format:` for the widening row, because `Any card` is not a format — it
-    // is the corpus this search is drawn from, and a chip reading `Format: Any card` would state
-    // a format filter that is not on.
-    chips.push({
-      label: search.format === ANY_CARD ? `Showing: ${label}` : `Format: ${label}`,
-      remove: () => search.setFormat(""),
-    });
+    // **Tokens & extras is stated as what it is, a corpus rather than a format** (the Filter bar
+    // board, 2026-11): `Showing:`, never `Format:`, because no format is on. It rides the same
+    // `format` sentinel the old `Any card` row did ({@link ANY_CARD}), so its × is the same
+    // press back to `Any format`.
+    if (search.format === ANY_CARD) {
+      chips.push({ label: `Showing: ${TOKENS_AND_EXTRAS}`, remove: () => search.setFormat("") });
+    } else {
+      const label =
+        search.formats.find((f) => f.value === search.format)?.label ?? search.format;
+      chips.push({ label: `Format: ${label}`, remove: () => search.setFormat("") });
+    }
   }
 
   if (search.rarities.length > 0) {
@@ -441,45 +441,22 @@ export function activeChips<SortKey extends string>(
 }
 
 /**
- * The format picker's rows: the two pinned rows, then the formats as {@link useFormatOptions}
+ * The format picker's rows: `Any format`, pinned, then the formats as {@link useFormatOptions}
  * ordered them.
  *
- * **Two pinned rows above the sorted list, widest first — and they are what used to be a
- * select and an `Unplayable` chip.** Neither is a format: one is "no format filter at all" and
- * the other "no format filter, and no format required either", so both belong where a reader
- * reaches for them blind — first — whatever the alphabet and the facets do to the formats
- * below.
- *
- * They read as a ladder rather than as an alphabet: every card, every card that is legal
- * *somewhere*, then one named format. `Any format` is the default and the middle rung, which
- * is the shape a reader can predict without being told.
- *
- * Neither carries a `title`. Unlike a native `<option>` — which Windows never draws one for,
- * whatever the markup says — a `DropdownOption.title` here *would* show as a real hover
- * tooltip through `Row`'s `useTooltip` binding; it stays off because neither pinned row needs a
- * sentence beyond its own label, not because the platform would swallow it.
+ * **One pinned row since the Filter bar board (2026-11).** `Any card` stood above it until then —
+ * "no format, and no format required either" — and it was the one row of this list that was not
+ * a format. It is the Include cell's **Tokens & extras** toggle now ({@link TOKENS_AND_EXTRAS}),
+ * which sets the same `format` sentinel, so this list holds formats and the one row that is no
+ * format filter at all.
  *
  * Moved here from `FilterTray` with the rest of this file, so the phone's filters sheet offers
- * the same ladder rather than a second spelling of it.
+ * the same list rather than a second spelling of it.
  */
-export function formatPickerRows<SortKey extends string>(
-  search: FilterSurface<SortKey>,
+export function formatPickerRows(
   formatOptions: readonly { value: string; label: string; disabled: boolean }[],
 ): DropdownOption[] {
   return [
-    // **`Any card` only where the surface narrows the corpus.** The card search and, since token
-    // stacks (2026-09-26), the deck search's Collection tab send `playableOnly` under every other
-    // row, so this is the widening back to what no format allows. The collection page and the
-    // wishlist answer about cardboard the reader already has or wants and narrow by nothing of
-    // the kind, so "every card, art cards included" is not a widening they can offer, and a row
-    // that set `format` to a value the caller cannot honour would be a destination that goes
-    // nowhere. `FilterSurface.anyCard` is what says which surface this is.
-    //
-    // It was drawn unconditionally for one commit while `FilterBar.tsx` was merged: a conversion
-    // rewrote this block into an array and, in resolving the conflict, took one side whole —
-    // which silently dropped the guard `main` had just added to the markup it replaced. The
-    // suite caught it, which is the only reason this comment is here rather than a bug.
-    ...(search.anyCard ? [{ value: ANY_CARD, label: "Any card" }] : []),
     { value: "", label: "Any format" },
     // The one place a real `disabled` was right on the old markup — `<option disabled>` is
     // native, and a listbox option is not a tab stop there is anything to lose. `DropdownOption`'s
@@ -488,6 +465,36 @@ export function formatPickerRows<SortKey extends string>(
     ...formatOptions.map((f) => ({ value: f.value, label: f.label, disabled: f.disabled })),
   ];
 }
+
+/**
+ * What the format picker shows as picked: the format, or `Any format` while Tokens & extras is
+ * on — that toggle is the format sentinel {@link ANY_CARD}, and the picker has no row for it.
+ */
+export function pickedFormat(format: string): string {
+  return format === ANY_CARD ? "" : format;
+}
+
+/**
+ * **The Include cell's toggle: also show the printings no format allows** — tokens, art cards,
+ * emblems, joke and test cards. It replaced the format picker's `Any card` row (the Filter bar
+ * board, 2026-11).
+ *
+ * **How it combines with a named format: it does not — turning it on puts the format back to
+ * `Any format`, and picking a format turns it off.** It is the same `format` sentinel the row was
+ * ({@link ANY_CARD}), because no format allows these printings: "Modern, plus the tokens" would be
+ * a union the backend's `format` and `playableOnly` cannot spell, and a toggle that stayed on under
+ * Modern while changing nothing would be a control that lies. So the two never stand on at once,
+ * and both moves are one press and visible — the Format cell beside it reads `Any format` the
+ * moment this goes on.
+ *
+ * A filter for the pills (it widens the wall, and Reset puts it back), stated as `Showing: tokens
+ * & extras`.
+ */
+export const TOKENS_AND_EXTRAS = "Tokens & extras";
+
+/** The toggle's sentence, for its tooltip and accessible name. */
+export const TOKENS_AND_EXTRAS_HINT =
+  "Also show cards no format allows: tokens, art cards, emblems, joke and test cards";
 
 /**
  * Which captioned cells the tray draws, in the order it draws them.
@@ -516,7 +523,10 @@ export type TrayCell =
    *  complement. A printing fact on every surface, like `border`. */
   | "universe"
   | "price"
-  | "printings"
+  // **`include` is Tokens & extras** (the Filter bar board, 2026-11), drawn where the surface
+  // offers it (`FilterSurface.anyCard`). `printings` left this list the same day: Stack printings
+  // is on every bar at every width now, so it has no cell.
+  | "include"
   /** One cell, two questions — see the cell itself. Published finish on the card search, the
    *  copy's own finish on a list of copies. */
   | "finish"
@@ -543,12 +553,12 @@ export const BREAKS_FOLDER_RULES = "Breaks folder rules";
 export const SEARCH_TRAY: readonly TrayCell[] = [
   "set",
   "format",
-  "owned",
-  "rarity",
-  "type",
-  "border",
-  "finish",
   "universe",
+  "type",
+  "rarity",
   "price",
-  "printings",
+  "finish",
+  "border",
+  "owned",
+  "include",
 ];

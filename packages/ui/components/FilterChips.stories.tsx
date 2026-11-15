@@ -7,15 +7,19 @@ import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
   ColorExactChip,
+  CountPill,
   FILTER_FIELD,
   FILTER_FOCUS,
   FILTER_LABEL,
   filterChipState,
   FiltersButton,
+  JoinedChoices,
   LayoutToggle,
   ManaChip,
   ManaValueChips,
   ResetAll,
+  STACK_PRINTINGS,
+  StackPrintingsToggle,
   ToggleChip,
 } from "./FilterChips";
 
@@ -162,6 +166,77 @@ function Disclosure({
 }
 
 /**
+ * A two-way partition as one joined control — the Universe cell's shape: the two answers split the
+ * printings, so pressing the one that is on turns the filter off rather than pressing the other.
+ */
+function PartitionPair() {
+  const [on, setOn] = useState<"beyond" | "within" | undefined>(undefined);
+  const press = (value: "beyond" | "within") => setOn((was) => (was === value ? undefined : value));
+  return (
+    <div className="w-72">
+      <JoinedChoices
+        label="Universe"
+        choices={[
+          {
+            value: "beyond",
+            label: "Beyond",
+            hint: "Universes Beyond",
+            pressed: on === "beyond",
+            onClick: () => press("beyond"),
+          },
+          {
+            value: "within",
+            label: "Within",
+            hint: "Universes Within",
+            pressed: on === "within",
+            onClick: () => press("within"),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+/**
+ * Three ORed choices joined — the Finish cell's shape, one segment greyed by its count: the
+ * choices do not partition, so each segment presses on its own, and a greyed one stays a tab stop.
+ */
+function OrTriple() {
+  const [on, setOn] = useState<readonly string[]>(["foil"]);
+  const toggle = (v: string) =>
+    setOn((vs) => (vs.includes(v) ? vs.filter((x) => x !== v) : [...vs, v]));
+  const rows = [
+    { value: "nonfoil", label: "Nonfoil" },
+    { value: "foil", label: "Foil" },
+    { value: "etched", label: "Etched", disabled: true, title: "Etched — nothing in this search" },
+  ];
+  return (
+    <div className="w-80">
+      <JoinedChoices
+        label="Finish"
+        choices={rows.map((r) => ({
+          ...r,
+          pressed: on.includes(r.value),
+          onClick: () => toggle(r.value),
+        }))}
+      />
+    </div>
+  );
+}
+
+/** The switch over its own state, pressed — stacked — to start with, as every wall opens. */
+function StackSwitch({ labelClass }: { labelClass?: string }) {
+  const [stacked, setStacked] = useState(true);
+  return (
+    <StackPrintingsToggle
+      stacked={stacked}
+      onToggle={() => setStacked((was) => !was)}
+      labelClass={labelClass}
+    />
+  );
+}
+
+/**
  * A required callback whose call the story has nothing to say about.
  *
  * Module-level rather than an inline `fn()`, because a render body runs on every render and an
@@ -184,7 +259,16 @@ const meta = {
   // answers it, and the number that used to sit in this comment had been wrong since the
   // module last grew.
   component: ToggleChip,
-  subcomponents: { ManaChip, ManaValueChips, LayoutToggle, ResetAll, FiltersButton },
+  subcomponents: {
+    ManaChip,
+    ManaValueChips,
+    LayoutToggle,
+    ResetAll,
+    FiltersButton,
+    CountPill,
+    JoinedChoices,
+    StackPrintingsToggle,
+  },
   tags: ["autodocs"],
   // Keyed on the seed, like `QuantityStepper.stories.tsx`: Storybook re-renders a story when an
   // arg changes rather than remounting it, and `useState`'s initial value is read once — so
@@ -410,8 +494,9 @@ export const Layout: Story = {
   render: () => <LayoutPair initial="grid" />,
 };
 
-/** Clear every filter at once, with the number of them on it. Press it and watch it go — that
- *  is the story. */
+/** Clear every filter at once, with the number of them on it: a reset glyph, the word `Reset`
+ *  and the count pill, borderless — a quiet action at the end of the bar (the Filter bar board,
+ *  2026-11). Press it and watch the pill go grey — that is the story. */
 export const Reset: Story = {
   args: { label: "Owned", pressed: false },
   parameters: { controls: { disable: true } },
@@ -427,8 +512,11 @@ export const Reset: Story = {
  * `flex-1` search box beside it and slides every chip to its right left — under the finger that
  * just pressed one. The row must not move while it is being used. `aria-disabled` and not
  * `disabled`, like every other out-of-reach control here, so it keeps its place in the tab
- * order; the count is spoken rather than read off the badge, because an inline `<span>` joins
+ * order; the count is spoken rather than read off the pill, because an inline `<span>` joins
  * the accessible name with no separator before it.
+ *
+ * **The pill is drawn at 0**, grey ({@link CountPills}): a button that grew a badge with its first
+ * filter would move the bar on that very press.
  */
 export const NothingToReset: Story = {
   args: { label: "Owned", pressed: false },
@@ -439,6 +527,9 @@ export const NothingToReset: Story = {
     const reset = canvas.getByRole("button", { name: /^Reset all/ });
     await expect(reset).toHaveAttribute("aria-disabled", "true");
     await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
+    // The word is `Reset` and the pill reads `0` — the name is the longer sentence.
+    await expect(within(reset).getByText("Reset")).toBeInTheDocument();
+    await expect(reset.querySelector("[data-count-pill]")).toHaveTextContent("0");
 
     // Still a tab stop: `aria-disabled` says "cannot be pressed" without taking the control
     // out from under a keyboard reader mid-row. That the press is refused is
@@ -452,20 +543,19 @@ export const NothingToReset: Story = {
  * The way into every filter that is not on the bar, in the four readings it has — and the point
  * of the picture is that the two treatments are **independent**.
  *
- * **The border and the word are the count; the fill is the tray.** The pair is
- * `filterChipState(count > 0)` itself rather than a copy — a hairline and a dim word off,
- * brightening under the mouse, exactly like the `ToggleChip` two stories up; gold border and gold
- * word on. An open tray adds that panel's own `bg-surface` and touches neither, which is why each
- * case here is drawn over the tray it opens. Read the third and fourth columns against each other
- * for the thing worth checking: **opening the tray never turns the word gold, and a live count
- * keeps it gold with the tray up.**
+ * **Gold is a count or an open popup; the fill is the popup.** The pair is
+ * `filterChipState(count > 0 || open)` itself rather than a copy — a hairline and a dim word with
+ * nothing on and the popup shut, brightening under the mouse, exactly like the `ToggleChip` two
+ * stories up; gold border and gold word with a filter on **or the popup open** (the Filter bar
+ * board, 2026-11: the button that opened the overlay reads as pressed while it is up). An open
+ * popup adds its own `bg-surface` too, which is why each case here is drawn over the panel it
+ * opens. The count pill is drawn in every case — grey at 0, gold at N.
  *
  * **It was gold-bordered at rest until 2026-08-26**, on the argument that a disclosure has to say
  * "there is more in here" before anything has been pressed. What that cost was the row's one
  * consistent sentence: this was the only control in it drawn in the on-treatment while off, so a
  * reader sweeping for what was switched on found it every single time and had to read the badge
- * to learn it was not. The badge is now the only thing that says "there is more in here", and it
- * says how much.
+ * to learn it was not. The pill is now the only thing that says how much is on.
  *
  * **The first fix overshot and went borderless**, for one commit. Dropping the gold at rest was
  * right; dropping the hairline with it left the only control on the row with no edge at all, so
@@ -500,17 +590,21 @@ export const Disclosures: Story = {
     await expect(active).toHaveClass(...on);
     await expect(active).not.toHaveClass("bg-surface");
 
-    // Open with nothing on keeps the dim word; open with a count keeps the gold one. The fill is
-    // the only thing the tray moves.
-    await expect(open).toHaveClass("bg-surface", ...off);
+    // Open reads as pressed whether or not anything is on, over the popup's own fill.
+    await expect(open).toHaveClass("bg-surface", ...on);
     await expect(both).toHaveClass("bg-surface", ...on);
 
-    // Pressing the quiet one puts the grey under it without inventing a count, which is the
-    // independence the story is about.
+    // The pill is always there, and only its colour says whether anything is on.
+    await expect(quiet.querySelector("[data-count-pill]")).toHaveTextContent("0");
+    await expect(quiet.querySelector("[data-count-pill]")).toHaveClass("bg-border");
+    await expect(active.querySelector("[data-count-pill]")).toHaveTextContent("2");
+    await expect(active.querySelector("[data-count-pill]")).toHaveClass("bg-accent");
+
+    // Pressing the quiet one opens its panel and lights the button without inventing a count.
     await userEvent.click(quiet);
-    await expect(quiet).toHaveClass("bg-surface", ...off);
-    await expect(quiet).not.toHaveClass("border-accent", "text-accent");
+    await expect(quiet).toHaveClass("bg-surface", ...on);
     await expect(quiet).toHaveAccessibleName("Hide filters — 0 active");
+    await expect(quiet.querySelector("[data-count-pill]")).toHaveTextContent("0");
   },
 };
 
@@ -555,4 +649,142 @@ export const OneFamily: Story = {
       <ResetAll count={2} onReset={noop} />
     </div>
   ),
+};
+
+/**
+ * **`CountPill` — the count on Filters and on Reset, always drawn.**
+ *
+ * One fixed width (22px, two digits in the mono face), grey in the border's colour at 0 and gold
+ * at N — the Filter bar board's rule (2026-11) that a button never changes width when it is used:
+ * a badge that appeared with the first filter moved everything beside it on that very press.
+ * `aria-hidden`, because each button spells its count into its own name.
+ */
+export const CountPills: Story = {
+  args: { label: "Owned", pressed: false },
+  parameters: { controls: { disable: true } },
+  render: () => (
+    <div className="flex items-center gap-3">
+      <CountPill count={0} />
+      <CountPill count={3} />
+      <CountPill count={12} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const pills = [...canvasElement.querySelectorAll("[data-count-pill]")];
+    await expect(pills.map((p) => p.textContent)).toEqual(["0", "3", "12"]);
+    for (const p of pills) {
+      await expect(p).toHaveAttribute("aria-hidden", "true");
+      // The same box at every count — the width is the class, never the digits.
+      await expect(p).toHaveClass("w-[22px]");
+    }
+    await expect(pills[0]).toHaveClass("bg-border", "text-dim");
+    await expect(pills[1]).toHaveClass("bg-accent", "text-accent-foreground");
+    await expect(pills[2]).toHaveClass("bg-accent");
+  },
+};
+
+/**
+ * **`JoinedChoices` as a partition — the Universe cell.**
+ *
+ * Two answers that split the printings, drawn as one framed control rather than two loose chips
+ * (the Filter bar board, 2026-11: separate chips read as that many unrelated switches). Each
+ * segment is its own `aria-pressed` button; the caller decides what a press means, and here
+ * pressing the one that is on turns the filter off, so the third state is one press away.
+ */
+export const JoinedPartition: Story = {
+  args: { label: "Owned", pressed: false },
+  parameters: { controls: { disable: true } },
+  render: () => <PartitionPair />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const group = canvas.getByRole("group", { name: "Universe" });
+    const beyond = within(group).getByRole("button", { name: "Beyond, Universes Beyond" });
+    const within_ = within(group).getByRole("button", { name: "Within, Universes Within" });
+    await expect(beyond).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(beyond);
+    await expect(beyond).toHaveAttribute("aria-pressed", "true");
+    await expect(within_).toHaveAttribute("aria-pressed", "false");
+
+    // The other answer replaces it rather than joining it…
+    await userEvent.click(within_);
+    await expect(beyond).toHaveAttribute("aria-pressed", "false");
+    await expect(within_).toHaveAttribute("aria-pressed", "true");
+
+    // …and pressing the one that is on is the way off.
+    await userEvent.click(within_);
+    await expect(within_).toHaveAttribute("aria-pressed", "false");
+  },
+};
+
+/**
+ * **`JoinedChoices` over ORed choices — the Finish cell, one segment greyed.**
+ *
+ * The same control when the choices do not partition (Finish and Border: a printing published
+ * in two finishes answers both), so each segment presses on its own. A segment whose count says
+ * it would return nothing is `aria-disabled`, refuses the press and **stays in the tab order**,
+ * the row's rule for every out-of-reach control.
+ */
+export const JoinedOr: Story = {
+  args: { label: "Owned", pressed: false },
+  parameters: { controls: { disable: true } },
+  render: () => <OrTriple />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const group = canvas.getByRole("group", { name: "Finish" });
+    await expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Nonfoil", "Foil", "Etched"]);
+
+    const nonfoil = within(group).getByRole("button", { name: "Nonfoil" });
+    const foil = within(group).getByRole("button", { name: "Foil" });
+    await userEvent.click(nonfoil);
+    // Both on at once: an OR, not a partition.
+    await expect(nonfoil).toHaveAttribute("aria-pressed", "true");
+    await expect(foil).toHaveAttribute("aria-pressed", "true");
+
+    const etched = within(group).getByRole("button", { name: "Etched — nothing in this search" });
+    await expect(etched).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(etched);
+    await expect(etched).toHaveAttribute("aria-pressed", "false");
+    etched.focus();
+    await expect(etched).toHaveFocus();
+  },
+};
+
+/**
+ * **`StackPrintingsToggle` — pressed is one tile per card, the default.**
+ *
+ * It was `Show all printings` until the Filter bar board (2026-11), with the opposite meaning: a
+ * switch that is on for the ordinary wall reads more plainly than one that has to be turned on to
+ * leave it. The hooks keep `allPrintings` and the bar inverts it here. On every bar at every width;
+ * below the widest band the word goes (`labelClass`) and the name stays, so the icon is the same
+ * button to a screen reader and to a test — the second one here is that narrow reading.
+ */
+export const StackPrintings: Story = {
+  args: { label: "Owned", pressed: false },
+  parameters: { controls: { disable: true } },
+  render: () => (
+    <div className="flex items-center gap-3">
+      <StackSwitch />
+      <StackSwitch labelClass="hidden" />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const [wide, narrow] = canvas.getAllByRole("button", { name: STACK_PRINTINGS });
+    await expect(wide).toHaveAttribute("aria-pressed", "true");
+    await expect(within(wide).getByText(STACK_PRINTINGS)).not.toHaveClass("hidden");
+    // The narrow one draws the glyph alone and keeps the whole name.
+    await expect(within(narrow).getByText(STACK_PRINTINGS)).toHaveClass("hidden");
+    await expect(narrow).toHaveAccessibleName(STACK_PRINTINGS);
+
+    await userEvent.click(wide);
+    await expect(wide).toHaveAttribute("aria-pressed", "false");
+    // On is the row's gold; off is the hairline.
+    await expect(wide).toHaveClass(...filterChipState(false).split(" "));
+    await expect(narrow).toHaveClass(...filterChipState(true).split(" "));
+  },
 };

@@ -1250,7 +1250,7 @@ function finishItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  * information. Re-sorting it here would throw away the fact the backend went and counted.
  *
  * "None" is pinned in front rather than sorted in: it is the row that takes a label *off*, not
- * one of the labels — `Any card`'s and `Top level`'s arrangement.
+ * one of the labels — `Tokens & extras`'s and `Top level`'s arrangement.
  *
  * Exported so the rule above can be pinned without mounting a menu.
  */

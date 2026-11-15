@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
 import {
+  Layers,
   LayoutGrid,
+  RotateCcw,
   Rows3,
   SlidersHorizontal,
   SquaresIntersect,
@@ -430,6 +433,7 @@ export function ManaValueChips({
   xDisabled = false,
   xTitle,
   chipClass,
+  className,
 }: {
   selected: readonly number[];
   onToggle: (value: number) => void;
@@ -471,6 +475,8 @@ export function ManaValueChips({
    * see {@link ValueChip}.
    */
   chipClass?: string;
+  /** The group's own classes: its gap, or a line the chips stretch across. */
+  className?: string;
 }) {
   return (
     // **`flex-wrap`, and it is load-bearing in exactly one place.** This row is ten `size-9`
@@ -485,7 +491,7 @@ export function ManaValueChips({
     // 2560×1400. **The X chip is what tipped it**: nine numerals came to 356 and fitted.
     // Wrapping makes the group's min-content one chip, so it shrinks and breaks onto a second
     // line in the panel and is unchanged in the two full-width filter bars, where it already fitted.
-    <div role="group" aria-label="Mana value" className="flex flex-wrap gap-1">
+    <div role="group" aria-label="Mana value" className={cn("flex flex-wrap gap-1", className)}>
       {MANA_VALUES.map((value) => {
         // The last chip is open-ended: past Emrakul the tail is a handful of cards
         // nobody filters by exact cost, and the backend reads it the same way.
@@ -546,6 +552,7 @@ export function ToggleChip({
   title,
   disabled,
   className,
+  icon,
 }: {
   label: string;
   pressed: boolean;
@@ -606,6 +613,8 @@ export function ToggleChip({
    * quietly winning that argument is a chip that stops saying whether it is on.
    */
   className?: string;
+  /** A glyph before the word — the Include cell's check or plus. */
+  icon?: ReactNode;
 }) {
   const tip = useTooltip();
   const name = title ?? (hint ? `${label}, ${hint}` : undefined);
@@ -635,9 +644,11 @@ export function ToggleChip({
         // *element*, and the hover brightening is a `hover:text-text` that survives a merge
         // against an identical `text-dim`. Named here so the greyed chip really is inert to both.
         disabled && "hover:text-dim active:scale-100",
+        icon !== undefined && "inline-flex items-center justify-center gap-2",
         className,
       )}
     >
+      {icon}
       {label}
     </button>
   );
@@ -722,7 +733,19 @@ export function LayoutToggle({
  *
  * The rule lives here so that every view that offers a reset offers the same one.
  */
-export function ResetAll({ count, onReset }: { count: number; onReset: () => void }) {
+export function ResetAll({
+  count,
+  onReset,
+  labelClass,
+  className,
+}: {
+  count: number;
+  onReset: () => void;
+  /** Classes for the word — the bar hides it below its widest band (see `FiltersButton`'s note on
+   *  why a class rather than a second button). */
+  labelClass?: string;
+  className?: string;
+}) {
   const tip = useTooltip();
   const empty = count <= 0;
   const name = `Reset all — ${count} filter${count === 1 ? "" : "s"} active`;
@@ -734,22 +757,167 @@ export function ResetAll({ count, onReset }: { count: number; onReset: () => voi
       }}
       aria-disabled={empty || undefined}
       aria-label={name}
-      // `describes: false`: identical to the `aria-label` above.
       {...tip(name, { describes: false })}
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,
-        "inline-flex items-center gap-2 border-border px-2.5 text-dim",
+        // Borderless: a quiet action at the end of the bar rather than one more control to set
+        // (the Filter bar board, 2026-11). The pill is what holds its width.
+        "inline-flex shrink-0 items-center gap-2 border-transparent px-2 text-dim",
         empty ? FILTER_UNAVAILABLE : "hover:text-text",
+        className,
       )}
     >
-      Reset all
-      <span
-        aria-hidden="true"
-        className="rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground"
-      >
-        {count}
-      </span>
+      <RotateCcw className="size-4 shrink-0" aria-hidden="true" />
+      <span className={labelClass}>Reset</span>
+      <CountPill count={count} />
+    </button>
+  );
+}
+
+/**
+ * **The count on Filters and on Reset — always drawn, one fixed width, grey at 0 and gold at N.**
+ *
+ * The Filter bar board's rule (2026-11): a button never changes width when it is used. A badge
+ * that appeared with the first filter moved everything beside it on that very press, so the pill
+ * is there from the first paint, reading `0` in the border's grey until something is on. Fixed at
+ * 22px, which holds two digits in the mono face. `aria-hidden`, because each button spells its
+ * count into its own name.
+ */
+export function CountPill({ count, className }: { count: number; className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      data-count-pill=""
+      className={cn(
+        "inline-flex h-4 w-[22px] shrink-0 items-center justify-center rounded-full font-mono text-[0.625rem] font-semibold tabular-nums",
+        count > 0 ? "bg-accent text-accent-foreground" : "bg-border text-dim",
+        className,
+      )}
+    >
+      {count}
+    </span>
+  );
+}
+
+/**
+ * **A two- or three-way choice as one joined control** — the Filter bar board's rule for Universe,
+ * Finish, Border and Owned, where a row of separate chips read as that many unrelated switches.
+ * Longer lists (types, rarities) stay chips.
+ *
+ * Each segment is its own `aria-pressed` button, so a group whose choices OR (Finish, Border) and
+ * one whose choices partition (Universe, Owned) are both this control: the caller decides what a
+ * press does. A greyed segment is `aria-disabled` and stays in the tab order, the row's rule.
+ */
+export function JoinedChoices<T extends string>({
+  label,
+  choices,
+  className,
+}: {
+  /** The group's accessible name. */
+  label: string;
+  choices: readonly {
+    value: T;
+    label: string;
+    pressed: boolean;
+    onClick: () => void;
+    disabled?: boolean;
+    /** Tooltip, and the button's accessible name when given. */
+    title?: string;
+    /** Folded into the name as `label, hint` when there is no `title`. */
+    hint?: string;
+  }[];
+  className?: string;
+}) {
+  const tip = useTooltip();
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={cn(
+        "flex h-9 min-w-0 rounded-md border border-border coarse:min-h-[var(--target-min)]",
+        className,
+      )}
+    >
+      {choices.map((c, i) => {
+        const name = c.title ?? (c.hint ? `${c.label}, ${c.hint}` : undefined);
+        return (
+          <button
+            key={c.value}
+            type="button"
+            onClick={c.disabled ? undefined : c.onClick}
+            aria-pressed={c.pressed}
+            aria-disabled={c.disabled || undefined}
+            aria-label={name}
+            {...tip(c.title ?? c.hint, { describes: false })}
+            className={cn(
+              FILTER_FOCUS,
+              PRESS,
+              "aria-disabled:active:scale-100",
+              "min-w-0 flex-1 truncate px-2.5 text-sm whitespace-nowrap",
+              i > 0 && "border-l border-border",
+              i === 0 && "rounded-l-[5px]",
+              i === choices.length - 1 && "rounded-r-[5px]",
+              c.pressed
+                ? "bg-accent/10 text-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                : "text-dim",
+              !c.pressed && !c.disabled && "hover:text-text",
+              c.disabled && FILTER_UNAVAILABLE,
+            )}
+          >
+            {c.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The Stack printings switch's name, on every bar and in every test. */
+export const STACK_PRINTINGS = "Stack printings";
+
+/**
+ * **Stack printings — one tile per card, the default, pressed.** It was `Show all printings` until
+ * the Filter bar board (2026-11), with the opposite meaning: a switch that is *on* for the
+ * ordinary wall reads more plainly than one that has to be turned on to leave it. Same state
+ * underneath (`allPrintings`, inverted here) — a view mode, so neither pill counts it and Reset
+ * leaves it alone.
+ *
+ * The word goes at the narrow bands (`labelClass`) and the name stays, so the icon is the same
+ * button to a screen reader and to a test.
+ */
+export function StackPrintingsToggle({
+  stacked,
+  onToggle,
+  labelClass,
+  className,
+}: {
+  stacked: boolean;
+  onToggle: () => void;
+  labelClass?: string;
+  className?: string;
+}) {
+  const tip = useTooltip();
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={stacked}
+      aria-label={STACK_PRINTINGS}
+      {...tip(
+        stacked ? "Stack printings — one tile per card" : "Stack printings — off: every printing",
+        { describes: false },
+      )}
+      className={cn(
+        FILTER_CONTROL,
+        FILTER_FOCUS,
+        "inline-flex shrink-0 items-center justify-center gap-2 px-2.5 whitespace-nowrap",
+        filterChipState(stacked),
+        className,
+      )}
+    >
+      <Layers className="size-4 shrink-0" aria-hidden="true" />
+      <span className={labelClass}>{STACK_PRINTINGS}</span>
     </button>
   );
 }
@@ -770,24 +938,15 @@ export const FILTER_LABEL = "text-[0.6875rem] uppercase tracking-[0.08em] text-d
  * The way into every filter that is not on the bar — a disclosure, with the number of filters
  * that are on riding on it.
  *
- * **Its two states are told apart by kind: the border and the word are the *count*, the fill is
- * the *tray*.** It was gold-bordered at rest until 2026-08-26, on the argument that a disclosure
- * has to say "there is more in here" before anything has been pressed — but that made it the one
- * control on the row wearing the on-treatment while off, so a reader sweeping the row for what is
- * switched on found it every single time and had to read the badge to learn it was not. It is
- * {@link filterChipState} now, unmodified, over `count > 0`: a hairline and a dim word off,
- * brightening under the mouse, exactly like every other bordered control here; gold border and
- * gold word on. An open tray adds the panel's own grey fill and touches neither — so opening the
- * tray never turns the word gold, and a live count turns it gold whether the tray is up or not.
- * Both readings at once is legal and draws both, which is that function's rule too.
+ * **Gold says something is on or the popup is up; the pill says how much.** It was
+ * {@link filterChipState} over the count alone until the Filter bar board (2026-11), which keeps
+ * it gold while open too, so the press reads as the edge of the popup hanging from it. The open
+ * popup adds the panel's grey fill as well. A hairline at rest, like every other bordered control
+ * on the row — it went borderless for one commit once (`dc96695`) and read as a label.
  *
- * **It went borderless at rest for one commit and that was a step too far** (`dc96695`, reverted
- * here the same day). Dropping the gold was right; dropping the hairline with it left the one
- * control on the row with no edge, so it read as a label rather than as something to press —
- * "similar to our other buttons" is the bar, and the other buttons have a border.
- *
- * The badge is what says how much is on, and it is drawn only when there is something to say — a
- * `0` on every quiet row is chrome that teaches the eye to skip the control it is attached to.
+ * **The count is a {@link CountPill}, always drawn** — grey `0` at rest, gold with the number when
+ * filters are on — so the button never changes width when it is used (the board's rule). A badge
+ * that appeared with the first filter moved every control beside it on that very press.
  *
  * **The count is the whole search's and not the tray's**, deliberately. It is `activeCount`, the
  * same number Reset all wears, so the two cannot disagree about how much is on. A tray-only count
@@ -810,7 +969,7 @@ export function FiltersButton({
   className,
 }: {
   open: boolean;
-  /** How many filters are on — the search's count, not the tray's. Zero draws no badge. */
+  /** How many filters are on — the search's count, not the tray's. The pill reads it, 0 too. */
   count: number;
   onToggle: () => void;
   /** The tray's `id`, for `aria-controls`. */
@@ -840,35 +999,18 @@ export function FiltersButton({
         FILTER_CONTROL,
         FILTER_FOCUS,
         "inline-flex shrink-0 items-center justify-center gap-2 px-3",
-        // **{@link filterChipState} itself, not a copy of it** — this control is told apart by its
-        // border like every other one in the row, so "a hairline and dim text off, gold border and
-        // gold text on, brightening on hover" is one function's answer rather than a class pair
-        // hand-written here that drifts the first time that one moves. The argument it takes is
-        // the *count*, so the gold says exactly what it says everywhere else on the row: a filter
-        // is on. Nothing about the tray reaches it — see the fill below.
-        filterChipState(count > 0),
-        // The panel below is this button's own extension, so an open tray draws the control that
-        // opened it in the panel's own fill rather than leaving it looking like one more thing to
-        // press. Grey (`bg-surface`, the tray's own) and not the gold tint it was: on this row
-        // gold means "a filter is on", which is the border's sentence above and not this one's —
-        // so an open tray never turns the word gold, and a live count turns it gold whether the
-        // tray is up or not.
+        // **{@link filterChipState} itself, not a copy of it**, so this control's on-state is the
+        // row's one answer. Gold while a filter is on **or while the popup is open** — the Filter
+        // bar board's "the Filters press stays gold while open" (2026-11), so the press reads as
+        // the edge of the popup hanging from it — and the popup's own grey fill while open.
+        filterChipState(count > 0 || open),
         open && "bg-surface",
         className,
       )}
     >
       <SlidersHorizontal className="size-4 shrink-0" aria-hidden="true" />
       <span className={labelClass}>Filters</span>
-      {count > 0 && (
-        // `aria-hidden`, with the digit spelled into the name above — {@link ResetAll}'s rule and
-        // its measurement: left to the accname algorithm this announces as `"Filters3"`.
-        <span
-          aria-hidden="true"
-          className="rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground"
-        >
-          {count}
-        </span>
-      )}
+      <CountPill count={count} />
     </button>
   );
 }

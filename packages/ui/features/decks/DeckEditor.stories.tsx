@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { STACK_PRINTINGS } from "@/components/FilterChips";
 import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { ipc } from "@/lib/ipc";
@@ -1299,11 +1300,11 @@ export const SwapFolds: Story = {
     await user.click(canvas.getByRole("button", { name: "Close" }));
     await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
 
-    // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
-    // Ring is one tile — its newest printing — which is the right default for building a deck
-    // and the wrong one for a story about choosing between two printings.
-    await user.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await user.click(canvas.getByRole("button", { name: "Show all printings" }));
+    // **Stack printings off, because the panel stacks like the search page does.** Stacked — the
+    // default, pressed — Sol Ring is one tile, its newest printing, which is the right default for
+    // building a deck and the wrong one for a story about choosing between two printings. The
+    // switch is on the bar at every width, the panel's four lines included.
+    await user.click(canvas.getByRole("button", { name: STACK_PRINTINGS }));
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),
     // which is `search::ORDER_NAME`: the card, then its newest printing.

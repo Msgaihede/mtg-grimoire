@@ -551,16 +551,16 @@ const tab = (name: string) => screen.getByRole("button", { name });
  * to keep clear of the word "Format", so the exact string matches one control here. Named through
  * `TrayField`'s `<label>` and the picker's own `labelledBy`, since a `<label htmlFor>` alone
  * would reach only a `<select>`'s accessible name, never a `<button>`'s (see `SharedProps` in
- * `Dropdown.tsx`). An `Unplayable` chip beside it used to be the one at risk of colliding, and it
- * is a row *inside* this picker now (`Any card`): a listbox row carries no label of its own, so
- * the widest thing this control offers can be worded plainly.
+ * `Dropdown.tsx`). An `Unplayable` chip beside it used to be the one at risk of colliding; that
+ * widening is the Include cell's `Tokens & extras` toggle now, a button whose name never says
+ * "Format", so the picker's own rows can be worded plainly.
  */
 const formatSelect = (): HTMLElement => screen.getByRole("button", { name: "Format" });
 
 /**
- * Open the filter row's tray, where Set, Format, Owned, Rarity, Price and Printings live since
- * the row was redesigned. Only the search box, the colours, the mana values and the sort are on
- * the bar at every width.
+ * Open the filter row's Filters popup, where Set, Format, Owned, Rarity, Price and Tokens & extras
+ * live since the row was redesigned. The search box, the colours, the mana values, the sort and
+ * Stack printings are on the bar at every width.
  *
  * Idempotent, so a case may call it after a railing without asking whether the press survived —
  * which is the question the railing case below actually cares about, and it asks it of the query
@@ -1539,13 +1539,15 @@ describe("DeckSearchPanel", () => {
 
   /**
    * The Escape stack, from inside the panel: the set picker is an `"inner"` layer and consumes
-   * its press in the capture phase, and the next press reaches `window` untouched — which is
-   * where the layer behind it listens. That was the docked card pane, in the bubble phase, when
-   * this was observed in the running window; the card is a `Dialog` since 2026-09-03, so the
-   * press it falls to is the editor's `"navigation"` floor. What this holds is the half that did
-   * not move: one layer per press, and this panel is not one of them.
+   * its press in the capture phase; the Filters popup is a layer of its own since the filter bar
+   * became one (the Filter bar board, 2026-11), so the second press closes it in the bubble
+   * phase and hands the caret back to Filters; and the third reaches `window` untouched — which
+   * is where the layer behind it listens. That was the docked card pane, in the bubble phase,
+   * when this was observed in the running window; the card is a `Dialog` since 2026-09-03, so
+   * the press it falls to is the editor's `"navigation"` floor. What this holds is the half that
+   * did not move: one layer per press, and the panel itself is not one of them.
    */
-  it("spends the first Escape on the set picker and lets the second through to the pane", async () => {
+  it("spends the first Escape on the set picker, the second on the Filters popup, and lets the third through to the pane", async () => {
     listSets.mockResolvedValue([
       {
         code: "lea",
@@ -1567,13 +1569,26 @@ describe("DeckSearchPanel", () => {
     };
     window.addEventListener("keydown", listen);
 
+    const filters = screen.getByRole("button", { name: /^(Show|Hide) filters/ });
+
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("combobox", { name: /search sets/i })).not.toBeInTheDocument();
+    // The set picker's press only: the popup it sat in is still open.
+    expect(filters).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Set" })).toBeInTheDocument();
+
+    // `keyboard`, which sends to wherever the caret already is — so the popup has to be
+    // holding it for this press to land on the popup at all.
+    await userEvent.keyboard("{Escape}");
+    expect(filters).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
+    expect(filters).toHaveFocus();
+
     await userEvent.keyboard("{Escape}");
     window.removeEventListener("keydown", listen);
 
-    // Consumed, then not: one layer per press, and the panel itself is not one of them.
-    expect(heard).toEqual([true, false]);
+    // Consumed, consumed, then not: one layer per press, and the panel itself is not one of them.
+    expect(heard).toEqual([true, true, false]);
   });
 
   /** A refused add is said in the app's own words, where the reader is looking. */
@@ -1810,13 +1825,16 @@ describe("DeckSearchPanel tabs", () => {
   });
 
   /**
-   * **`Any card` is one ladder on both tabs** (token stacks spec §3.6), and the collection tab is
-   * the half that was reported: *I can't select Any card*. The panel opens there, seeded with the
-   * deck's format, and the row was not offered at all — so a reader's own tokens, legal in no
-   * format, had no row that brought them back.
+   * **Tokens & extras is one ladder on both tabs** (token stacks spec §3.6; the format picker's
+   * old `Any card` row, a toggle in the Filters popup's Include cell since the Filter bar board,
+   * 2026-11), and the collection tab is the half that was reported: *I can't select Any card*.
+   * The panel opens there, seeded with the deck's format, and the row was not offered at all — so
+   * a reader's own tokens, legal in no format, had no row that brought them back.
    *
-   * One case per tab, each through the same press: pick the row, wait out the text debounce so a
-   * late re-seed would have had its chance to land, and read the trigger and the last request.
+   * One case per tab, each through the same press: turn the toggle on, wait out the text debounce
+   * so a late re-seed would have had its chance to land, and read the toggle, the Format trigger
+   * (`Any format`: the toggle is the format sentinel, so the picker shows no format) and the last
+   * request.
    * The deck is a Commander deck on purpose, which is also what keeps the payload assertion from
    * being vacuous: the first request of both tabs carried `format: "commander"`, so a last request
    * with no format is the press's and nothing earlier.
@@ -1825,7 +1843,7 @@ describe("DeckSearchPanel tabs", () => {
     [COLLECTION, collectionList],
     [ALL_CARDS, searchCards],
   ])(
-    "picks Any card on the %s tab, keeps it, and sends no format and no playableOnly",
+    "turns on Tokens & extras on the %s tab, keeps it, and sends no format and no playableOnly",
     async (which, command) => {
       const user = userEvent.setup();
       panel({ defaultFormat: COMMANDER });
@@ -1836,10 +1854,17 @@ describe("DeckSearchPanel tabs", () => {
       if (toggle.getAttribute("aria-expanded") !== "true") await user.click(toggle);
       expect(formatSelect()).toHaveTextContent(COMMANDER.label);
 
-      await pickOption(user, "Format", "Any card");
+      const tokens = screen.getByRole("button", {
+        name: /^Tokens & extras, Also show cards no format allows/,
+      });
+      expect(tokens).toHaveAttribute("aria-pressed", "false");
+      await user.click(tokens);
       await act(() => new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS + 50)));
 
-      expect(formatSelect()).toHaveTextContent("Any card");
+      expect(
+        screen.getByRole("button", { name: /^Tokens & extras, Also show cards no format allows/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+      expect(formatSelect()).toHaveTextContent("Any format");
       await waitFor(() => expect(command.mock.lastCall?.[0].format).toBeUndefined());
       expect(command.mock.lastCall?.[0].playableOnly).toBeUndefined();
     },

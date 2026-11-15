@@ -223,7 +223,7 @@ const DEFAULT_VIEW: DeckView = "stacks";
  * **`Stacks` is pinned above the alphabet and the other three are sorted under it**, so the list
  * reads `Stacks · Grid · Table · Text` (2026-09-08, the reader's ask). That is the app's third
  * option-list shape rather than a third exemption from the sort: `packages/ui/CLAUDE.md` names the rows
- * that stay outside it — `Any card`, `Any format`, `Custom…`, `Auto (by what it does)`,
+ * that stay outside it — `Tokens & extras`, `Any format`, `Custom…`, `Auto (by what it does)`,
  * `Top level` — and this is one of them. {@link DEFAULT_VIEW} is what every deck opens on, the
  * other three are the alternates *to* it, and the stacked desk is the signature interaction of
  * the whole builder, so it is the row a reader learns the **position** of rather than hunts for

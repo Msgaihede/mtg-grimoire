@@ -111,7 +111,8 @@ const meta = {
           "(body ink, not gold) and a row per set whose caption is its code, how far off it is " +
           "in UTC days from the read's own date, how many of its cards are out and — only when " +
           "there are some — how many your decks already play. A press shows the set in the " +
-          "search with the format picker on `Any card`.\n\n" +
+          "search with the Filters popup's **Tokens & extras** on (the format sentinel the " +
+          "picker's old `Any card` row was), so legality hides nothing not legal anywhere yet.\n\n" +
           "Every story reads through the fake's `waiting` world, which holds three invented " +
           "sets past the workbench's clock, except the whole-row story: five sets across four columns " +
           "is more than any world holds, so that face is drawn from a **constructed** answer. " +

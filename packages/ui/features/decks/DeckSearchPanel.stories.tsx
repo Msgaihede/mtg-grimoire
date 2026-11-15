@@ -164,8 +164,8 @@ const meta = {
           "press that is not visible on the tile.\n\n" +
           "**The format filter opens on the open deck's format** ({@link DeckFormat}), because " +
           "a deck is built out of what is legal in it. It is a *default* and not a " +
-          "constraint — the select is live, `Any format` stays in it under the wider " +
-          "`Any card`, and a card the " +
+          "constraint — the select is live, `Any format` stays in it, the Filters popup's " +
+          "**Tokens & extras** widens past every format, and a card the " +
           "format does not allow is the validation panel's `RULE BREAK` to draw rather than " +
           "something this search hides.\n\n" +
           "**A fixture of the editor, not a dismissible layer.** This panel registers no Escape " +

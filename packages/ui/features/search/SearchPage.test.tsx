@@ -205,9 +205,10 @@ const setPicker = () => screen.getByRole("button", { name: "Set", expanded: fals
 /**
  * Open the filter tray.
  *
- * Set, Format, Owned, Rarity, Price and Printings live behind a disclosure since the filter row
- * was redesigned — only the search box, the colours, the mana values and the sort are on the bar
- * at every width. A case that drives any of the six opens it first; the others are untouched.
+ * Set, Format, Owned, Rarity, Price and Tokens & extras live behind a disclosure since the filter
+ * row was redesigned — the search box, the colours, the mana values, the sort and Stack printings
+ * are on the bar at every width. A case that drives any of the six opens it first; the others are
+ * untouched.
  */
 async function openTray(): Promise<void> {
   await userEvent.click(screen.getByRole("button", { name: /^Show filters/ }));
@@ -326,29 +327,29 @@ describe("SearchPage", () => {
     expect(req).toMatchObject({ limit: 50, offset: 0 });
   });
 
-  it("collapses printings by default, and asks the backend for it", async () => {
+  it("collapses printings by default, asks the backend for it, and draws Stack printings pressed", async () => {
     wrap(<SearchPage />);
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     expect(lastRequest().collapse).toBe(true);
-    await openTray();
-    expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
+    // On the bar at every width, so no tray to open: pressed is the stacked wall.
+    expect(screen.getByRole("button", { name: "Stack printings" })).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "true",
     );
   });
 
-  it("stops collapsing when all printings are asked for", async () => {
+  it("stops collapsing when Stack printings is pressed off", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
-    await openTray();
+    expect(lastRequest().collapse).toBe(true);
 
-    await userEvent.click(screen.getByRole("button", { name: "Show all printings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stack printings" }));
 
     await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
-    expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Stack printings" })).toHaveAttribute(
       "aria-pressed",
-      "true",
+      "false",
     );
   });
 
@@ -357,16 +358,16 @@ describe("SearchPage", () => {
    * change whether you are looking at cards or at cardboard — the same reasoning that keeps
    * the sort out of it.
    */
-  it("does not count Show all printings as a filter, and Reset all leaves it alone", async () => {
+  it("does not count Stack printings as a filter, and Reset all leaves it alone", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
-    await openTray();
 
-    await userEvent.click(screen.getByRole("button", { name: "Show all printings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stack printings" }));
+    await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
     // Nothing to reset: a view mode is not a filter, so Reset all stays greyed. It is drawn
     // from the first render — a button that appeared here would slide the whole row — so the
     // claim is that it is dead, not that it is absent.
-    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Reset all — 0 filters active" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
@@ -374,12 +375,13 @@ describe("SearchPage", () => {
     await userEvent.type(screen.getByPlaceholderText("Search cards…"), "bolt");
     const reset = await screen.findByRole("button", { name: "Reset all — 1 filter active" });
     await userEvent.click(reset);
+    await screen.findByRole("button", { name: "Reset all — 0 filters active" });
 
-    expect(screen.getByRole("button", { name: "Show all printings" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Stack printings" })).toHaveAttribute(
       "aria-pressed",
-      "true",
+      "false",
     );
-    await waitFor(() => expect(lastRequest().collapse).toBeUndefined());
+    expect(lastRequest().collapse).toBeUndefined();
   });
 
   it("says how many printings a collapsed row stands for, and prices across them", async () => {
@@ -407,7 +409,7 @@ describe("SearchPage", () => {
     wrap(<SearchPage />);
 
     await screen.findByText(BOLT.name);
-    // `/printings/` alone would match the All-printings toggle, which is always mounted.
+    // `/printings/` alone would match the Stack printings toggle, which is always mounted.
     expect(screen.queryByText(/×\d+ printings/)).not.toBeInTheDocument();
     // Both ends are the row's own price, so the range renders as the single price it is.
     expect(screen.getByText("$400.50")).toBeInTheDocument();
@@ -1797,15 +1799,21 @@ describe("SearchPage — text handed over by the quick search", () => {
     useAppStore.setState({ pendingSearchText: null });
   });
 
-  it("opens on that text alone, at Any card, and spends the hand-off", async () => {
+  it("opens on that text alone, with Tokens & extras on, and spends the hand-off", async () => {
     useAppStore.setState({ pendingSearchText: "bolt" });
     wrap(<SearchPage />);
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     for (const [req] of searchCards.mock.calls) expect(req).toMatchObject({ text: "bolt" });
     expect(lastRequest().format).toBeUndefined();
+    expect(lastRequest().playableOnly).toBeUndefined();
     expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("bolt");
     await waitFor(() => expect(useAppStore.getState().pendingSearchText).toBeNull());
+    await openTray();
+    expect(screen.getByRole("button", { name: /^Tokens & extras, / })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("replaces the search already on screen", async () => {
@@ -1858,7 +1866,7 @@ describe("SearchPage — a set handed over by the card modal", () => {
     );
   });
 
-  it("opens on that set alone, at Any card, and spends the hand-off", async () => {
+  it("opens on that set alone, with Tokens & extras on, and spends the hand-off", async () => {
     useAppStore.setState({ pendingSearchSet: "lea" });
     wrap(<SearchPage />);
 
@@ -1867,11 +1875,16 @@ describe("SearchPage — a set handed over by the card modal", () => {
     // never asks for the unfiltered browse it would otherwise open on. (A render-phase
     // adjustment on mount was tried first and sent that browse ahead of the set's request.)
     for (const [req] of searchCards.mock.calls) expect(req).toMatchObject({ sets: ["lea"] });
-    // `Any card`, so an Un-set's acorns and a set's art cards are on the wall: no `playableOnly`,
-    // which every other row of the format select sends.
+    // Tokens & extras, so an Un-set's acorns and a set's art cards are on the wall: no
+    // `playableOnly`, which every row of the format select sends.
     expect(lastRequest().playableOnly).toBeUndefined();
     expect(lastRequest().format).toBeUndefined();
     await waitFor(() => expect(useAppStore.getState().pendingSearchSet).toBeNull());
+    await openTray();
+    expect(screen.getByRole("button", { name: /^Tokens & extras, / })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("replaces the search already on screen, and lands again on a second press", async () => {
