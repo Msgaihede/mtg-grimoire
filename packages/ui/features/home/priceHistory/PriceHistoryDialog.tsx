@@ -326,7 +326,7 @@ function Body({
               // The copy the row was about: a foil mover opens on the foil sheen.
               openedAs={request.finish}
               // A view change and nothing else — there is no row here for it to write to.
-              onToggleFoil={() => {}}
+              onPickFinish={() => {}}
               // No meld read: the chart is one printing's price, and a meld view would swap the
               // picture for a card this line is not about. `[]` draws no meld controls at all.
               meld={{

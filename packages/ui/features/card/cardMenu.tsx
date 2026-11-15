@@ -83,6 +83,7 @@ import type { Marketplace } from "@/lib/marketplace";
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 import { sortOptions } from "@/lib/options";
 import { openMarketplaceForCard } from "./openMarketplace";
+import { FINISH_GLYPH, finishChoiceLabel, switchableFinishes } from "./finishChoice";
 import { toggleShownFace } from "./shownFace";
 
 /**
@@ -180,6 +181,63 @@ export interface CardMenuTarget {
    * picture per tile, and a flip is a look at one of them.
    */
   flip?: boolean;
+  /**
+   * Whether this menu offers **a row for every other finish** — issue #1679, the right-click half
+   * of the card modal's finish buttons — and what a press on one does.
+   *
+   * **Set by the card modal alone**, which is the one surface whose picture *is* a choice of
+   * finish: its art column draws a `View as …` / `Set as …` button per finish, and these rows are
+   * the same choices for a reader who right-clicked the picture instead. Every other surface
+   * leaves it out, for {@link flip}'s reason — it is a property of the surface, not of the card —
+   * and a deck card's own finish rows are `deckCardMenu.tsx`'s, in its `Set as` group.
+   *
+   * The rows are `finishChoice.ts`' rules, so they can never offer a finish the buttons do not or
+   * name one differently: one row per finish the printing is sold in other than the one on
+   * screen ({@link FinishPick.shown}), in the printing's own order, and none at all on a printing
+   * with a single finish. Always about the one card that was right-clicked, as a flip is.
+   */
+  finishPick?: FinishPick;
+}
+
+/**
+ * What the card modal hands its menu about the finish on screen — see
+ * {@link CardMenuTarget.finishPick}.
+ */
+export interface FinishPick {
+  /** The finish the picture is showing now, which is the one finish the rows leave out. */
+  shown: Finish;
+  /**
+   * Whether a press **writes** — there is a deck row or a collection copy behind the modal — and
+   * so reads `Set as …` rather than `View as …`. The same answer the buttons' labels turn on.
+   */
+  writes: boolean;
+  /** The reader picked that finish: the same handler the buttons under the art call. */
+  pick: (finish: Finish) => void;
+}
+
+/**
+ * The finish rows {@link CardMenuTarget.finishPick} asks for, ruled off beneath — or nothing.
+ *
+ * **First, beside Flip card**, because they are the menu form of the row under the modal's art,
+ * which is where Flip card lives too: both change what the picture shows. A `Set as …` row writes
+ * as well, and it still belongs here rather than in a group of its own: it is the same press as
+ * the button, and the button is beside the flip.
+ */
+function finishRows(target: CardMenuTarget): MenuItem[] {
+  const pick = target.finishPick;
+  if (pick === undefined) return [];
+  const others = switchableFinishes(target.finishes).filter((f) => f !== pick.shown);
+  if (others.length === 0) return [];
+  return [
+    ...others.map((f): MenuItem => ({
+      kind: "action",
+      id: `finish-${f}`,
+      label: finishChoiceLabel(f, pick.writes),
+      Icon: FINISH_GLYPH[f],
+      onSelect: () => pick.pick(f),
+    })),
+    { kind: "separator", id: "sep-finish" },
+  ];
 }
 
 /** Everything the card menu needs that is not the card. Built once per surface, not per row. */
@@ -468,6 +526,7 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
           { kind: "separator", id: "sep-flip" } satisfies MenuItem,
         ]
       : []),
+    ...finishRows(target),
     {
       kind: "action",
       id: "copy-name",

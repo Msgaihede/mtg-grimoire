@@ -202,6 +202,14 @@ one answer is not a choice):
   (`nonfoil → foil → etched`), the row's current finish greyed
 - sold in **one** — the row is drawn and **greyed silently**
 
+> **Superseded for three finishes (issue #1679, 2026-11-15).** The `Finish ▸` submenu is gone: the
+> menu now draws one flat `Set as …` row for every finish other than the one the row plays (two
+> rows for a three-finish printing), the first keeping the id `finish` so the block's position
+> never moves. The card modal's §6.1 toggle likewise became one `View as …` / `Set as …` button
+> per finish the printing has, the one on screen `aria-pressed`, and a right-click on the modal's
+> picture offers the same choices as menu rows — every finish but the one on screen, beside
+> `Flip card` (`cardMenu.tsx`'s `finishPick`; the rules shared in `features/card/finishChoice.ts`).
+
 **Greyed silently is a decision, not an omission.** `zoneItem` in this same file is already the
 menu's greyed-without-a-reason row, and its site says why; a reason string on a row that is greyed
 on a large minority of cards is noise on the surface a reader uses most. The row stays *present* so

@@ -66,7 +66,7 @@ const rest = {
   // Nobody named a finish — the state a card opened from a search wall, from Tags or from a
   // printings row is in.
   openedAs: null,
-  onToggleFoil: vi.fn(),
+  onPickFinish: vi.fn(),
   // `[]` is the answer for every card that is not a meld, which is 116 518 of 116 590 rows.
   meld: { relations: [], melded: null, onMeld: vi.fn(), onOpen: vi.fn() },
   onShowSet: vi.fn(),
@@ -154,7 +154,7 @@ describe("CardModalArt", () => {
   });
 
   it("reports the press with no deck row behind it, and reports the way back too", async () => {
-    // **`onToggleFoil` fires on every press, and the words above are about what the press *does*
+    // **`onPickFinish` fires on every press, and the words above are about what the press *does*
     // rather than about whether the host hears it.** The host reads this callback for two
     // different things — the deck write, which only a row can take, and the finish the reader is
     // *looking at*, which the rail's `Open on …` row shops for — so a column that reported only
@@ -162,16 +162,16 @@ describe("CardModalArt", () => {
     // opened with while the picture beside it said otherwise — reported 2026-09-10. That was the
     // host's half of it; this pins the half the host's fix rests on.
     //
-    // **Both presses, because the way back is the one that carries `null`** — the value that
-    // would be indistinguishable from silence if it were never sent.
-    const onToggleFoil = vi.fn();
-    render(<CardModalArt card={card({})} {...rest} deckRow={null} onToggleFoil={onToggleFoil} />);
+    // **Both presses, because the way back is the one that carries the regular copy** — spelled
+    // `nonfoil`, so it can never be mistaken for silence.
+    const onPickFinish = vi.fn();
+    render(<CardModalArt card={card({})} {...rest} deckRow={null} onPickFinish={onPickFinish} />);
 
     await userEvent.click(screen.getByRole("button", { name: "View as foil" }));
-    expect(onToggleFoil).toHaveBeenCalledExactlyOnceWith("foil");
+    expect(onPickFinish).toHaveBeenCalledExactlyOnceWith("foil");
 
     await userEvent.click(screen.getByRole("button", { name: "View as nonfoil" }));
-    expect(onToggleFoil).toHaveBeenLastCalledWith(null);
+    expect(onPickFinish).toHaveBeenLastCalledWith("nonfoil");
   });
 
   it("says `No foil` on a printing with none, rather than dropping the control", () => {
@@ -202,8 +202,8 @@ describe("CardModalArt", () => {
   });
 
   it("says nothing about foil where the printing *is* the foil, or where nothing is known", () => {
-    // **The `soleFinish` trap, and the reason `noFoil` is not `foilable === null` read
-    // backwards.** `foilViewFinish` answers `null` for a foil-only printing too — 12 366 of them
+    // **The `soleFinish` trap, and the reason `noFoil` is not `switchable.length === 0` read
+    // backwards.** `switchableFinishes` answers `[]` for a foil-only printing too — 12 366 of them
     // exist — because there is nothing to switch *to*, and `soleFinish` is already drawing "this
     // cardboard is foil" over the art. `No foil` under that sheen would be the two halves of the
     // component contradicting each other about one piece of cardboard.
@@ -265,33 +265,60 @@ describe("CardModalArt", () => {
     // because this file reads no store. Without the prop a reader who pressed their foil copy was
     // shown the plain photograph of it — the regression this closes.
     //
-    // The toggle is pressed *and* its words have already flipped: the visible label is the
-    // accessible name here, so a seeded toggle that still said "View as foil" would be a control
-    // offering to do the thing it had already done.
+    // The foil button is the pressed one, and the plain one beside it is the way back.
     render(<CardModalArt card={card({})} {...rest} openedAs="foil" />);
 
-    const toggle = screen.getByRole("button", { name: "View as nonfoil" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "View as foil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
-  it("toggles an etched copy of a three-finish printing as etched, and back (issue #1561)", async () => {
-    // A printing sold nonfoil, foil *and* etched has two shiny answers, and "foil if listed" drew
-    // an etched deck row as Foil and turned it into foil on a regular → shiny round trip. The
-    // row says which shiny it is, so the toggle is about that one — and keeps being about it
-    // after its own `Set as regular` re-reads the row as `null`.
+  it("draws one button per finish, each named for its own finish (issue #1679)", () => {
+    // A printing sold nonfoil, foil *and* etched used to get one toggle that could only be about
+    // one of its two shiny finishes. Now every finish has its own button, in Scryfall's order, and
+    // the label always names the finish the button is for.
     const three = card({ finishes: '["nonfoil","foil","etched"]' });
-    const onToggleFoil = vi.fn();
+    const { unmount } = render(<CardModalArt card={three} {...rest} />);
+    const group = screen.getByRole("group", { name: "Finish" });
+    expect(Array.from(group.querySelectorAll("button"), (b) => b.textContent)).toEqual([
+      "View as nonfoil",
+      "View as foil",
+      "View as etched",
+    ]);
+    unmount();
+
+    // Behind a deck row the same three are writes, and the regular copy says `regular`.
+    render(<CardModalArt card={three} {...rest} deckRow={{ finish: "etched" }} />);
+    expect(
+      Array.from(
+        screen.getByRole("group", { name: "Finish" }).querySelectorAll("button"),
+        (b) => b.textContent,
+      ),
+    ).toEqual(["Set as regular", "Set as foil", "Set as etched"]);
+    // The row plays etched, so etched is the one pressed.
+    expect(screen.getByRole("button", { name: "Set as etched" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("moves an etched copy of a three-finish printing to any other finish, and back (issue #1561)", async () => {
+    // The row says which shiny it is, so the column opens on it — and keeps every finish one
+    // press away after its own `Set as regular` re-reads the row as `null`.
+    const three = card({ finishes: '["nonfoil","foil","etched"]' });
+    const onPickFinish = vi.fn();
     const { rerender } = render(
       <CardModalArt
         card={three}
         {...rest}
         deckRow={{ finish: "etched" }}
-        onToggleFoil={onToggleFoil}
+        onPickFinish={onPickFinish}
       />,
-    );
-    expect(screen.getByRole("button", { name: "Set as regular" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Set as regular" }));
@@ -301,38 +328,101 @@ describe("CardModalArt", () => {
         card={three}
         {...rest}
         deckRow={{ finish: null }}
-        onToggleFoil={onToggleFoil}
+        onPickFinish={onPickFinish}
       />,
     );
+    expect(screen.getByRole("button", { name: "Set as regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Set as foil" }));
     await userEvent.click(screen.getByRole("button", { name: "Set as etched" }));
 
-    expect(onToggleFoil.mock.calls).toEqual([[null], ["etched"]]);
+    expect(onPickFinish.mock.calls).toEqual([["nonfoil"], ["foil"], ["etched"]]);
   });
 
-  it("seeds an etched toggle from the opening surface, where the printing has it", () => {
+  it("shows the finish the host was asked for, over its own seed (issue #1679)", () => {
+    // The modal's right-click menu offers the same finishes, and a pick there reaches this column
+    // only as `viewing`. It wins over the seed, and the sheen follows it.
+    const three = card({ finishes: '["nonfoil","foil","etched"]' });
+    const { rerender } = render(<CardModalArt card={three} {...rest} />);
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    rerender(<CardModalArt card={three} {...rest} viewing="etched" />);
+    expect(screen.getByRole("button", { name: "View as etched" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("tells the host nothing when the finish already on screen is pressed", async () => {
+    const onPickFinish = vi.fn();
+    render(<CardModalArt card={card({})} {...rest} onPickFinish={onPickFinish} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "View as nonfoil" }));
+    expect(onPickFinish).not.toHaveBeenCalled();
+  });
+
+  it("offers both shiny finishes on a printing with no plain copy", async () => {
+    // A foil+etched printing had no control at all while the row was a foil toggle: there was no
+    // plain copy to toggle back to. It opens on its most ordinary finish, foil, which is a real
+    // piece of foil cardboard and is drawn as one.
+    const onPickFinish = vi.fn();
+    render(
+      <CardModalArt
+        card={card({ finishes: '["foil","etched"]' })}
+        {...rest}
+        onPickFinish={onPickFinish}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "View as foil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("button", { name: "View as nonfoil" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "View as etched" }));
+    expect(onPickFinish).toHaveBeenCalledExactlyOnceWith("etched");
+  });
+
+  it("seeds an etched view from the opening surface, where the printing has it", () => {
     const three = card({ finishes: '["nonfoil","foil","etched"]' });
     const { unmount } = render(<CardModalArt card={three} {...rest} openedAs="etched" />);
-    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "View as etched" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     unmount();
 
-    // A plain row of the same printing still offers the foil, as it always did.
+    // A plain row of the same printing opens on the regular copy.
     render(<CardModalArt card={three} {...rest} deckRow={{ finish: null }} />);
-    expect(screen.getByRole("button", { name: "Set as foil" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set as regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
-  it("seeds nothing from a plain copy, which is not the same as nobody knowing", () => {
+  it("seeds the plain view from a plain copy, which is not the same as nobody knowing", () => {
     // `nonfoil` is a real answer and a *different* one from `null`: a surface saying "the copy
-    // they pressed is the plain one". Both seed nothing, which is right — regular is the finish a
-    // card is assumed to be — and asserting it keeps the seed a two-value test rather than a
-    // truthiness one, which `"nonfoil"` would silently pass.
+    // they pressed is the plain one". On a two-finish printing both land on the plain view, which
+    // is right — regular is the finish a card is assumed to be — and asserting it keeps the seed a
+    // value test rather than a truthiness one, which `"nonfoil"` would silently pass.
     render(<CardModalArt card={card({})} {...rest} openedAs="nonfoil" />);
 
     expect(screen.getByRole("button", { name: "View as foil" })).toHaveAttribute(
       "aria-pressed",
       "false",
+    );
+    expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
   });
 

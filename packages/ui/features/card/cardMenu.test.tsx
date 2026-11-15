@@ -316,6 +316,67 @@ describe("buildCardMenu", () => {
     });
   });
 
+  /**
+   * Issue #1679: the card modal's picture offers the same finishes on a right-click as its
+   * buttons do — every finish other than the one on screen, named for its own finish.
+   */
+  describe("the finish rows", () => {
+    const THREE = '["nonfoil","foil","etched"]';
+    const finishIds = (items: MenuItem[]) =>
+      items
+        .filter((i) => i.kind === "action" && i.id.startsWith("finish-"))
+        .map((i) => (i.kind === "action" ? i.label : ""));
+
+    it("is absent unless the surface set `finishPick` on the target", () => {
+      expect(finishIds(buildCardMenu({ ...BOLT, finishes: THREE }, deps()))).toEqual([]);
+    });
+
+    it("offers every finish but the one on screen, in the printing's own order", () => {
+      const pick = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, finishes: THREE, finishPick: { shown: "foil", writes: false, pick } },
+        deps(),
+      );
+      expect(finishIds(items)).toEqual(["View as nonfoil", "View as etched"]);
+      // Leading the menu and ruled off, like Flip card: both change what the picture shows.
+      expect(items[2]).toMatchObject({ kind: "separator", id: "sep-finish" });
+      expect(labels(items)[2]).toBe("Copy card name");
+
+      (find(items, "View as etched") as MenuAction).onSelect();
+      expect(pick).toHaveBeenCalledExactlyOnceWith("etched");
+    });
+
+    it("says Set as where the press writes, and regular for the plain copy", () => {
+      const items = buildCardMenu(
+        { ...BOLT, finishes: THREE, finishPick: { shown: "etched", writes: true, pick: vi.fn() } },
+        deps(),
+      );
+      expect(finishIds(items)).toEqual(["Set as regular", "Set as foil"]);
+    });
+
+    it("sits under Flip card where the surface offers both", () => {
+      const items = buildCardMenu(
+        {
+          ...BOLT,
+          flip: true,
+          finishes: '["nonfoil","foil"]',
+          finishPick: { shown: "nonfoil", writes: false, pick: vi.fn() },
+        },
+        deps(),
+      );
+      expect(labels(items).slice(0, 3)).toEqual(["Flip card", "View as foil", "Copy card name"]);
+    });
+
+    it("draws nothing — not even its rule — on a printing with one finish", () => {
+      const items = buildCardMenu(
+        { ...BOLT, finishPick: { shown: "nonfoil", writes: false, pick: vi.fn() } },
+        deps(),
+      );
+      expect(finishIds(items)).toEqual([]);
+      expect(items[0]).toMatchObject({ kind: "action", id: "copy-name" });
+    });
+  });
+
   it("copies the printed name", async () => {
     const items = buildCardMenu(BOLT, deps());
     (find(items, "Copy card name") as MenuAction).onSelect();

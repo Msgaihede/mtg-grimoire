@@ -12,7 +12,7 @@
  * ─────────────────────
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
- * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
+ * Set as foil             one row per finish other than the one played (greyed on a single finish)
  * Set as deck image       this printing's art crop becomes the deck's cover
  * Split to new printing…  some of this row's copies onto another printing (greyed on one copy)
  * ─────────────────────
@@ -190,7 +190,7 @@ export interface DeckCardMenuDeps {
   moveTo: (card: DeckCard, categoryId: number) => Press;
   /** `useDeck.setLabel`. `null` takes the label off. */
   setLabel: (card: DeckCard, labelId: number | null) => Press;
-  /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
+  /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItems}. */
   setFinish: (card: DeckCard, to: DeckFinish) => Press;
   /** The labels **this list is wearing**, already in hand from `deck_get`, most-used first —
    *  the label rows are built from these rather than from a second `deck_label_list`, which is
@@ -560,7 +560,7 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     // is a different question from where it is filed, and is drawn as one.
     { kind: "separator", id: "sep-set-as" },
     ...zoneItems(card, deps),
-    finishItem(card, deps),
+    ...finishItems(card, deps),
     ...coverItem(card, deps),
     ...splitItem(card, deps),
     // **Under a rule of their own, between the `Set as` rows and the removal** — the notes are
@@ -748,7 +748,7 @@ function otherListItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  * remedy for a card that is not short is that there is nothing to do.
  *
  * **Greyed _with_ a reason, where this file's other two refusals are silent, and the split is a
- * test rather than a drift.** {@link zoneItem} and {@link finishItem} grey on facts the reader can
+ * test rather than a drift.** {@link zoneItem} and {@link finishItems} grey on facts the reader can
  * check against the card in front of them — it is not a legendary creature, it is sold in one
  * finish — so the sentence would only repeat what the cardboard says. *A plan holds no cards* is a
  * rule about the **list the reader is standing in**, and nothing on the card says it; that is
@@ -1148,12 +1148,19 @@ function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
 }
 
 /**
- * **Which object this row plays**, and the three shapes that question has.
+ * **Which object this row plays** — one `Set as …` row for every finish the printing is sold in
+ * other than the one the row already plays (issue #1679).
  *
  * `cardMenu.tsx`'s `collectionItem` applied to a write rather than an add, and for its reason:
  * **a choice with one answer is not a choice.** Sold in two finishes — nonfoil and foil, which
- * is the overwhelming majority of printings — the row is a toggle and costs one press. Sold in
- * three, it is a submenu of the printing's own list. Sold in one, there is nothing to pick.
+ * is the overwhelming majority of printings — that is exactly one row, and the press is the whole
+ * interaction. Sold in three, it is two rows named outright, so every other finish is one press
+ * away rather than behind a `Finish ▸` submenu whose first row was the finish the card already
+ * is. Sold in one, there is nothing to pick.
+ *
+ * **The first row keeps the id `finish`**, so the block keeps its position in the list whatever
+ * the printing — a reader learns where the row is, and a second row follows it rather than
+ * moving it. Further rows are `finish-<word>`.
  *
  * **The greyed row says nothing**, which is {@link zoneItem}'s precedent rather than
  * `cardMenu.tsx`'s greyed-with-a-reason — and for the sharper half of that same argument. A
@@ -1168,69 +1175,54 @@ function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  * information (plain, then the premium treatments), which is one of the two exemptions
  * `packages/ui/CLAUDE.md` grants.
  */
-function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
-  const choices = finishChoices(card.finishes);
-  const label = (f: DeckFinish) =>
-    `Set as ${f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase()}`;
+function finishItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  const word = (f: DeckFinish) =>
+    f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase();
+  const label = (f: DeckFinish) => `Set as ${word(f)}`;
   /**
    * **The same two glyphs `FinishMark` draws**, because a menu row that names a finish is
    * naming the same finish the mark on the card is — issue #353. `Sparkles` is the app's one
    * foil icon and doubles as the finish control's own picture, which is what the regular row
-   * and the submenu head get: nonfoil has no glyph of its own anywhere in the app, and foil is
-   * the finish a reader opening this row came looking for.
+   * gets: nonfoil has no glyph of its own in a menu, and foil is the finish a reader opening
+   * this row came looking for.
    */
   const icon = (f: DeckFinish) => (f === "etched" ? Gem : Sparkles);
   // The finish is drawn on the card, but the menu that made the press has closed and a refusal
   // (a printing not sold in it) arrives after — so the press says what it did, once.
   const setTo = (f: DeckFinish) => {
-    const word = f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase();
     pressRows(deps, [card], [deps.setFinish(card, f)], {
-      done: (what) => `Set ${what} as ${word}`,
-      failed: (what) => `Couldn't set ${what} as ${word}`,
+      done: (what) => `Set ${what} as ${word(f)}`,
+      failed: (what) => `Couldn't set ${what} as ${word(f)}`,
     });
   };
 
+  const choices = finishChoices(card.finishes);
   // Nothing to pick. The label names foil rather than the finish the printing *is*, because
   // what the greyed row is saying is "this card has no other finish", and foil is the one a
-  // reader came looking for.
+  // reader came looking for. An unknown list answers `[null]`, so it greys here too.
   if (choices.length <= 1) {
-    return {
-      kind: "action",
-      id: "finish",
-      label: label("foil"),
-      Icon: icon("foil"),
-      disabled: true,
-      onSelect: () => {},
-    };
+    return [
+      {
+        kind: "action",
+        id: "finish",
+        label: label("foil"),
+        Icon: icon("foil"),
+        disabled: true,
+        onSelect: () => {},
+      },
+    ];
   }
-  // Two finishes is exactly one *other* finish, so the row names it outright and the press is
-  // the whole interaction — no submenu to open for a choice with one answer.
-  if (choices.length === 2) {
-    const other = choices.find((f) => f !== card.finish) ?? null;
-    return {
+  // A row whose stored finish the printing does not list is offered every listed finish, which
+  // is what puts it back on one.
+  return choices
+    .filter((f) => f !== card.finish)
+    .map((f, i): MenuItem => ({
       kind: "action",
-      id: "finish",
-      label: label(other),
-      Icon: icon(other),
-      onSelect: () => setTo(other),
-    };
-  }
-  return {
-    kind: "submenu",
-    id: "finish",
-    label: "Finish",
-    Icon: Sparkles,
-    items: choices.map((f) => ({
-      kind: "action",
-      id: `finish-${f ?? "regular"}`,
-      label: f === null ? REGULAR : FINISH_LABEL[f],
-      // The finish the row already is, greyed — and silently, like every other refusal in this
-      // file. It is drawn rather than dropped so the list keeps its length and its positions.
-      ...(f === card.finish
-        ? { disabled: true, onSelect: () => {} }
-        : { onSelect: () => setTo(f) }),
-    })),
-  };
+      id: i === 0 ? "finish" : `finish-${f ?? "regular"}`,
+      label: label(f),
+      Icon: icon(f),
+      onSelect: () => setTo(f),
+    }));
 }
 
 
