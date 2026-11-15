@@ -199,6 +199,8 @@ export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
     needsReview: null,
     finish: tokenDeckFinish(view),
     finishes: view.finishes,
+    // A token row carries no promo types, so a foil token draws traditional foil.
+    promoTypes: null,
     name: view.name,
     manaCost: null,
     typeLine: view.typeLine,

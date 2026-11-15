@@ -47,6 +47,7 @@ import { ManaText } from "@/components/ManaText";
 import { playedFinish } from "@/lib/finish";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
+import { finishTreatments } from "@/lib/treatment";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { QuantityTag, RuleBreakMark, TheoryMatchMark } from "./CardMarks";
@@ -233,6 +234,7 @@ export type DeckCardFaceFacts = Pick<
   | "needsReview"
   | "finish"
   | "finishes"
+  | "promoTypes"
   | "name"
   | "manaCost"
   | "typeLine"
@@ -437,8 +439,13 @@ export function DeckCardFace({
           is room for the word and no corner to compete for. `mark={false}` takes the crown with
           it, and that is still exactly why this card's top-right corner belongs to
           {@link TheoryMatchMark} on both views rather than to a foil chip. The crown itself is not
-          lost with the chip: it is printed on the quantity tag at the other end of the strip. */}
-      <FoilOverlay finish={finish} mark={false} />
+          lost with the chip: it is printed on the quantity tag at the other end of the strip.
+          The treatments pick the foil's drawing — a Surge Foil copy in a deck draws surge. */}
+      <FoilOverlay
+        finish={finish}
+        treatments={finishTreatments(card.promoTypes, finish)}
+        mark={false}
+      />
 
       {/* The reveal strip: what the app knows that the printed card cannot. Over the card's own
           title bar and **left-aligned**, which is a reversal — {@link CARD_MARKS_STRIP} has the

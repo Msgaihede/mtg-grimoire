@@ -797,3 +797,447 @@ html[data-dragging] * {
 .scrollbar-accent::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
 }
+
+/* ---------------------------------------------------------------------------------------
+   Foil — one drawing per kind of foil, laid over a card's picture by `FoilOverlay`
+   (`components/CardArt.tsx`). `lib/foilEffect.ts` says which kind a copy is and owns the light;
+   `scripts/foil-textures.ts` generates the patterns, which arrive as `--foil-tex-1…3`.
+
+   **Why the app draws foil at all.** Scryfall keeps one picture per printing, and a printing
+   sold plain and special is photographed plain, so a surge or ripple copy of it looked like any
+   other foil. Every recipe below was tuned on a design canvas against photographs of real cards
+   and signed off kind by kind by the owner on 2026-11-15. Change one and look at a card of that
+   kind before committing; a number that "looks harmless" here is a different foil.
+
+   **The light is variables, and the card never moves.** `--foil-px/py` (0..1) and `--foil-mx/my`
+   (as %) place it, `--foil-on` is its strength (0.55 at rest, 1 under the pointer), `--foil-hyp`
+   its distance from the centre, and `--foil-wa/wb/wc` weight ripple's three circle sets. No tilt:
+   the owner's call — "no tilt, but keep the motion follows cursor".
+
+   **Every layer blends with the picture itself**, so none of them may sit inside an element with
+   a mask, clip-path, opacity, filter or transform: any of those makes an isolated group, the
+   blend modes then mix with nothing, and the layers paint as flat colour. Cut-outs are therefore
+   per layer (`clip-path` on each), never on a wrapper. Measured the hard way on the canvas: the
+   silver drawing came out as a flat grey sheet.
+
+   The rest of a layer's look is its blend mode: `color-dodge` lights the light parts of the art
+   and leaves dark ink dark (how printed foil behaves), `screen` adds light over dark art too, and
+   a faint `multiply` is what shows a pattern on a white frame or text box, where neither of the
+   others can.
+   --------------------------------------------------------------------------------------- */
+
+.foil-shine,
+.foil-pattern,
+.foil-pattern-2,
+.foil-pattern-3,
+.foil-glare {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Where the light hits, the surface lifts; away from it, it dims a little. */
+.foil-glare {
+  background: radial-gradient(
+    farthest-corner circle at var(--foil-mx) var(--foil-my),
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(255, 255, 255, 0.2) 25%,
+    rgba(0, 0, 0, 0.28) 90%
+  );
+  mix-blend-mode: overlay;
+  opacity: calc(0.4 * var(--foil-on));
+}
+
+/* Traditional foil, and the base of most kinds: mostly silver with a faint rainbow tint (as
+   Wizards' own web renderer draws it), one broad soft band sweeping across with the light. */
+.foil-shine {
+  --foil-tint: linear-gradient(
+    115deg,
+    hsl(0 32% 30%) 0%,
+    hsl(45 36% 32%) 12%,
+    hsl(100 26% 30%) 24%,
+    hsl(180 32% 32%) 36%,
+    hsl(225 32% 35%) 48%,
+    hsl(280 26% 33%) 60%,
+    hsl(330 32% 31%) 72%,
+    hsl(0 32% 30%) 84%,
+    hsl(45 36% 32%) 100%
+  );
+  --foil-band: linear-gradient(
+    115deg,
+    rgba(0, 0, 0, 0) 36%,
+    hsl(40 10% 52%) 50%,
+    rgba(0, 0, 0, 0) 64%
+  );
+  background-image: var(--foil-band), var(--foil-tint);
+  background-size:
+    260% 260%,
+    180% 180%;
+  background-position: calc(var(--foil-px) * 100%) calc(var(--foil-py) * 100%);
+  mix-blend-mode: color-dodge;
+  opacity: calc(var(--foil-on) * 0.85);
+}
+
+/* Kinds drawn with a lightening blend keep a card's black border black. */
+:is([data-foil="surge"], [data-foil="ripple"], [data-foil="silver"])
+  > :is(.foil-shine, .foil-pattern, .foil-pattern-2, .foil-pattern-3) {
+  clip-path: inset(3.2% 4.5% round 1.5%);
+}
+
+/* Etched: frosted metallic grain on the frame and text box, no rainbow, the art left flat. The
+   frame brightens as a whole, the grain twinkles, and a smooth specular band sweeps the frame.
+   The art window is a regular frame's: a showcase or borderless etched card has its own, which
+   no shared drawing knows. */
+[data-foil="etched"] > :is(.foil-shine, .foil-pattern, .foil-pattern-2, .foil-glare) {
+  clip-path: polygon(
+    evenodd,
+    4.5% 3.2%,
+    95.5% 3.2%,
+    95.5% 96.8%,
+    4.5% 96.8%,
+    4.5% 3.2%,
+    7.5% 11%,
+    92.5% 11%,
+    92.5% 55.8%,
+    7.5% 55.8%,
+    7.5% 11%
+  );
+}
+[data-foil="etched"] > .foil-shine {
+  background-image: radial-gradient(
+    farthest-corner circle at var(--foil-mx) var(--foil-my),
+    hsl(45 25% 88%) 0%,
+    hsl(40 14% 66%) 22%,
+    hsl(220 8% 42%) 55%,
+    hsl(220 6% 26%) 100%
+  );
+  background-size: 100% 100%;
+  mask-image: var(--foil-tex-1);
+  mask-size: 128px 128px;
+  mask-repeat: repeat;
+  mask-position: calc(var(--foil-px) * 9px) calc(var(--foil-py) * 7px);
+  opacity: calc(0.55 + 0.45 * var(--foil-on));
+}
+[data-foil="etched"] > .foil-pattern {
+  background: hsl(220 6% 50%);
+  mix-blend-mode: multiply;
+  opacity: 0.16;
+  mask-image: var(--foil-tex-1);
+  mask-size: 128px 128px;
+  mask-repeat: repeat;
+  mask-position: calc(64px - var(--foil-px) * 9px) calc(64px - var(--foil-py) * 7px);
+}
+[data-foil="etched"] > .foil-pattern-2 {
+  background: radial-gradient(
+    farthest-corner circle at var(--foil-mx) var(--foil-my),
+    #fff 0%,
+    #fff 10%,
+    hsl(220 6% 80%) 34%,
+    hsl(220 8% 58%) 100%
+  );
+  mix-blend-mode: multiply;
+  opacity: calc(0.78 - 0.3 * var(--foil-on));
+}
+[data-foil="etched"] > .foil-glare {
+  background:
+    linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0) 38%,
+      rgba(255, 255, 255, 0.75) 48%,
+      rgba(255, 255, 255, 0.9) 50%,
+      rgba(255, 255, 255, 0.75) 52%,
+      rgba(255, 255, 255, 0) 62%
+    ),
+    radial-gradient(
+      farthest-corner circle at var(--foil-mx) var(--foil-my),
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(255, 255, 255, 0.2) 25%,
+      rgba(0, 0, 0, 0.3) 90%
+    );
+  background-size:
+    260% 260%,
+    100% 100%;
+  background-position:
+    calc(var(--foil-px) * 100%) calc(var(--foil-py) * 100%),
+    0 0;
+  opacity: calc(0.35 + 0.4 * var(--foil-on));
+}
+
+/* Surge: soft, rounded rainbow blotches stretched lower-left to upper-right "like tiger stripes",
+   over the whole card. The blotches stay put; a rainbow repeating every third of the card runs
+   across them with the light, and those under it glow brightest. Screen keeps them bright over
+   dark art, colour-dodge makes them vivid, a faint multiply (on the shine) marks them on light
+   frames. */
+[data-foil="surge"] > :is(.foil-shine, .foil-pattern, .foil-pattern-2) {
+  background-size: 150% 150%;
+  background-position: calc(var(--foil-px) * 100%) calc(var(--foil-py) * 100%);
+  mask-image: var(--foil-tex-1);
+  mask-size: 100% 100%;
+}
+[data-foil="surge"] > .foil-pattern {
+  background-image: repeating-linear-gradient(
+    140deg,
+    hsl(0 85% 58%) 0%,
+    hsl(35 85% 58%) 4.5%,
+    hsl(58 85% 58%) 9%,
+    hsl(120 85% 58%) 13.5%,
+    hsl(185 85% 58%) 18%,
+    hsl(220 85% 62%) 22.5%,
+    hsl(275 85% 62%) 27%,
+    hsl(320 85% 58%) 31.5%,
+    hsl(0 85% 58%) 36%
+  );
+  mix-blend-mode: screen;
+  mask-image:
+    var(--foil-tex-1),
+    linear-gradient(
+      140deg,
+      rgba(0, 0, 0, 0.35) 0%,
+      rgba(0, 0, 0, 0.5) 35%,
+      #000 50%,
+      rgba(0, 0, 0, 0.5) 65%,
+      rgba(0, 0, 0, 0.35) 100%
+    );
+  mask-size:
+    100% 100%,
+    250% 250%;
+  mask-position:
+    0 0,
+    calc(var(--foil-px) * 100%) calc(var(--foil-py) * 100%);
+  mask-composite: intersect;
+  opacity: calc(0.3 + 0.4 * var(--foil-on));
+}
+[data-foil="surge"] > .foil-pattern-2 {
+  background-image: repeating-linear-gradient(
+    140deg,
+    hsl(0 85% 40%) 0%,
+    hsl(35 85% 40%) 4.5%,
+    hsl(58 85% 40%) 9%,
+    hsl(120 85% 40%) 13.5%,
+    hsl(185 85% 40%) 18%,
+    hsl(220 85% 44%) 22.5%,
+    hsl(275 85% 44%) 27%,
+    hsl(320 85% 40%) 31.5%,
+    hsl(0 85% 40%) 36%
+  );
+  mix-blend-mode: color-dodge;
+  opacity: calc(0.45 + 0.35 * var(--foil-on));
+}
+[data-foil="surge"] > .foil-shine {
+  background-image: repeating-linear-gradient(
+    140deg,
+    hsl(0 85% 80%) 0%,
+    hsl(35 85% 80%) 4.5%,
+    hsl(58 85% 80%) 9%,
+    hsl(120 85% 80%) 13.5%,
+    hsl(185 85% 80%) 18%,
+    hsl(220 85% 84%) 22.5%,
+    hsl(275 85% 84%) 27%,
+    hsl(320 85% 80%) 31.5%,
+    hsl(0 85% 80%) 36%
+  );
+  mix-blend-mode: multiply;
+  opacity: calc(0.12 + 0.12 * var(--foil-on));
+}
+
+/* Silver (the Lord of the Rings scroll showcase): one neutral colour, no rainbow. A chrome glare
+   sweeps across, the art washes toward pale silver under it, and away from the light the card is
+   a little greyer. */
+[data-foil="silver"] > .foil-shine {
+  background-image: linear-gradient(
+    120deg,
+    hsl(0 0% 10%) 18%,
+    hsl(0 0% 32%) 38%,
+    hsl(0 0% 55%) 50%,
+    hsl(0 0% 32%) 62%,
+    hsl(0 0% 10%) 82%
+  );
+  background-size: 220% 220%;
+  opacity: calc(0.22 + 0.62 * var(--foil-on));
+}
+[data-foil="silver"] > .foil-pattern {
+  background: hsl(0 0% 70%);
+  mix-blend-mode: screen;
+  mask-image: var(--foil-tex-1);
+  mask-size: 128px 128px;
+  mask-repeat: repeat;
+  opacity: calc(0.06 + 0.1 * var(--foil-on));
+}
+[data-foil="silver"] > .foil-pattern-2 {
+  background: radial-gradient(
+    farthest-corner circle at var(--foil-mx) var(--foil-my),
+    #fff 0%,
+    hsl(220 4% 88%) 35%,
+    hsl(220 5% 72%) 100%
+  );
+  mix-blend-mode: multiply;
+  opacity: calc(0.35 + 0.15 * var(--foil-on));
+}
+
+/* Ripple: large rainbow circles with their own centres, red outside and violet inside. Three
+   independent sets, each drifting its own way as the light moves and each strongest when the
+   light is near its own spot, so circles fade out in one place and in somewhere else — "like a
+   camera obscura". */
+[data-foil="ripple"] > :is(.foil-shine, .foil-pattern, .foil-pattern-2, .foil-pattern-3) {
+  background-size: 130% 130%;
+  filter: hue-rotate(calc((var(--foil-px) - 0.5) * 60deg));
+}
+[data-foil="ripple"] > :is(.foil-pattern, .foil-pattern-2, .foil-pattern-3) {
+  mix-blend-mode: screen;
+}
+[data-foil="ripple"] > .foil-pattern {
+  background-image: var(--foil-tex-1);
+  background-position:
+    calc(50% + (var(--foil-px) - 0.5) * 80%) calc(50% + (var(--foil-py) - 0.5) * 30%);
+  opacity: calc(var(--foil-wa) * (0.55 + 0.4 * var(--foil-on)));
+}
+[data-foil="ripple"] > .foil-pattern-2 {
+  background-image: var(--foil-tex-2);
+  background-position:
+    calc(50% - (var(--foil-px) - 0.5) * 60%) calc(50% + (var(--foil-py) - 0.5) * 70%);
+  opacity: calc(var(--foil-wb) * (0.55 + 0.4 * var(--foil-on)));
+}
+[data-foil="ripple"] > .foil-pattern-3 {
+  background-image: var(--foil-tex-3);
+  background-position:
+    calc(50% + (var(--foil-py) - 0.5) * 60%) calc(50% - (var(--foil-px) - 0.5) * 70%);
+  opacity: calc(var(--foil-wc) * (0.55 + 0.4 * var(--foil-on)));
+}
+/* On a light text box screen shows nothing: a faint multiply of all three marks the circles. */
+[data-foil="ripple"] > .foil-shine {
+  background-image: var(--foil-tex-1), var(--foil-tex-2), var(--foil-tex-3);
+  background-position:
+    calc(50% + (var(--foil-px) - 0.5) * 80%) calc(50% + (var(--foil-py) - 0.5) * 30%),
+    calc(50% - (var(--foil-px) - 0.5) * 60%) calc(50% + (var(--foil-py) - 0.5) * 70%),
+    calc(50% + (var(--foil-py) - 0.5) * 60%) calc(50% - (var(--foil-px) - 0.5) * 70%);
+  mix-blend-mode: multiply;
+  opacity: calc(0.12 + 0.08 * var(--foil-on));
+}
+
+/* Galaxy: pinpoint stars, small stars and rings, and shaded planets, each its own hue. Two sets
+   trade places as the light moves, so the stars blink. Most galaxy scans already show stars;
+   these add the twinkle (and the stars, on the few printings also sold plain). */
+[data-foil="galaxy"] > :is(.foil-pattern, .foil-pattern-2) {
+  background-size: 100% 100%;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(
+    circle at var(--foil-mx) var(--foil-my),
+    #000 0 18%,
+    rgba(0, 0, 0, 0.45) 50%,
+    rgba(0, 0, 0, 0.2) 100%
+  );
+  filter: hue-rotate(calc(var(--foil-px) * 120deg));
+}
+[data-foil="galaxy"] > .foil-pattern {
+  background-image: var(--foil-tex-1);
+  opacity: calc(var(--foil-on) * (1 - var(--foil-px) * 0.8));
+}
+[data-foil="galaxy"] > .foil-pattern-2 {
+  background-image: var(--foil-tex-2);
+  opacity: calc(var(--foil-on) * (0.2 + var(--foil-px) * 0.8));
+}
+
+/* Confetti: a dense mosaic of tiny flat flakes, neighbours in different hues, strongest in pale
+   areas; they flash where the light is and change colour as it moves. A screen-sized tile. */
+[data-foil="confetti"] > .foil-shine {
+  opacity: calc(var(--foil-on) * 0.5);
+}
+[data-foil="confetti"] > .foil-pattern {
+  background-image: var(--foil-tex-1);
+  background-size: 200px 200px;
+  mix-blend-mode: color-dodge;
+  mask-image: radial-gradient(
+    circle at var(--foil-mx) var(--foil-my),
+    #000 0 15%,
+    rgba(0, 0, 0, 0.35) 45%,
+    rgba(0, 0, 0, 0.12) 100%
+  );
+  filter: hue-rotate(calc(var(--foil-px) * 240deg + var(--foil-py) * 120deg));
+  opacity: calc(var(--foil-on) * 0.9);
+}
+
+/* Fracture: small shards, each its own hue, flashing independently as the light moves. */
+[data-foil="fracture"] > .foil-pattern {
+  background-image: var(--foil-tex-1);
+  background-size: 100% 100%;
+  mix-blend-mode: color-dodge;
+  mask-image: radial-gradient(
+    circle at var(--foil-mx) var(--foil-my),
+    #000 0 20%,
+    rgba(0, 0, 0, 0.3) 55%,
+    rgba(0, 0, 0, 0.1) 100%
+  );
+  filter: hue-rotate(calc(var(--foil-px) * 220deg - var(--foil-py) * 140deg));
+  opacity: calc(var(--foil-on) * 0.55);
+}
+
+/* Textured: thin bright glints along engraved ridge lines near the light. Generic lines — a real
+   textured foil's raised lines are drawn for its own art. */
+[data-foil="textured"] > .foil-pattern {
+  background: #fff;
+  mix-blend-mode: soft-light;
+  mask-image:
+    var(--foil-tex-1),
+    radial-gradient(
+      circle at var(--foil-mx) var(--foil-my),
+      #000 0 22%,
+      rgba(0, 0, 0, 0.25) 60%,
+      rgba(0, 0, 0, 0.08) 100%
+    );
+  mask-size: 100% 100%;
+  mask-composite: intersect;
+  opacity: calc(var(--foil-on) * 0.9);
+}
+
+/* Rainbow: traditional foil in more vivid colour. */
+[data-foil="rainbow"] > .foil-shine {
+  --foil-tint: linear-gradient(
+    115deg,
+    hsl(0 75% 34%) 0%,
+    hsl(45 80% 36%) 12%,
+    hsl(100 65% 32%) 24%,
+    hsl(180 75% 34%) 36%,
+    hsl(225 75% 40%) 48%,
+    hsl(280 65% 38%) 60%,
+    hsl(330 75% 36%) 72%,
+    hsl(0 75% 34%) 84%,
+    hsl(45 80% 36%) 100%
+  );
+}
+
+/* Double rainbow: fully coloured, the spectrum twice across, with a hot band. */
+[data-foil="doublerainbow"] > .foil-shine {
+  --foil-tint: linear-gradient(
+    120deg,
+    hsl(0 70% 32%),
+    hsl(50 75% 34%),
+    hsl(120 60% 30%),
+    hsl(190 70% 32%),
+    hsl(240 65% 38%),
+    hsl(300 60% 35%),
+    hsl(0 70% 32%),
+    hsl(50 75% 34%),
+    hsl(120 60% 30%),
+    hsl(190 70% 32%),
+    hsl(240 65% 38%),
+    hsl(300 60% 35%),
+    hsl(0 70% 32%)
+  );
+  --foil-band: linear-gradient(
+    120deg,
+    rgba(0, 0, 0, 0) 40%,
+    hsl(45 80% 46%) 47%,
+    hsl(330 80% 46%) 53%,
+    rgba(0, 0, 0, 0) 60%
+  );
+  opacity: calc(var(--foil-on) * 0.7);
+}
+
+/* Halo: the swirl is already in Scryfall's picture of every halo-foil card; the light only
+   travels along it, so the sweep is narrower and the light parts of the swirl flash. */
+[data-foil="halo"] > .foil-shine {
+  background-size:
+    260% 260%,
+    140% 140%;
+  opacity: calc(var(--foil-on) * 0.8);
+}

@@ -8,11 +8,13 @@
  * word behind it. Scryfall answers in a different column — `promo_types`, already ingested
  * (`card_row.rs`) and stored (`schema.rs`), and until this module never read on this side.
  *
- * **What this table supplies is the word and not the picture** — issue #353. A treatment renames
- * `FinishMark` and never redraws it, because the glyph is the finish and a Surge Foil is foil;
- * drawing it as something else made one card two different pictures across the views that pass
- * `treatments` and the views that only know a finish. The exception is a **nonfoil** copy with a
- * trait, which has no finish glyph to keep.
+ * **What this table supplies to the chip is the word and not the glyph** — issue #353. A
+ * treatment renames `FinishMark` and never redraws it, because the glyph is the finish and a
+ * Surge Foil is foil; drawing it as something else made one card two different pictures across
+ * the views that pass `treatments` and the views that only know a finish. The exception is a
+ * **nonfoil** copy with a trait, which has no finish glyph to keep. **The foil drawn over the art
+ * is another matter** (2026-11-15): `lib/foilEffect.ts` reads these same treatments to draw a
+ * Surge Foil as surge, a Ripple Foil as ripple, and so on.
  *
  * **A treatment is therefore an annotation on a finish and never a fourth finish.** Nothing here
  * touches `Finish`, `collection_entries.finish`, its `CHECK`, or any import format: a Surge Foil

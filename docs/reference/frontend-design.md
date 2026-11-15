@@ -365,6 +365,43 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   What works is **`screen` with a specular band**: low-alpha rainbow stops (0.10–0.13) either
   side of one white stop at 0.34, 41 % along a 115° sweep — the streak is what the eye reads
   as "shiny", and being narrow it obscures almost nothing.
+- **One drawing per kind of foil, since 2026-11-15** — and the single sheen above is gone.
+  Scryfall keeps one picture per printing, so a printing sold plain _and_ special (693 surge,
+  369 silver, 316 ripple, 326 etched) is photographed plain, and its Surge Foil copy looked like
+  any other foil (the owner's report). `FoilOverlay` now draws the kind `lib/foilEffect.ts` reads
+  off the copy's finish and treatments: traditional, etched, surge, silver, ripple, galaxy,
+  rainbow, double rainbow, halo, textured, confetti, fracture (a named foil with no drawing falls
+  back to traditional). The drawings are the "Foil" section of `packages/ui/index.css`, with
+  patterns from `scripts/foil-textures.ts`, and each was tuned on a design canvas against
+  photographs of real cards and signed off by the owner kind by kind. What was learned there:
+  - **`color-dodge` works after all, with a dark gradient.** The base sweep is a mostly-silver,
+    faintly tinted gradient at 30–36 % lightness: it lights the light parts of the art the way
+    printed foil does and leaves dark ink dark. The 2026-08 blow-out was a gradient too bright.
+  - **A pattern on a white frame or text box needs `multiply`**: `screen` and `color-dodge` both
+    leave white white, so each patterned kind adds a faint multiply layer.
+  - **Never put a mask, clip-path, opacity, filter or transform on a wrapper of blend layers.**
+    Any of them makes an isolated group; the layers then blend with nothing and paint as flat
+    colour (the silver drawing came out as a grey sheet). Cut-outs are per layer.
+  - **The real patterns, from the owner's own cards:** surge is soft rounded blotches stretched
+    lower-left to upper-right "like tiger stripes" — not thin lines, not sharp; ripple is many
+    large overlapping rainbow circles with their own centres, which fade and drift as the light
+    moves "like a camera obscura" — not concentric rings; etched is frosted metal on the frame
+    with the art left flat. Foil-only halo, fracture, galaxy and confetti scans already show
+    their pattern, so those add moving light rather than a second pattern.
+  - **The light follows the pointer and the card never moves** — no tilt, the owner's call. A
+    finger, or a reader who asked for less motion, gets the resting light (`useFoilLight`).
+  - **Etched and surge are drawn on every copy, on purpose** (the owner's call, 2026-11-15) —
+    even where Scryfall's picture already shows them: 845 of the 892 etched-only printings wear
+    the etched frame, whose scan already shows the frosted metal, and the Warhammer 40,000 `★`
+    surge scans already show streaks. The drawing doubles there, and the etched art cut-out is a
+    regular frame's. Both were weighed and kept, so do not add a "picture already shows it" fence
+    for these two without asking.
+  - **Where a drawing is shown did not change**: wherever the old sheen was (a copy whose finish
+    is known, the card pane's chosen finish, and on a printing wall only `soleFinish`). Surfaces
+    that pass a finish but no treatments — the wishlist, trades, the scanner tray, opened packs,
+    tokens, the phone's walls, the share viewer — draw traditional foil, because their rows carry
+    no promo types. The collection wall did too until the live check (2026-11-15) found it: its
+    rows always had `promoTypes`, and the wall simply never handed the tile a `treatment`.
 - **A mark drawn _inside_ the tile's button joins that button's accessible name.** The foil
   chip did, and a wall of foils became buttons called "Consecrated Sphinx Foil" — measured in
   the shipped window, where a tile button's name came back as bare "Foil". The whole

@@ -7,6 +7,7 @@ import { FIELD } from "@/features/decks/formFields";
 import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
 import { PANEL_BUTTON, TOUCH_FIELD, TOUCH_FLOOR } from "@/features/settings/controls";
 import { soleFinish } from "@/lib/finish";
+import { finishTreatments } from "@/lib/treatment";
 import { FOCUS_INSET } from "@/lib/focus";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
@@ -290,6 +291,7 @@ function PrintingTile({
         name={card.name}
         variant="grid"
         finish={soleFinish(card.finishes)}
+        treatments={finishTreatments(card.promoTypes, soleFinish(card.finishes))}
         // Not virtualised: every tile of the answer is mounted, so the browser's own gate is
         // what bounds how many pictures a two-hundred-printing answer asks for.
         loading="lazy"
