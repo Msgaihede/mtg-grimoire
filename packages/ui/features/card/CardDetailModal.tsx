@@ -42,7 +42,7 @@
  *
  * **The seam runs the other way once**, and it is the same argument as the credit's: the column
  * owns the foil *view*, and the finish on screen is a fact the rail's `Open on …` row needs and
- * cannot see from where it is drawn. So `onToggleFoil` is heard here on **every** press rather
+ * cannot see from where it is drawn. So `onPickFinish` is heard here on **every** press rather
  * than only where there is a deck row to write — {@link Body}'s `viewedFinish`. A host that heard
  * only the write half cost the collection and the wishlist their link's finish entirely, which is
  * what was reported on 2026-09-10.
@@ -997,17 +997,18 @@ function Body({
   /**
    * The finish the reader asked to **look at**, or `null` while they have asked for nothing.
    *
-   * `View as foil` is `CardModalArt`'s own state and the picture changes there; this is the host
-   * hearing the same press, because the finish on screen is a fact about the open card that two
-   * other things in this panel need and neither of them is in that column. It arrives through
-   * `onToggleFoil`, which is called on **every** press — the write half is gated on a deck row and
-   * the view half never was — so nothing new is wired to produce it.
+   * `View as foil` (and every other finish button, issue #1679) is `CardModalArt`'s own state and
+   * the picture changes there; this is the host hearing the same press, because the finish on
+   * screen is a fact about the open card that two other things in this panel need and neither of
+   * them is in that column. It arrives through `onPickFinish`, which is called on **every** press —
+   * the write half is gated on a deck row and the view half never was — so nothing new is wired to
+   * produce it.
    *
-   * **`Finish` rather than the `DeckFinish` the press carries, and the conversion at the boundary
-   * is the whole point.** That callback's `null` means *the regular copy*, which is a statement;
-   * this field's `null` means *the reader has not made one*, which is the absence of one. Spelling
-   * the press's `null` as `"nonfoil"` here is what keeps the two apart, and it is what lets the
-   * fold below be a `??` — see the third paragraph there for what a fold over the raw `DeckFinish`
+   * **`Finish` and never the `DeckFinish` a deck write takes, and the distinction is the whole
+   * point.** A deck row's `null` means *the regular copy*, which is a statement; this field's
+   * `null` means *the reader has not made one*, which is the absence of one. The press arrives as
+   * `"nonfoil"` for the regular copy, which is what keeps the two apart, and it is what lets the
+   * fold below be a `??` — see the third paragraph there for what a fold over a raw `DeckFinish`
    * would have done to a foil tile viewed as regular.
    *
    * **Reset with the face and the meld view**, in the same during-render block: `CardModalArt` is
@@ -2120,21 +2121,19 @@ function Body({
                 // nothing rather than the toggle (issue #1561).
                 openedAs={openedFinish}
                 // **The press is a view change everywhere and a write only where there is a row**,
-                // which is exactly what the column's own `onToggleFoil` doc says it hands over —
+                // which is exactly what the column's own `onPickFinish` doc says it hands over —
                 // and this handler used to act on the second half alone. So on the collection and
                 // the wishlist the press reached nothing here, and the rail's last row kept
                 // shopping for the finish the card was *opened* with while the picture beside it
                 // said otherwise. The view half is recorded first and unconditionally,
                 // because it is true of a deck row too.
-                onToggleFoil={(next: DeckFinish) => {
-                  // `null` here is the *regular* copy — see `viewedFinish` for why that word is
-                  // spelled out rather than passed along as an absence.
-                  setViewedFinish(next ?? "nonfoil");
+                onPickFinish={(next: Finish) => {
+                  setViewedFinish(next);
                   if (scope.deck === null && scope.copy !== null) {
                     // `Set as …` on a copy being edited: the row's own finish, through the same
                     // `collection_update` the table's editor writes — which folds onto a row
                     // already holding that finish rather than refusing.
-                    const finish: Finish = next ?? "nonfoil";
+                    const finish: Finish = next;
                     const refused = finishRefusal(finish, card);
                     if (refused !== null) {
                       setRefusal(refused);
@@ -2148,7 +2147,9 @@ function Body({
                     cardId: scope.deck.cardId,
                     categoryId: scope.deck.categoryId,
                     finish: scope.deck.finish,
-                    to: next,
+                    // `deck_cards.finish` spells the regular copy `null` — the one place that
+                    // spelling belongs, so the conversion is here at the write.
+                    to: next === "nonfoil" ? null : next,
                   });
                 }}
                 // **`melded` is this component's state and not the column's**, which is the whole

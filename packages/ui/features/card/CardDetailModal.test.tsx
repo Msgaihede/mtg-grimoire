@@ -755,8 +755,8 @@ it("wires every control a card opened out of a deck draws", async () => {
 it("seeds the foil view from the finish the surface that opened the card named", async () => {
   // **`CardModalArt` reads no store**, so the seed is this host's to supply: `openCardAsFinish` is
   // what a collection tile that *is* a foil calls, and without the prop the reader who pressed
-  // their foil copy was shown the plain photograph of it. The toggle's visible words are its
-  // accessible name, so a seeded one already says the way back.
+  // their foil copy was shown the plain photograph of it. One button per finish (issue #1679), and
+  // the seeded one is the pressed one.
   cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
   useAppStore.getState().openCardAsFinish("c1", "foil");
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -766,8 +766,14 @@ it("seeds the foil view from the finish the surface that opened the card named",
     </QueryClientProvider>,
   );
 
-  const toggle = await screen.findByRole("button", { name: "View as nonfoil" });
-  expect(toggle).toHaveAttribute("aria-pressed", "true");
+  expect(await screen.findByRole("button", { name: "View as foil" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 });
 
 /**
@@ -842,7 +848,7 @@ it("sends it to the etched product for a deck row that plays the etched copy", a
 /**
  * **The finish a reader is *looking at* is the one they are shopping for, and the press that
  * changes it is under the art rather than in the store.** `View as foil` is `CardModalArt`'s own
- * state; the host hears it through `onToggleFoil` and used to hear it *only* to write a deck row,
+ * state; the host hears it through `onPickFinish` and used to hear it *only* to write a deck row,
  * so on the collection and the wishlist — where there is no row to write — the picture went shiny
  * and the rail's last row went on pointing at the listing the card was **opened** with.
  *

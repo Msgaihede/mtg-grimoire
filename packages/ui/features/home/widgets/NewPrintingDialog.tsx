@@ -35,8 +35,8 @@
  * ## What it hands the art column, and what it does not
  *
  * `CardModalArt` is presentational and every write is a callback, so the host decides what each
- * one means here. **The foil toggle is a view and nothing more**: there is no deck row behind this
- * dialog, so `deckRow` is `null` and the column's own label says *View as foil* rather than *Set
+ * one means here. **The finish buttons are a view and nothing more**: there is no deck row behind this
+ * dialog, so `deckRow` is `null` and the column's own labels say *View as foil* rather than *Set
  * as foil*. **Meld is empty**: a meld card's counterparts are a second query and a third piece of
  * state for a rare layout, and the card modal — one press away — draws them. The set's name keeps
  * its meaning (`showSetInSearch`), which is a navigation, so the home page and this dialog go with
@@ -271,7 +271,7 @@ function Body({
               marketplace={marketplace}
               deckRow={null}
               openedAs={null}
-              onToggleFoil={viewOnly}
+              onPickFinish={viewOnly}
               meld={NO_MELD}
               onShowSet={showSetInSearch}
             />
