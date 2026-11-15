@@ -1402,9 +1402,13 @@ impl DecksQuery {
     /// Every deck's printed mana costs, for colour bars. A deck with no costed cards is absent.
     #[graphql(directive = invalidatedBy::apply(roots(&["decks"])))]
     async fn deck_pip_costs(&self, ctx: &Context<'_>) -> Result<Option<Vec<DeckPipCosts>>> {
+        // The core's read also answers a deck whose only costs are its theory list's (issue
+        // #1673, `costs` empty and `theory_costs` not); this field is the live list's, so such a
+        // deck is absent here as it always was.
         Ok(Some(
             all_pip_costs(ctx)?
                 .iter()
+                .filter(|p| !p.costs.is_empty())
                 .map(|p| DeckPipCosts(p.clone()))
                 .collect(),
         ))

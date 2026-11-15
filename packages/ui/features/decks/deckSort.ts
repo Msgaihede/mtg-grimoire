@@ -40,6 +40,7 @@
 import { compareLabels } from "@/lib/options";
 import { MANA_LINE_KEYS, type PipCounts } from "@/lib/mana";
 import type { DeckRow } from "@/lib/ipc";
+import { tileCardCount } from "./deckCover";
 /** The one place `decks.bracket` and the estimate are reconciled into a single number. It
  *  lives beside the hook that produces the estimates because that is where a reader looking
  *  for "what number does this tile show" goes; a second reading of the `AUTO_BRACKET`
@@ -265,9 +266,11 @@ function comparatorFor(sort: DeckSortKey, ctx: DeckSortContext) {
         ) || byName(a, b);
     // The biggest pile first, which is what a reader picking a card count is looking for — and
     // the names still read forwards inside a size, because a name has no natural relationship to
-    // a number of cards for a direction to be inherited from.
+    // a number of cards for a direction to be inherited from. The pile is the one each tile
+    // prints (`tileCardCount`, the plan's on a `THEORY ONLY` deck — issue #1673), so the wall
+    // reads in the order of the numbers on it.
     case "cards":
-      return (a: DeckRow, b: DeckRow) => b.cardCount - a.cardCount || byName(a, b);
+      return (a: DeckRow, b: DeckRow) => tileCardCount(b) - tileCardCount(a) || byName(a, b);
     case "format":
       return (a: DeckRow, b: DeckRow) =>
         compareLabels(formatLabel(a), formatLabel(b)) || byName(a, b);

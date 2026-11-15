@@ -10,7 +10,7 @@
  * {@link deckBadge} and {@link DeckBadge}, so nothing that imported them from there changed.
  */
 import { cardImageUrl } from "@/lib/images";
-import type { DeckRow } from "@/lib/ipc";
+import type { DeckRow, DeckVariant } from "@/lib/ipc";
 import { rowKind } from "./deckKind";
 
 /**
@@ -58,6 +58,31 @@ export function deckBadge(deck: DeckRow): DeckBadge | null {
   if (kind === "virtual") return "VIRTUAL";
   if (kind === "regular") return null;
   return deck.cardCount === 0 ? "THEORY ONLY" : "THEORY + ACTUAL";
+}
+
+/**
+ * Which of a deck's two lists its tile's figures are read from — the card count, the colour bar
+ * and the size verdict on it, and the `Cards` sort (issue #1673).
+ *
+ * **The Actual list, unless the deck is `THEORY ONLY`.** A deck the reader is building from a
+ * plan has nothing in its Actual list for as long as the plan is being built, and a tile reading
+ * `0 cards` over an empty bar says nothing about the list being worked on — the report was a
+ * wall of Commander plans, every one of them a red `0`. So that deck's tile is about its plan,
+ * and every other deck's is about its cardboard, as it always was: the moment the first card
+ * lands in the Actual list the badge turns to `THEORY + ACTUAL` and the tile goes back to the
+ * deck the reader has.
+ *
+ * **Decided by {@link deckBadge} and nothing else**, so the badge is what tells the reader which
+ * list the figures under it are: a tile cannot draw the plan's count under a badge that says the
+ * deck has an Actual list, nor the reverse. A plan that is empty too draws `0` either way.
+ */
+export function tileList(deck: DeckRow): DeckVariant {
+  return deckBadge(deck) === "THEORY ONLY" ? "theory" : "live";
+}
+
+/** The card count a deck's tile prints — {@link tileList}'s list, sized the one way both are. */
+export function tileCardCount(deck: DeckRow): number {
+  return tileList(deck) === "theory" ? deck.theoryCardCount : deck.cardCount;
 }
 
 /**

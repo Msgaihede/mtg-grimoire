@@ -1164,6 +1164,19 @@ pub struct DeckRow {
     /// (a copy of a draft is an ordinary deck), and not on the deck's history. Read last, for the
     /// positional rule written on [`deck_row`]'s reads.
     pub draft: bool,
+    /// [`Self::card_count`] asked of the **theory** list — `theory` copies in active categories
+    /// of kind `main`, `commander` or `maybe`, the same three exclusions word for word, so the
+    /// plan is sized exactly the way the deck is (issue #1673).
+    ///
+    /// **A fact for every deck, and which number a tile prints is TypeScript's.** A deck with
+    /// theory switched on and nothing in its Actual list is a plan the reader is still building
+    /// — the `THEORY ONLY` badge — and a caption reading `0 cards` under it says nothing about
+    /// the list being worked on. `deckCover.ts`' `tileList` is the one rule that picks which of
+    /// the two counts a gallery tile draws; this column only makes the second one readable
+    /// without a `deck_get` per tile. `0` on a deck that keeps no plan, which is what it holds.
+    ///
+    /// Read last, for the positional rule written on [`deck_row`]'s reads.
+    pub theory_card_count: i64,
 }
 
 /// One deck's tags as a reader would have typed them carefully — [`update_deck`]'s whole say
@@ -1471,7 +1484,13 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
             d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens, d.todos_open,
-            d.tags, d.sync_uid, d.draft
+            d.tags, d.sync_uid, d.draft,
+            coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
+                        JOIN deck_categories cat ON cat.id = dc.category_id
+                       WHERE dc.deck_id = d.id
+                         AND dc.variant = 'theory'
+                         AND cat.is_active = 1
+                         AND cat.kind IN ('main','commander','maybe')), 0)
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1642,6 +1661,10 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // `INTEGER` like `archived` at 8: a crossed read would hide an archived deck from the
         // gallery as a draft, or answer a draft as merely archived, both still a `0` or a `1`.
         draft: r.get(35)?,
+        // 36, at the end of the list, same rule — and an `INTEGER` like `card_count` at 9, the
+        // number it mirrors, so a crossed read would put the plan's size in the Actual caption
+        // with nothing going red (issue #1673).
+        theory_card_count: r.get(36)?,
     })
 }
 
@@ -4382,11 +4405,20 @@ pub fn list_draft_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
 /// every row has been orphaned by a sync, a deck with no cards at all — all three answer no
 /// entry, and the reading side treats a deck it cannot find as a deck with no pips. Shipping an
 /// empty `costs` array for each of them would be one object per deck saying nothing.
+///
+/// **Two lists, and either may be the empty one** (issue #1673): a deck is present when its
+/// Actual list *or* its theory list has a cost to fold, so a `THEORY ONLY` deck arrives with
+/// `costs: []` and its plan in [`Self::theory_costs`]. Which of the two a tile colours its bar
+/// from is TypeScript's (`deckCover.ts`' `tileList`), the same rule that picks its card count.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckPipCosts {
     pub deck_id: i64,
+    /// The Actual (`live`) list's costs — the pile [`DeckRow::card_count`] counts.
     pub costs: Vec<PipCost>,
+    /// The theory list's costs — the pile [`DeckRow::theory_card_count`] counts, by the same
+    /// three exclusions. Empty on a deck that keeps no plan.
+    pub theory_costs: Vec<PipCost>,
 }
 
 /// One printed mana cost, and how many copies of it the deck plays.
@@ -4408,10 +4440,12 @@ pub struct PipCost {
 /// **The `WHERE` clause is [`DeckRow::card_count`]'s, copied from `DECK_SELECT`'s correlated
 /// subquery rather than re-derived**, and that is the whole of the definition: the bar is drawn
 /// under a tile whose caption already says how many cards the deck has, so a bar counting a
-/// different pile than that number counts is a tile disagreeing with itself. `'live'` is spelled
-/// out for `DECK_SELECT`'s reason — this is a `const` and there is nothing to interpolate with —
-/// and `the_colour_bar_reads_the_same_pile_the_gallery_count_does` is what keeps the two literals
-/// honest.
+/// different pile than that number counts is a tile disagreeing with itself. The variant is
+/// selected rather than filtered — `'live'` and `'theory'` are the two lists, and each folds into
+/// its own half of [`DeckPipCosts`] — so the plan's bar counts the pile
+/// [`DeckRow::theory_card_count`] counts, by the same three exclusions (issue #1673).
+/// `the_colour_bar_reads_the_same_pile_the_gallery_count_does` and
+/// `the_theory_bar_reads_the_same_pile_the_theory_count_does` are what keep the literals honest.
 ///
 /// **The `cards` join is inner, and it is the only inner join in this file's reads apart from
 /// `deck_categories`.** Everywhere else a `LEFT JOIN cards` is discipline — an orphaned row is a
@@ -4424,18 +4458,18 @@ pub struct PipCost {
 /// deck is a third lands: shipping them would be ~35 rows per deck carrying no pip, for a bar
 /// that would draw exactly the same.
 const PIP_COSTS_SQL: &str = "
-SELECT dc.deck_id, c.mana_cost, sum(dc.quantity)
+SELECT dc.deck_id, dc.variant = 'theory', c.mana_cost, sum(dc.quantity)
   FROM deck_cards dc
   JOIN decks d ON d.id = dc.deck_id AND d.draft = 0
   JOIN deck_categories cat ON cat.id = dc.category_id
   JOIN cards c ON c.id = dc.card_id
- WHERE dc.variant = 'live'
+ WHERE dc.variant IN ('live','theory')
    AND cat.is_active = 1
    AND cat.kind IN ('main','commander','maybe')
    AND c.mana_cost IS NOT NULL
    AND c.mana_cost <> ''
- GROUP BY dc.deck_id, c.mana_cost
- ORDER BY dc.deck_id, c.mana_cost";
+ GROUP BY dc.deck_id, dc.variant, c.mana_cost
+ ORDER BY dc.deck_id, dc.variant, c.mana_cost";
 
 /// What every deck is made of, in mana costs — one round trip for the whole gallery.
 ///
@@ -4459,25 +4493,37 @@ pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
         .query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
+                r.get::<_, bool>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
             ))
         })
         .map_err(|e| e.to_string())?;
 
     // A fold rather than a `HashMap`, because the statement already delivers the rows grouped:
     // a deck's entries are contiguous, so the only state needed is whether this row belongs to
-    // the deck at the end of the list.
+    // the deck at the end of the list. Within a deck the variant decides which half a cost is
+    // filed under, and nothing else.
     let mut out: Vec<DeckPipCosts> = Vec::new();
     for row in rows {
-        let (deck_id, cost, copies) = row.map_err(|e| e.to_string())?;
-        match out.last_mut() {
-            Some(last) if last.deck_id == deck_id => last.costs.push(PipCost { cost, copies }),
-            _ => out.push(DeckPipCosts {
-                deck_id,
-                costs: vec![PipCost { cost, copies }],
-            }),
-        }
+        let (deck_id, theory, cost, copies) = row.map_err(|e| e.to_string())?;
+        let last = match out.last_mut() {
+            Some(last) if last.deck_id == deck_id => last,
+            _ => {
+                out.push(DeckPipCosts {
+                    deck_id,
+                    costs: Vec::new(),
+                    theory_costs: Vec::new(),
+                });
+                out.last_mut().expect("the entry just pushed")
+            }
+        };
+        let list = if theory {
+            &mut last.theory_costs
+        } else {
+            &mut last.costs
+        };
+        list.push(PipCost { cost, copies });
     }
     Ok(out)
 }
@@ -10118,7 +10164,7 @@ mod tests {
         assert_eq!(
             read_deck(&conn, deck.id).unwrap().unwrap().card_count,
             4,
-            "the theory list is a plan and is counted on no tile"
+            "the theory list is a plan, and this is the Actual list's count"
         );
 
         crate::deck_meta::set_category_active(&conn, main, false).unwrap();
@@ -10130,6 +10176,81 @@ mod tests {
 
         crate::deck_meta::set_category_active(&conn, main, true).unwrap();
         assert_eq!(read_deck(&conn, deck.id).unwrap().unwrap().card_count, 4);
+    }
+
+    /// **The plan is sized the way the deck is** (issue #1673): [`DeckRow::theory_card_count`]
+    /// is [`DeckRow::card_count`] with the variant turned over and nothing else — a live row,
+    /// a switched-off pile, a sideboard and a companion count toward neither number in the
+    /// other's list, and an active Maybeboard counts in its own. A `THEORY ONLY` tile prints
+    /// this, so it has to mean what the Actual count would mean once the plan is built.
+    #[test]
+    fn the_theory_count_reads_only_theory_rows_in_active_categories() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let plan_main = plan_pile(&conn, deck.id, main);
+        let theory = |card: &str, pile: i64, quantity: i64| {
+            add_card(
+                &conn,
+                deck.id,
+                card,
+                Some(pile),
+                None,
+                THEORY,
+                None,
+                quantity,
+            )
+            .unwrap();
+        };
+        let count = || {
+            let row = read_deck(&conn, deck.id).unwrap().unwrap();
+            (row.card_count, row.theory_card_count)
+        };
+
+        assert_eq!(count(), (0, 0), "a deck with no plan sizes it at nothing");
+
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        theory("bolt-m10", plan_main, 40);
+        assert_eq!(
+            count(),
+            (4, 40),
+            "each list counts its own rows and none of the other's"
+        );
+
+        // Played beside the plan rather than in it — `SIZE_KINDS`' two exclusions, in the plan.
+        let plan_side = plan_pile(&conn, deck.id, kind_of(&conn, deck.id, "side"));
+        let plan_companion = plan_pile(&conn, deck.id, kind_of(&conn, deck.id, "companion"));
+        theory("serra-8ed", plan_side, 15);
+        theory("serra-lea", plan_companion, 1);
+        assert_eq!(
+            count(),
+            (4, 40),
+            "a sideboard and a companion size no plan either"
+        );
+
+        // An active Maybeboard is part of the plan, as it is part of the deck.
+        let plan_maybe = plan_pile(&conn, deck.id, kind_of(&conn, deck.id, "maybe"));
+        theory("bolt-jp", plan_maybe, 2);
+        assert_eq!(count(), (4, 40), "the plan's Maybeboard is seeded off");
+        crate::deck_meta::set_category_active(&conn, plan_maybe, true).unwrap();
+        assert_eq!(count(), (4, 42), "switched on, it sizes the plan");
+
+        crate::deck_meta::set_category_active(&conn, plan_main, false).unwrap();
+        assert_eq!(
+            count(),
+            (4, 2),
+            "and a plan's `main` pile switched off counts toward nothing, kind or no kind"
+        );
+
+        assert_eq!(
+            list_decks(&conn)
+                .unwrap()
+                .iter()
+                .find(|d| d.id == deck.id)
+                .map(|d| d.theory_card_count),
+            Some(2),
+            "the gallery's read carries the column too — it is the one the tiles are drawn from"
+        );
     }
 
     /// **The switch decides whether a pile counts at all; the kind decides only whether it is
@@ -10294,6 +10415,91 @@ mod tests {
             bar(&conn, deck.id).unwrap(),
             vec![("{3}{W}{W}".to_owned(), 2)],
             "a `main` category switched off colours nothing either"
+        );
+    }
+
+    /// One deck's **theory** bar, or `None` if that deck said nothing at all — [`bar`]'s other
+    /// half.
+    fn plan_bar(conn: &Connection, deck_id: i64) -> Option<Vec<(String, i64)>> {
+        pip_costs(conn).unwrap().into_iter().find_map(|d| {
+            (d.deck_id == deck_id).then(|| {
+                d.theory_costs
+                    .into_iter()
+                    .map(|c| (c.cost, c.copies))
+                    .collect()
+            })
+        })
+    }
+
+    /// **The plan's bar counts the pile [`DeckRow::theory_card_count`] counts** (issue #1673),
+    /// so a `THEORY ONLY` tile, which prints that count, colours its bar from the same cards.
+    /// The colour bar test above asked in the other direction; this one asks the plan's half —
+    /// a live row, a plan sideboard, a plan companion and a switched-off plan pile, in turn —
+    /// and pins that a deck whose only costs are its plan's is **present**, with an empty
+    /// Actual half, rather than absent.
+    #[test]
+    fn the_theory_bar_reads_the_same_pile_the_theory_count_does() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let plan_main = plan_pile(&conn, deck.id, main);
+        let theory = |card: &str, pile: i64, quantity: i64| {
+            add_card(
+                &conn,
+                deck.id,
+                card,
+                Some(pile),
+                None,
+                THEORY,
+                None,
+                quantity,
+            )
+            .unwrap();
+        };
+
+        assert_eq!(plan_bar(&conn, deck.id), None, "an empty deck says nothing");
+
+        theory("bolt-m10", plan_main, 4);
+        theory("bolt-jp", plan_main, 3);
+        assert_eq!(
+            bar(&conn, deck.id),
+            Some(Vec::new()),
+            "a deck with only a plan is present, its Actual half empty"
+        );
+        assert_eq!(
+            plan_bar(&conn, deck.id).unwrap(),
+            vec![("{R}".to_owned(), 7)],
+            "folded and summed exactly as the Actual half is"
+        );
+
+        // Beside the plan rather than in it, and a live row: none of the three colour it.
+        theory(
+            "serra-8ed",
+            plan_pile(&conn, deck.id, kind_of(&conn, deck.id, "side")),
+            15,
+        );
+        theory(
+            "serra-lea",
+            plan_pile(&conn, deck.id, kind_of(&conn, deck.id, "companion")),
+            1,
+        );
+        add(&conn, deck.id, "serra-lea", main, 2);
+        assert_eq!(
+            plan_bar(&conn, deck.id).unwrap(),
+            vec![("{R}".to_owned(), 7)],
+            "a plan sideboard, a plan companion and a live row colour no plan"
+        );
+        assert_eq!(
+            bar(&conn, deck.id).unwrap(),
+            vec![("{3}{W}{W}".to_owned(), 2)],
+            "and the live row colours the Actual half alone"
+        );
+
+        crate::deck_meta::set_category_active(&conn, plan_main, false).unwrap();
+        assert_eq!(
+            plan_bar(&conn, deck.id).unwrap(),
+            Vec::<(String, i64)>::new(),
+            "a plan pile switched off colours nothing either"
         );
     }
 
@@ -11384,6 +11590,9 @@ mod tests {
             // `true` rather than the column's `DEFAULT 0`, the rule above: `false` is what every
             // listed deck carries and would read correct on a field that never left Rust.
             draft: true,
+            // Not `60` and not `0`: the one would read correct on a wire that carried
+            // `cardCount` twice, the other on one that never carried this at all.
+            theory_card_count: 98,
         })
         .unwrap();
         assert_eq!(
@@ -11482,7 +11691,11 @@ mod tests {
                 // User schema v62, and **an array, not the column's JSON text**: `ipc.ts` types
                 // this key `string[]`, and the one string `collection_entries.tags` travels as
                 // would be iterated a character at a time. One word, so no casing to get wrong.
-                "tags": ["No Gamechangers", "Meme"]
+                "tags": ["No Gamechangers", "Meme"],
+                // Issue #1673, and `theoryCardCount` rather than `theory_card_count`: a gallery
+                // tile of a `THEORY ONLY` deck prints this key, and a snake-cased one would be
+                // `undefined` — `NaN cards` on exactly the tiles the column was added for.
+                "theoryCardCount": 98
             })
         );
 

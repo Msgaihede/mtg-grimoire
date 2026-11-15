@@ -45,6 +45,7 @@ const ATRAXA: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  theoryCardCount: 0,
   managedWishlist: "off",
   managedWishlistTokens: false,
   lastVariant: "live",

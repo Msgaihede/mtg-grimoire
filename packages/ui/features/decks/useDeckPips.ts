@@ -9,12 +9,13 @@
  */
 import { useMemo } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { ipc, type DeckPipCosts } from "@/lib/ipc";
+import { ipc, type DeckPipCosts, type DeckRow } from "@/lib/ipc";
 import type { PipCounts } from "@/lib/mana";
-import { deckPips } from "./deckPips";
+import { deckPips, tilePips } from "./deckPips";
 
 /**
- * The pip distribution of every deck, keyed by id.
+ * The pip distribution of every deck in `decks`, keyed by id — each from the list its tile is
+ * about (`tilePips`: the Actual list, or the plan on a `THEORY ONLY` deck, issue #1673).
  *
  * `["decks", "pips"]`, **under the `["decks"]` root every deck write already invalidates**, and
  * that is the whole of what keeps a bar honest: adding a card, moving one between piles,
@@ -24,11 +25,12 @@ import { deckPips } from "./deckPips";
  * is argued and `useDeckPlays` is the nearest precedent — a read that goes stale on exactly the
  * same events, keyed the same way for the same reason.
  *
- * No arguments, no `enabled` and no per-deck key. The gallery wants all of them, the read
- * answers all of them, and a key naming a deck would be a cache entry per tile over one round
- * trip's worth of data.
+ * No `enabled` and no per-deck key. The gallery wants all of them, the read answers all of
+ * them, and a key naming a deck would be a cache entry per tile over one round trip's worth of
+ * data. `decks` is not in the key either: the read is every deck's two lists whoever asks, and
+ * the rows only decide which of a deck's two folds its tile is handed.
  */
-export function useDeckPips(): {
+export function useDeckPips(decks: readonly DeckRow[]): {
   byDeck: Map<number, PipCounts>;
   query: UseQueryResult<DeckPipCosts[]>;
 } {
@@ -41,7 +43,10 @@ export function useDeckPips(): {
    * may put it in a dependency array — which `sortDecks`' context is. A read that has not
    * answered memoises one empty map and keeps handing that same one back.
    */
-  const byDeck = useMemo(() => deckPips(query.data ?? []), [query.data]);
+  const live = useMemo(() => deckPips(query.data ?? []), [query.data]);
+  const theory = useMemo(() => deckPips(query.data ?? [], "theory"), [query.data]);
+  /** `live` itself on a wall with no `THEORY ONLY` deck, so the map is as still as it was. */
+  const byDeck = useMemo(() => tilePips(decks, live, theory), [decks, live, theory]);
 
   return {
     /**

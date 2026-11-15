@@ -10,7 +10,13 @@ import {
 import { CardImage } from "@grimoire/ui/components/CardImage";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { DeckColorBar } from "@grimoire/ui/features/decks/DeckColorBar";
-import { coverUrl, deckBadge, hasCover } from "@grimoire/ui/features/decks/deckCover";
+import {
+  coverUrl,
+  deckBadge,
+  hasCover,
+  tileCardCount,
+  tileList,
+} from "@grimoire/ui/features/decks/deckCover";
 import { deckColorsLabel } from "@grimoire/ui/features/decks/deckPips";
 import { DeckCardCount, deckSizeProblem } from "@grimoire/ui/features/decks/deckSizeMark";
 import { sortDecks } from "@grimoire/ui/features/decks/deckSort";
@@ -89,7 +95,7 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
   const [making, setMaking] = useState<"blank" | "list" | null>(null);
   const newDeckRef = useRef<HTMLButtonElement>(null);
   const { folders } = useDeckFolders();
-  const { byDeck: pipsByDeck } = useDeckPips();
+  const { byDeck: pipsByDeck } = useDeckPips(decks);
   const { sort } = useDeckSort();
   const { formatSpecFor } = useFormatSpecs();
   const [showArchived, setShowArchived] = useState(false);
@@ -468,7 +474,7 @@ function DeckCover({
         <span className="block truncate text-xs leading-4 text-dim">
           {deck.formatName ?? deck.formatKey}
           {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-          <DeckCardCount count={deck.cardCount} problem={sizeProblem} />
+          <DeckCardCount count={tileCardCount(deck)} list={tileList(deck)} problem={sizeProblem} />
         </span>
       </a>
 

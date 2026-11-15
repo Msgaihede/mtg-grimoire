@@ -28,6 +28,12 @@ Validation is executed entirely in TypeScript:
 - The rule is the engine's own: `deckSizeIssue(size, spec)` is what `validateDeck` sizes a deck with, exported so the wall can judge `DeckRow.cardCount` — which counts the same `SIZE_KINDS` in active categories of the live list. The tile's hover and its accessible name carry the panel's sentence; colour is never the only signal.
 - No mark where nothing can judge: an `unspecified` format (`validates` false) or a key the seed no longer carries draws a plain count, never a verdict.
 
+### A `THEORY ONLY` tile reads its plan (issue #1673)
+- A deck with theory on and nothing in its Actual list (the `THEORY ONLY` badge) is a plan being built, and a tile reading `0 cards` over an empty bar said nothing about it. Its tile now reads the **theory list**: the caption count, the red verdict, the colour bar and the `Cards` sort. Every other deck's tile reads its Actual list as before, so the first card into the Actual list turns the badge to `THEORY + ACTUAL` and the tile back to the cardboard.
+- One rule, `deckCover.ts`' `tileList(deck)` (decided by `deckBadge`, so the badge says which list the figures are), with `tileCardCount(deck)` for the number; `deckPips.ts`' `tilePips` picks each tile's bar the same way. The caption stays three terms; the count's accessible text adds `in the theory list`.
+- Rust supplies both facts: `DeckRow.theoryCardCount` (`DECK_SELECT`'s count subquery over `variant = 'theory'`) and `DeckPipCosts.theoryCosts` (`PIP_COSTS_SQL` grouped by variant), each with `cardCount`'s three exclusions. The read graph's `deckPipCosts` stays the live list's.
+- The delete confirmation still quotes the **Actual** count: it is about owned copies going back to Recently removed, and plan rows are not cardboard. The editor needed no change — its ledger and stats band already follow the list on screen.
+
 ### Commander Bracket Estimation
 - `estimateBracket` calculates a **floor**, never an absolute bracket.
 - Commander bracket rules are formulated as negative prohibitions (e.g., Bracket 2 may not run mass land denial; Bracket 3 may run at most three Game Changers).
