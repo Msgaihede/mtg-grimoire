@@ -456,7 +456,7 @@ async function main() {
   // The card file is still held, so the phase is the download's.
   const phase = await first.until(
     "the page said it is a first run",
-    `document.body.innerText.includes("Setting up your card database") &&
+    `document.body.innerText.includes("Setting up card data") &&
       [...document.querySelectorAll('[role="status"]')]
         .map((region) => region.innerText.trim())
         .find((text) => text !== "")`,
