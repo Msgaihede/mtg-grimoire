@@ -1546,6 +1546,32 @@ describe("AllPrintingsDialog", () => {
     expect(await screen.findByRole("dialog", { name: /Forest/ })).toBeInTheDocument();
   });
 
+  /**
+   * Issue #1672: inside the deck editor the view's walk is the desk's — deck rows only — so a
+   * plain printing from the docked search column finds its place on the column's own walk, and a
+   * step keeps the card behind the scrim "opened from the column".
+   */
+  it("steps along the deck search column for a plain printing the desk cannot hold", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    withDeckWalk();
+    act(() =>
+      useAppStore.getState().setDeckSearchWalk({ label: "the search results", stops: LIST_WALK }),
+    );
+    open(LIST_WALK[1]);
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+
+    await waitFor(() =>
+      expect(useAppStore.getState().printingsRequest).toEqual(stepped(LIST_WALK[2])),
+    );
+    expect(useAppStore.getState().selectedCardId).toBe("forest-1");
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
   /** And back, by the chevron rather than the key — one gesture, the same two writes. */
   it("steps back along a page's list when the left chevron is pressed", async () => {
     const user = userEvent.setup();

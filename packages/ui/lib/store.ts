@@ -1069,10 +1069,10 @@ interface AppState {
    * `groupBy` and `sortBy` are `useState` inside that component, and a page's rows are a query
    * narrowed by a filter bar.
    *
-   * **The deck editor's docked search panel deliberately publishes nothing.** The editor already
-   * owns the walk while it is open, and a panel that overwrote it would step a modal opened from
-   * a *deck row* through a list of search results. A modal opened from that panel finds no stop
-   * and gets no chevrons, which is the honest answer rather than a wrong walk.
+   * **The deck editor's docked search panel never publishes here.** The editor already owns this
+   * walk while it is open, and a panel that overwrote it would step a modal opened from a *deck
+   * row* through a list of search results. The panel publishes {@link deckSearchWalk} instead —
+   * a second field, so the two lists on one screen are two walks rather than one fought over.
    *
    * Empty is "there is no walk", written on the publishing surface's unmount. A stale walk
    * through a deck that is no longer open would step a modal opened from the Collection into
@@ -1082,6 +1082,23 @@ interface AppState {
   /** Publish the walk. One field, like {@link openAllPrintings} — nothing about the open card,
    *  the open deck or the view is this write's business. */
   setCardWalk: (walk: CardWalk) => void;
+  /**
+   * The deck editor's docked search column as a walk (issue #1672) — whichever of its two tabs is
+   * drawn, in the wall's own order. Empty whenever no such column is mounted.
+   *
+   * **A field of its own beside {@link cardWalk}, not a second writer of it**, because the deck
+   * editor and its search column are on screen together: the desk publishes the deck, the column
+   * publishes its results, and `ActiveView`'s one-writer guarantee holds for each field alone.
+   *
+   * Read by the card modal only while {@link paneFromDeckSearch} says the open card came from the
+   * column — so a deck row's modal still steps the desk — and by the printings modal as the
+   * fallback for a plain printing the desk's walk (all deck rows) cannot hold. A step along it
+   * opens through {@link openCardFromDeckSearch}, which is what keeps the flag, and so the next
+   * step, on this walk.
+   */
+  deckSearchWalk: CardWalk;
+  /** Publish the column's walk — {@link setCardWalk}'s twin, collapsing an empty one the same way. */
+  setDeckSearchWalk: (walk: CardWalk) => void;
   /**
    * The stops the app has moved the reader **off**, because the row behind each was removed —
    * newest last. Issue #474.
@@ -1900,6 +1917,9 @@ export const useAppStore = create<AppState>((set) => ({
   // those two are *navigations*, and this is a fact about what is drawn, which only the surface
   // drawing it knows. A second writer would be a second place for the two to disagree.
   setCardWalk: (walk) => set({ cardWalk: walk.stops.length === 0 ? NO_WALK : walk }),
+  // The docked search column's walk — `cardWalk`'s rules, one field along.
+  deckSearchWalk: NO_WALK,
+  setDeckSearchWalk: (walk) => set({ deckSearchWalk: walk.stops.length === 0 ? NO_WALK : walk }),
   // **The one empty stack, for `NO_WALK`'s reason exactly**: this field is selected by the card
   // modal on every render, and a fresh `[]` per clear would be a new identity and a re-render of
   // the modal for every card anybody opens anywhere in the app.

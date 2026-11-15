@@ -576,7 +576,10 @@ export function CardDetailModal() {
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
   useRecentCardRecorder(cardId);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
-  const walk = useAppStore((s) => s.cardWalk);
+  const openCardFromDeckSearch = useAppStore((s) => s.openCardFromDeckSearch);
+  const viewWalk = useAppStore((s) => s.cardWalk);
+  const deckSearchWalk = useAppStore((s) => s.deckSearchWalk);
+  const fromDeckSearch = useAppStore((s) => s.paneFromDeckSearch);
   // **What stacks over this panel**, and the only thing the shell needs to know to take its
   // caret back: the four rail overlays and the printings modal are every layer that can stand
   // on top of the card modal. A boolean rather than the values, so a *change between two
@@ -586,6 +589,19 @@ export function CardDetailModal() {
   const stacked = stackedOverlay !== null || stackedPrintings !== null;
   const scope = useCardModalScope();
   const { marketplace } = useMarketplace();
+  /**
+   * **Which list the open card is walked along** (issue #1672): the deck editor's docked search
+   * column when the card was opened from it, and the active view's walk otherwise.
+   *
+   * The desk and the column are on screen together and publish two walks, so a card opened out of
+   * the column used to find no stop on the desk's walk — every stop there is a deck row — and got
+   * no chevrons and no arrow keys. `paneFromDeckSearch` is the store's own record of that press,
+   * set by one opener and cleared by every other, so it is the exact question rather than a guess
+   * from which walk happens to hold the printing. A deck slot always wins: a card opened out of a
+   * deck row steps the desk, whatever the column holds.
+   */
+  const viaDeckSearch = fromDeckSearch && scope.deck === null;
+  const walk = viaDeckSearch ? deckSearchWalk : viewWalk;
 
   /**
    * The card the panel is *drawing*, which outlives the flag by the length of the exit.
@@ -692,10 +708,15 @@ export function CardDetailModal() {
    */
   const step = useCallback(
     (stop: CardWalkStop) => {
-      if (stop.deck === null) setSelectedCardId(stop.cardId);
+      // A step along the search column re-opens through the column's own opener, which keeps
+      // `paneFromDeckSearch` set — and with it this walk, for the next press. `setSelectedCardId`
+      // would clear the flag and drop the reader onto the desk's walk, where the card is no stop.
+      // No finish travels: a step clears it, as every walk's step does (see `returnToRemovedCard`).
+      if (viaDeckSearch) openCardFromDeckSearch(stop.cardId);
+      else if (stop.deck === null) setSelectedCardId(stop.cardId);
       else openCardFromDeck(stop.deck);
     },
-    [setSelectedCardId, openCardFromDeck],
+    [viaDeckSearch, openCardFromDeckSearch, setSelectedCardId, openCardFromDeck],
   );
 
   /**
@@ -862,7 +883,9 @@ export function CardDetailModal() {
           error={card.isError ? ipcError(card.error) : null}
           scope={scope}
           chevrons={chevrons}
-          removalDeparture={departureFrom(stops, at)}
+          // Nothing to depart along on the search column: a card opened there draws no stepper
+          // (its scope is `search`), so no press of this modal removes a row from that wall.
+          removalDeparture={viaDeckSearch ? null : departureFrom(stops, at)}
           onClose={close}
           closeRef={closeRef}
         />

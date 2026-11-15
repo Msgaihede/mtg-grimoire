@@ -68,3 +68,10 @@ export const Both: Story = {
 /** `tabular-nums` is why this is worth a story — four figures must not shove the card frame
  *  around as the count climbs. */
 export const LargeCount: Story = { args: { owned: 1284 } };
+
+/**
+ * The deck editor's search column adds a third fact (issue #1672): copies of this card already in
+ * the deck, by any printing — the Decks icon in the accent, so it cannot be read as the binder's
+ * `×N` beside it.
+ */
+export const InDeck: Story = { args: { owned: 4, inDeck: 2 } };

@@ -357,8 +357,8 @@ export const Selected: Story = { args: { selectedId: BOLT_ALPHA.id } };
 /**
  * The arrow keys walking the wall — and **the selection walking with them**.
  *
- * Opt-in, through `arrowNav`, and only the search page and the collection page pass it. Every
- * press calls `onSelect`, which on both of those *is* the store's `selectedCardId` and therefore
+ * Opt-in, through `arrowNav`: the search page, the collection page and the deck's search column
+ * pass it. Every press calls `onSelect`, which on each of those *is* the store's `selectedCardId` and therefore
  * what the docked card pane reads: the reader asked for the next card to be selected, not merely
  * outlined, and a ring that moved while the pane held still would be a wall with two carets on
  * it. The printings modal draws this same component and must never take the prop — left and

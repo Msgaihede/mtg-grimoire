@@ -1,4 +1,5 @@
 import { Heart } from "lucide-react";
+import { Cards } from "@/components/icons";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 export function OwnedBadge({
   owned,
   wishlisted = false,
+  inDeck = 0,
   className,
 }: {
   /** Copies held. Finish-blind on a search row, finish-aware nowhere this is used. */
@@ -32,11 +34,21 @@ export function OwnedBadge({
   /** Whether a wish covers this card. Absent where the surface cannot know — the collection
    *  wall shows what is owned and has no opinion about what is wanted. */
   wishlisted?: boolean;
+  /**
+   * Copies of this **card** — any printing — already in the open deck's drawn list (issue #1672).
+   * Only the deck editor's search column passes it; `0` draws nothing.
+   *
+   * **The deck's own glyph, not a third `×N`**: two bare counts side by side would leave the reader
+   * guessing which one is the binder's. `Cards` is the sidebar's Decks icon, for the heart's reason
+   * — the mark on the tile and the entry in the nav are visibly one thing — and it is the accent,
+   * because it is the one fact here about the list being built rather than about holdings.
+   */
+  inDeck?: number;
   className?: string;
 }) {
   // The hook is a hook: called unconditionally, ahead of the early return below.
   const tip = useTooltip();
-  if (owned <= 0 && !wishlisted) return null;
+  if (owned <= 0 && !wishlisted && inDeck <= 0) return null;
   // The two sentences this badge makes, written once and said twice — as `sr-only` text, which
   // is how a screen reader gets them, and joined into a tooltip, which is how a pointer does.
   // `×3` beside a filled heart is two glyphs of shorthand, and a reader who can see it still
@@ -47,7 +59,12 @@ export function OwnedBadge({
   // assistive tech — a wired `aria-describedby` would have a screen reader say them twice.
   const ownedSentence = `${owned} in your collection`;
   const wishSentence = "On your wishlist";
-  const hint = [owned > 0 ? ownedSentence : null, wishlisted ? wishSentence : null]
+  const deckSentence = `${inDeck} in this deck`;
+  const hint = [
+    inDeck > 0 ? deckSentence : null,
+    owned > 0 ? ownedSentence : null,
+    wishlisted ? wishSentence : null,
+  ]
     .filter((sentence) => sentence !== null)
     .join(" · ");
   return (
@@ -60,6 +77,18 @@ export function OwnedBadge({
         className,
       )}
     >
+      {inDeck > 0 && (
+        <>
+          <span
+            aria-hidden="true"
+            className="inline-flex items-center gap-[calc(0.125rem*var(--mark-scale,1))] text-accent"
+          >
+            <Cards className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0" />
+            {inDeck}
+          </span>
+          <span className="sr-only">{deckSentence}</span>
+        </>
+      )}
       {owned > 0 && (
         <>
           <span aria-hidden="true">×{owned}</span>
@@ -68,7 +97,7 @@ export function OwnedBadge({
       )}
       {wishlisted && (
         <>
-            <Heart
+          <Heart
             className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 fill-current"
             aria-hidden="true"
           />

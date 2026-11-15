@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { CardSearchBody } from "@/features/search/CardSearchBody";
 import { CardSearchPanel } from "@/features/search/CardSearchPanel";
 import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
@@ -24,6 +25,7 @@ import { ADD_BUTTON } from "./addButton";
 import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
 import { isTokenPrinting } from "./deckTokens";
+import { NOTHING_IN_DECK } from "./inDeck";
 import { TOKENS_HEADING } from "./DeckTokensPanel";
 import type { DragPayload } from "./dnd";
 import type { Deck } from "./useDeck";
@@ -440,6 +442,12 @@ export interface DeckSearchPanelProps {
    * reads as no cap; the editor's observer answers on the same frame.
    */
   maxWidth?: number;
+  /**
+   * Copies of each card the deck's drawn list already holds, by oracle id — `inDeckByOracle` over
+   * the editor's rows (issue #1672). Each tile's badge marks its card with it, so a reader can see
+   * from the column which results are already in the deck. Absent marks nothing.
+   */
+  inDeck?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -484,6 +492,7 @@ export function DeckSearchPanel({
   roomy,
   overWidth,
   maxWidth,
+  inDeck = NOTHING_IN_DECK,
 }: DeckSearchPanelProps) {
   // The fallback for a panel mounted on its own — see {@link DeckSearchPanelProps.open}. Called
   // unconditionally because a hook must be, and free when the editor has already answered: the
@@ -570,6 +579,7 @@ export function DeckSearchPanel({
           deckId={deckId}
           targetCategoryId={targetCategoryId}
           defaultFormat={defaultFormat}
+          inDeck={inDeck}
         />
       ) : (
         <OpenPanel
@@ -581,6 +591,7 @@ export function DeckSearchPanel({
           deckId={deckId}
           cardMenu={cardMenu}
           cardMenuKey={cardMenuKey}
+          inDeck={inDeck}
         />
       )}
     </CardSearchPanel>
@@ -747,6 +758,7 @@ function OpenPanel({
   defaultFormat,
   cardMenu,
   cardMenuKey,
+  inDeck,
 }: Pick<
   DeckSearchPanelProps,
   | "add"
@@ -757,7 +769,7 @@ function OpenPanel({
   | "defaultFormat"
   | "cardMenu"
   | "cardMenuKey"
->) {
+> & { inDeck: ReadonlyMap<string, number> }) {
   // The deck's format seeds the Format select and nothing else — the hook owns what a default
   // does to filter state, this panel owns only handing it the deck's answer. See
   // {@link DeckSearchPanelProps.defaultFormat} for why that is a seed rather than a fence.
@@ -801,6 +813,26 @@ function OpenPanel({
    * by going through `setSelectedCardId`, which clears the flag in the same `set`.
    */
   const selectCard = useAppStore((s) => s.openCardFromDeckSearch);
+
+  /**
+   * These results as a **walk** (issue #1672), so a card opened from this column — its details or
+   * its printings — steps along the column with the arrow keys and the chevrons, exactly as one
+   * opened from the search page steps along that page.
+   *
+   * Published to `deckSearchWalk` rather than `cardWalk`: the desk beside this column owns that
+   * one, and a card opened out of a deck row must go on stepping the deck. From `search.rows`, the
+   * wall's own order, and memoised for `usePublishCardWalk`'s reason.
+   */
+  const walk = useMemo(
+    () =>
+      listWalkStops(search.rows, (card) => ({
+        cardId: card.id,
+        oracleId: card.oracleId,
+        name: card.name,
+      })),
+    [search.rows],
+  );
+  usePublishCardWalk("the search results", walk, "deckSearch");
 
   /**
    * What the picked id is *called*, for the two names every Add button carries — or `null` under
@@ -911,11 +943,21 @@ function OpenPanel({
       addFailure={add.isError ? ipcError(add.error) : null}
       dragPayload={tileDrag}
       selectedId={selectedCardId}
+      // The search page's left/right (issue #1672): the arrows walk the column and open each card
+      // they land on. They answer only a caret on this wall's tiles, so the desk's own keys —
+      // a press with the caret in the deck — are untouched.
+      arrowNav
       onSelect={selectCard}
       cardMenu={cardMenu}
       cardMenuKey={cardMenuKey}
       finish={tileFinish}
-      badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
+      badge={(card) => (
+        <OwnedBadge
+          owned={card.ownedQuantity}
+          wishlisted={card.wishlisted}
+          inDeck={card.oracleId === null ? 0 : (inDeck.get(card.oracleId) ?? 0)}
+        />
+      )}
       action={(card) => {
         // Where this card would land, named before the press rather than reported after it.
         // Under `Auto` that is the rule's own answer for *this* card — over its **Oracle tags

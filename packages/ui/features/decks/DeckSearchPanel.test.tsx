@@ -373,6 +373,8 @@ interface Props {
   /** The editor's cap on the drag. Absent is `Infinity`, which is what a story and the first
    *  paint both get — see the prop's own doc. */
   maxWidth?: number;
+  /** Copies of each card already in the deck, by oracle id — the tiles' deck mark (issue #1672). */
+  inDeck?: ReadonlyMap<string, number>;
 }
 
 function Harness(props: Props) {
@@ -394,6 +396,7 @@ function panel({
   // assignable.
   defaultFormat = null as FormatFilterOption | null,
   maxWidth = undefined as number | undefined,
+  inDeck = undefined as ReadonlyMap<string, number> | undefined,
   /**
    * What `app_meta` already holds about the disclosure, or `undefined` for a database that has
    * never been asked.
@@ -433,6 +436,7 @@ function panel({
     overWidth,
     defaultFormat,
     maxWidth,
+    inDeck,
   };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
@@ -2222,6 +2226,59 @@ describe("DeckSearchPanel resizing", () => {
     await openPanel({ roomy: false });
 
     expect(screen.queryByRole("separator", { name: "Resize card search" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Issue #1672: the column is a list a reader walks — the search page's left/right on its wall, and
+ * a walk of its own for the card and printings modals — and its tiles say which cards the deck
+ * already holds.
+ */
+describe("DeckSearchPanel walking and deck marks", () => {
+  const BLAST: CardSummary = { ...BOLT, id: "2", name: "Fireblast", oracleId: "o-blast" };
+
+  it("publishes its results as the deck search walk, and clears it on the way out", async () => {
+    searchCards.mockResolvedValue(page([BOLT, BLAST]));
+    const view = await openPanel();
+    await screen.findByRole("button", { name: "Fireblast" });
+
+    await waitFor(() =>
+      expect(useAppStore.getState().deckSearchWalk.stops.map((stop) => stop.cardId)).toEqual([
+        "1",
+        "2",
+      ]),
+    );
+    // The desk owns `cardWalk`; the column never writes it.
+    expect(useAppStore.getState().cardWalk.stops).toEqual([]);
+
+    view.unmount();
+    expect(useAppStore.getState().deckSearchWalk.stops).toEqual([]);
+  });
+
+  it("walks the wall with the arrow keys, opening each card from the column", async () => {
+    searchCards.mockResolvedValue(page([BOLT, BLAST]));
+    await openPanel();
+    const bolt = await screen.findByRole("button", { name: "Lightning Bolt" });
+    await screen.findByRole("button", { name: "Fireblast" });
+
+    bolt.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(useAppStore.getState().selectedCardId).toBe("2");
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+  });
+
+  it("marks a card the deck already holds, by any printing", async () => {
+    searchCards.mockResolvedValue(page([BOLT, BLAST]));
+    await openPanel({ inDeck: new Map([["o-bolt", 3]]) });
+    await screen.findByRole("button", { name: "Fireblast" });
+
+    expect(screen.getAllByText("3 in this deck")).toHaveLength(1);
+  });
+
+  it("marks the collection tab's tiles the same way", async () => {
+    panel({ inDeck: new Map([["o-bolt", 2]]) });
+    expect(await screen.findByText("2 in this deck")).toBeInTheDocument();
   });
 });
 

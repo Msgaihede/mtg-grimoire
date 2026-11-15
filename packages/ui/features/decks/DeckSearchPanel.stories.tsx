@@ -3,7 +3,9 @@ import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY } from "./autoCategory";
+import { useMemo } from "react";
 import { DeckSearchPanel } from "./DeckSearchPanel";
+import { inDeckByOracle } from "./inDeck";
 import { useDeck } from "./useDeck";
 
 /**
@@ -62,6 +64,9 @@ function Panel({
   maxWidth?: number;
 }) {
   const deck = useDeck(deckId);
+  // What the editor hands the column for its deck marks (issue #1672) — the same count over the
+  // same rows, so a tile of a card this seed deck holds wears the Decks glyph here too.
+  const inDeck = useMemo(() => inDeckByOracle(deck.cards), [deck.cards]);
   /*
    * **`useAddMode` was mounted here for `add`'s reason and is gone with the own/need pair**
    * (2026-08-25). The answer was the editor's, because it governed the toolbar's quick-add field
@@ -79,6 +84,7 @@ function Panel({
       defaultFormat={defaultFormat}
       roomy={roomy}
       maxWidth={maxWidth}
+      inDeck={inDeck}
     />
   );
 }
