@@ -169,48 +169,82 @@ describe("CardArt", () => {
   });
 
   /**
-   * **The light follows the pointer, and the card never moves** — the owner's call: "no tilt, but
-   * keep the motion follows cursor". The overlay is `pointer-events-none`, so it listens on the
-   * frame; jsdom lays nothing out, so the frame's box is given here.
+   * **The light follows the pointer anywhere in the window, at full strength, and the card never
+   * moves** — the owner's calls: "no tilt, but keep the motion follows cursor", then "the foils
+   * should react to the cursor moving anywhere in the window" and "full strength even when not
+   * hovered". jsdom lays nothing out, so every frame's box is given here.
    */
   describe("the foil's light", () => {
     // The suite restores nothing by itself, and a reduced-motion `matchMedia` left behind would
     // quietly hold every later light still.
     afterEach(() => vi.restoreAllMocks());
     const BOX = { left: 0, top: 0, width: 100, height: 140, right: 100, bottom: 140, x: 0, y: 0 };
+    const boxAt = (box: typeof BOX) =>
+      vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockReturnValue({ ...box, toJSON: () => box });
     const mountFoil = () => {
       const { container } = render(<CardArt cardId="dmr" name="Counterspell" finish="foil" />);
       const overlay = container.querySelector<HTMLElement>("[data-foil]");
-      if (!overlay?.parentElement) throw new Error("no foil overlay");
-      const frame = overlay.parentElement;
-      vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({ ...BOX, toJSON: () => BOX });
-      return { overlay, frame };
+      if (!overlay) throw new Error("no foil overlay");
+      return overlay;
     };
-    // A `MouseEvent` named `pointermove`, so `clientX` is set whatever jsdom's `PointerEvent` is.
-    const pointer = (frame: HTMLElement, x: number, y: number, pointerType = "mouse") => {
-      const event = new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y });
+    // A `MouseEvent` named `pointermove`, so `clientX` is set whatever jsdom's `PointerEvent` is —
+    // dispatched on the window, nowhere near the card.
+    const pointer = (x: number, y: number, pointerType = "mouse") => {
+      const event = new MouseEvent("pointermove", { clientX: x, clientY: y });
       Object.defineProperty(event, "pointerType", { value: pointerType });
-      act(() => void frame.dispatchEvent(event));
+      act(() => void window.dispatchEvent(event));
     };
     const light = (overlay: HTMLElement) => ({
       mx: overlay.style.getPropertyValue("--foil-mx"),
       on: overlay.style.getPropertyValue("--foil-on"),
     });
+    const REST = { mx: "32.0%", on: "1" };
 
-    it("moves the light with a mouse over the frame, and rests it when the mouse leaves", () => {
-      const { overlay, frame } = mountFoil();
-      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
-      pointer(frame, 75, 70);
-      expect(light(overlay)).toEqual({ mx: "75.0%", on: "1" });
-      act(() => void frame.dispatchEvent(new MouseEvent("pointerleave")));
-      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+    it("rests at full strength, follows a mouse anywhere in the window, and rests when it leaves", () => {
+      boxAt(BOX);
+      const overlay = mountFoil();
+      expect(light(overlay)).toEqual(REST);
+      // Far to the card's right, outside it altogether: the light turns all the way toward it.
+      pointer(900, 70);
+      expect(Number.parseFloat(light(overlay).mx)).toBeGreaterThan(90);
+      expect(light(overlay).on).toBe("1");
+      // Far to its left now.
+      pointer(-800, 70);
+      expect(Number.parseFloat(light(overlay).mx)).toBeLessThan(10);
+      // `relatedTarget` null: the pointer has left the window.
+      act(() => void window.dispatchEvent(new MouseEvent("pointerout")));
+      expect(light(overlay)).toEqual(REST);
+    });
+
+    it("lights a card mounted while the pointer is already in the window", () => {
+      boxAt(BOX);
+      const first = mountFoil();
+      pointer(900, 70);
+      const second = mountFoil();
+      expect(light(second)).toEqual(light(first));
+      expect(Number.parseFloat(light(second).mx)).toBeGreaterThan(90);
+    });
+
+    it("relights the cards that moved under a still pointer when the page scrolls", () => {
+      const box = boxAt(BOX);
+      const overlay = mountFoil();
+      pointer(150, 70);
+      const before = light(overlay).mx;
+      // The wall scrolled the card 600px to the right of where it was, under the same pointer.
+      const moved = { ...BOX, left: 600, right: 700, x: 600 };
+      box.mockReturnValue({ ...moved, toJSON: () => moved });
+      act(() => void document.body.dispatchEvent(new Event("scroll")));
+      expect(Number.parseFloat(light(overlay).mx)).toBeLessThan(Number.parseFloat(before));
     });
 
     /** A touch has no hover, and a light that jumped to wherever a scroll began would be noise. */
     it("leaves the light at rest under a finger", () => {
-      const { overlay, frame } = mountFoil();
-      pointer(frame, 75, 70, "touch");
-      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+      boxAt(BOX);
+      const overlay = mountFoil();
+      pointer(75, 70, "touch");
+      expect(light(overlay)).toEqual(REST);
     });
 
     /** WCAG 2.3.3: a reader who asked the OS for less motion gets a still light. */
@@ -224,9 +258,10 @@ describe("CardArt", () => {
             removeEventListener() {},
           }) as unknown as MediaQueryList,
       );
-      const { overlay, frame } = mountFoil();
-      pointer(frame, 75, 70);
-      expect(light(overlay)).toEqual({ mx: "32.0%", on: "0.55" });
+      boxAt(BOX);
+      const overlay = mountFoil();
+      pointer(75, 70);
+      expect(light(overlay)).toEqual(REST);
     });
   });
 
