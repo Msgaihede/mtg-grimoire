@@ -3472,8 +3472,9 @@ const EVERY_FINISH = ["nonfoil", "foil", "etched"] as const;
 
 /**
  * The printings {@link readHandlers.price_movers} measures: every owned one with no `scope`,
- * else `PriceMoverScope::pool_sql`'s three lists — possibly naming one printing twice, which the
- * caller folds.
+ * else `PriceMoverScope::pool_sql`'s four lists — possibly naming one printing twice, which the
+ * caller folds. A `printings` entry is one finish (issue #1675); one in a finish the crate does not
+ * know names nothing, as `PriceMoverScope::printings_json` drops it.
  */
 function priceMoverPool(
   db: FakeDb,
@@ -3493,6 +3494,9 @@ function priceMoverPool(
         })),
       ),
     ...(scope.cards ?? []).flatMap((cardId) => EVERY_FINISH.map((finish) => ({ cardId, finish }))),
+    ...(scope.printings ?? []).filter(
+      (p) => p.cardId.trim() !== "" && (EVERY_FINISH as readonly string[]).includes(p.finish),
+    ),
   ];
 }
 
@@ -13604,8 +13608,9 @@ export function readHandlers(db: FakeDb) {
      * **`scope` (issue #906) replaces the owned printings with the ones it names** —
      * `PriceMoverScope::pool_sql`: copies filed directly in a listed collection folder, the
      * printings pinned by wishes directly in a listed wishlist folder (a wish with no preferred
-     * finish in every finish, an any-printing wish in none), and each listed card in every finish.
-     * `0` is a cabinet's root. Each printing once.
+     * finish in every finish, an any-printing wish in none), each listed card in every finish, and
+     * each listed printing in its one finish (issue #1675). `0` is a cabinet's root. Each printing
+     * once.
      */
     price_movers: (args: {
       window: string;

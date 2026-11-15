@@ -641,7 +641,11 @@ pub struct PriceMovers {
 ///   counts — a deck's group and `Recently removed` included — because a filter is not a write.
 /// * `wishlist_folders` — wishlist folder ids, direct, `0` the root; a deck's managed wishlist is
 ///   a folder like any other here. An any-printing wish names no printing and is skipped.
-/// * `cards` — printing ids, owned or not, each in every finish it is priced in.
+/// * `cards` — printing ids, owned or not, each in every finish it is priced in: a card chosen
+///   at *Any finish*, and every card chosen before a card could carry a finish.
+/// * `printings` — a printing in **one** finish each, owned or not: a card the reader chose as
+///   that finish (issue #1675), so a foil chosen is the foil's move and never the plain copy's.
+///   A finish outside [`crate::schema::FINISHES`] names nothing, as a card the corpus lacks does.
 ///
 /// Absent on the wire — every build before this, and a widget left on *Everything you own* —
 /// is [`movers`]' own question, every owned printing.
@@ -651,11 +655,22 @@ pub struct PriceMoverScope {
     pub collection_folders: Vec<i64>,
     pub wishlist_folders: Vec<i64>,
     pub cards: Vec<String>,
+    pub printings: Vec<PriceMoverPrinting>,
+}
+
+/// One printing in one finish, in a [`PriceMoverScope`] — a card the reader chose as that finish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceMoverPrinting {
+    pub card_id: String,
+    /// `nonfoil`, `foil` or `etched`.
+    pub finish: String,
 }
 
 impl PriceMoverScope {
     /// The `pool(card_id, finish)` CTE body this scope reads. Bound: `?2` the collection folder
-    /// ids, `?3` the wishlist folder ids, `?4` the card ids — each a JSON array.
+    /// ids, `?3` the wishlist folder ids, `?4` the card ids, `?5` the printings in one finish
+    /// ([`Self::printings_json`]) — each a JSON array.
     ///
     /// **It names `collection_entries` in its own `FROM`**, one of the statements
     /// [`crate::collection_source`]'s module doc lists: it narrows the copies by where they are
@@ -668,12 +683,29 @@ impl PriceMoverScope {
              UNION
              {wished}
              UNION
-             {listed}",
+             {listed}
+             UNION
+             SELECT json_extract(j.value, '$.cardId'), json_extract(j.value, '$.finish')
+               FROM json_each(?5) j",
             wished = wished_printings(
                 " AND coalesce(w.folder_id, 0) IN (SELECT value FROM json_each(?3))"
             ),
             listed = listed_printings("?4"),
         )
+    }
+
+    /// `printings` as the JSON array [`Self::pool_sql`] binds at `?5` — a blank id and a finish
+    /// this build does not know dropped here, so no row reaches the SQL that `sorting::price_expr`
+    /// would price as some other finish.
+    fn printings_json(&self) -> String {
+        let kept: Vec<&PriceMoverPrinting> = self
+            .printings
+            .iter()
+            .filter(|p| {
+                !p.card_id.trim().is_empty() && crate::schema::FINISHES.contains(&p.finish.as_str())
+            })
+            .collect();
+        serde_json::to_string(&kept).unwrap_or_else(|_| "[]".to_owned())
     }
 }
 
@@ -836,7 +868,8 @@ pub fn movers_in(
                     key,
                     json(serde_json::to_string(&scope.collection_folders)),
                     json(serde_json::to_string(&scope.wishlist_folders)),
-                    json(serde_json::to_string(&scope.cards))
+                    json(serde_json::to_string(&scope.cards)),
+                    scope.printings_json()
                 ],
                 read,
             )
@@ -2028,6 +2061,7 @@ mod tests {
                 collection_folders: vec![7, 0],
                 wishlist_folders: vec![3],
                 cards: ids(&["bolt", "lonely"]),
+                printings: Vec::new(),
             }),
             [
                 pair("bolt", "foil"),
@@ -2052,12 +2086,94 @@ mod tests {
         assert_eq!(none.days, 1, "the history is still there");
     }
 
+    /// **A card chosen as one finish is that finish's move alone** (issue #1675): a foil chosen
+    /// is never the plain copy's move, a finish the printing is not priced in is no mover, and a
+    /// finish this build does not know names nothing rather than being priced as another.
+    #[test]
+    fn a_printing_chosen_in_one_finish_moves_in_that_finish_alone() {
+        let conn = conn();
+        past(&conn, 8, "tcgplayer", "bolt", "nonfoil", 9.0); // +1
+        past(&conn, 8, "tcgplayer", "bolt", "foil", 40.0); // +10
+        past(&conn, 8, "tcgplayer", "lonely", "nonfoil", 1.0); // +2
+
+        let moved = |scope: PriceMoverScope| -> Vec<(String, String)> {
+            movers_in(
+                &conn,
+                "7d",
+                "both",
+                Marketplace::Tcgplayer,
+                10,
+                Some(&scope),
+            )
+            .unwrap()
+            .movers
+            .into_iter()
+            .map(|m| (m.card_id, m.finish))
+            .collect()
+        };
+        let pair = |id: &str, finish: &str| (id.to_owned(), finish.to_owned());
+        let printing = |id: &str, finish: &str| PriceMoverPrinting {
+            card_id: id.to_owned(),
+            finish: finish.to_owned(),
+        };
+
+        assert_eq!(
+            moved(PriceMoverScope {
+                cards: ids(&["bolt"]),
+                ..Default::default()
+            }),
+            [pair("bolt", "foil"), pair("bolt", "nonfoil")],
+            "a card at any finish is every finish it is priced in"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                printings: vec![printing("bolt", "foil")],
+                ..Default::default()
+            }),
+            [pair("bolt", "foil")],
+            "the foil chosen, and not the plain copy"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                printings: vec![printing("bolt", "nonfoil")],
+                ..Default::default()
+            }),
+            [pair("bolt", "nonfoil")]
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                printings: vec![printing("lonely", "foil")],
+                ..Default::default()
+            }),
+            Vec::<(String, String)>::new(),
+            "a finish with no price is no mover"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                printings: vec![printing("bolt", "shiny"), printing(" ", "foil")],
+                ..Default::default()
+            }),
+            Vec::<(String, String)>::new(),
+            "an unknown finish and a blank id name nothing"
+        );
+        assert_eq!(
+            moved(PriceMoverScope {
+                cards: ids(&["lonely"]),
+                printings: vec![printing("bolt", "foil"), printing("bolt", "foil")],
+                ..Default::default()
+            }),
+            [pair("bolt", "foil"), pair("lonely", "nonfoil")],
+            "beside the any-finish cards, each printing once"
+        );
+    }
+
     /// The wire's spelling: camelCase, and every list optional.
     #[test]
     fn a_scope_reads_the_names_the_page_sends() {
         let scope: PriceMoverScope = serde_json::from_value(serde_json::json!({
             "collectionFolders": [0, 7],
             "cards": ["bolt"],
+            "printings": [{ "cardId": "ring", "finish": "foil" }],
         }))
         .unwrap();
         assert_eq!(
@@ -2066,6 +2182,10 @@ mod tests {
                 collection_folders: vec![0, 7],
                 wishlist_folders: Vec::new(),
                 cards: ids(&["bolt"]),
+                printings: vec![PriceMoverPrinting {
+                    card_id: "ring".to_owned(),
+                    finish: "foil".to_owned(),
+                }],
             }
         );
     }

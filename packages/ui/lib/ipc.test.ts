@@ -3733,7 +3733,12 @@ describe("ipc argument names match the Rust command signatures", () => {
     // **The scope (issue #906) is a fifth argument and only when given**: an unscoped read stays
     // the exact four-key request it always was, and a scoped one carries the struct under `scope`
     // — `#[serde(default)]` on every field, so the struct's own names are pinned by the walk.
-    const scope = { collectionFolders: [0, 7], wishlistFolders: [3], cards: ["bolt-lea"] };
+    const scope = {
+      collectionFolders: [0, 7],
+      wishlistFolders: [3],
+      cards: ["bolt-lea"],
+      printings: [{ cardId: "ring-lea", finish: "foil" as const }],
+    };
     await ipc.priceMovers("7d", "both", "tcgplayer", 100, scope);
     expect(invoke).toHaveBeenLastCalledWith("price_movers", {
       window: "7d",
@@ -6882,6 +6887,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // its quietest: every field is `#[serde(default)]`, so a renamed `wishlistFolders` is not a
     // refusal but an empty list, and a widget narrowed to a wishlist folder answers nothing moved.
     ["PriceMoverScope", priceHistoryRs, "PriceMoverScope"],
+    // **A card chosen in one finish** (issue #1675), nested for `PriceMovers`' reason: a renamed
+    // `cardId` or `finish` leaves the scope agreeing while every pair deserialises as a refusal.
+    ["PriceMoverPrinting", priceHistoryRs, "PriceMoverPrinting"],
     // **The movers popup's two** (issue #515), nested for `PriceMovers`' reason: a field renamed
     // inside `PricePoint` leaves `PriceHistory` agreeing while every point of the line reads
     // `undefined`. Both are the quiet kind. A renamed `day` or `price` gives the chart `NaN`s and

@@ -159,6 +159,7 @@ describe("shape", () => {
           collectionFolders: [1],
           wishlistFolders: [],
           cards: [],
+          printings: [],
         }),
       ),
     ).toBe(true);

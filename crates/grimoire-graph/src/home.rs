@@ -27,8 +27,8 @@ use grimoire_core::new_printings::{
     NewPrintings as CoreNewPrintings,
 };
 use grimoire_core::price_history::{
-    movers_in, PriceHistory as CorePriceHistory, PriceMover as CorePriceMover, PriceMoverScope,
-    PriceMovers as CorePriceMovers, PricePoint as CorePricePoint,
+    movers_in, PriceHistory as CorePriceHistory, PriceMover as CorePriceMover, PriceMoverPrinting,
+    PriceMoverScope, PriceMovers as CorePriceMovers, PricePoint as CorePricePoint,
 };
 use grimoire_core::recent_cards::{recent, RecentCard as CoreRecentCard};
 use grimoire_core::set_completion::{set_completion_of, SetCompletion as CoreSetCompletion};
@@ -357,6 +357,18 @@ pub struct PriceMoverScopeInput {
     /// Printing ids (Scryfall), owned or not, each measured in every finish it is priced in. A
     /// card only has history once it is owned, wished for or watched.
     pub cards: Option<Vec<String>>,
+    /// Printings, owned or not, each measured in the one finish named — a foil named here is
+    /// the foil's move alone.
+    pub printings: Option<Vec<PriceMoverPrintingInput>>,
+}
+
+/// One printing in one finish, for `PriceMoverScopeInput.printings`.
+#[derive(InputObject)]
+#[graphql(name = "PriceMoverPrintingInput")]
+pub struct PriceMoverPrintingInput {
+    /// The printing's Scryfall id.
+    pub card_id: String,
+    pub finish: Finish,
 }
 
 // ── Value history ────────────────────────────────────────────────────────────────────────────
@@ -740,6 +752,15 @@ impl HomeQuery {
             collection_folders: s.collection_folders.unwrap_or_default(),
             wishlist_folders: s.wishlist_folders.unwrap_or_default(),
             cards: s.cards.unwrap_or_default(),
+            printings: s
+                .printings
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| PriceMoverPrinting {
+                    card_id: p.card_id,
+                    finish: p.finish.id().to_owned(),
+                })
+                .collect(),
         });
         let movers = read(ctx, |c| {
             movers_in(c, window, direction, market, limit, scope.as_ref())
@@ -947,7 +968,8 @@ mod tests {
               setCompletion { setCode name releasedAt owned size }
               priceMovers { movers { cardId name setCode setName finish now then delta } since days }
               scoped: priceMovers(window: ALL, direction: up, limit: 5,
-                                  scope: { collectionFolders: [0], cards: ["c-bolt"] },
+                                  scope: { collectionFolders: [0], cards: ["c-bolt"],
+                                           printings: [{ cardId: "c-bolt", finish: foil }] },
                                   marketplace: cardmarket) { days }
               priceHistory(cardId: "c-bolt") { points { day price } now today }
               collectionValueHistory { buckets { key name } points { day total values moved live } today }

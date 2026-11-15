@@ -150,14 +150,26 @@ export const NothingChosen: Story = {
 
 /**
  * The settings panel under `Chosen`: the two folder checklists, the chosen cards with a way to
- * take each off, and a search over every card in the data, owned or not.
+ * take each off, and a search over every card in the data, owned or not. Each chosen card picks
+ * its finish (issue #1675) — Sol Ring, chosen before the finishes were kept, at every finish;
+ * the Bolt followed as its foil alone.
  */
 export const ChosenSettings: Story = {
   args: {
     widget: movers(2, 3, {
       scope: "chosen",
       collectionFolderIds: [0],
-      cards: [{ id: "sol-ring", name: "Sol Ring", setCode: "lea", collectorNumber: "270" }],
+      cards: [
+        { id: "sol-ring", name: "Sol Ring", setCode: "lea", collectorNumber: "270" },
+        {
+          id: "lightning-bolt",
+          name: "Lightning Bolt",
+          setCode: "m21",
+          collectorNumber: "161",
+          finish: "foil",
+          finishes: ["nonfoil", "foil"],
+        },
+      ],
     }),
   },
   render: ({ widget }) => (
@@ -176,6 +188,12 @@ export const ChosenSettings: Story = {
     await expect(
       canvas.getByRole("button", { name: "Remove Sol Ring · LEA #270" }),
     ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Finish of Sol Ring · LEA #270" }),
+    ).toHaveTextContent("Any finish");
+    await expect(
+      canvas.getByRole("button", { name: "Finish of Lightning Bolt · M21 #161" }),
+    ).toHaveTextContent("Foil");
     await expect(canvas.getByLabelText("Cards")).toBeInTheDocument();
   },
 };

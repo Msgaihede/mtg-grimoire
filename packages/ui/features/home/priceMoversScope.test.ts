@@ -22,6 +22,25 @@ describe("priceMoversConfig", () => {
       ),
     ).toEqual({ collectionFolderIds: [7], wishlistFolderIds: [], cards: [card("bolt")] });
   });
+
+  /** Issue #1675: a finish this build cannot read is every finish, never a card dropped. */
+  it("keeps a card's finish and finishes, reading a word it does not know as every finish", () => {
+    expect(
+      priceMoversConfig(
+        widget({
+          cards: [
+            { ...card("bolt"), finish: "foil", finishes: ["nonfoil", "foil"] },
+            { ...card("ring"), finish: "shiny", finishes: ["shiny", "etched", 3] },
+            { ...card("lotus"), finishes: "foil" },
+          ],
+        }),
+      ).cards,
+    ).toEqual([
+      { ...card("bolt"), finish: "foil", finishes: ["nonfoil", "foil"] },
+      { ...card("ring"), finishes: ["etched"] },
+      card("lotus"),
+    ]);
+  });
 });
 
 describe("moverScopeOf", () => {
@@ -50,7 +69,41 @@ describe("moverScopeOf", () => {
         collection,
         wishlist,
       ),
-    ).toEqual({ collectionFolders: [0, 3, 4, 5], wishlistFolders: [9], cards: ["bolt", "ring"] });
+    ).toEqual({
+      collectionFolders: [0, 3, 4, 5],
+      wishlistFolders: [9],
+      cards: ["bolt", "ring"],
+      printings: [],
+    });
+  });
+
+  /** Issue #1675: a card chosen as one finish is asked about in that finish alone. */
+  it("sends a card chosen as one finish as a printing, sorted and once", () => {
+    expect(
+      moverScopeOf(
+        widget({
+          scope: "chosen",
+          cards: [
+            { ...card("ring"), finish: "foil" },
+            card("bolt"),
+            { ...card("lotus"), finish: "etched" },
+            { ...card("lotus"), finish: "etched" },
+            { ...card("lotus"), finish: "foil" },
+          ],
+        }),
+        [],
+        [],
+      ),
+    ).toEqual({
+      collectionFolders: [],
+      wishlistFolders: [],
+      cards: ["bolt"],
+      printings: [
+        { cardId: "lotus", finish: "etched" },
+        { cardId: "lotus", finish: "foil" },
+        { cardId: "ring", finish: "foil" },
+      ],
+    });
   });
 });
 
@@ -66,5 +119,15 @@ describe("priceWatchOf", () => {
         ],
       }),
     ).toEqual(["bolt", "lotus", "ring"]);
+  });
+
+  /** A card chosen as one finish is still watched by its id: the snapshots keep every finish. */
+  it("watches a card chosen as one finish by its id", () => {
+    expect(
+      priceWatchOf({
+        version: 2,
+        widgets: [widget({ scope: "chosen", cards: [{ ...card("bolt"), finish: "foil" }] })],
+      }),
+    ).toEqual(["bolt"]);
   });
 });

@@ -76,6 +76,7 @@ import type {
   HomeLayout,
   HomeWidget,
   ImportResolveLine,
+  PriceMoverScope,
   SearchRequest,
   ScannerTrayRow,
   SearchSortKey,
@@ -22203,6 +22204,29 @@ describe("the price movers", () => {
     const db = world([snap(NOW - 10, 8)]);
     const got = readHandlers(db).price_movers({ window: "7d", direction: "both", limit: 0 });
     expect(got.movers).toHaveLength(1);
+  });
+
+  /** Issue #1675: a card chosen as one finish is measured in that finish alone, owned or not. */
+  it("measures a printing named in one finish in that finish, and an unknown finish not at all", () => {
+    const db = world([snap(NOW - 10, 8)], []);
+    const scoped = (printings: { cardId: string; finish: string }[]) =>
+      readHandlers(db).price_movers({
+        window: "7d",
+        direction: "both",
+        limit: 100,
+        scope: {
+          collectionFolders: [],
+          wishlistFolders: [],
+          cards: [],
+          printings: printings as PriceMoverScope["printings"],
+        },
+      }).movers;
+
+    expect(scoped([{ cardId: FOIL_ONLY.id, finish: "foil" }])).toEqual([
+      expect.objectContaining({ cardId: FOIL_ONLY.id, finish: "foil", delta: 10 }),
+    ]);
+    expect(scoped([{ cardId: FOIL_ONLY.id, finish: "nonfoil" }])).toEqual([]);
+    expect(scoped([{ cardId: FOIL_ONLY.id, finish: "shiny" }])).toEqual([]);
   });
 
   it("reads a window or a direction it does not know as the default, as the crate does", () => {
