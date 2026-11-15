@@ -367,7 +367,7 @@ describe("SearchPage", () => {
     // Nothing to reset: a view mode is not a filter, so Reset all stays greyed. It is drawn
     // from the first render — a button that appeared here would slide the whole row — so the
     // claim is that it is dead, not that it is absent.
-    expect(screen.getByRole("button", { name: "Reset all — 0 filters active" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Reset all: 0 filters active" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
@@ -375,7 +375,7 @@ describe("SearchPage", () => {
     await userEvent.type(screen.getByPlaceholderText("Search cards…"), "bolt");
     const reset = await screen.findByRole("button", { name: "Reset all: 1 filter active" });
     await userEvent.click(reset);
-    await screen.findByRole("button", { name: "Reset all — 0 filters active" });
+    await screen.findByRole("button", { name: "Reset all: 0 filters active" });
 
     expect(screen.getByRole("button", { name: "Stack printings" })).toHaveAttribute(
       "aria-pressed",

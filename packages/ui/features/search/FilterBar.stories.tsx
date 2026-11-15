@@ -1009,7 +1009,7 @@ export const PriceBand: Story = {
     );
     await waitFor(async () => {
       await expect(
-        canvas.queryByRole("button", { name: /^Remove filter — Price/ }),
+        canvas.queryByRole("button", { name: /^Remove filter, Price/ }),
       ).not.toBeInTheDocument();
     });
     await openTray(canvas);
@@ -1137,7 +1137,7 @@ export const TokensAndExtras: Story = {
     await expect(
       canvas.getByRole("button", { name: "Remove filter, Showing: Tokens & extras" }),
     ).toBeInTheDocument();
-    await expect(canvas.queryByRole("button", { name: /^Remove filter — Format:/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Remove filter, Format:/ })).toBeNull();
     // One filter for one filter: the format's place in the count, not a second one beside it.
     await expect(
       canvas.getByRole("button", { name: "Reset all: 1 filter active" }),

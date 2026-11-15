@@ -189,13 +189,13 @@ describe("the filters sheet", () => {
     await userEvent.click(stack());
     expect(stack()).toHaveAttribute("aria-pressed", "false");
     // A view mode, not a filter: nothing for Reset all to count.
-    expect(within(sheet).getByRole("button", { name: /^Reset all — 0 filters/ })).toHaveAttribute(
+    expect(within(sheet).getByRole("button", { name: /^Reset all: 0 filters/ })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
 
     await userEvent.click(within(sheet).getByRole("button", { name: /^Red\b/ }));
-    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all — 1 filter / }));
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all: 1 filter / }));
     expect(within(sheet).getByRole("button", { name: /^Red\b/ })).toHaveAttribute(
       "aria-pressed",
       "false",

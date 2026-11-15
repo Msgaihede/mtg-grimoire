@@ -279,7 +279,7 @@ export const Unplayable: Story = {
     // what is, as a corpus rather than as a format.
     await expect(format).toHaveTextContent("Any format");
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Showing: Tokens & extras" }),
+      canvas.getByRole("button", { name: "Remove filter, Showing: Tokens & extras" }),
     ).toBeInTheDocument();
 
     // **Named rather than counted, and reached by a search rather than by scrolling.** The
