@@ -99,6 +99,8 @@ export function OpenedWall({
                 cardId={inCorpus ? card.cardId : null}
                 name={name}
                 finish={card.foil ? "foil" : null}
+                // A foil Surge or Ripple pull draws as its own kind, as a binder's copy does.
+                promoTypes={fact?.promoTypes ?? null}
                 rarity={fact?.rarity ?? null}
                 chin={
                   fact !== undefined

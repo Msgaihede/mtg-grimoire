@@ -2491,6 +2491,7 @@ describe("ipc argument names match the Rust command signatures", () => {
    */
   it("names the deck token command arguments the way Rust spells them", async () => {
     const row: DeckTokenRow = {
+      promoTypes: null,
       oracleId: "o-1",
       name: "Treasure",
       typeLine: "Token Artifact — Treasure",

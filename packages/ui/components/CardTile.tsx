@@ -4,6 +4,7 @@ import { CardChin, type ChinPrinting } from "@/components/CardChin";
 import { cardScaleVars, DEFAULT_ZOOM } from "@/lib/cardZoom";
 import type { Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
+import { finishTreatments } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 
 export interface CardTileProps {
@@ -13,6 +14,13 @@ export interface CardTileProps {
    *  see `CardArt`'s own prop for why the two are different answers. */
   remoteSrc?: string | null;
   finish?: Finish | null;
+  /**
+   * The printing's `promo_types`, verbatim — what names a Surge Foil on the chip and draws it as
+   * surge rather than as plain foil (`finishTreatments`, `lib/foilEffect.ts`). Absent or `null`
+   * draws traditional foil. A field rather than treatments, because every caller would otherwise
+   * spell the same `finishTreatments(promoTypes, finish)` against the same finish.
+   */
+  promoTypes?: string | null;
   rarity: string | null;
   chin: ChinPrinting;
   money?: ReactNode;
@@ -60,6 +68,7 @@ export function CardTile({
   name,
   remoteSrc,
   finish = null,
+  promoTypes = null,
   rarity,
   chin,
   money,
@@ -71,12 +80,14 @@ export function CardTile({
   loading,
   className,
 }: CardTileProps): ReactElement {
+  const treatments = finishTreatments(promoTypes, finish);
   const art = (
     <>
       <CardArt
         cardId={cardId}
         name={name}
         finish={finish}
+        treatments={treatments}
         hoverZoom={hoverZoom}
         loading={loading}
         // Spread only when given: an absent `remoteSrc` and a present `null` are two answers.
@@ -100,7 +111,15 @@ export function CardTile({
       ) : (
         <div className="relative">{art}</div>
       )}
-      <CardChin {...chin} zoom={zoom} rarity={rarity} finish={finish} money={money} seam="art" />
+      <CardChin
+        {...chin}
+        zoom={zoom}
+        rarity={rarity}
+        finish={finish}
+        treatments={treatments}
+        money={money}
+        seam="art"
+      />
     </div>
   );
 }

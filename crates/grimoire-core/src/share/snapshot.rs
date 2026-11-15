@@ -118,6 +118,12 @@ pub struct ShareCard {
     /// The mana value. A deck share's alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mv: Option<f64>,
+    /// The printing's promo types, as the JSON text `cards.promo_types` holds
+    /// (`["surgefoil"]`) — what lets a viewer draw a Surge Foil copy as surge rather than as
+    /// plain foil, since the picture is the plain printing's. Absent where the printing has
+    /// none, which is four cards in five, so the golden's fixtures are unchanged byte for byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pt: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,6 +238,7 @@ pub(crate) fn counted(
             t: None,
             mc: None,
             mv: None,
+            pt: e.promo_types,
         })
         .collect();
 

@@ -210,6 +210,7 @@ pub fn snapshot(
         t: card.type_line,
         mc: card.mana_cost,
         mv: card.mana_value,
+        pt: card.promo_types,
     })
     .collect();
 

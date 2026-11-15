@@ -281,6 +281,77 @@ describe("drawing a spec", () => {
     expect(screen.getAllByText("4 Jul 2026")).toHaveLength(2);
   });
 
+  /** `promoTypes` arrived after widgets were stored, so a spec that never heard of it must still
+   *  validate — the one prop that is `.nullish()` rather than `.nullable()`. */
+  it("keeps a stored card spec without promoTypes valid", () => {
+    const tile = {
+      type: "CardTile",
+      children: [],
+      props: {
+        cardId: "bolt-lea",
+        name: "Lightning Bolt",
+        setCode: "lea",
+        collectorNumber: "161",
+        rarity: "common",
+        finish: "foil",
+        price: null,
+      },
+    };
+    const art = {
+      type: "CardArt",
+      children: [],
+      props: { cardId: "bolt-lea", name: "Lightning Bolt", face: null, finish: "foil", size: null },
+    };
+    const mark = { type: "FinishMark", children: [], props: { finish: "foil" } };
+    for (const element of [tile, art, mark]) {
+      expect(catalog.validate({ root: "x", elements: { x: element } }).success).toBe(true);
+    }
+  });
+
+  it("draws a bound special foil as its own kind, and names it", () => {
+    const { container } = draw({
+      root: "wall",
+      elements: {
+        wall: {
+          type: "Stack",
+          props: { direction: null, gap: null, align: null, justify: null, wrap: null },
+          children: ["tile", "art"],
+        },
+        tile: {
+          type: "CardTile",
+          children: [],
+          props: {
+            cardId: "bolt-lea",
+            name: "Lightning Bolt",
+            setCode: "lea",
+            collectorNumber: "161",
+            rarity: "common",
+            finish: "foil",
+            price: null,
+            promoTypes: ["surgefoil"],
+          },
+        },
+        art: {
+          type: "CardArt",
+          children: [],
+          props: {
+            cardId: "ripple-1",
+            name: "Rippling",
+            face: null,
+            finish: "foil",
+            size: null,
+            promoTypes: ["ripplefoil"],
+          },
+        },
+      },
+    });
+    expect(container.querySelector('[data-foil="surge"]')).not.toBeNull();
+    expect(container.querySelector('[data-foil="ripple"]')).not.toBeNull();
+    expect(container.querySelector('[data-foil="foil"]')).toBeNull();
+    // The chin's finish glyph is named for the treatment, as on every wall.
+    expect(screen.getAllByRole("img", { name: "Surge Foil" }).length).toBeGreaterThan(0);
+  });
+
   it("draws a missing price as an em dash, not zero", () => {
     draw({
       root: "p",

@@ -210,6 +210,12 @@ impl CardSummary {
     async fn finishes(&self) -> Vec<Finish> {
         finishes_of(self.0.finishes.as_deref())
     }
+    /// Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+    /// names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+    /// none.
+    async fn promo_types(&self) -> Option<Vec<String>> {
+        crate::decks::parse_string_array(self.0.promo_types.as_deref())
+    }
     /// One of the cards the Commander bracket system counts as a game changer.
     async fn game_changer(&self) -> bool {
         self.0.game_changer
@@ -417,6 +423,12 @@ impl CardDetail {
     async fn finishes(&self) -> Vec<Finish> {
         finishes_of(self.0.finishes.as_deref())
     }
+    /// Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+    /// names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+    /// none.
+    async fn promo_types(&self) -> Option<Vec<String>> {
+        crate::decks::parse_string_array(self.0.promo_types.as_deref())
+    }
     /// Scryfall's image quality word: `highres_scan`, `lowres`, `placeholder` or `missing`.
     async fn image_status(&self) -> Option<&str> {
         self.0.image_status.as_deref()
@@ -488,6 +500,12 @@ impl Printing {
     /// The finishes this printing is published in. Empty when the corpus does not say.
     async fn finishes(&self) -> Vec<Finish> {
         finishes_of(self.0.finishes.as_deref())
+    }
+    /// Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+    /// names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+    /// none.
+    async fn promo_types(&self) -> Option<Vec<String>> {
+        crate::decks::parse_string_array(self.0.promo_types.as_deref())
     }
     /// This printing's price per finish, at the marketplace `cardPrintings` was asked at.
     async fn finish_prices(&self) -> FinishPrices {
@@ -1053,6 +1071,50 @@ pub(crate) mod tests {
             .map(|s| s["code"].as_str().unwrap())
             .collect();
         assert_eq!(sets, vec!["m11", "lea"]);
+    }
+
+    /// A printing's promo types answer on every card shape a widget draws — what lets one draw
+    /// a Surge Foil copy as surge — and a printing with none answers null.
+    #[test]
+    fn a_printings_promo_types_answer_on_every_card_shape() {
+        let state = seeded("graph-cards-promo-types");
+        state
+            .lock_db()
+            .execute(
+                "UPDATE cards SET promo_types = '[\"surgefoil\",3]' WHERE id = 'bolt-lea'",
+                [],
+            )
+            .unwrap();
+        let data = answer(
+            &state,
+            r#"{
+                searchCards { items { id promoTypes } }
+                card(id: "bolt-lea") { promoTypes }
+                plain: card(id: "bolt-m11") { promoTypes }
+                cardPrintings(oracleId: "o-bolt") { items { id promoTypes } }
+            }"#,
+        );
+        let of = |items: &Value, id: &str| {
+            items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == json!(id))
+                .unwrap()["promoTypes"]
+                .clone()
+        };
+        // A non-string member is dropped, as every string list here drops one.
+        assert_eq!(data["card"]["promoTypes"], json!(["surgefoil"]));
+        assert_eq!(data["plain"]["promoTypes"], Value::Null);
+        assert_eq!(
+            of(&data["searchCards"]["items"], "bolt-lea"),
+            json!(["surgefoil"])
+        );
+        assert_eq!(of(&data["searchCards"]["items"], "bear-lea"), Value::Null);
+        assert_eq!(
+            of(&data["cardPrintings"]["items"], "bolt-lea"),
+            json!(["surgefoil"])
+        );
     }
 
     /// The structured filter narrows the same search the Search page runs, beside the search's

@@ -129,6 +129,12 @@ export interface BoosterCard {
   cmc: number | null;
   /** Letters, `"WU"`, as the corpus stores them. */
   colors: string | null;
+  /**
+   * JSON: the printing's `promo_types`, verbatim, or `null` — `null` too for a printing only
+   * MTGJSON knows. Read it with `finishTreatments` from `@/lib/treatment`, which names a Surge
+   * Foil on the chip and draws it as surge rather than as plain foil.
+   */
+  promoTypes: string | null;
   /** `false`: known from MTGJSON alone — this corpus has no such printing, so no image and no price. */
   inCorpus: boolean;
 }

@@ -148,6 +148,7 @@ export const CARDS_EXAMPLE: Spec = {
         rarity: { $item: "rarity" },
         finish: null,
         price: { $item: "price" },
+        promoTypes: { $item: "promoTypes" },
       },
       on: { press: { action: "openCard", params: { cardId: { $item: "id" } } } },
     },
@@ -161,6 +162,7 @@ export const CARDS_EXAMPLE: Spec = {
         collectorNumber: "161",
         rarity: "common",
         price: 412.5,
+        promoTypes: null,
       },
       {
         id: "sol-ring-cmm",
@@ -169,6 +171,7 @@ export const CARDS_EXAMPLE: Spec = {
         collectorNumber: "400",
         rarity: "uncommon",
         price: 1.2,
+        promoTypes: null,
       },
       {
         id: "ragavan-mh2",
@@ -177,6 +180,7 @@ export const CARDS_EXAMPLE: Spec = {
         collectorNumber: "138",
         rarity: "mythic",
         price: null,
+        promoTypes: ["surgefoil"],
       },
     ],
   },

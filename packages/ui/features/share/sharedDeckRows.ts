@@ -15,7 +15,7 @@
  * the wire, read from the other end.
  */
 import type { CategoryKind, DeckCard, DeckCategory } from "@/lib/ipc";
-import type { ShareDeck, ShareSnapshot } from "@/lib/shareSnapshot";
+import { sharePromoTypes, type ShareDeck, type ShareSnapshot } from "@/lib/shareSnapshot";
 
 /** The five pile kinds the rules read. A word this build does not know reads as `main`. */
 const KINDS: readonly CategoryKind[] = ["main", "side", "commander", "companion", "maybe"];
@@ -115,7 +115,9 @@ export function sharedDeckRows(snapshot: ShareSnapshot, deck: ShareDeck): Shared
       faces: null,
       gameChanger: null,
       finishes: null,
-      promoTypes: null,
+      // The printing's, when the publisher's build carried them (`pt`) — the deck face draws a
+      // Surge Foil copy as surge from it, exactly as the reader's own deck does.
+      promoTypes: sharePromoTypes(card),
       everUncommon: false,
       // `== null`, the format's absence: an unquoted finish is an em dash, never a zero.
       unitPrice: card.p ?? null,

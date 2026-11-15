@@ -248,6 +248,9 @@ export interface DeckTokenView {
   rarity: string | null;
   finishes: string | null;
   unitPrice: number | null;
+  /** The effective printing's `promo_types`, verbatim — what draws a Surge Foil token as surge
+   *  and names it on the chin (`finishTreatments`). */
+  promoTypes: string | null;
 }
 
 /**
@@ -366,6 +369,7 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     rarity: row.rarity,
     finishes: row.finishes,
     unitPrice: row.unitPrice,
+    promoTypes: row.promoTypes,
   };
 }
 

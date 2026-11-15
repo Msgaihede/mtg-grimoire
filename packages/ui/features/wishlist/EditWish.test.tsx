@@ -16,6 +16,7 @@ import { EditWishButton } from "./EditWish";
  */
 
 const BOLT: WishRow = {
+  promoTypes: null,
   // The Arena export filter's field and its only reader — nothing this suite drives touches it.
   legalities: null,
   layout: null,

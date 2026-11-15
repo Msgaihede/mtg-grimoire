@@ -203,6 +203,11 @@ pub struct WishRow {
     /// gets a flip button and a "Flip card" row). Off the same join, so it is always the layout
     /// of the picture on screen, and `None` exactly where that id is.
     pub layout: Option<String>,
+    /// JSON, verbatim: the `promo_types` of the printing [`Self::art_card_id`] names — what
+    /// names a Surge Foil wish on its chip and draws it as surge rather than as plain foil
+    /// (TypeScript's `finishTreatments`). Off the same join, so it describes the picture on
+    /// screen, and `None` where that id is or the printing has none.
+    pub promo_types: Option<String>,
     pub quantity: i64,
     pub preferred_finish: Option<String>,
     /// The cheapest way to satisfy this wish, per copy, at the marketplace the query named:
@@ -1576,7 +1581,10 @@ fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
                         AND k.id <> w.card_id)
                 END AS owned_other,
                 -- The wish's entry tags (user schema v67), appended for `c.type_line`'s reason.
-                w.tags
+                w.tags,
+                -- The drawn printing's promo types, appended for the same reason: what kind
+                -- of foil the picture is drawn as.
+                c.promo_types
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
@@ -1617,6 +1625,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     type_line: r.get(15)?,
                     art_card_id: r.get(16)?,
                     layout: r.get(20)?,
+                    promo_types: r.get(24)?,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
                     unit_price: r.get(11)?,
@@ -2848,6 +2857,31 @@ mod tests {
         assert_eq!(stored, "bolt-lea");
     }
 
+    /// The drawn printing's promo types arrive on the row — the fact the wall draws a Surge
+    /// Foil wish as surge from — and a printing with none answers `None`.
+    #[test]
+    fn list_wishes_carries_the_drawn_printings_promo_types() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+        let surge = add_pinned_wish(&conn, "bolt-lea", Some("foil"));
+        let plain = add_pinned_wish(&conn, "bolt-2ed", Some("foil"));
+        let page = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let promo = |id: i64| {
+            page.items
+                .iter()
+                .find(|w| w.id == id)
+                .unwrap()
+                .promo_types
+                .clone()
+        };
+        assert_eq!(promo(surge).as_deref(), Some(r#"["surgefoil"]"#));
+        assert_eq!(promo(plain), None);
+    }
+
     #[test]
     fn wish_row_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(WishRow {
@@ -2863,6 +2897,7 @@ mod tests {
             type_line: Some("Instant".into()),
             art_card_id: Some("bolt-2ed".into()),
             layout: Some("normal".into()),
+            promo_types: Some(r#"["surgefoil"]"#.into()),
             quantity: 4,
             preferred_finish: Some("foil".into()),
             unit_price: Some(40.0),
@@ -2889,7 +2924,8 @@ mod tests {
                 "id": 3, "oracleId": "o1", "cardId": null, "name": "Lightning Bolt",
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
                 "manaCost": "{R}", "typeLine": "Instant", "artCardId": "bolt-2ed",
-                "layout": "normal", "quantity": 4, "preferredFinish": "foil",
+                "layout": "normal", "promoTypes": "[\"surgefoil\"]",
+                "quantity": 4, "preferredFinish": "foil",
                 "unitPrice": 40.0, "notes": null, "tags": "[\"trade bait\"]",
                 "needsReview": null, "updatedAt": 1800000000,
                 "legalities": "{\"timeless\":\"legal\"}",

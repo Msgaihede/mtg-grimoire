@@ -111,6 +111,8 @@ function toTile(wish: WishRow, managed: boolean): WishTile {
     setCode: wish.setCode ?? "",
     collectorNumber: wish.collectorNumber ?? "",
     rarity: wish.rarity,
+    // The drawn printing's, off the same join as `art` — what draws a Surge Foil wish as surge.
+    promoTypes: wish.promoTypes,
     wish,
   };
 }

@@ -44,8 +44,14 @@ import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { resolveMarketplace, type Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
-import { shareDeckOf, type ShareCard, type ShareSnapshot } from "@/lib/shareSnapshot";
+import {
+  shareDeckOf,
+  sharePromoTypes,
+  type ShareCard,
+  type ShareSnapshot,
+} from "@/lib/shareSnapshot";
 import { useAppStore } from "@/lib/store";
+import { finishTreatments } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 import { AddToWishlist } from "./AddToWishlist";
 import { OpenShareDialog } from "./OpenShareDialog";
@@ -902,6 +908,9 @@ function SharedTile({
   // A published copy *is* the finish it was stored as. `nonfoil` goes unmarked, which is the
   // app's rule everywhere.
   const marked = finish === "nonfoil" ? null : finish;
+  // What the copy is called — a Surge Foil draws as surge and says so on the chin. `pt` is
+  // absent on a card an older build published, which reads as none.
+  const treatments = finishTreatments(sharePromoTypes(card), finish);
   // ⚠️ **`== null` and not `=== undefined`, and the loose equality is the point.** The writer
   // never emits `null` — both optional card fields carry `skip_serializing_if` — but *nothing*
   // validates that on the way in, and a `c: null` from a hand-made document would take the
@@ -923,7 +932,7 @@ function SharedTile({
       }
     >
       <div className="relative">
-        <CardArt cardId={card.id} name={card.n} finish={marked} />
+        <CardArt cardId={card.id} name={card.n} finish={marked} treatments={treatments} />
         {picked !== null && (
           // Top-left, which is the corner this wall leaves free: the finish chip owns top-right
           // everywhere in the app and the copy count owns bottom-left here. Backed the same way
@@ -955,6 +964,7 @@ function SharedTile({
         setCode={card.s}
         collectorNumber={card.cn}
         finish={marked}
+        treatments={treatments}
         // `undefined` rather than `null`: the chin draws no money slot for the first and an em
         // dash for the second, which is exactly the difference between "nobody asked" and
         // "nobody quoted". Both are live states here.

@@ -727,6 +727,46 @@ fn an_unpriced_finish_carries_no_value_and_does_not_fail_the_publish() {
 /// The image columns are read **positionally**, off the end of a select list this module builds
 /// by hand — `snapshot.rs`'s `IMAGE_COL`. Nothing else in this file would notice an offset
 /// that reads a folder uid as a URL, or reads nothing at all.
+/// The printing's promo types travel as `pt`, verbatim — what lets a viewer draw a Surge Foil
+/// copy as surge — and a printing with none carries **no key at all**, so the goldens, whose
+/// fixtures have none, are unchanged byte for byte.
+#[test]
+fn a_cards_promo_types_travel_as_pt_and_none_is_no_key() {
+    let conn = test_db();
+    card(&conn, "c1", "Fury Sliver");
+    card(&conn, "c2", "Plain Sliver");
+    conn.execute(
+        "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'c1'",
+        [],
+    )
+    .unwrap();
+    entry(&conn, "c1", None, 1);
+    entry(&conn, "c2", None, 1);
+
+    let s = snap(&conn, None);
+    let by_id = |id: &str| s.cards.iter().find(|c| c.id == id).unwrap();
+    assert_eq!(by_id("c1").pt.as_deref(), Some(r#"["surgefoil"]"#));
+    assert_eq!(by_id("c2").pt, None);
+    let wire = serde_json::to_value(&s).unwrap();
+    let wire_card = |id: &str| {
+        wire["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(wire_card("c1")["pt"], r#"["surgefoil"]"#);
+    assert!(wire_card("c2").get("pt").is_none(), "absent, never null");
+
+    // A wishlist share carries the drawn printing's, an any-printing wish included.
+    oracle(&conn, "c1", "o1");
+    wish(&conn, None, "o1", None, Some("foil"));
+    let w = snap(&conn, Some("wishlist:"));
+    assert_eq!(w.cards[0].pt.as_deref(), Some(r#"["surgefoil"]"#));
+}
+
 #[test]
 fn the_front_face_picture_travels_with_the_card() {
     let conn = test_db();
@@ -1123,6 +1163,23 @@ fn a_binder_carries_no_deck_half_and_no_deck_facts() {
     for key in ["t", "mc", "mv"] {
         assert!(card.get(key).is_none(), "{key} on a binder's card: {card}");
     }
+}
+
+/// A deck's card carries its printing's promo types as `pt`, as a binder's does.
+#[test]
+fn a_deck_card_carries_its_printings_promo_types() {
+    let conn = test_db();
+    spell(&conn, "b1", "Lightning Bolt", "Instant", "{R}", 1.0);
+    conn.execute(
+        "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = 'b1'",
+        [],
+    )
+    .unwrap();
+    let deck = shared_deck(&conn, "Burn", "deckuid-burn");
+    let pile = crate::deck_meta::create_category(&conn, deck, "live", "Burn").unwrap();
+    put(&conn, deck, "b1", pile.id, 4);
+    let s = snap(&conn, Some("deck:deckuid-burn"));
+    assert_eq!(s.cards[0].pt.as_deref(), Some(r#"["surgefoil"]"#));
 }
 
 /// The reader's own words about their deck never reach the wire — the description, the tags and

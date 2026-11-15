@@ -14,6 +14,7 @@ const item = (n: number, over: Partial<WallItem> = {}): WallItem => ({
   rarity: "common",
   chin: { setCode: "lea", collectorNumber: String(n) },
   finish: null,
+  promoTypes: null,
   money: "$1.00",
   count: 1,
   pressLabel: `Card ${n}, LEA ${n}`,

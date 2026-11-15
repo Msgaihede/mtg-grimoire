@@ -3,8 +3,10 @@ import { CardArt } from "@grimoire/ui/components/CardArt";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { type Currency } from "@grimoire/ui/lib/marketplace";
 import { formatPrice } from "@grimoire/ui/lib/prices";
+import { finishTreatments } from "@grimoire/ui/lib/treatment";
 import {
   shareImage,
+  sharePromoTypes,
   type ShareCard,
   type ShareDeck as ShareDeckHalf,
   type ShareSnapshot,
@@ -287,6 +289,7 @@ function Stacks({ groups }: { groups: Group[] }) {
                   name={card.n}
                   remoteSrc={shareImage(card)}
                   finish={finishMark(card)}
+                  treatments={finishTreatments(sharePromoTypes(card), wireFinish(card.f))}
                   loading="lazy"
                 />
                 {card.q > 1 && (

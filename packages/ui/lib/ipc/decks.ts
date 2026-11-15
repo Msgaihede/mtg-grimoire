@@ -2628,6 +2628,12 @@ export interface DeckTokenRow {
    *  holds, and `parseFinishes` in `@/lib/finish` is the one reader of it on this side. */
   finishes: string | null;
   /**
+   * JSON: the printing's `promo_types`, verbatim, or `null` — **this entry's printing's**, {@link cardId}'s, like the chin beside it. Read it with
+   * `finishTreatments` from `@/lib/treatment`, which names a Surge Foil on the chip and draws it
+   * as surge rather than as plain foil.
+   */
+  promoTypes: string | null;
+  /**
    * What one copy of this entry costs at the marketplace {@link ipc.deckTokens} was asked for,
    * **at the entry's own {@link finish}** (user schema v52) — `sorting::price_expr` at that
    * finish, the set arm of {@link DeckCard.unitPrice}'s rule, with **no fallback across

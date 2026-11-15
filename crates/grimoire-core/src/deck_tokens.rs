@@ -379,6 +379,9 @@ pub struct DeckTokenRow {
     /// (`["nonfoil","foil"]`) — `packages/ui/lib/finish.ts`' `parseFinishes` input, not a second shape.
     /// What the picker offers; [`Self::finish`] is what this entry is.
     pub finishes: Option<String>,
+    /// This entry's printing's `promo_types`, as the JSON text `cards.promo_types` holds — what
+    /// names a Surge Foil token on its chip and draws it as surge rather than as plain foil.
+    pub promo_types: Option<String>,
     /// What one copy of this entry costs in the asked marketplace **at [`Self::finish`]**
     /// ([`printing_price`]), or `None` where that marketplace has no figure — never `0`, which a
     /// pile heading's sum would count as a free card.
@@ -406,6 +409,7 @@ struct Printing {
     set_name: Option<String>,
     rarity: Option<String>,
     finishes: Option<String>,
+    promo_types: Option<String>,
 }
 
 /// The columns [`Printing`] reads, in its own order.
@@ -417,7 +421,8 @@ struct Printing {
 /// [`printing_from`] reads by position, so a column added anywhere but the end shifts every later
 /// index into a field of the same SQLite type, silently — [`crate::deck`]'s `deck_row` rule.
 const PRINTING_COLUMNS: &str = "id, oracle_id, name, type_line, layout, power, toughness, colors,
-     oracle_text, released_at, set_code, collector_number, set_name, rarity, finishes";
+     oracle_text, released_at, set_code, collector_number, set_name, rarity, finishes,
+     promo_types";
 
 /// A [`Printing`], or `None` when the row carries no `oracle_id` and so cannot be grained.
 ///
@@ -447,6 +452,7 @@ fn printing_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Printing>> {
         set_name: r.get(12)?,
         rarity: r.get(13)?,
         finishes: r.get(14)?,
+        promo_types: r.get(15)?,
     }))
 }
 
@@ -965,6 +971,7 @@ fn row_of(
         set_name: drawn.set_name,
         rarity: drawn.rarity,
         finishes: drawn.finishes,
+        promo_types: drawn.promo_types,
         unit_price: drawn.unit_price,
     }
 }
@@ -978,6 +985,7 @@ struct Drawn {
     set_name: Option<String>,
     rarity: Option<String>,
     finishes: Option<String>,
+    promo_types: Option<String>,
     unit_price: Option<f64>,
 }
 
@@ -1007,6 +1015,7 @@ fn drawn_for(
         set_name: printing.set_name.clone(),
         rarity: printing.rarity.clone(),
         finishes: printing.finishes.clone(),
+        promo_types: printing.promo_types.clone(),
         unit_price: printing_price(conn, &printing.id, finish, market)?,
     })
 }
@@ -1022,7 +1031,7 @@ fn picked_printing(
 ) -> Result<Drawn, String> {
     let found = conn
         .query_row(
-            "SELECT set_code, collector_number, set_name, rarity, finishes
+            "SELECT set_code, collector_number, set_name, rarity, finishes, promo_types
                FROM cards WHERE id = ?1",
             params![card_id],
             |r| {
@@ -1032,6 +1041,7 @@ fn picked_printing(
                     set_name: r.get(2)?,
                     rarity: r.get(3)?,
                     finishes: r.get(4)?,
+                    promo_types: r.get(5)?,
                     unit_price: None,
                 })
             },
@@ -3647,6 +3657,31 @@ mod tests {
         assert_eq!(t.rarity.as_deref(), Some("common"));
         assert_eq!(t.finishes.as_deref(), Some(r#"["nonfoil"]"#));
         assert_eq!(t.unit_price, Some(0.25));
+        assert_eq!(t.promo_types, None, "a printing with none answers none");
+    }
+
+    /// The drawn printing's promo types ride the row — what draws a Surge Foil token as surge —
+    /// for the resolver's printing and for a printing the reader picked alike.
+    #[test]
+    fn a_token_row_carries_its_drawn_printings_promo_types() {
+        let conn = open();
+        let (deck, main, _) = deck_with_piles(&conn);
+        tithe().insert(&conn);
+        treasure().insert(&conn);
+        conn.execute(
+            "UPDATE cards SET promo_types = '[\"surgefoil\"]' WHERE id = ?1",
+            params![treasure().id],
+        )
+        .unwrap();
+        play(&conn, deck, main, &tithe(), "live");
+
+        let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
+        let t = rows.iter().find(|r| r.name == "Treasure").unwrap();
+        assert_eq!(t.promo_types.as_deref(), Some(r#"["surgefoil"]"#));
+
+        let picked =
+            picked_printing(&conn, treasure().id, "nonfoil", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(picked.promo_types.as_deref(), Some(r#"["surgefoil"]"#));
     }
 
     /// **A foil-only printing is priced at its foil rate, never read as unpriced** — reading
@@ -7773,6 +7808,7 @@ mod tests {
                 "oracleId",
                 "oracleText",
                 "power",
+                "promoTypes",
                 "quantity",
                 "rarity",
                 "setCode",

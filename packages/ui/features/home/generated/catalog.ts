@@ -35,6 +35,16 @@ import { schema } from "@json-render/react/schema";
 import { z } from "zod";
 import { PANELS, type PanelId } from "@/features/settings/nav";
 
+/**
+ * A printing's `promoTypes`, as the read graph answers them (`["surgefoil"]`) — what names a Surge
+ * Foil and draws it as surge rather than as plain foil.
+ *
+ * **`.nullish()`, the one exception to the `.nullable()` rule**: it arrived after widgets were
+ * stored, and a `.nullable()` prop is a required key, so every stored spec drawing a card would
+ * have stopped validating the day it shipped. Left out and `null` both mean none.
+ */
+const PROMO_TYPES = z.array(z.string()).nullish();
+
 /** The gap scale every layout component shares. */
 const GAP = z.enum(["none", "sm", "md", "lg"]).nullable();
 
@@ -250,9 +260,10 @@ export const catalog = defineCatalog(schema, {
         face: z.number().int().min(0).max(1).nullable(),
         finish: FINISH.nullable(),
         size: z.enum(["sm", "md", "lg"]).nullable(),
+        promoTypes: PROMO_TYPES,
       }),
       description:
-        "A card's picture, by its printing's Scryfall id (`cardId`). `face` 1 is a double-faced card's back. `finish: foil` draws the foil sheen.",
+        "A card's picture, by its printing's Scryfall id (`cardId`). `face` 1 is a double-faced card's back. `finish: foil` draws the foil sheen; bind `promoTypes` from the graph's field of that name and a Surge, Ripple or other special foil draws as its own kind (optional).",
     },
     CardTile: {
       props: z.object({
@@ -263,9 +274,10 @@ export const catalog = defineCatalog(schema, {
         rarity: z.string().nullable(),
         finish: FINISH.nullable(),
         price: z.number().nullable(),
+        promoTypes: PROMO_TYPES,
       }),
       description:
-        "A card as the app's walls draw it: its picture, and its set, number and rarity under it, with an optional price. Pressable when its `press` event is bound — usually to `openCard`.",
+        "A card as the app's walls draw it: its picture, and its set, number and rarity under it, with an optional price. Bind `promoTypes` from the graph's field of that name and a special foil draws as its own kind and is named on the chin (optional). Pressable when its `press` event is bound — usually to `openCard`.",
     },
     RarityGem: {
       props: z.object({
@@ -276,8 +288,9 @@ export const catalog = defineCatalog(schema, {
         "A printing's rarity as a coloured gem (`common`, `uncommon`, `rare`, `mythic`).",
     },
     FinishMark: {
-      props: z.object({ finish: FINISH }),
-      description: "A copy's finish as the app's glyph — sparkles for foil, a gem for etched.",
+      props: z.object({ finish: FINISH, promoTypes: PROMO_TYPES }),
+      description:
+        "A copy's finish as the app's glyph — sparkles for foil, a gem for etched. With `promoTypes` bound, a special foil is named as itself (Surge Foil) (optional).",
     },
     SetSymbol: {
       props: z.object({

@@ -113,6 +113,7 @@ describe("dealSetPacks", () => {
   it("never deals a card this corpus lacks", () => {
     const missing = SET.products[0].sheets[0].cards[0].cardId;
     const unknown: BoosterCard = {
+      promoTypes: null,
       cardId: missing,
       name: "Unknown",
       setCode: SET.code,

@@ -87,6 +87,7 @@ import { LAYER } from "@/lib/layers";
 import type { Currency } from "@/lib/marketplace";
 import { PRESS, stackCard } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
+import { finishTreatments } from "@/lib/treatment";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { DeckFinishMark, theoryMatchLabel, WordMark } from "../CardMarks";
@@ -199,8 +200,8 @@ export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
     needsReview: null,
     finish: tokenDeckFinish(view),
     finishes: view.finishes,
-    // A token row carries no promo types, so a foil token draws traditional foil.
-    promoTypes: null,
+    // The entry's printing's, so a Surge Foil token draws as surge as a deck card does.
+    promoTypes: view.promoTypes,
     name: view.name,
     manaCost: null,
     typeLine: view.typeLine,
@@ -213,11 +214,11 @@ export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
 
 /**
  * An entry as `DeckFinishMark` reads a deck row — the entry's finish, the printing's finishes and
- * no treatment (a token row carries no promo types) — so the two compact drawings mark a foil
- * entry with the very glyph a deck line and a deck row draw, and never a second spelling of it.
+ * its promo types — so the two compact drawings mark a foil entry with the very glyph and word a
+ * deck line and a deck row draw, and never a second spelling of it.
  */
 function entryFinishFacts(view: DeckTokenView) {
-  return { finish: tokenDeckFinish(view), finishes: view.finishes, promoTypes: null };
+  return { finish: tokenDeckFinish(view), finishes: view.finishes, promoTypes: view.promoTypes };
 }
 
 /**
@@ -637,6 +638,10 @@ function TokenFace({
         // printing's sole finish — so the sheen on the face and the word in the foot cannot
         // disagree, and a token's foil entry and its regular one say two different things.
         finish={playedFinish(tokenDeckFinish(view), view.finishes)}
+        treatments={finishTreatments(
+          view.promoTypes,
+          playedFinish(tokenDeckFinish(view), view.finishes),
+        )}
         money={formatPrice(view.unitPrice, currency)}
         seam="card"
         // The card's own edge, carried down through the foot — see {@link cardEdge}.

@@ -35,6 +35,7 @@ function boosterSetOf(code: string, name: string): BoosterSet {
   const uncommons = PAPER.filter((c) => c.rarity === "uncommon");
   const rares = PAPER.filter((c) => c.rarity === "rare" || c.rarity === "mythic");
   const facts: BoosterCard[] = PAPER.map((c) => ({
+    promoTypes: null,
     cardId: c.id,
     name: c.name,
     setCode: c.setCode,

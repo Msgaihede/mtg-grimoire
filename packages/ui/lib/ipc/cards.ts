@@ -578,6 +578,12 @@ export interface FinishPrices {
 export interface PrintingPrices {
   cardId: string;
   finishPrices: FinishPrices;
+  /**
+   * JSON: the printing's `promo_types`, verbatim, or `null` — the scanner tray's one read of `cards`, so it rides beside the prices. Read it with
+   * `finishTreatments` from `@/lib/treatment`, which names a Surge Foil on the chip and draws it
+   * as surge rather than as plain foil.
+   */
+  promoTypes: string | null;
 }
 
 /** Everything the detail pane renders about one printing. */

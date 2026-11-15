@@ -40,6 +40,7 @@ import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { BUTTON, SWITCH, TOUCH_FIELD, switchTone } from "@/features/settings/controls";
 import { setGlyphClass } from "@/lib/keyrune";
+import { finishTreatments } from "@/lib/treatment";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -227,6 +228,14 @@ function Chart({ props }: ComponentContext<Catalog, "PriceChart">): ReactElement
   return <PriceChart points={points} currency={currency} summary={props.summary} />;
 }
 
+/**
+ * The graph's `promoTypes` list as the JSON text `finishTreatments` reads — the column's own
+ * shape, so a widget's card and a wall's are named by one function. `null` for none.
+ */
+function promoText(promoTypes: readonly string[] | null | undefined): string | null {
+  return promoTypes && promoTypes.length > 0 ? JSON.stringify(promoTypes) : null;
+}
+
 function Tile(ctx: ComponentContext<Catalog, "CardTile">): ReactElement {
   const { props } = ctx;
   const currency = useCurrency();
@@ -236,6 +245,7 @@ function Tile(ctx: ComponentContext<Catalog, "CardTile">): ReactElement {
       name={props.name}
       rarity={props.rarity}
       finish={props.finish}
+      promoTypes={promoText(props.promoTypes)}
       chin={{ setCode: props.setCode, collectorNumber: props.collectorNumber }}
       money={props.price === null ? undefined : formatPrice(props.price, currency)}
       onPress={pressOf(ctx)}
@@ -657,6 +667,7 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
           name={props.name}
           face={props.face ?? 0}
           finish={props.finish}
+          treatments={finishTreatments(promoText(props.promoTypes), props.finish)}
         />
       </div>
     ),
@@ -664,7 +675,12 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
     RarityGem: ({ props }) => (
       <RarityGem rarity={props.rarity} withLabel={props.withLabel ?? false} />
     ),
-    FinishMark: ({ props }) => <FinishMark finish={props.finish} />,
+    FinishMark: ({ props }) => (
+      <FinishMark
+        finish={props.finish}
+        treatments={finishTreatments(promoText(props.promoTypes), props.finish)}
+      />
+    ),
     SetSymbol: ({ props }) => (
       <i
         role="img"

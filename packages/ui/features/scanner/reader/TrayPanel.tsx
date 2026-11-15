@@ -44,6 +44,7 @@ import type {
 } from "@/lib/ipc";
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
+import { finishTreatments } from "@/lib/treatment";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import type { TrayDestinationFace } from "../useTrayDestination";
@@ -466,7 +467,10 @@ export function TrayPanel({
   // An archive is the Scanner view's own history, and a side of a trade is not a pile to keep a
   // record of here — so a destination draws no Archive whatever the page hands down.
   const archive = destination === undefined ? onArchive : undefined;
-  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, destination?.marketplace);
+  const { priceOf, promoTypesOf, currency, marketplaceLabel } = useTrayPrices(
+    rows,
+    destination?.marketplace,
+  );
   const money: Money = { currency, marketplaceLabel };
   // The same unit price each card shows, times its copies — so the figure in the header is the sum
   // of the figures under the cards, and a card whose price has not been read yet is in neither.
@@ -651,6 +655,7 @@ export function TrayPanel({
                 zoom={zoom}
                 flash={row.key === flashKey}
                 price={priceOf(row)}
+                promoTypes={promoTypesOf(row)}
                 money={money}
                 onQuantity={on.onQuantity}
                 onFinish={on.onFinish}
@@ -1345,6 +1350,7 @@ function TrayTile({
   zoom,
   flash,
   price,
+  promoTypes,
   money,
   onQuantity,
   onFinish,
@@ -1356,6 +1362,9 @@ function TrayTile({
   zoom: number;
   flash: boolean;
   price: number | null | undefined;
+  /** The printing's `promo_types` (`useTrayPrices`' `promoTypesOf`), so a Surge Foil draws as
+   *  surge. */
+  promoTypes: string | null;
   money: Money;
   onQuantity: (q: number) => void;
   onFinish: (f: ScannerTrayFinish) => void;
@@ -1378,6 +1387,9 @@ function TrayTile({
         name={row.name}
         variant={tileVariant(zoom)}
         finish={isKnownFinish(row.finish) ? row.finish : null}
+        treatments={
+          isKnownFinish(row.finish) ? finishTreatments(promoTypes, row.finish) : undefined
+        }
         loading="lazy"
         className="rounded-none border-0"
       />

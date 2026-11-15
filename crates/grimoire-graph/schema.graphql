@@ -147,6 +147,12 @@ type CardDetail {
 	"""
 	oracleTags: [String!]!
 	oracleText: String
+	"""
+	Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+	names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+	none.
+	"""
+	promoTypes: [String!]
 	rarity: String
 	"""
 	The printing's release date, `YYYY-MM-DD`.
@@ -484,6 +490,12 @@ type CardSummary {
 	"""
 	printings: Int!
 	"""
+	Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+	names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+	none.
+	"""
+	promoTypes: [String!]
+	"""
 	`common`, `uncommon`, `rare`, `mythic`, `special` or `bonus`.
 	"""
 	rarity: String
@@ -592,6 +604,12 @@ type CollectionEntry {
 	The card's Scryfall oracle id. Null only when the printing has left the card database.
 	"""
 	oracleId: String
+	"""
+	Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+	names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+	none.
+	"""
+	promoTypes: [String!]
 	proxy: Boolean!
 	purchaseCurrency: String
 	"""
@@ -1967,6 +1985,12 @@ type Printing {
 	Scryfall marks this printing a promo.
 	"""
 	promo: Boolean!
+	"""
+	Scryfall's `promo_types` for the printing (`surgefoil`, `halofoil`, `showcase`, …) — what
+	names a foil's kind, so a widget can draw a Surge Foil copy as surge. Absent when it has
+	none.
+	"""
+	promoTypes: [String!]
 	rarity: String
 	"""
 	The printing's release date, `YYYY-MM-DD`.
@@ -3201,6 +3225,12 @@ type WishlistEntry {
 	The finish the reader wants, or null for any.
 	"""
 	preferredFinish: Finish
+	"""
+	Scryfall's `promo_types` for the printing the wish is drawn as (`surgefoil`, `halofoil`,
+	`showcase`, …) — what names a foil's kind, so a widget can draw a Surge Foil wish as surge.
+	Absent when it has none.
+	"""
+	promoTypes: [String!]
 	"""
 	Copies wanted.
 	"""

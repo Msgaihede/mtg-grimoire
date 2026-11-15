@@ -156,6 +156,12 @@ export interface WishRow {
    * picture on screen; `null` exactly where `artCardId` is.
    */
   layout: string | null;
+  /**
+   * JSON: the printing's `promo_types`, verbatim, or `null` — of the printing {@link WishRow.artCardId} names, off the same join, so it describes the picture on screen. Read it with
+   * `finishTreatments` from `@/lib/treatment`, which names a Surge Foil on the chip and draws it
+   * as surge rather than as plain foil.
+   */
+  promoTypes: string | null;
   quantity: number;
   preferredFinish: string | null;
   /** The cheapest way to satisfy this wish, per copy, at the marketplace the query named: the

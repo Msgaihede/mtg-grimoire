@@ -50,6 +50,7 @@ export function WallTile({
       rarity={item.rarity}
       chin={item.chin}
       finish={item.finish}
+      promoTypes={item.promoTypes}
       money={item.money}
       pressLabel={copies === null ? item.pressLabel : `${item.pressLabel}, ${copies}`}
       onPress={item.cardId === null ? undefined : () => onOpen(item)}

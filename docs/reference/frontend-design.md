@@ -397,11 +397,22 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     regular frame's. Both were weighed and kept, so do not add a "picture already shows it" fence
     for these two without asking.
   - **Where a drawing is shown did not change**: wherever the old sheen was (a copy whose finish
-    is known, the card pane's chosen finish, and on a printing wall only `soleFinish`). Surfaces
-    that pass a finish but no treatments — the wishlist, trades, the scanner tray, opened packs,
-    tokens, the phone's walls, the share viewer — draw traditional foil, because their rows carry
-    no promo types. The collection wall did too until the live check (2026-11-15) found it: its
-    rows always had `promoTypes`, and the wall simply never handed the tile a `treatment`.
+    is known, the card pane's chosen finish, and on a printing wall only `soleFinish`).
+  - **Every wall and display draws the kind** (the owner's call, 2026-11-15), so every row a
+    foil is drawn from carries the printing's `promoTypes`, verbatim, and the surface hands
+    `finishTreatments(promoTypes, finish)` to `CardArt` and `CardChin`. `CardTile` and
+    `CardGrid` take the raw column themselves (`CardTile`'s `promoTypes`, `GridCard.promoTypes`,
+    used whenever a wall passes no `treatment`), so a new wall cannot forget the step. The rows
+    that had to learn the column: `WishRow`, `TradeLine`, `DeckTokenRow`, `BoosterCard` (opened
+    packs) and `PrintingPrices` (the scanner tray's one read of `cards`); a shared snapshot
+    carries it as each card's optional `pt` key (`sharePromoTypes` reads it, and an older build's
+    card reads as none); and the read graph answers `promoTypes` on `CardSummary`, `CardDetail`,
+    `Printing`, `CollectionEntry` and `WishlistEntry`, which a generated widget binds to the
+    catalogue's `CardArt`, `CardTile` and `FinishMark`. That catalogue prop is `.nullish()`, the
+    one exception to its `.nullable()` rule, because a required key would have invalidated
+    every stored widget that draws a card. The collection wall was the first found missing (the
+    live check, 2026-11-15): its rows always had `promoTypes`, and it simply never handed the
+    tile a `treatment`.
 - **A mark drawn _inside_ the tile's button joins that button's accessible name.** The foil
   chip did, and a wall of foils became buttons called "Consecrated Sphinx Foil" — measured in
   the shipped window, where a tile button's name came back as bare "Foil". The whole

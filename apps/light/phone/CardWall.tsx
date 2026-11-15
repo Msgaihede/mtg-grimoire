@@ -17,6 +17,9 @@ export interface WallItem {
   rarity: string | null;
   chin: ChinPrinting;
   finish: Finish | null;
+  /** The printing's `promo_types`, verbatim — a Surge Foil draws as surge and is named on the
+   *  chin (`CardTile`'s prop). `null` for none. */
+  promoTypes: string | null;
   /** Already formatted. `undefined` draws no money slot at all. */
   money: string | undefined;
   /** Copies. Drawn as a tag on the art only above one, and said in the tile's name there too. */

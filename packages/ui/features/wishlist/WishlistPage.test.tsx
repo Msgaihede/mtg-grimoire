@@ -176,6 +176,7 @@ const SOL_RING: ImportMatch = {
 
 /** A wish pinned to one printing, for four copies. */
 const BOLT: WishRow = {
+  promoTypes: null,
   legalities: null,
   layout: null,
   id: 7,

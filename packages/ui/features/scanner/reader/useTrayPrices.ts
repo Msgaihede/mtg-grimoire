@@ -17,6 +17,8 @@ export interface Answered {
   marketplace: MarketplaceId;
   asked: ReadonlySet<string>;
   prices: TrayPriceMap;
+  /** Each printing's `promo_types`, off the same read — what draws a Surge Foil row as surge. */
+  promoTypes: ReadonlyMap<string, string | null>;
 }
 
 /**
@@ -29,11 +31,15 @@ export function trayPricesQuery(marketplace: MarketplaceId, ids: readonly string
     queryFn:
       ids.length === 0
         ? skipToken
-        : async (): Promise<Answered> => ({
-            marketplace,
-            asked: new Set(ids),
-            prices: trayPriceMap(await ipc.printingPrices([...ids], marketplace)),
-          }),
+        : async (): Promise<Answered> => {
+            const rows = await ipc.printingPrices([...ids], marketplace);
+            return {
+              marketplace,
+              asked: new Set(ids),
+              prices: trayPriceMap(rows),
+              promoTypes: new Map(rows.map((row) => [row.cardId, row.promoTypes])),
+            };
+          },
   });
 }
 
@@ -62,6 +68,9 @@ export function useTrayPrices(
   at?: MarketplaceId,
 ): {
   priceOf: (row: ScannerTrayRow) => number | null | undefined;
+  /** The row's printing's promo types, or `null` — none, or not answered yet. A marketplace
+   *  switch does not move them, so the previous key's answer is as good as the new one's. */
+  promoTypesOf: (row: ScannerTrayRow) => string | null;
   currency: Currency;
   marketplaceLabel: string;
 } {
@@ -82,6 +91,8 @@ export function useTrayPrices(
       !answered.asked.has(row.cardId)
         ? undefined
         : trayRowPrice(row, answered.prices),
+    promoTypesOf: (row) =>
+      row.choices.length > 0 ? null : (answered?.promoTypes.get(row.cardId) ?? null),
     currency: marketplace.currency,
     marketplaceLabel: marketplace.label,
   };

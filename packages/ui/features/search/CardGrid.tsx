@@ -37,7 +37,7 @@ import { PendingSlot, ShelfRails, shelfRowKey, stickyShelfAt } from "@/features/
 import { cardScaleVars, CHIN_RISE, chinHeight, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import type { Finish } from "@/lib/finish";
-import type { Treatment } from "@/lib/treatment";
+import { finishTreatments, type Treatment } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import {
@@ -108,6 +108,16 @@ export interface GridCard {
   setCode: string;
   collectorNumber: string;
   rarity: string | null;
+  /**
+   * The printing's `promo_types`, verbatim, where the row has it — what names a Surge Foil on the
+   * chip and draws it as surge rather than as plain foil. A wall that passes {@link CardGrid} no
+   * `treatment` has its tiles' treatments read from here, against the tile's own `finish`; a row
+   * without the field draws traditional foil.
+   *
+   * On the base interface (2026-11-15) because "every card wall uses the new foils" (the owner)
+   * meant every wall had to pass a callback it would have written identically each time.
+   */
+  promoTypes?: string | null;
 }
 
 /**
@@ -655,8 +665,9 @@ export function CardGrid<T extends GridCard>({
    * existing marks already do for each other's reason: they answer about different columns
    * (`finishes` and `promo_types`), a caller may honestly have one and not the other, and a
    * `{finish, treatments}` pair would make every existing call site build an object per tile
-   * on every render. Absent means no tile is named, which is what a wall with no
-   * `promoTypes` on its rows must draw.
+   * on every render. **Absent means the tile's own `promoTypes`** (see {@link GridCard.promoTypes})
+   * read against its finish — so a wall whose rows carry the field names and draws its special
+   * foils without passing anything, and one whose rows do not draws traditional foil.
    *
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}. A fresh arrow
    * per render tears every tile's drag registration down and rebuilds it on every scrolled row.
@@ -2718,7 +2729,12 @@ function Tile<T extends GridCard>({
   const corner = topLeft?.(card);
   const footMark = bottomRight?.(card);
   const tileFinish = finish?.(card) ?? null;
-  const tileTreatments = treatment?.(card) ?? [];
+  // The caller's answer, else the row's own promo types read against this tile's finish — what
+  // makes a Surge Foil copy on any wall draw as surge with no callback of its own.
+  const tileTreatments = useMemo(
+    () => treatment?.(card) ?? finishTreatments(card.promoTypes ?? null, tileFinish),
+    [treatment, card, tileFinish],
+  );
   const crowned = gameChanger?.(card) ?? false;
   const stamp = unreleased?.(card) ?? null;
   const broken = ruleBreak?.(card) ?? null;

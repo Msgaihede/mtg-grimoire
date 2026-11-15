@@ -27,6 +27,7 @@ export function wallItem(card: FakeCard, over: Partial<WallItem> = {}): WallItem
       printingTitle: card.setName,
     },
     finish: null,
+    promoTypes: card.promoTypes,
     money: formatPrice(card.priceUsd, "usd"),
     count: 1,
     pressLabel: `${card.name}, ${card.setCode.toUpperCase()} ${card.collectorNumber}`,

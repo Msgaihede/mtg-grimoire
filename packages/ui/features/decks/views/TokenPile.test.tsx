@@ -55,6 +55,7 @@ beforeEach(() => {
  */
 function token(over: Partial<DeckTokenView> = {}): DeckTokenView {
   const base: DeckTokenView = {
+    promoTypes: null,
     oracleId: "o-treasure",
     name: "Treasure",
     typeLine: "Token Artifact — Treasure",
