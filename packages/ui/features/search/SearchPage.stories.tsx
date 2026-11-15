@@ -2,6 +2,7 @@ import { useState } from "react";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { STACK_PRINTINGS } from "@/components/FilterChips";
 import { GAME_CHANGER_HINT, GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { useAppStore, type SearchView } from "@/lib/store";
@@ -100,8 +101,9 @@ const meta = {
           "row per card, where nine of the survivors are further printings of a card already in " +
           "the list (four Lightning Bolts, three Elesh Norns, three Swords to Plowshares, two " +
           "Sol Rings, two Ancestral Recalls) — **47 → 38**. " +
-          "So `38 cards` is what every play below waits for; picking `Any card` in the format " +
-          "select gets 47 and All printings asks for the whole 57 " +
+          "So `38 cards` is what every play below waits for; turning on **Tokens & extras** in " +
+          "the Filters popup's Include cell gets 47, and un-pressing **Stack printings** asks " +
+          "for the whole 57 " +
           "({@link CollapsedPrintings}). Measured " +
           '2026-08-10 by calling `readHandlers(seed("starter")).search_cards` with the page\'s ' +
           "own request, re-measured 2026-08-14 after the playable filter landed — the two " +
@@ -111,7 +113,7 @@ const meta = {
           "when seven token and emblem rows joined it for the deck editor's Tokens & Emblems " +
           "band. **`37` did not move that last time and that is the point of the chain**: a " +
           "token is legal in no format, so all seven fall at the `playableOnly` step, and only " +
-          "the two figures either side of it — the paper total and the `Any card` count — " +
+          "the two figures either side of it — the paper total and the Tokens & extras count — " +
           "change.\n\n" +
           "**Two states this page can show have no story here, for two different reasons.** A " +
           "sync in flight is unreachable through the fake at all — its `sync_status` answers " +
@@ -163,8 +165,12 @@ export const Default: Story = {
  * What the collapse actually does, in one row.
  *
  * Sol Ring is printed twice in this corpus — `sld 913` (2025-12-01) and `c21 263` (2021-04-23)
- * — so collapsed it is **one** row that says `×2 printings` and prices across both. Press All
- * printings and it is two rows, each priced on its own.
+ * — so collapsed it is **one** row that says `×2 printings` and prices across both. Press
+ * `Stack printings` off and it is two rows, each priced on its own.
+ *
+ * **Pressed is the stacked wall** (the Filter bar board, 2026-11): the switch was `Show all
+ * printings` until then, with the opposite reading, and it is on the bar at every width now rather
+ * than a cell of the Filters popup.
  *
  * Three rules are visible here at once. The **representative is the newest printing**, so the
  * set cell reads `SLD · 913` and not the older one. The **count and the range describe what
@@ -204,8 +210,12 @@ export const CollapsedPrintings: Story = {
       { timeout: 5000 },
     );
 
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
+    // `Stack printings` is on the bar at every width and pressed by default — one tile per card —
+    // so un-pressing it is what asks for every printing.
+    const stack = canvas.getByRole("button", { name: STACK_PRINTINGS });
+    await expect(stack).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(stack);
+    await expect(stack).toHaveAttribute("aria-pressed", "false");
 
     // Two rows now, and neither claims to stand for more than itself.
     await waitFor(async () => {
@@ -216,14 +226,15 @@ export const CollapsedPrintings: Story = {
 };
 
 /**
- * The cards the search hides, and the row of the format select that asks for them back.
+ * The cards the search hides, and the Filters popup's **Tokens & extras** toggle that asks for them
+ * back.
  *
  * **The page opens on `Any format`, and that row means hidden** — which is the whole of what
  * makes this worth a story, because a filter that is on before the reader touches anything is
  * otherwise invisible. `playableOnly` narrows to `cards.legal_mask != 0`: legal or restricted in
  * at least one of Scryfall's 23 formats. Three of the fixture's 41 paper printings fail it — the
  * `astx` art card, `Kozilek, Compleated` (a Mystery Booster 2 playtest card) and `Little Girl`
- * (Unhinged) — so the caption steps 33 → 36 when the select moves one row up to `Any card`.
+ * (Unhinged) — so the caption steps 38 → 47 when the Include cell's toggle goes on.
  *
  * The art card is the case that says why the default is what it is. It is named
  * `Prismatic Ending // Prismatic Ending`, which is the card's name **twice**, and bm25 rewards
@@ -231,12 +242,12 @@ export const CollapsedPrintings: Story = {
  * `search::non_card_rank` demoted them. This filter is the other half of that fix: ranking
  * decides what comes first, and this decides whether it is there at all.
  *
- * It was an `Unplayable` chip beside All printings until 2026-08-14, on the argument that both
- * said what there is to look *through* rather than what to look for. It is a row of the format
- * select now: that select was already answering "legal in at least one format", so the two
- * controls were moving one axis in opposite directions and could between them reach "Modern,
- * and also the art cards" — a filter contradicting itself. As a row of the select it is counted
- * by Reset all and cleared by it, which the chip was not.
+ * It was an `Unplayable` chip beside All printings until 2026-08-14, then the format picker's
+ * `Any card` row until the Filter bar board (2026-11), and it is the Include cell's toggle now —
+ * **the same `format` sentinel (`ANY_CARD`) all along**, so it still cannot stand beside a named
+ * format: turning it on puts the picker back to `Any format`, and picking a format turns it off.
+ * "Modern, and also the art cards" would be a filter contradicting itself. It is counted by Reset
+ * and cleared by it, and stated under the bar as `Showing: Tokens & extras`.
  */
 export const Unplayable: Story = {
   args: { view: "table" },
@@ -245,21 +256,31 @@ export const Unplayable: Story = {
     await canvas.findByText("38 cards");
 
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    // Set, Format, Owned, Rarity, Price and Printings live in the filter row's tray since the
-    // row was redesigned — only the box, the colours, the mana values and the sort are on the
-    // bar at every width.
+    // Set, Format, Universe, Type, Rarity, Price, Finish, Border, Owned and Include live in the
+    // Filters popup — the box, the colours, the mana values, Stack printings and (at this width)
+    // the sort are on the bar.
     const format = canvas.getByRole("button", { name: "Format" });
     // The trigger's own text is the whole of what the reader sees — no separate `value` to
     // check apart from it, the way a native `<select>` needed both.
     await expect(format).toHaveTextContent("Any format");
 
+    // The picker has no row for it any more — the toggle is its own control, the popup's last.
     await userEvent.click(format);
-    await userEvent.click(await canvas.findByRole("option", { name: "Any card" }));
+    await expect(canvas.queryByRole("option", { name: "Any card" })).toBeNull();
+    await userEvent.click(format);
+
+    const extras = canvas.getByRole("button", { name: /^Tokens & extras\b/ });
+    await expect(extras).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(extras);
 
     await canvas.findByText("47 cards");
-    // The widest row is where the picker was moved to, so the word on the closed trigger is the
-    // one thing saying this wall has art cards in it.
-    await expect(format).toHaveTextContent("Any card");
+    await expect(extras).toHaveAttribute("aria-pressed", "true");
+    // The format picker reads `Any format` under it — no format is on — and the stated line says
+    // what is, as a corpus rather than as a format.
+    await expect(format).toHaveTextContent("Any format");
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Showing: Tokens & extras" }),
+    ).toBeInTheDocument();
 
     // **Named rather than counted, and reached by a search rather than by scrolling.** The
     // table is virtualised and jsdom lays nothing out, so which rows are in the DOM is an
@@ -275,11 +296,10 @@ export const Unplayable: Story = {
     await expect(canvas.getByText("Prismatic Ending // Prismatic Ending")).toBeInTheDocument();
 
     // And the other direction, which is the sharper half: the corpus holds **no** ordinary
-    // printing of Prismatic Ending, so dropping back to `Any format` leaves this search with
+    // printing of Prismatic Ending, so turning the toggle back off leaves this search with
     // nothing — and the page says so as a statement about the filters rather than about the
     // database, because the search box is on (`summaryOf`'s `unfiltered` arm).
-    await userEvent.click(format);
-    await userEvent.click(await canvas.findByRole("option", { name: "Any format" }));
+    await userEvent.click(canvas.getByRole("button", { name: /^Tokens & extras\b/ }));
     await waitFor(async () => {
       await expect(canvas.getByText("No cards match these filters.")).toBeInTheDocument();
     });
@@ -317,7 +337,7 @@ export const TableView: Story = {
  *
  * **And the filter row above it is fully live**, which is the second claim and the one that
  * had no test. Counted honestly an empty corpus puts every option at zero, the greying rule
- * dims the whole row, and — with no filter on — the `Reset all` that would be the escape is
+ * dims the whole row, and — with no filter on — the `Reset` that would be the escape is
  * itself greyed: the first screen a new user ever sees would be a dead control panel. So
  * `facets::compute`
  * guards on `ix.all.count() == 0` and answers `ready: false`, the same shape a cold index
@@ -348,9 +368,9 @@ export const Empty: Story = {
     // is handed nothing and the chips keep the plain labels they had before this feature.
     await expect(canvas.getByRole("button", { name: "White" })).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    // Set, Format, Owned, Rarity, Price and Printings live in the filter row's tray since the
-    // row was redesigned — only the box, the colours, the mana values and the sort are on the
-    // bar at every width.
+    // Set, Format, Universe, Type, Rarity, Price, Finish, Border, Owned and Include live in the
+    // Filters popup — the box, the colours, the mana values, Stack printings and the sort are on
+    // the bar.
     const format = canvas.getByRole("button", { name: "Format" });
     await userEvent.click(format);
     // `aria-disabled`, not the native attribute — a dropdown row is a `<li>` and never carries
@@ -414,7 +434,7 @@ export const Busy: Story = {
  * `LARGE_TEMPLATES`, which is why the synthetic 5 200 are all playable).
  *
  * **This is the story where the collapse pays for itself.** The page opens on one row per
- * card, so the caption is an exact `688 cards`; pressing All printings asks for the printings
+ * card, so the caption is an exact `688 cards`; un-pressing Stack printings asks for the printings
  * instead, and *then* the count runs past `search::TOTAL_CAP` (`db.ts`, 5 000) and stops.
  * Past it the answer carries `totalIsCapped`, and `countOf` (`resultCount.ts`) renders
  * `5,000+ cards`: a floor, which is true, rather than `5,000 cards`, which would not be.
@@ -430,8 +450,9 @@ export const Large: Story = {
     // Collapsed — the default — the whole set fits under the cap and is counted exactly.
     await expect(await canvas.findByText("688 cards")).toBeInTheDocument();
 
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
+    // `Stack printings` is on the bar at every width and pressed by default — one tile per card —
+    // so un-pressing it is what asks for every printing.
+    await userEvent.click(canvas.getByRole("button", { name: STACK_PRINTINGS }));
 
     await expect(await canvas.findByText("5,000+ cards")).toBeInTheDocument();
     // The lie the `+` exists to prevent, asserted as absent.
@@ -449,7 +470,7 @@ export const Large: Story = {
  * Invisible on screen, and the only reason this is a story of its own rather than a second
  * assertion on {@link Large}: the two views take different paths to the same number.
  *
- * All printings is pressed first, because the cap is only reachable over printings now — 687
+ * Stack printings is pressed off first, because the cap is only reachable over printings now — 687
  * cards fit under it comfortably, and a collapsed table reports an honest `aria-rowcount`.
  */
 export const CappedTotal: Story = {
@@ -464,8 +485,9 @@ export const CappedTotal: Story = {
       "689",
     );
 
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
+    // `Stack printings` is on the bar at every width and pressed by default — one tile per card —
+    // so un-pressing it is what asks for every printing.
+    await userEvent.click(canvas.getByRole("button", { name: STACK_PRINTINGS }));
 
     await canvas.findByText("5,000+ cards");
     const table = canvas.getByRole("table", { name: "Search results" });
@@ -491,8 +513,9 @@ export const NarrowedToAnExactCount: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("688 cards");
     // Over printings, because that is where the cap lives — see {@link CappedTotal}.
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "Show all printings" }));
+    // `Stack printings` is on the bar at every width and pressed by default — one tile per card —
+    // so un-pressing it is what asks for every printing.
+    await userEvent.click(canvas.getByRole("button", { name: STACK_PRINTINGS }));
     await canvas.findByText("5,000+ cards");
 
     await userEvent.type(canvas.getByRole("searchbox", { name: "Search cards" }), "Ancient");

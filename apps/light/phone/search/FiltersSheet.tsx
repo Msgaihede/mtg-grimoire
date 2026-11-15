@@ -12,6 +12,7 @@ import {
   ManaValueChips,
   RarityChip,
   ResetAll,
+  STACK_PRINTINGS,
   ToggleChip,
 } from "@grimoire/ui/components/FilterChips";
 import { PriceRange } from "@grimoire/ui/components/PriceRange";
@@ -19,6 +20,9 @@ import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "@grimo
 import {
   conditionChip,
   formatPickerRows,
+  pickedFormat,
+  TOKENS_AND_EXTRAS,
+  TOKENS_AND_EXTRAS_HINT,
   RARITIES,
   SEARCH_SORT_ROWS,
   SEARCH_TRAY,
@@ -30,7 +34,7 @@ import {
 import { countOf } from "@grimoire/ui/features/search/resultCount";
 import { SetCombobox } from "@grimoire/ui/features/search/SetCombobox";
 import type { FilterSurface } from "@grimoire/ui/features/search/FilterBar";
-import { CARD_TYPES, cycleTriState } from "@grimoire/ui/features/search/useCardSearch";
+import { ANY_CARD, CARD_TYPES, cycleTriState } from "@grimoire/ui/features/search/useCardSearch";
 import { BORDERS, BORDER_LABEL } from "@grimoire/ui/lib/border";
 import { FINISHES, FINISH_LABEL } from "@grimoire/ui/lib/finish";
 import { CONDITIONS, CONDITION_NOT_SET } from "@grimoire/ui/lib/conditions";
@@ -309,7 +313,7 @@ function SheetBody<SortKey extends string>({
   onDone: () => void;
 }) {
   const { facets } = search;
-  const formatRows = formatPickerRows(search, useFormatOptions(search));
+  const formatRows = formatPickerRows(useFormatOptions(search));
   const currency = search.marketplace.currency;
   /** A cell is drawn where the surface names it **and** wires it — `FilterBar`'s two rules. */
   const offers = (cell: TrayCell) => tray.includes(cell);
@@ -348,14 +352,29 @@ function SheetBody<SortKey extends string>({
             <Section caption="Format">
               <Dropdown
                 label="Format"
-                value={search.format}
-                onChange={search.setFormat}
+                // Tokens & extras is the format sentinel and has no row here — the desktop
+                // tray's rule: the picker reads `Any format` under it.
+                value={pickedFormat(search.format)}
+                onChange={(next) => {
+                  if (next !== pickedFormat(search.format)) search.setFormat(next);
+                }}
                 options={formatRows}
                 fill
                 searchable
-                // Gold for anything but `Any format`, `Any card` included: the desktop tray's rule,
-                // because the widening is as much a statement about the wall as a narrowing.
-                active={search.format !== ""}
+                active={pickedFormat(search.format) !== ""}
+              />
+            </Section>
+          )}
+
+          {offers("include") && search.anyCard && (
+            <Section caption="Include">
+              {/* The format list's old `Any card` row as its own toggle (the Filter bar board,
+                  2026-11): see `TOKENS_AND_EXTRAS` for how it combines with a format. */}
+              <ToggleChip
+                label={TOKENS_AND_EXTRAS}
+                hint={TOKENS_AND_EXTRAS_HINT}
+                pressed={search.format === ANY_CARD}
+                onClick={() => search.setFormat(search.format === ANY_CARD ? "" : ANY_CARD)}
               />
             </Section>
           )}
@@ -630,13 +649,15 @@ function SheetBody<SortKey extends string>({
             </Section>
           )}
 
-          {offers("printings") && search.toggleAllPrintings && (
+          {search.toggleAllPrintings && (
             <Section caption="Printings">
               {/* A view mode rather than a filter: neither counted on the badge nor cleared by
-                Reset all. One label, never flipped — `aria-pressed` carries the state. */}
+                Reset all. `Stack printings` since the Filter bar board (2026-11), pressed by
+                default — the desktop bar's switch, its meaning turned over. The phone has no
+                bar to carry it, so it is here on every surface that offers it. */}
               <ToggleChip
-                label="All printings"
-                pressed={search.allPrintings ?? false}
+                label={STACK_PRINTINGS}
+                pressed={!(search.allPrintings ?? false)}
                 onClick={search.toggleAllPrintings}
               />
             </Section>

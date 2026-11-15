@@ -162,10 +162,45 @@ describe("the filters sheet", () => {
     expect(window.history.length).toBe(length);
   });
 
-  it("offers Any card, because this search narrows to playable cards under every other row", async () => {
+  // The format list's old `Any card` row is the Include section's toggle now (the Filter bar
+  // board, 2026-11): the same format sentinel, so turning it on puts the picker on `Any format`.
+  it("offers Tokens & extras, because this search narrows to playable cards under every format", async () => {
     const { sheet } = await openSheet();
+    const tokens = () =>
+      within(sheet).getByRole("button", {
+        name: /^Tokens & extras, Also show cards no format allows/,
+      });
+    expect(tokens()).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(tokens());
+
+    expect(tokens()).toHaveAttribute("aria-pressed", "true");
+    expect(within(sheet).getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     await userEvent.click(within(sheet).getByRole("button", { name: "Format" }));
-    expect(await screen.findByRole("option", { name: /Any card/ })).toBeInTheDocument();
+    await screen.findByRole("option", { name: /Any format/ });
+    expect(screen.queryByRole("option", { name: /Any card/ })).toBeNull();
+  });
+
+  it("draws Stack printings pressed, and Reset all leaves it alone", async () => {
+    const { sheet } = await openSheet();
+    const stack = () => within(sheet).getByRole("button", { name: /^Stack printings\b/ });
+    expect(stack()).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(stack());
+    expect(stack()).toHaveAttribute("aria-pressed", "false");
+    // A view mode, not a filter: nothing for Reset all to count.
+    expect(within(sheet).getByRole("button", { name: /^Reset all — 0 filters/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Red\b/ }));
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all — 1 filter / }));
+    expect(within(sheet).getByRole("button", { name: /^Red\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(stack()).toHaveAttribute("aria-pressed", "false");
   });
 });
 

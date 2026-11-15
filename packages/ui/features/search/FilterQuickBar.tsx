@@ -1,26 +1,25 @@
 import { useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, ArrowUpToLine, ChevronDown, RotateCcw, Search } from "lucide-react";
+import { AnimatePresence } from "motion/react";
+import { ArrowUpToLine, ChevronDown, Search } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { DockedPanel, holdsBar } from "@/components/DockedBar";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import {
   ColorExactChip,
   FILTER_CONTROL,
   FILTER_FOCUS,
-  FILTER_UNAVAILABLE,
   filterChipState,
   FiltersButton,
   ManaChip,
   ManaValueChips,
+  ResetAll,
+  StackPrintingsToggle,
 } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DOCKED_SHADOW } from "@/lib/dockedBar";
 import { blurLeftTheWindow } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
-import { TRANSITION } from "@/lib/motion";
 import { nearestScroller } from "@/lib/useDockHeight";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
@@ -30,7 +29,7 @@ import {
   SEARCH_LABELS,
   SEARCH_SORT_ROWS,
   SEARCH_TRAY,
-  sortDirectionName,
+  SortControl,
   useFormatOptions,
   type FilterLabels,
   type FilterSurface,
@@ -61,9 +60,6 @@ const PRESS =
   "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-border bg-surface px-2.5 text-xs";
 /** The round chips at 32px, their pressed ring offset on the bar's `surface` rather than `bg`. */
 const CHIP_SM = "size-8 text-base ring-offset-surface";
-/** `FiltersButton`'s and `ResetAll`'s count badge, character for character. */
-const BADGE =
-  "rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground";
 /**
  * Literal strings, because Tailwind reads source text: one pair per `manaValuesFrom`. An
  * interpolated `@min-[${px}px]/qb:flex` would emit no rule at all, and both halves would draw at
@@ -176,7 +172,6 @@ export function FilterQuickBar<SortKey extends string>({
   // `<label for>` binds to the *first* element with its id, so a shared stem would name the row's
   // controls twice and leave the bar's unnamed — both rows are in the DOM while the bar is down.
   const qbLabels: FilterLabels = { ...labels, idStem: `${labels.idStem}-qb` };
-  const sortDir = search.sortDir;
   const count = search.activeCount;
   const sortOptions: readonly DropdownOption[] = sortRows.map((s) => ({
     value: s.value,
@@ -190,8 +185,6 @@ export function FilterQuickBar<SortKey extends string>({
     .map((v) => (v >= 8 ? "8+" : String(v)));
   if (search.manaX) picked.push("X");
   const mvSummary = picked.join(", ");
-  // `ResetAll`'s own sentence, so the bar's and the row's Reset all answer to one name.
-  const resetName = `Reset all: ${count} filter${count === 1 ? "" : "s"} active`;
 
   /**
    * **A pointer press outside the bar closes its tray**, and the listener is in the **capture**
@@ -432,82 +425,39 @@ export function FilterQuickBar<SortKey extends string>({
                 className="text-xs"
               />
 
-              {/* The row's sort, drawn exactly as the row draws it, and gone below 860 — sort is
-                  the one control a reader deep in a wall is least likely to want mid-scroll. */}
+              {/* The row's sort — the same joined control — and gone below 860: sort is the one
+                  control a reader deep in a wall is least likely to want mid-scroll. */}
               <div className="hidden shrink-0 items-center gap-2 @min-[860px]/qb:flex">
                 <Divider />
-                <label
-                  id={`${qbLabels.idStem}-sort-label`}
-                  htmlFor={`${qbLabels.idStem}-sort`}
-                  className="sr-only"
-                >
-                  Sort results
-                </label>
-                <div className="flex items-center gap-1">
-                  <Dropdown
-                    id={`${qbLabels.idStem}-sort`}
-                    labelledBy={`${qbLabels.idStem}-sort-label`}
-                    value={search.sortSelection}
-                    onChange={(key) => search.setSortKey(key as SortKey)}
-                    options={sortOptions}
-                  />
-                  {/* Wrapped for the row's reason: a `disabled` button fires no pointer events,
-                      so a tooltip bound to it would be inert in exactly the state it explains. */}
-                  <span {...tip(sortDirectionName(sortDir), { describes: false })}>
-                    <button
-                      type="button"
-                      onClick={search.flipSortDir}
-                      disabled={!sortDir}
-                      aria-label={sortDirectionName(sortDir)}
-                      className={cn(
-                        FILTER_CONTROL,
-                        FILTER_FOCUS,
-                        "flex size-9 items-center justify-center",
-                        filterChipState(false, !sortDir),
-                      )}
-                    >
-                      <motion.span
-                        aria-hidden="true"
-                        initial={false}
-                        animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
-                        transition={TRANSITION.fast}
-                        className="flex"
-                      >
-                        <ArrowUp className="size-4" />
-                      </motion.span>
-                    </button>
-                  </span>
-                </div>
+                <SortControl
+                  idStem={qbLabels.idStem}
+                  value={search.sortSelection}
+                  options={sortOptions}
+                  onChange={(key) => search.setSortKey(key as SortKey)}
+                  dir={search.sortDir}
+                  onFlip={search.flipSortDir}
+                  triggerClass="w-30"
+                />
               </div>
 
+              {/* Stack printings rides the quick bar too (the board): a view mode, so neither
+                  pill counts it — the word at the widest rung, the icon below. */}
+              {search.toggleAllPrintings && (
+                <StackPrintingsToggle
+                  stacked={!(search.allPrintings ?? false)}
+                  onToggle={() => search.toggleAllPrintings?.()}
+                  labelClass="hidden @min-[1500px]/qb:inline"
+                  className="h-8 text-xs"
+                />
+              )}
+
               <Divider />
-              {/* `ResetAll`'s rule and name, drawn here rather than imported because the bar's
-                  version gives up its word below the widest rung. The guard is on the press, not
-                  the attribute: `aria-disabled` keeps it in the tab order. */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (count > 0) search.resetAll();
-                }}
-                aria-disabled={count <= 0 || undefined}
-                aria-label={resetName}
-                {...tip(resetName, { describes: false })}
-                className={cn(
-                  FILTER_CONTROL,
-                  FILTER_FOCUS,
-                  PRESS,
-                  "min-w-9 gap-2 px-2 text-dim @min-[1500px]/qb:px-2.5",
-                  count <= 0 ? FILTER_UNAVAILABLE : "hover:text-text",
-                )}
-              >
-                <RotateCcw aria-hidden="true" className="size-4 shrink-0 @min-[1500px]/qb:hidden" />
-                <span className="hidden @min-[1500px]/qb:inline">Reset all</span>
-                {count > 0 && (
-                  <span aria-hidden="true" className={BADGE}>
-                    {count}
-                  </span>
-                )}
-              </button>
+              <ResetAll
+                count={count}
+                onReset={search.resetAll}
+                labelClass="hidden @min-[1500px]/qb:inline"
+                className="text-xs"
+              />
 
               {trayOpen && (
                 /* **The page's own `FilterTray`, same cells, hung under the bar — in two boxes,

@@ -79,7 +79,7 @@ For global repo workflow, style, and testing conventions, refer to:
 
 ## 4. Search, Filtering, & Pricing
 
-- **Container-driven layout**: `FilterBar.tsx` uses container queries (`@container/fb`), not viewport media queries. Draggable from 206px.
+- **Container-driven layout**: `FilterBar.tsx` lays out by its own width, never the viewport: `barBand` reads the bar's measured width (`useElementWidth`) and places each control once — on the bar or in the Filters popup's View cell — and the popup's columns are container queries (`@container/fb`). Draggable from 206px. The bar follows the Filter bar design canvas (2026-11): count pills always drawn (grey 0, gold N), Stack printings (pressed by default = one tile per card; inverted `allPrintings`), and Tokens & extras in the Include cell, which is the `ANY_CARD` format sentinel (turning it on puts the format to Any format; picking a format turns it off).
 - **Query syntax (`features/search/queryLanguage.ts`)**:
   - Parses Scryfall's whole language (issue #909): keyword terms (`kw:`, `cmc>=3`, `is:fetchland`, `otag:`), `or`, parentheses, `!exact` names and `not:`. Top-level plain terms keep their own paths (free text, tag tokens, predicates); an `or` or a negated group travels as one `anyOf`/`allOf` predicate that Rust answers as a single SQL clause, and the facet index counts it wide.
   - Tag resolution is exact; queries fail closed on unresolved tags to prevent showing stale results.

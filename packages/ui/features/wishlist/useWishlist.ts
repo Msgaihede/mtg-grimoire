@@ -210,10 +210,10 @@ export function activeFilterCount(f: WishlistFilterState): number {
 export const WISHLIST_TRAY: readonly TrayCell[] = [
   "set",
   "format",
-  "rarity",
-  "type",
-  "border",
   "universe",
+  "type",
+  "rarity",
+  "border",
   "needsReview",
 ];
 

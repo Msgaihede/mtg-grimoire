@@ -10,7 +10,7 @@ import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import type { TagToken } from "./queryLanguage";
-import { FilterBar, printingsOnBar, StatedFiltersLine } from "./FilterBar";
+import { barBand, FilterBar, layoutOnBar, sortOnBar, StatedFiltersLine } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
 const search = (over: Record<string, unknown> = {}) =>
@@ -23,9 +23,8 @@ const search = (over: Record<string, unknown> = {}) =>
     // cases at the foot of this file. `FORMATS` is what the hook answers a caller that asked
     // for no default, so it is what the stub carries and every case here reads as it always did.
     formats: FORMATS,
-    // This stub stands for the **card search**, which is the one surface `Any card` is a real row
-    // on — see `FilterSurface.anyCard`. The collection and the wishlist leave it off, and their
-    // own page suites are where the two-rung ladder is asserted.
+    // This stub stands for the **card search**, one of the surfaces that offers Tokens & extras —
+    // see `FilterSurface.anyCard`. The collection and the wishlist leave it off.
     anyCard: true,
     colors: [] as string[],
     toggleColor: vi.fn(),
@@ -119,11 +118,9 @@ const search = (over: Record<string, unknown> = {}) =>
   }) as unknown as Parameters<typeof FilterBar>[0]["search"];
 
 /**
- * Open the filter tray, and hand back the panel.
+ * Open the Filters popup, and hand back the button that opened it.
  *
- * Set, Format, Owned, Rarity, Price and Printings are behind a disclosure since the row was
- * redesigned, so a case about any of them opens it first. The four controls that never fold away
- * — the search box, the colours, the mana values and the sort — need none of this.
+ * Everything but the bar's own controls is behind it, so a case about any of those opens it first.
  */
 async function openTray(): Promise<HTMLElement> {
   await userEvent.click(screen.getByRole("button", { name: /^Show filters/ }));
@@ -134,6 +131,10 @@ async function openTray(): Promise<HTMLElement> {
  *  carries the direction and becomes a reason when there is none to flip, so the exact enabled
  *  string fails on the row this suite opens with and would read as "the button is not there". */
 const dirButton = () => screen.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ });
+
+/** The bar's own row — the box the search field's wrapper sits in, and the box whose measured
+ *  width picks the band (`useElementWidth`). Every control on the bar is inside it. */
+const barRow = () => screen.getByPlaceholderText("Search cards…").parentElement!.parentElement!;
 
 /**
  * Records, for every Escape that reaches `window`'s bubble phase, whether something nearer the
@@ -178,8 +179,7 @@ vi.mock("./SetCombobox", () => ({
  * 2026-08-25.
  *
  * So this describe runs before the first one that clicks anything, which is `describe("FilterBar",
- * ...)` below — its "offers the printings no format allows as a row of the format select" is the
- * first `pickOption` in the file. **Nothing about the assertions changed; only where they sit.**
+ * ...)` below — its first `pickOption` is the first click on a `<Dropdown>` row in the file. **Nothing about the assertions changed; only where they sit.**
  */
 describe("FilterBar, its sort direction tooltip binding", () => {
   /**
@@ -325,55 +325,78 @@ describe("FilterBar", () => {
   it("draws Reset all greyed until something is filtered", () => {
     render(<FilterBar search={search()} />);
 
-    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    const reset = screen.getByRole("button", { name: /^Reset all/ });
+    expect(reset).toHaveAttribute("aria-disabled", "true");
+    // The pill is there from the first paint, reading 0 — the board's fixed width.
+    expect(reset.querySelector("[data-count-pill]")).toHaveTextContent(/^0$/);
   });
 
   /**
-   * The printings no format allows are a **row of the format select**, not a chip beside it —
-   * and the row that reaches them is the one the select does *not* open on, which is the one
-   * thing about this control a reader cannot see. So the assertion is the pair together: what
-   * is drawn as picked, and what asking for the wider corpus actually sends.
+   * The printings no format allows are **Tokens & extras**, the Include cell's toggle (the Filter
+   * bar board, 2026-11) — no longer a row of the format picker. It sets the same `format`
+   * sentinel the `Any card` row did, so what a press sends is the assertion.
    *
-   * There is deliberately no `Unplayable` button left to find. The chip and this select were
-   * moving one axis in opposite directions, and their one combined state — "Modern, and also
-   * the art cards" — was a filter contradicting itself.
+   * There is deliberately no `Unplayable` button left to find: "Modern, and also the art cards"
+   * is a filter contradicting itself.
    */
-  it("offers the printings no format allows as a row of the format select", async () => {
+  it("offers the printings no format allows as the Tokens & extras toggle", async () => {
     const setFormat = vi.fn();
-    const user = userEvent.setup();
     render(<FilterBar search={search({ setFormat })} />);
 
     await openTray();
 
-    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
+    const toggle = screen.getByRole("button", { name: /^Tokens & extras\b/ });
+    expect(toggle).toHaveAccessibleName(
+      "Tokens & extras, Also show cards no format allows: tokens, art cards, emblems, joke and test cards",
+    );
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: /unplayable/i })).toBeNull();
 
-    await pickOption(user, "Format", "Any card");
+    await userEvent.click(toggle);
 
     expect(setFormat).toHaveBeenCalledWith(ANY_CARD);
   });
 
   /**
-   * The trigger's own text is the whole of what the reader sees — a `<Dropdown>` given a value
-   * that matches nothing falls back to its own placeholder dash rather than to a stale label
-   * (`DEFAULT_PLACEHOLDER`, `Dropdown.tsx`), so reading the drawn text is what tells "Any card is
-   * correctly picked" apart from "the value did not match and this is the dash instead".
+   * **Under Tokens & extras the picker reads `Any format`** — the sentinel has no row, and a
+   * `<Dropdown>` handed a value that matches nothing draws its placeholder dash instead
+   * (`DEFAULT_PLACEHOLDER`), so the drawn text is what tells the two apart. A second press on the
+   * toggle is the way back.
    */
-  it("shows Any card as picked when it is", async () => {
-    render(<FilterBar search={search({ format: ANY_CARD })} />);
+  it("presses Tokens & extras while it is on, with the format picker on Any format", async () => {
+    const setFormat = vi.fn();
+    render(<FilterBar search={search({ format: ANY_CARD, setFormat })} />);
 
     await openTray();
 
-    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any card");
+    const toggle = screen.getByRole("button", { name: /^Tokens & extras\b/ });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
+
+    await userEvent.click(toggle);
+
+    expect(setFormat).toHaveBeenCalledWith("");
+  });
+
+  /** The two never stand on at once: picking a format is what turns the toggle off, and picking
+   *  the `Any format` it already reads leaves it on. */
+  it("hands a picked format over Tokens & extras, and keeps it on under Any format", async () => {
+    const setFormat = vi.fn();
+    const user = userEvent.setup();
+    render(<FilterBar search={search({ format: ANY_CARD, setFormat })} />);
+    await openTray();
+
+    await pickOption(user, "Format", "Any format");
+    expect(setFormat).not.toHaveBeenCalled();
+
+    await pickOption(user, "Format", "Modern");
+    expect(setFormat).toHaveBeenCalledWith("modern");
   });
 
   /**
-   * Gold means "this is not where the control opens" — a wider claim than "a filter is on",
-   * since `Any card` is a *widening* and lights the same way. `Any format` is the default and the
-   * only value that reads as untouched.
+   * Gold means "this is not where the control opens". `Any format` is the default and the only
+   * value that reads as untouched — and that is what the picker reads under Tokens & extras, which
+   * lights its own toggle instead.
    *
    * `classList.contains`, never `className.includes`: the trigger's own quiet state carries a
    * `hover:` variant of `text-text`, and a substring match would pass on that without the control
@@ -392,10 +415,13 @@ describe("FilterBar", () => {
     expect(named.classList.contains("border-accent")).toBe(true);
     expect(named.classList.contains("text-accent")).toBe(true);
 
-    // `Any card` is the widening row rather than the default, and it lights the same way.
     rerender(<FilterBar search={search({ format: ANY_CARD })} />);
-    const widened = screen.getByRole("button", { name: "Format" });
-    expect(widened.classList.contains("border-accent")).toBe(true);
+    expect(screen.getByRole("button", { name: "Format" }).classList.contains("border-accent")).toBe(
+      false,
+    );
+    expect(
+      screen.getByRole("button", { name: /^Tokens & extras\b/ }).classList.contains("border-accent"),
+    ).toBe(true);
   });
 
   /** The format trigger's half of the check above the sort picker's — see that test's comment
@@ -702,12 +728,10 @@ describe("FilterBar, greyed by its facets", () => {
       "true",
     );
     expect(screen.getByRole("option", { name: "Legacy" })).not.toHaveAttribute("aria-disabled");
-    // Never, either of them: they are how you get back to no format at all, and `Any card` is
-    // the only row that can *widen* a search that has greyed itself into nothing.
+    // Never: it is how you get back to no format at all.
     expect(screen.getByRole("option", { name: "Any format" })).not.toHaveAttribute(
       "aria-disabled",
     );
-    expect(screen.getByRole("option", { name: "Any card" })).not.toHaveAttribute("aria-disabled");
   });
 
   /**
@@ -789,7 +813,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Commander",
       "Legacy",
@@ -802,51 +825,41 @@ describe("FilterBar, its format options in order", () => {
   });
 
   /**
-   * The two pinned rows are a **ladder, widest first**, and it is the one ordering in this list
-   * that is not alphabetical and not faceted: every card, every card legal *somewhere*, then one
-   * named format. `Any card` collates above `Any format` by accident of the alphabet, which is
-   * exactly why this is asserted rather than left to fall out — a reader predicts the ladder,
-   * and the alphabet agreeing with it here is not what puts it in that order.
+   * **One pinned row since the Filter bar board (2026-11)**: `Any format`, the default and the way
+   * out of a format filter. `Any card` stood above it until then and is the Include cell's Tokens &
+   * extras toggle now, so it is asserted absent from an open listbox — a closed `Dropdown` has no
+   * rows either way.
    */
-  it("opens on Any format with Any card above it", async () => {
+  it("opens on Any format, pinned first, with no Any card row", async () => {
     const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
     await openTray();
 
     expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
-    expect((await formatOrder(user)).slice(0, 2)).toEqual(["Any card", "Any format"]);
+    const order = await formatOrder(user);
+    expect(order[0]).toBe("Any format");
+    expect(order).not.toContain("Any card");
   });
 
   /**
-   * **The ladder is two rungs on a surface that does not narrow its corpus**, and this is the
-   * case the row shipped without.
-   *
-   * `Any card` is not a format — it is the row that puts back the printings *no* format allows,
-   * and it only means anything where every other row of the picker rides `playableOnly`
-   * (`formatParams`). The collection and the wishlist filter by nothing of the kind, and drawing
-   * it there set `format` to the `any-card` sentinel, which their backends read as a legalities
-   * key nothing matches: the list went empty and the control said `Any card`. So the row is
-   * gated on `FilterSurface.anyCard`, which `useCardSearch` sets and — since token stacks
-   * (2026-09-26), when its format started riding `formatParams` too — the deck search's
-   * Collection tab (`useCollectionSearch`); the collection page and the wishlist never do.
-   *
-   * Asserted as an absence *and* as the first row, because "not in the list" alone would pass on
-   * a build that drew it somewhere further down.
+   * **Tokens & extras is offered only where the surface narrows the corpus.** It puts back the
+   * printings *no* format allows, which only means anything where every format rides
+   * `playableOnly` (`formatParams`). The collection and the wishlist filter by nothing of the
+   * kind — the sentinel would read there as a legalities key nothing matches, and the list would
+   * go empty — so the Include cell is gated on `FilterSurface.anyCard`.
    */
-  it("leaves Any card out where the surface does not narrow the corpus", async () => {
+  it("draws no Include cell where the surface does not narrow the corpus", async () => {
     const user = userEvent.setup();
     render(<FilterBar search={search({ anyCard: undefined })} />);
 
     await openTray();
 
-    // `formatOrder` opens the panel, which is the only place the rows exist now: a `Dropdown`
-    // draws nothing until its trigger is pressed, so the absence below is asserted against an
-    // open listbox rather than against a closed control that has no rows either way.
-    const order = await formatOrder(user);
-    expect(order[0]).toBe("Any format");
-    expect(order).not.toContain("Any card");
-    expect(screen.queryByRole("option", { name: "Any card" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Tokens & extras\b/ })).toBeNull();
+    expect(screen.queryByText("Include")).toBeNull();
+    // The rest of the popup is drawn, so the absence is not an empty tray's.
+    expect(screen.getByRole("button", { name: "Format" })).toBeInTheDocument();
+    expect((await formatOrder(user))[0]).toBe("Any format");
   });
 
   /**
@@ -878,7 +891,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Commander",
       "Modern",
@@ -927,7 +939,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Standard",
       "Vintage",
@@ -942,11 +953,11 @@ describe("FilterBar, its format options in order", () => {
 
   /**
    * The dead end — a search so narrow that every format greys at once, which one card and a
-   * text filter is enough to reach. Both pinned rows are outside the sorted list, so they are
-   * first and pickable here exactly as they are everywhere else: neither is a format, and they
-   * are how a reader who has filtered themselves into nothing gets out.
+   * text filter is enough to reach. The pinned row is outside the sorted list, so it is first and
+   * pickable here exactly as it is everywhere else: it is not a format, and it is how a reader who
+   * has filtered themselves into nothing gets out.
    */
-  it("pins both non-format rows first even when nothing at all is legal", async () => {
+  it("pins Any format first even when nothing at all is legal", async () => {
     const user = userEvent.setup();
     render(
       <FilterBar
@@ -959,7 +970,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Commander",
       "Legacy",
@@ -972,7 +982,6 @@ describe("FilterBar, its format options in order", () => {
     expect(screen.getByRole("option", { name: "Any format" })).not.toHaveAttribute(
       "aria-disabled",
     );
-    expect(screen.getByRole("option", { name: "Any card" })).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("option", { name: "Commander" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -1015,7 +1024,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Commander",
       "Historic",
@@ -1030,12 +1038,10 @@ describe("FilterBar, its format options in order", () => {
 
   /**
    * The pin is outside the sort, and a seeded format is the first thing that can prove it:
-   * `Alchemy` collates *above* both pinned rows (`Al` before `An`), so a list that sorted them
-   * in with the rest would file a format above the way out of the filter, where nothing else in
-   * this suite would notice. Neither pinned row is a format, and both are first whatever the
-   * alphabet hands them.
+   * `Alchemy` collates *above* `Any format` (`Al` before `An`), so a list that sorted the pin in
+   * with the rest would file a format above the way out of the filter.
    */
-  it("keeps both pinned rows first when a seeded format would collate above them", async () => {
+  it("keeps Any format first when a seeded format would collate above it", async () => {
     const user = userEvent.setup();
     render(
       <FilterBar
@@ -1049,7 +1055,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Alchemy",
       "Commander",
@@ -1076,7 +1081,6 @@ describe("FilterBar, its format options in order", () => {
     await openTray();
 
     expect(await formatOrder(user)).toEqual([
-      "Any card",
       "Any format",
       "Commander",
       "Legacy",
@@ -1465,10 +1469,11 @@ describe("FilterBar, its sort picker", () => {
 /**
  * The shape of the redesign, and the only claim on this page that is about *absence*.
  *
- * Four controls never fold away — the box you type in, the colours, the mana values, and the
- * order the results come in — because those are the four a reader reaches for without looking.
- * Everything else is one press in. Asserted from both sides: a control that quietly stayed on the
- * bar would pass any test about the tray holding it.
+ * The box you type in, the colours, the mana values, the order the results come in and Stack
+ * printings are on the bar — at the widest band, which is what an unmeasured jsdom box reads as;
+ * "its bands" below pins where the width moves the sort and the Grid/List pair. Everything else
+ * is one press in. Asserted from both sides: a control that quietly stayed on the bar would pass
+ * any test about the popup holding it.
  */
 describe("FilterBar, its tray", () => {
   const ON_THE_BAR = [
@@ -1476,6 +1481,7 @@ describe("FilterBar, its tray", () => {
     () => screen.getByRole("button", { name: "White" }),
     () => screen.getByRole("button", { name: "Mana value 3" }),
     () => screen.getByRole("button", { name: "Sort results" }),
+    () => screen.getByRole("button", { name: "Stack printings" }),
   ];
 
   it("keeps four controls on the bar and folds the rest away", async () => {
@@ -1487,7 +1493,7 @@ describe("FilterBar, its tray", () => {
     expect(screen.queryByRole("button", { name: /^Owned\b/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Rare cards\b/ })).toBeNull();
     expect(screen.queryByLabelText("Lowest price")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Show all printings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Tokens & extras\b/ })).toBeNull();
 
     const toggle = await openTray();
 
@@ -1497,7 +1503,10 @@ describe("FilterBar, its tray", () => {
     expect(screen.getByRole("button", { name: /^Owned\b/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Rare cards\b/ })).toBeInTheDocument();
     expect(screen.getByLabelText("Lowest price")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show all printings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Tokens & extras\b/ })).toBeInTheDocument();
+    // Stack printings stays on the bar with the popup open — drawn once, and no cell of its own.
+    expect(screen.getAllByRole("button", { name: "Stack printings" })).toHaveLength(1);
+    expect(screen.queryByText("Printings")).toBeNull();
     // The panel is the button's, said in the markup rather than only in the layout — an
     // `aria-controls` pointing at nothing is a promise to assistive tech that is not kept.
     expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeInTheDocument();
@@ -1506,18 +1515,20 @@ describe("FilterBar, its tray", () => {
   /**
    * **The count is the whole search's, not the tray's.** It is the same number Reset all wears,
    * so the two cannot disagree about how much is on while the tray is shut — and a reader who has
-   * pressed three colours is never looking at a Filters button reading zero.
+   * pressed three colours is never looking at a Filters button reading zero. The pill is drawn at
+   * zero too (the board: a button never changes width when used).
    */
-  it("carries the search's own count, and draws no badge at zero", async () => {
+  it("carries the search's own count, and draws its pill at zero", async () => {
     const { rerender } = render(<FilterBar search={search()} />);
 
     const quiet = screen.getByRole("button", { name: "Show filters, 0 active" });
     expect(quiet).toHaveTextContent("Filters");
-    expect(quiet).not.toHaveTextContent("0");
+    expect(quiet.querySelector("[data-count-pill]")).toHaveTextContent(/^0$/);
 
     rerender(<FilterBar search={search({ activeCount: 3, colors: ["W"] })} />);
 
-    expect(screen.getByRole("button", { name: "Show filters, 3 active" })).toHaveTextContent("3");
+    const counted = screen.getByRole("button", { name: "Show filters, 3 active" });
+    expect(counted.querySelector("[data-count-pill]")).toHaveTextContent(/^3$/);
   });
 
   it("says whether it is open, and shuts again on a second press", async () => {
@@ -1534,6 +1545,86 @@ describe("FilterBar, its tray", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^Hide filters/ }));
     expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+  });
+
+  /** The popup overlays the results, so a press outside the bar closes it; a press on one of its
+   *  own chips does not. A real click, so the pointerdown is the one a hand makes. */
+  it("closes on a press outside the bar, and stays open for a press inside it", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <FilterBar search={search()} />
+        <button type="button">Elsewhere</button>
+      </>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+    await user.click(screen.getByRole("button", { name: /^Rare\b/ }));
+    expect(screen.getByRole("button", { name: /^Hide filters/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Elsewhere" }));
+
+    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  /**
+   * Escape closes the popup and hands the caret back to Filters. The caret is put on a chip in
+   * the popup by a click and the key goes where it is (`user.keyboard`), so neither half can
+   * repair the other.
+   */
+  it("closes on Escape, and hands the caret back to Filters", async () => {
+    const user = userEvent.setup();
+    render(<FilterBar search={search()} />);
+
+    await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+    await user.click(screen.getByRole("button", { name: /^Rare\b/ }));
+    expect(screen.getByRole("button", { name: /^Rare\b/ })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveFocus();
+  });
+
+  /** One press per layer: an open picker inside the popup takes the first Escape, and the popup
+   *  the second. */
+  it("leaves the popup open while an Escape closes a picker inside it", async () => {
+    const user = userEvent.setup();
+    render(<FilterBar search={search()} />);
+    await openTray();
+    await openDropdown(user, "Format");
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("button", { name: "Format" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveFocus();
+  });
+
+  /** With the popup shut an Escape is not the bar's: it reaches `window` unspent, for the layer
+   *  behind (a deck to close, a folder to go up out of). */
+  it("lets an Escape through while the popup is shut", async () => {
+    const user = userEvent.setup();
+    const escapes = watchEscapeAtWindow();
+    try {
+      render(<FilterBar search={search()} />);
+      const filters = screen.getByRole("button", { name: /^Show filters/ });
+      await user.click(filters);
+      await user.click(screen.getByRole("button", { name: /^Hide filters/ }));
+      expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveFocus();
+
+      await user.keyboard("{Escape}");
+
+      expect(escapes.prevented).toEqual([false]);
+    } finally {
+      escapes.stop();
+    }
   });
 
   /**
@@ -1578,15 +1669,13 @@ describe("FilterBar, its tray", () => {
   });
 
   /**
-   * **One row holds every control on the bar.** The arrangement is `order` plus a `basis-full`
-   * break inside one flex container rather than a `<div>` per line, so the search box's own
-   * parent is the box every other control on the bar is laid out in — and a control that had
-   * been split off into a line of its own fails here by name.
+   * **One row holds every control on the bar** — the box `barBand` measures — so a control that
+   * had been split off into a line of its own fails here by name.
    */
-  it("lays every control on the bar out in the search box's own row", () => {
+  it("lays every control on the bar out in the bar's own row", () => {
     render(<FilterBar search={search()} />);
 
-    const row = screen.getByPlaceholderText("Search cards…").parentElement!;
+    const row = barRow();
     const onTheRow = {
       colours: screen.getByRole("group", { name: "Color identity" }),
       filters: screen.getByRole("button", { name: /^Show filters/ }),
@@ -1594,6 +1683,8 @@ describe("FilterBar, its tray", () => {
       layout: screen.getByRole("group", { name: "Result layout" }),
       sort: screen.getByRole("button", { name: "Sort results" }),
       sortDirection: screen.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ }),
+      stack: screen.getByRole("button", { name: "Stack printings" }),
+      reset: screen.getByRole("button", { name: /^Reset all/ }),
     };
     const offTheRow = Object.entries(onTheRow)
       .filter(([, el]) => !row.contains(el))
@@ -1617,7 +1708,8 @@ describe("FilterBar, its rarity chips", () => {
     const names = screen
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label"))
-      .filter((n): n is string => !!n && n.endsWith(" cards"));
+      // One word and `cards`: Tokens & extras' sentence ends in "test cards" too.
+      .filter((n): n is string => !!n && /^[A-Z][a-z]+ cards$/.test(n));
     expect(names).toEqual([
       "Common cards",
       "Uncommon cards",
@@ -2340,7 +2432,7 @@ describe("FilterBar, the filters it states", () => {
     render(<FilterBar search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2 })} />);
 
     const reset = screen.getByRole("button", { name: /^Reset all/ });
-    const row = screen.getByLabelText("Search cards").parentElement!;
+    const row = barRow();
     expect(row).toContainElement(reset);
     expect(screen.getByText("Filtering by").parentElement).not.toContainElement(reset);
     expect(screen.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
@@ -2406,13 +2498,20 @@ describe("FilterBar, the filters it states", () => {
   });
 
   /**
-   * `Any card` is not a format — it is the corpus the search is drawn from — so its chip may not
-   * read `Format: Any card`, which would state a format filter that is not on.
+   * Tokens & extras is not a format — it is the corpus the search is drawn from — so its chip may
+   * not read `Format: …`, which would state a format filter that is not on. Its × is the toggle's
+   * second press: back to `Any format`.
    */
-  it("calls the widening row what it is", () => {
-    render(<FilterBar search={search({ format: ANY_CARD })} />);
+  it("states Tokens & extras as what it shows, and clears it back to Any format", async () => {
+    const setFormat = vi.fn();
+    render(<FilterBar search={search({ format: ANY_CARD, setFormat })} />);
 
-    expect(chipLabels()).toEqual(["Showing: Any card"]);
+    expect(chipLabels()).toEqual(["Showing: Tokens & extras"]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter, Showing: Tokens & extras" }),
+    );
+    expect(setFormat).toHaveBeenCalledWith("");
   });
 
   /** Half a band is a sentence, never a range with a hole in it. */
@@ -2478,23 +2577,21 @@ describe("FilterBar, the filters it states", () => {
   });
 
   /**
-   * **A wrapped block under the bar, and never a line of the bar's own row.** An appearing chip
-   * under the bar moves only the wall, where on the row it would take its width out of a `flex-1`
-   * search box and slide nine colour chips left under the finger that had just pressed one. The
-   * chips wrap onto further lines as they grow rather than running out of the box. `Reset all` is
-   * the other way round since 2026-09-27 — on the row, drawn from the first paint so it never
-   * appears — and "keeps Reset all on the bar's own row", in this block, pins that half.
+   * **One line under the bar, and never a part of the bar's own row** — `StatedFiltersLine`
+   * since the Filter bar board (2026-11): it scrolls rather than wraps, so a filter going on never
+   * grows the bar by a line, and on the row it would take its width out of the search box and
+   * slide the colour chips under the finger that had just pressed one.
    */
-  it("wraps the chips in a block of their own, off the bar's row", () => {
+  it("states the chips on one scrolling line of their own, off the bar's row", () => {
     render(<FilterBar search={search({ colors: ["U", "R"], activeCount: 1 })} />);
 
-    const block = screen.getByRole("button", {
+    const line = screen.getByRole("button", {
       name: "Remove filter, Color: Blue, Red",
     }).parentElement!;
-    expect(block.classList.contains("flex-wrap")).toBe(true);
+    expect(line.classList.contains("overflow-x-auto")).toBe(true);
+    expect(line.classList.contains("flex-wrap")).toBe(false);
 
-    const row = screen.getByPlaceholderText("Search cards…").parentElement!;
-    expect(row).not.toContainElement(block);
+    expect(barRow()).not.toContainElement(line);
   });
 });
 
@@ -2677,14 +2774,12 @@ describe("StatedFiltersLine", () => {
 });
 
 /**
- * **`Show all printings` beside Filters on a wide bar, in the tray on a narrow one** (issue #911).
- *
- * jsdom lays nothing out and its observer never reports, so the row's width is reported here by
- * hand to the observer watching the row — the wiring and the one-control rule are what is pinned.
- * Which widths have *room* is a measurement, made in Chromium and written down on
- * {@link printingsOnBar}; the edges below pin that the bands are the ones it states.
+ * **Where the bar's width puts each control** (the Filter bar board, 2026-11). `barBand` reads the
+ * row's measured width; jsdom lays nothing out and its observer never reports, so the width is
+ * handed to the observer watching the row by hand. The rule pinned at every band: the sort and the
+ * Grid/List pair are on the bar or in the open popup's View cell — once, never both.
  */
-describe("FilterBar, the printings switch", () => {
+describe("FilterBar, its bands", () => {
   let watchers: { callback: ResizeObserverCallback; observed: Element[] }[] = [];
 
   beforeEach(() => {
@@ -2708,9 +2803,10 @@ describe("FilterBar, the printings switch", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  /** Report the row — the box the search field is laid out in — as `width` px wide. */
+  /** Report the bar's row as `width` px wide, to the observer watching it. */
   function rowIs(width: number): void {
-    const row = screen.getByPlaceholderText("Search cards…").parentElement!;
+    // The measured box is the row around the controls (and any page title), not the controls.
+    const row = barRow().parentElement!;
     const watcher = watchers.find((w) => w.observed.includes(row));
     expect(watcher).toBeDefined();
     act(() => {
@@ -2718,68 +2814,160 @@ describe("FilterBar, the printings switch", () => {
     });
   }
 
-  const showAll = () => screen.queryAllByRole("button", { name: "Show all printings" });
+  const sorts = () => screen.queryAllByRole("button", { name: "Sort results" });
+  const layouts = () => screen.queryAllByRole("group", { name: "Result layout" });
+  const stacks = () => screen.queryAllByRole("button", { name: "Stack printings" });
+  /** The open popup, found the way assistive tech finds it: through Filters' `aria-controls`. */
+  const popup = () => {
+    const filters = screen.getByRole("button", { name: /^Hide filters/ });
+    return document.getElementById(filters.getAttribute("aria-controls")!)!;
+  };
 
-  it("opens on two lines from 1040, closes at the one-line fold, and opens again at 1624", () => {
-    expect(printingsOnBar(0)).toBe(false);
-    expect(printingsOnBar(1039)).toBe(false);
-    expect(printingsOnBar(1040)).toBe(true);
-    expect(printingsOnBar(1499)).toBe(true);
-    expect(printingsOnBar(1500)).toBe(false);
-    expect(printingsOnBar(1623)).toBe(false);
-    expect(printingsOnBar(1624)).toBe(true);
+  /** Each edge from both sides, written out — the board's bands, where its controls fit. */
+  it("reads the board's band edges", () => {
+    expect(barBand(0)).toBe("widest");
+    expect(barBand(1400)).toBe("widest");
+    expect(barBand(1399)).toBe("roomy");
+    expect(barBand(1100)).toBe("roomy");
+    expect(barBand(1099)).toBe("normal");
+    expect(barBand(980)).toBe("normal");
+    expect(barBand(979)).toBe("tight");
+    expect(barBand(800)).toBe("tight");
+    expect(barBand(799)).toBe("panel");
+    expect(barBand(206)).toBe("panel");
   });
 
-  it("rides the bar beside Filters on a wide row, and the tray leaves its cell out", async () => {
-    const toggleAllPrintings = vi.fn();
-    render(<FilterBar search={search({ toggleAllPrintings })} />);
+  it("moves the sort off the bar only when tight, and the Grid/List pair below roomy", () => {
+    expect(
+      (["widest", "roomy", "normal", "tight", "panel"] as const).map((b) => [
+        b,
+        sortOnBar(b),
+        layoutOnBar(b),
+      ]),
+    ).toEqual([
+      ["widest", true, true],
+      ["roomy", true, true],
+      ["normal", true, false],
+      ["tight", false, false],
+      ["panel", true, false],
+    ]);
+  });
+
+  /**
+   * Shut, a control in the View cell is drawn nowhere; open, each is drawn exactly once, on the
+   * bar or in the popup. `0` is unmeasured and reads as the widest band.
+   */
+  it.each([
+    [0, "bar", "bar"],
+    [1600, "bar", "bar"],
+    [1200, "bar", "bar"],
+    [1000, "bar", "popup"],
+    [900, "popup", "popup"],
+    [600, "bar", "popup"],
+  ] as const)(
+    "at %ipx puts the sort on the %s and the Grid/List pair on the %s",
+    async (width, sortAt, layoutAt) => {
+      render(<FilterBar search={search()} />);
+      if (width > 0) rowIs(width);
+
+      expect(sorts()).toHaveLength(sortAt === "bar" ? 1 : 0);
+      expect(layouts()).toHaveLength(layoutAt === "bar" ? 1 : 0);
+
+      await openTray();
+
+      expect(sorts()).toHaveLength(1);
+      expect(layouts()).toHaveLength(1);
+      expect(popup().contains(sorts()[0])).toBe(sortAt === "popup");
+      expect(barRow().contains(sorts()[0])).toBe(sortAt === "bar");
+      expect(popup().contains(layouts()[0])).toBe(layoutAt === "popup");
+      expect(barRow().contains(layouts()[0])).toBe(layoutAt === "bar");
+      // The View cell is drawn only when something moved into it.
+      expect(screen.queryByText("View") !== null).toBe(sortAt === "popup" || layoutAt === "popup");
+    },
+  );
+
+  it("moves the sort into the popup as the bar narrows, without drawing it twice", async () => {
+    render(<FilterBar search={search()} />);
     rowIs(1200);
-
-    // On the bar with the tray shut — and the very next control is Filters.
-    const [chip] = showAll();
-    expect(chip).toHaveAttribute("aria-pressed", "false");
-    expect(chip.nextElementSibling).toBe(screen.getByRole("button", { name: /^Show filters/ }));
-
-    // **Once, with the tray open too**: the cell is not drawn a second time under the bar.
     await openTray();
-    expect(showAll()).toHaveLength(1);
-    expect(screen.queryByText("Printings")).toBeNull();
+    expect(popup().contains(sorts()[0])).toBe(false);
 
-    await userEvent.click(showAll()[0]);
+    rowIs(900);
+
+    expect(sorts()).toHaveLength(1);
+    expect(popup().contains(sorts()[0])).toBe(true);
+  });
+
+  /** A surface with no Grid/List pair (the deck panel) has nothing to move at normal, so no
+   *  View cell either. */
+  it("opens no View cell for a pair the surface does not draw", async () => {
+    render(<FilterBar search={search()} layoutToggle={false} />);
+    rowIs(1000);
+    await openTray();
+
+    expect(layouts()).toHaveLength(0);
+    expect(screen.queryByText("View")).toBeNull();
+    expect(barRow().contains(sorts()[0])).toBe(true);
+  });
+
+  /** The words go below the widest band and the names stay, so each is one button whatever the
+   *  width — hidden by a class, never a second copy. */
+  it("draws the words on Filters, Stack printings and Reset only at the widest band", () => {
+    render(<FilterBar search={search()} />);
+    const hidden = () =>
+      [
+        within(screen.getByRole("button", { name: /^Show filters/ })).getByText("Filters"),
+        within(screen.getByRole("button", { name: "Stack printings" })).getByText(
+          "Stack printings",
+        ),
+        within(screen.getByRole("button", { name: /^Reset all/ })).getByText("Reset"),
+      ].map((word) => word.classList.contains("hidden"));
+
+    rowIs(1400);
+    expect(hidden()).toEqual([false, false, false]);
+    rowIs(1399);
+    expect(hidden()).toEqual([true, true, true]);
+    rowIs(600);
+    expect(hidden()).toEqual([true, true, true]);
+  });
+
+  /** On the bar at every band, and never a cell in the popup — the old `Printings` cell is gone. */
+  it.each([1600, 1200, 1000, 900, 600])(
+    "keeps Stack printings on the bar at %ipx, and out of the popup",
+    async (width) => {
+      render(<FilterBar search={search()} />);
+      rowIs(width);
+      await openTray();
+
+      expect(stacks()).toHaveLength(1);
+      expect(barRow().contains(stacks()[0])).toBe(true);
+      expect(screen.queryByText("Printings")).toBeNull();
+    },
+  );
+
+  /**
+   * **Pressed is one tile per card, the default** — the inverse of the hooks' `allPrintings`. It
+   * was `Show all printings`, pressed for the other reading. The press is the hook's toggle.
+   */
+  it("presses Stack printings by default, and lifts it when every printing is shown", async () => {
+    const toggleAllPrintings = vi.fn();
+    const { rerender } = render(
+      <FilterBar search={search({ allPrintings: false, toggleAllPrintings })} />,
+    );
+    expect(stacks()[0]).toHaveAttribute("aria-pressed", "true");
+
+    rerender(<FilterBar search={search({ allPrintings: true, toggleAllPrintings })} />);
+    expect(stacks()[0]).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(stacks()[0]);
     expect(toggleAllPrintings).toHaveBeenCalledOnce();
   });
 
-  it("says it is on, on the bar as in the tray", () => {
-    render(<FilterBar search={search({ allPrintings: true })} />);
-    rowIs(1700);
-    expect(showAll()[0]).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it.each([0, 900, 1550])("waits in the tray on a %ipx row", async (width) => {
-    render(<FilterBar search={search()} />);
-    if (width > 0) rowIs(width);
-
-    expect(showAll()).toHaveLength(0);
-    await openTray();
-    expect(showAll()).toHaveLength(1);
-    expect(screen.getByText("Printings")).toBeInTheDocument();
-  });
-
-  it("moves back into the tray when the row narrows, without being drawn twice", async () => {
-    render(<FilterBar search={search()} />);
-    rowIs(1200);
-    await openTray();
-    expect(screen.queryByText("Printings")).toBeNull();
-
-    rowIs(800);
-    expect(showAll()).toHaveLength(1);
-    expect(screen.getByText("Printings")).toBeInTheDocument();
-  });
-
-  it("is drawn nowhere on a surface that cannot fold its rows", async () => {
+  it("draws Stack printings nowhere on a surface that cannot fold its rows", async () => {
     render(<FilterBar search={search({ toggleAllPrintings: undefined })} />);
     rowIs(1700);
     await openTray();
-    expect(showAll()).toHaveLength(0);
+
+    expect(stacks()).toHaveLength(0);
   });
 });

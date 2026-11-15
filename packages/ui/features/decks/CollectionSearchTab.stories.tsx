@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
+import { STACK_PRINTINGS } from "@/components/FilterChips";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
@@ -135,10 +136,16 @@ export const Default: Story = {
     await expect(canvas.getByRole("group", { name: "Color identity" })).toBeInTheDocument();
     await expect(canvas.getByRole("group", { name: "Mana value" })).toBeInTheDocument();
     await expect(canvas.getByLabelText("Format")).toBeInTheDocument();
-    // No Owned pair and no All printings: every row here is a copy the reader has, and these
+    // No Owned pair and no Stack printings: every row here is a copy the reader has, and these
     // *are* their printings. `COLLECTION_TRAY` is where both absences are argued.
     await expect(canvas.queryByRole("button", { name: /^Owned/ })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /^Show all printings/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: STACK_PRINTINGS })).toBeNull();
+    // The Include cell is here, though: this tab's `Any format` means *legal somewhere*, so its
+    // Tokens & extras toggle is the only way back to the reader's own tokens.
+    await expect(canvas.getByRole("button", { name: /^Tokens & extras\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   },
 };
 

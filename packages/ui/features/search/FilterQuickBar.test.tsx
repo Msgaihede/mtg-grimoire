@@ -218,6 +218,33 @@ describe("FilterQuickBar", () => {
     expect(some.resetAll).toHaveBeenCalled();
   });
 
+  /**
+   * Stack printings rides the quick bar too, its meaning the inverse of the hook's `allPrintings`:
+   * pressed is the stacked wall, one tile per card. The second render, over `allPrintings: true`,
+   * is what makes the first half more than a constant — a toggle that always read pressed would
+   * pass it.
+   */
+  it("draws Stack printings pressed by default, and a press asks for all printings", async () => {
+    const s = search();
+    const { unmount } = render(<FilterQuickBar search={s} shown />, { wrapper: TooltipProvider });
+    const stack = within(bar()).getByRole("button", { name: "Stack printings" });
+    expect(stack).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(stack);
+    expect(s.toggleAllPrintings).toHaveBeenCalledTimes(1);
+    // A view mode: the press touches nothing a reset would.
+    expect(s.resetAll).not.toHaveBeenCalled();
+    unmount();
+
+    render(<FilterQuickBar search={search({ allPrintings: true })} shown />, {
+      wrapper: TooltipProvider,
+    });
+    expect(within(bar()).getByRole("button", { name: "Stack printings" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("draws a page's lead after Top", () => {
     render(<FilterQuickBar search={search()} shown lead={<span>picked tags here</span>} />, {
       wrapper: TooltipProvider,

@@ -480,9 +480,9 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // unset anyway, and sending them would make the payload lie about intent.
     ...terms,
     // **The card search tab's ladder, through its one mapping** (token stacks spec §3.6):
-    // `Any card` sends neither field, `Any format` sends `playableOnly` — *legal somewhere*, so a
+    // `Tokens & extras` sends neither field, `Any format` sends `playableOnly` — *legal somewhere*, so a
     // token or an orphan copy (its printing gone from the corpus) is hidden under it and shown
-    // under `Any card` — and a named format sends both. Rust needs nothing for it:
+    // under `Tokens & extras` — and a named format sends both. Rust needs nothing for it:
     // `collection::scope` keeps `q.cards.playable_only` and forces only `paper_only` off.
     ...formatParams(format),
     colors: colorsParam,
@@ -683,15 +683,15 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      *  so a dependency on the object would rebuild the list on every keystroke. */
     formats: formatOptions,
     /**
-     * **This tab draws the card search tab's format ladder** (token stacks spec §3.6): `Any card`,
+     * **This tab draws the card search tab's format ladder** (token stacks spec §3.6): `Tokens & extras`,
      * `Any format`, then the formats, spelled through {@link formatParams} above. It used to leave
      * the row out, when this tab sent no `playableOnly` and `Any format` already meant every copy
      * — and with the deck's format seeded and no widening row, a reader's own tokens, legal
      * nowhere, had no way back onto a panel that opens on this tab. `Any format` now means *legal
      * somewhere*, the card search's meaning, so an orphan copy is hidden under it and shown under
-     * `Any card`.
+     * `Tokens & extras`.
      *
-     * **The collection _page_ (`useCollection`) is untouched and still offers no `Any card`**: it
+     * **The collection _page_ (`useCollection`) is untouched and still offers no `Tokens & extras`**: it
      * sends no `playableOnly`, so it never narrows the corpus to begin with and the row would have
      * nothing to put back.
      */
@@ -812,7 +812,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      * the reader has, so it is not a question this list can ask.
      *
      * **The format term is `useCardSearch`'s three arms, unchanged** (token stacks spec §3.6):
-     * `format.length > 0`, so `Any card` counts — it is the row that *widens*, and Reset all
+     * `format.length > 0`, so `Tokens & extras` counts — it is the row that *widens*, and Reset all
      * would change the wall — while `Any format` (`""`) counts nothing, because it is where Reset
      * all goes. The deck's own seeded format counts too, which is why a Commander deck's tab
      * opens reading `Reset all 1`. There is no `unfiltered` on this hook to keep in step.
@@ -840,7 +840,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     }),
     resetAll: () => {
       setText("");
-      // `Any format`, never the deck's own format and never `Any card` — `useCardSearch`'s reset,
+      // `Any format`, never the deck's own format and never `Tokens & extras` — `useCardSearch`'s reset,
       // so both tabs of one panel clear to the same row. Only the deck's format *changing*
       // re-seeds it (`appliedDefaultFormat` above), which is what makes the press stick.
       setFormat("");

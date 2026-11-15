@@ -171,16 +171,21 @@ export interface FormatFilterOption {
 export const ANY_CARD = "any-card";
 
 /**
+ * The two things the format decides — the select and, since the Filter bar board (2026-11), the Include
+ * cell's **Tokens & extras** toggle, which is this sentinel ({@link ANY_CARD}; it was the select's
+ * `Any card` row). The two never stand on at once: the toggle puts the format back to `Any format`,
+ * and a named format replaces the sentinel.
+ *
  * The two things the one format select decides: which `legalities` key the backend narrows to,
  * and whether the printings no format allows are in the corpus at all.
  *
- * `playableOnly` rides with **every** row but `Any card`, the named formats included, and that
+ * `playableOnly` rides with **every** row but `Tokens & extras`, the named formats included, and that
  * is not belt-and-braces — it is what makes the three rows nest. A card legal in Modern is
  * legal somewhere, so the flag cannot narrow a format row any further; sending it anyway means
  * one expression answers all three rows, and there is no fourth combination for a reader to
  * reach.
  *
- * Both fields are **absent rather than `false`** on `Any card`, which is the request every
+ * Both fields are **absent rather than `false`** on `Tokens & extras`, which is the request every
  * other caller of `search_cards` sends: `playableOnly` is omitted-means-false (the opposite of
  * `paperOnly` beside it — see `SearchRequest.playableOnly`), so "show them" is no filter at
  * all, and spelling it out would make the payload lie about intent.
@@ -299,7 +304,7 @@ export function cycleTriState(current: boolean | undefined, first: boolean): boo
 export interface FilterState {
   text: string;
   /**
-   * The format select's whole value: `""` for `Any format`, {@link ANY_CARD} for `Any card`,
+   * The format select's whole value: `""` for `Any format`, {@link ANY_CARD} for `Tokens & extras`,
    * or a `legalities` key. Two of those three are "no format filter" and only one of them is
    * the default, which is why the count below tests for a non-empty string rather than for a
    * format.
@@ -369,9 +374,9 @@ export interface FilterState {
 export function activeFilterCount(f: FilterState): number {
   return [
     f.text.trim().length > 0,
-    // **`Any card` counts, and it is the one row here that *widens*.** This number captions
+    // **`Tokens & extras` counts, and it is the one row here that *widens*.** This number captions
     // Reset all and answers "how much would pressing this change" — reset puts the select back
-    // on `Any format`, so a reader sitting on `Any card` really does have one thing that press
+    // on `Any format`, so a reader sitting on `Tokens & extras` really does have one thing that press
     // would clear. A count that read zero there would caption a button that changes the wall.
     f.format.length > 0,
     f.colors.length > 0,
@@ -669,7 +674,7 @@ export interface CardSearchOptions {
    */
   availableForDeck?: number | null;
   /**
-   * A set to **open** on, alone and at `Any card` — `SearchPage` passing the card modal's
+   * A set to **open** on, alone and at `Tokens & extras` — `SearchPage` passing the card modal's
    * hand-off when that press is what mounted it (issue #503). Read once, by the `useState` seeds,
    * and ignored after.
    *
@@ -687,7 +692,7 @@ export interface CardSearchOptions {
    */
   initialSort?: SortSpec<SearchSortKey> | null;
   /**
-   * A search box to **open** on, alone and at `Any card` — `SearchPage` passing the header's quick
+   * A search box to **open** on, alone and at `Tokens & extras` — `SearchPage` passing the header's quick
    * search hand-off when that press is what mounted it (issue #1098). {@link initialSet}'s seed
    * for the box instead of the Set chips, read once and ignored after; {@link showOnlyText} is
    * the same answer for a page already mounted.
@@ -776,14 +781,14 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const { marketplace } = useMarketplace();
   const [text, setText] = useState(seededText);
   // The format select's whole value, which is three kinds of thing in one string: `""` is
-  // `Any format` and the default, {@link ANY_CARD} is `Any card`, anything else is a
+  // `Any format` and the default, {@link ANY_CARD} is `Tokens & extras`, anything else is a
   // `legalities` key. {@link formatParams} is the only place that branch is written.
   //
   // Seeded from the caller's default rather than from `""`, so the first request the panel
   // makes is already the filtered one — an empty seed corrected afterwards would send the
   // unfiltered search first and answer it, which is a wall of illegal cards and a second round
   // trip to replace it.
-  // `Any card` when opening on a set, for {@link showOnlySet}'s reason.
+  // `Tokens & extras` when opening on a set, for {@link showOnlySet}'s reason.
   // A remembered format wins over the caller's default: it is the reader's own last answer.
   const [format, setFormat] = useState(
     options.initialSet || options.initialText ? ANY_CARD : (seed?.format ?? defaultFormatValue),
@@ -872,7 +877,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     recalled?.allPrintings ?? options.defaultAllPrintings ?? false,
   );
   // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
-  // to off-and-hidden. It is the format select's `Any card` row now — one control, because the
+  // to off-and-hidden. It is the format select's `Tokens & extras` row now — one control, because the
   // chip and the select were narrowing and widening the same axis and `Modern plus the art
   // cards` was a state nothing wanted. Two things changed with it, both deliberate: the row is
   // **counted by Reset all and cleared by it**, where the chip was neither (it was filed beside
@@ -1481,7 +1486,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // search missed". Telling those two apart would take remembering the press, which buys a
   // caption in a case that also needs the database to be empty.
   //
-  // **`Any card` is not reader-set either, and that arm is about arithmetic rather than about
+  // **`Tokens & extras` is not reader-set either, and that arm is about arithmetic rather than about
   // intent.** It is the one row of this select that *widens*: its result set is a superset of
   // `Any format`'s, so an empty answer to it with nothing else on still proves the database is
   // empty rather than that the search missed — which is exactly the distinction this flag is
@@ -1589,7 +1594,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     },
     /**
      * The format select's whole value — `""` (`Any format`, the default), {@link ANY_CARD}
-     * (`Any card`), or a `legalities` key.
+     * (`Tokens & extras`), or a `legalities` key.
      *
      * One string for what used to be a select and a chip: it decides both `format` and
      * `playableOnly`, through {@link formatParams}. The two rows that are not formats are the
@@ -1604,13 +1609,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     formats,
     /**
-     * **This is the surface `Any card` exists for**, and one of the two of the four hooks that
+     * **This is the surface `Tokens & extras` exists for**, and one of the two of the four hooks that
      * offer it — the other is the deck search's Collection tab (`useCollectionSearch`), which
      * since token stacks (2026-09-26) spells its format through this file's {@link formatParams}
      * and so narrows its corpus the same way.
      *
      * Every other row of this picker rides `playableOnly` ({@link formatParams}), so the corpus
-     * this search draws from *is* narrowed by default and `Any card` is the way back to the
+     * this search draws from *is* narrowed by default and `Tokens & extras` is the way back to the
      * printings no format allows. The collection page and the wishlist filter by nothing of the
      * kind — see `FilterSurface.anyCard`, where the empty wall it caused is written down.
      */
@@ -1851,7 +1856,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * `appliedDefaultFormat`, which this does not touch, so the default returns when the deck's
      * format changes and never a render later on its own.
      *
-     * **That one line now also puts `Any card` back to `Any format`**, which the old `Unplayable`
+     * **That one line now also puts `Tokens & extras` back to `Any format`**, which the old `Unplayable`
      * chip deliberately survived. The chip was outside this because it was a statement about the
      * corpus rather than a filter; as a row of the format select it is neither outside nor
      * special, and a reset that left the select where it was would be the one control this
@@ -1887,7 +1892,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * the whole question: a colour row or a typed word left standing from the reader's last search
      * would answer a narrower one while the Set chip claimed the set.
      *
-     * **`Any card` rather than `resetAll`'s `Any format`**, and that is the one place the two
+     * **`Tokens & extras` rather than `resetAll`'s `Any format`**, and that is the one place the two
      * differ. The reader asked for a *set*, which is a fact about the cardboard rather than about
      * any format: every other row of the select narrows to printings some format allows
      * ({@link formatParams}), which would drop an Un-set's acorn cards or a set's art cards from a
