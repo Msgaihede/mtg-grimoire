@@ -980,6 +980,47 @@ it("opens the card menu on a right-click of the picture, drawn over the modal's 
   expect(menu).toHaveClass(LAYER.menuOverDialog);
 });
 
+/**
+ * Issue #1679: the picture's right-click menu offers every finish other than the one on screen,
+ * and a pick there is the same press as the button under the art — the picture follows it.
+ */
+it("offers the other finishes on a right-click of the picture, and shows the one picked", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil","etched"]' });
+  useAppStore.getState().setSelectedCardId("c1");
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardToDeckProvider>
+        <ContextMenuProvider>
+          <CardDetailModal />
+        </ContextMenuProvider>
+      </CardToDeckProvider>
+    </QueryClientProvider>,
+  );
+
+  const picture = await screen.findByAltText("Lightning Bolt");
+  act(() => {
+    picture.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  });
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByRole("menuitem", { name: "View as foil" })).toBeInTheDocument();
+  expect(within(menu).queryByRole("menuitem", { name: "View as nonfoil" })).not.toBeInTheDocument();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "View as etched" }));
+
+  expect(screen.getByRole("button", { name: "View as etched" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  // And the next right-click knows: etched is on screen now, so it is the finish left out.
+  act(() => {
+    picture.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  });
+  const again = await screen.findByRole("menu");
+  expect(within(again).getByRole("menuitem", { name: "View as nonfoil" })).toBeInTheDocument();
+  expect(within(again).queryByRole("menuitem", { name: "View as etched" })).not.toBeInTheDocument();
+});
+
 it("dates the prices it draws, in the footer beside the credit", async () => {
   // **Spec §5: a price is never shown without saying how old it is** — and, with five
   // marketplaces in the picker, whose. This lived under `CardModalArt`'s price cells until
@@ -2357,6 +2398,36 @@ it("sets the copy's finish once Edit is on, where it only viewed it before", asy
   await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(42, { finish: "foil" }));
   await waitFor(() => expect(useAppStore.getState().paneFinish).toBe("foil"));
   expect(useAppStore.getState().paneCopy).toEqual({ entryId: 42 });
+});
+
+it("sets the copy's finish from the picture's right-click menu too (issue #1679)", async () => {
+  // The menu's finish rows are the buttons' handler, so behind a copy being edited they write
+  // through the same `collection_update` — and say `Set as`, as the buttons do.
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  collectionList.mockResolvedValue({ items: [copyRow(42)], total: 1 });
+  useAppStore.setState({ activeView: "collection" });
+  useAppStore.getState().openCardAsFinish("c1", "nonfoil");
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardToDeckProvider>
+        <ContextMenuProvider>
+          <CardDetailModal />
+        </ContextMenuProvider>
+      </CardToDeckProvider>
+    </QueryClientProvider>,
+  );
+
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  await screen.findByRole("button", { name: "Set as foil" });
+  const picture = await screen.findByAltText("Lightning Bolt");
+  act(() => {
+    picture.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  });
+  const menu = await screen.findByRole("menu");
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Set as foil" }));
+
+  await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(42, { finish: "foil" }));
 });
 
 it("asks which copy to edit when the printing is held in more than one row", async () => {

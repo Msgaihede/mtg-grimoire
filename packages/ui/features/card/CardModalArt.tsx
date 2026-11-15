@@ -1,25 +1,10 @@
 import { useState, type JSX, type MouseEvent as ReactMouseEvent } from "react";
-import {
-  ArrowRight,
-  Combine,
-  FlipHorizontal2,
-  Gem,
-  RotateCcw,
-  RotateCw,
-  RectangleVertical,
-  Sparkles,
-} from "lucide-react";
+import { ArrowRight, Combine, FlipHorizontal2, RotateCcw, RotateCw, Sparkles } from "lucide-react";
 import { FoilOverlay } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
 import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import {
-  FINISH_LABEL,
-  parseFinishes,
-  recordableFinishes,
-  soleFinish,
-  type Finish,
-} from "@/lib/finish";
+import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { CardDetail, DeckFinish, MeldRelation } from "@/lib/ipc";
@@ -28,6 +13,7 @@ import { formatPrice } from "@/lib/prices";
 import { finishTreatments, treatmentName } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 import { cardTurn, meldPartsOf, meldResultOf, type CardTurn } from "./orientation";
+import { FINISH_GLYPH, finishChoiceLabel, seededFinish, switchableFinishes } from "./finishChoice";
 import { faceCount } from "./printings";
 
 /**
@@ -70,55 +56,6 @@ const TURNED_CARD_ASPECT = CARD_ASPECT.split("/")
   .map((side) => side.trim())
   .reverse()
   .join(" / ");
-
-/**
- * The finishes this printing's finish row offers a button for — every finish it lists, or none.
- *
- * **One button per finish, and only where there are two or more** (issue #1679). The row used to
- * be a single foil toggle, which could only ever be about one shiny finish: a printing sold
- * nonfoil, foil *and* etched had to pick one of its two shiny answers for the toggle to be about
- * (issue #1561's `own`), and a foil+etched printing — no plain copy to toggle back to — had no
- * control at all. A button per finish answers both, in the printing's own order (Scryfall's,
- * which is `FINISHES`': plain, then the premium treatments).
- *
- * A single-finish printing gets none: there is nothing to switch to, and `soleFinish` — which
- * states what the cardboard simply *is* — already speaks for it. An unknown list (`[]`) gets none
- * either, because nothing is known to offer.
- */
-function switchableFinishes(finishesJson: string | null): Finish[] {
-  const finishes = parseFinishes(finishesJson);
-  return finishes.length >= 2 ? finishes : [];
-}
-
-/**
- * The finish the column opens showing.
- *
- * The deck row's (or the copy's) own finish first — `null` there is the regular copy — then the
- * finish the opening surface named, where this printing was made in it, then the most ordinary
- * finish the printing is sold in, which is `recordableFinishes`' first answer: `nonfoil` for
- * nearly every printing and `foil` for a foil+etched one.
- */
-function seededFinish(
-  finishesJson: string | null,
-  deckRow: { finish: DeckFinish } | null,
-  openedAs: Finish | null,
-): Finish {
-  if (deckRow !== null) return deckRow.finish ?? "nonfoil";
-  const listed = parseFinishes(finishesJson);
-  if (openedAs !== null && (listed.length === 0 || listed.includes(openedAs))) return openedAs;
-  return recordableFinishes(finishesJson)[0];
-}
-
-/**
- * The glyph a finish button draws: `FinishMark`'s own two for the shiny finishes, and a plain
- * card for the regular one, which has no mark of its own anywhere else because nothing needs to
- * say a card is ordinary — but a button beside two glyphed ones needs a picture too.
- */
-const FINISH_GLYPH: Record<Finish, typeof Sparkles> = {
-  nonfoil: RectangleVertical,
-  foil: Sparkles,
-  etched: Gem,
-};
 
 /**
  * The meld half of the row under the art — what the counterparts are, which one is being looked
@@ -190,6 +127,7 @@ export function CardModalArt({
   marketplace,
   deckRow,
   openedAs,
+  viewing = null,
   onPickFinish,
   meld,
   onShowSet,
@@ -238,6 +176,19 @@ export function CardModalArt({
    * at its own boundary (`deck_cards.finish` spells the regular copy `null`).
    */
   onPickFinish: (next: Finish) => void;
+  /**
+   * The finish the host was last asked to show, or `null` while it has been asked for nothing —
+   * which leaves the column on its own seed and its own presses.
+   *
+   * **What lets a press made somewhere else change the picture** (issue #1679): the modal's
+   * right-click menu offers the same finishes as the buttons below the art, and that menu is the
+   * host's, so a `View as etched` chosen there reaches this column only through the host's
+   * `viewedFinish`. It wins over the column's own state rather than replacing it, so a host that
+   * never passes it — the price-history and new-printing dialogs — keeps the buttons working on
+   * their own. Every button press also reaches the host through {@link onPickFinish}, so the two
+   * never disagree about which finish is on screen.
+   */
+  viewing?: Finish | null;
   /** The meld counterparts and what a press does about them — see {@link MeldTarget}. */
   meld: MeldTarget;
   /**
@@ -260,7 +211,7 @@ export function CardModalArt({
   const tip = useTooltip();
   const sides = faceCount(card.layout, card.faces.length);
   const finishes = parseFinishes(card.finishes);
-  /** The finishes the row draws a button for — see {@link switchableFinishes}. */
+  /** The finishes the row draws a button for — see `switchableFinishes`. */
   const switchable = switchableFinishes(card.finishes);
 
   /**
@@ -286,13 +237,17 @@ export function CardModalArt({
   /**
    * The finish on screen — opened showing the copy the reader actually has, where the surface
    * knew of one (a deck row that plays a foil, a collection tile that *is* one), else the
-   * printing's most ordinary finish. See {@link seededFinish}.
+   * printing's most ordinary finish. See `seededFinish`. A finish the host was asked for since
+   * ({@link viewing}) outranks it.
    *
    * **Held from mount** rather than re-derived from `deckRow`, because the press's own write
    * changes the row: the host re-reads it after a `Set as …`, and the column already knows the
    * answer. The host keys this column on the card, so a step to another printing seeds afresh.
    */
-  const [shown, setShown] = useState<Finish>(() => seededFinish(card.finishes, deckRow, openedAs));
+  const [ownShown, setShown] = useState<Finish>(() =>
+    seededFinish(card.finishes, deckRow, openedAs),
+  );
+  const shown = viewing ?? ownShown;
 
   /**
    * How far this card has to be turned to be read, and whether the reader has asked for it.
@@ -341,23 +296,7 @@ export function CardModalArt({
       : soleFinish(card.finishes);
 
   /**
-   * What a finish button says, and it says what the press **does** — always naming the finish
-   * it is the button for (issue #1679).
-   *
-   * `Set as …` behind a deck row (or a copy being edited) and `View as …` without one, because
-   * those are two different acts and a label naming only the visible half would be a control
-   * that quietly edits a deck. **`regular` rather than `FINISH_LABEL.nonfoil`** on the write arm:
-   * "set as nonfoil" is not a thing anybody says, and `Regular` is the word the deck card's own
-   * menu uses for the same choice. The view arm keeps the wording the pane shipped with.
-   */
-  const finishLabel = (f: Finish): string => {
-    if (deckRow !== null)
-      return `Set as ${f === "nonfoil" ? "regular" : FINISH_LABEL[f].toLowerCase()}`;
-    return `View as ${FINISH_LABEL[f].toLowerCase()}`;
-  };
-
-  /**
-   * What the turn button says, and — like the foil button above — it says what the press
+   * What the turn button says, and — like the finish buttons above — it says what the press
    * **does**.
    *
    * A half turn names the half it brings up, because a `flip` card's two halves have two
@@ -712,7 +651,7 @@ export function CardModalArt({
                         accessible name, and a labelled image inside a button *joins* the button's
                         name — this control would be called "Foil View as foil". */}
                     <Glyph className="size-3.5 shrink-0" aria-hidden="true" />
-                    <span className="min-w-0 truncate">{finishLabel(f)}</span>
+                    <span className="min-w-0 truncate">{finishChoiceLabel(f, deckRow !== null)}</span>
                   </button>
                 );
               })}

@@ -109,8 +109,14 @@ import { cn } from "@/lib/utils";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { ACTION, ACTION_PRIMARY } from "./actionButtons";
 import { copyFinish, copyOption, finishRefusal } from "./copyEdit";
+import { seededFinish } from "./finishChoice";
 import { ownsArrowKeys } from "./arrowKeys";
-import { buildCardMenu, useOptionalAddCardToDeck, type CardMenuDeps } from "./cardMenu";
+import {
+  buildCardMenu,
+  useOptionalAddCardToDeck,
+  type CardMenuDeps,
+  type FinishPick,
+} from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
 import { cardHoldingsKey, cardPrintingsKey } from "./cardKeys";
 import { useHoldingsFreshness } from "./useHoldingsFreshness";
@@ -1860,6 +1866,59 @@ function Body({
    * opened a menu behind the scrim, which is why the pane's right-click did not survive the move.
    */
   const { menu } = useContextMenu();
+
+  /**
+   * A finish picked — by a button under the art or by a finish row of the picture's right-click
+   * menu (issue #1679), which are the same choice and so the same handler.
+   *
+   * **The press is a view change everywhere and a write only where there is a row.** On the
+   * collection and the wishlist the press used to reach nothing here, and the rail's last row kept
+   * shopping for the finish the card was *opened* with while the picture beside it said otherwise;
+   * so the view half is recorded first and unconditionally, because it is true of a deck row too.
+   * It is also what moves the picture when the press came from the menu: the art column reads
+   * `viewedFinish` back as its `viewing`.
+   */
+  const pickFinish = (next: Finish) => {
+    if (card === null) return;
+    setViewedFinish(next);
+    if (scope.deck === null && scope.copy !== null) {
+      // `Set as …` on a copy being edited: the row's own finish, through the same
+      // `collection_update` the table's editor writes — which folds onto a row already holding
+      // that finish rather than refusing.
+      const refused = finishRefusal(next, card);
+      if (refused !== null) {
+        setRefusal(refused);
+        return;
+      }
+      setCopyFinish.mutate({ id: scope.copy.entryId, cardId, finish: next });
+      return;
+    }
+    if (scope.deck === null) return;
+    deck.setCardFinish.mutate({
+      cardId: scope.deck.cardId,
+      categoryId: scope.deck.categoryId,
+      finish: scope.deck.finish,
+      // `deck_cards.finish` spells the regular copy `null` — the one place that spelling
+      // belongs, so the conversion is here at the write.
+      to: next === "nonfoil" ? null : next,
+    });
+  };
+  /**
+   * The finish the picture is showing, for the menu's finish rows: the reader's last pick, else
+   * the same seed the art column opened on — `seededFinish` over the very props it was handed.
+   * The rows are withheld while a meld view is up, as the buttons are: the picture is another
+   * card's then.
+   */
+  const finishPick: FinishPick | undefined =
+    card === null || melded !== null
+      ? undefined
+      : {
+          shown:
+            viewedFinish ?? seededFinish(card.finishes, scope.deck ?? copyAsRow, openedFinish),
+          writes: (scope.deck ?? copyAsRow) !== null,
+          pick: pickFinish,
+        };
+
   const menuDeps = useMemo<CardMenuDeps>(
     () => ({ ...deps, printingsDeck: scope.deck }),
     [deps, scope.deck],
@@ -1867,7 +1926,9 @@ function Body({
   const artMenu =
     target === null
       ? undefined
-      : menu(() => buildCardMenu({ ...target, finish: railFinish ?? undefined }, menuDeps));
+      : menu(() =>
+          buildCardMenu({ ...target, finish: railFinish ?? undefined, finishPick }, menuDeps),
+        );
 
   /**
    * The rail's surface-specific entries.
@@ -2120,38 +2181,11 @@ function Body({
                 // Through `openedFinish`, so a seed the open printing was never made in seeds
                 // nothing rather than the toggle (issue #1561).
                 openedAs={openedFinish}
-                // **The press is a view change everywhere and a write only where there is a row**,
-                // which is exactly what the column's own `onPickFinish` doc says it hands over —
-                // and this handler used to act on the second half alone. So on the collection and
-                // the wishlist the press reached nothing here, and the rail's last row kept
-                // shopping for the finish the card was *opened* with while the picture beside it
-                // said otherwise. The view half is recorded first and unconditionally,
-                // because it is true of a deck row too.
-                onPickFinish={(next: Finish) => {
-                  setViewedFinish(next);
-                  if (scope.deck === null && scope.copy !== null) {
-                    // `Set as …` on a copy being edited: the row's own finish, through the same
-                    // `collection_update` the table's editor writes — which folds onto a row
-                    // already holding that finish rather than refusing.
-                    const finish: Finish = next;
-                    const refused = finishRefusal(finish, card);
-                    if (refused !== null) {
-                      setRefusal(refused);
-                      return;
-                    }
-                    setCopyFinish.mutate({ id: scope.copy.entryId, cardId, finish });
-                    return;
-                  }
-                  if (scope.deck === null) return;
-                  deck.setCardFinish.mutate({
-                    cardId: scope.deck.cardId,
-                    categoryId: scope.deck.categoryId,
-                    finish: scope.deck.finish,
-                    // `deck_cards.finish` spells the regular copy `null` — the one place that
-                    // spelling belongs, so the conversion is here at the write.
-                    to: next === "nonfoil" ? null : next,
-                  });
-                }}
+                // **The press is a view change everywhere and a write only where there is a row** —
+                // see {@link pickFinish}, which the right-click menu's finish rows call too.
+                onPickFinish={pickFinish}
+                // What a row of that menu picked, so the picture follows a press made there.
+                viewing={viewedFinish}
                 // **`melded` is this component's state and not the column's**, which is the whole
                 // of why the meld controls are wired this way round: the artist credit at the
                 // foot of the panel has to name the illustrator of the face on screen, and it is
