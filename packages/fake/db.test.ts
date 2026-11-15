@@ -12144,7 +12144,7 @@ describe("the third deck kind", () => {
     // `live` rows — the whole reason they are stored that way.
     expect(readHandlers(db).deck_list()[0]).toMatchObject({ cardCount: 4, virtualOnly: true });
     expect(readHandlers(db).deck_pip_costs()).toEqual([
-      { deckId: 1, costs: [{ cost: "{R}", copies: 4 }] },
+      { deckId: 1, costs: [{ cost: "{R}", copies: 4 }], theoryCosts: [] },
     ]);
   });
 
@@ -12290,6 +12290,41 @@ describe("the third deck kind", () => {
       .deck_pip_costs()
       .find((c) => c.deckId === virtual[0].id)!;
     expect(costs.costs.length).toBeGreaterThan(5);
+  });
+});
+
+/**
+ * Issue #1673: a `THEORY ONLY` deck's tile reads its plan, so the gallery's two reads answer the
+ * plan's size and costs beside the Actual list's — `DECK_SELECT`'s subquery and `PIP_COSTS_SQL`
+ * over the other variant, with the same three exclusions.
+ */
+describe("the plan's figures on the gallery's reads", () => {
+  it("counts and colours the theory list apart from the Actual one", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, categoryKind: "main", variant: "theory", quantity: 4 }),
+        // Beside the plan rather than in it: sized and coloured in neither list.
+        deckCard({ id: 2, deckId: 1, categoryKind: "side", variant: "theory", quantity: 15 }),
+      ],
+    });
+    const r = readHandlers(db);
+
+    expect(r.deck_list()[0]).toMatchObject({ cardCount: 0, theoryCardCount: 4 });
+    expect(r.deck_pip_costs()).toEqual([
+      { deckId: 1, costs: [], theoryCosts: [{ cost: "{R}", copies: 4 }] },
+    ]);
+
+    // And a live row lands in the Actual half alone.
+    db.deckCards.push(deckCard({ id: 3, deckId: 1, categoryKind: "main", quantity: 2 }));
+    expect(r.deck_list()[0]).toMatchObject({ cardCount: 2, theoryCardCount: 4 });
+    expect(r.deck_pip_costs()).toEqual([
+      {
+        deckId: 1,
+        costs: [{ cost: "{R}", copies: 2 }],
+        theoryCosts: [{ cost: "{R}", copies: 4 }],
+      },
+    ]);
   });
 });
 

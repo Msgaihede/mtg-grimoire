@@ -13,19 +13,25 @@
  * editor's panel would say the deck is the wrong size, in the same sentence. A format that
  * judges nothing (`unspecified`) and a format the seed no longer carries both draw a plain
  * count: no verdict about rules the reader never picked.
+ *
+ * **The count is the tile's, which is the plan's on a `THEORY ONLY` deck** (issue #1673,
+ * `deckCover.ts`' `tileList`): the verdict judges the number the caption prints, so a plan that
+ * has reached 100 stops being a red `0` and one at 73 says how far it has to go — the sentence
+ * the editor's panel says on the Theory tab, where it validates the same list.
  */
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import type { DeckRow, FormatSpec } from "@/lib/ipc";
+import type { DeckRow, DeckVariant, FormatSpec } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { tileCardCount } from "./deckCover";
 import { deckSizeIssue } from "./validation/engine";
 
 /**
- * The editor's deck-size sentence for this deck, or `null` when its size fits — or when there is
- * no spec to judge it by (still loading, or a key the table no longer carries).
+ * The editor's deck-size sentence for this deck's tile count, or `null` when its size fits — or
+ * when there is no spec to judge it by (still loading, or a key the table no longer carries).
  */
 export function deckSizeProblem(deck: DeckRow, spec: FormatSpec | null): string | null {
   if (spec === null) return null;
-  return deckSizeIssue(deck.cardCount, spec)?.message ?? null;
+  return deckSizeIssue(tileCardCount(deck), spec)?.message ?? null;
 }
 
 /**
@@ -34,13 +40,26 @@ export function deckSizeProblem(deck: DeckRow, spec: FormatSpec | null): string 
  * The colour is never the only signal: the sentence is also in the accessible name, so a screen
  * reader hears why the count is marked, and the hover says it to a pointer. Only the digits take
  * the colour, so the caption's other terms keep the dim they share with every tile.
+ *
+ * `list` is which list the count is of (`tileList`). A plan's count says so to a screen reader —
+ * `98 cards in the theory list` — where a sighted reader has the `THEORY ONLY` badge on the art
+ * above it; the visible caption stays the three terms every tile has.
  */
-export function DeckCardCount({ count, problem }: { count: number; problem: string | null }) {
+export function DeckCardCount({
+  count,
+  problem,
+  list = "live",
+}: {
+  count: number;
+  problem: string | null;
+  list?: DeckVariant;
+}) {
   const tip = useTooltip();
   return (
     <>
       <span
         data-size-problem={problem === null ? undefined : ""}
+        data-list={list}
         className={cn("font-mono tabular-nums", problem !== null && "text-destructive")}
         {...tip(problem, { describes: false })}
       >
@@ -49,6 +68,12 @@ export function DeckCardCount({ count, problem }: { count: number; problem: stri
       {count === 1 ? "card" : "cards"}
       {/* Behind a sibling space: a name computation trims each element's part before joining
           them, so only a text node between the two keeps the words apart. */}
+      {list === "theory" && (
+        <>
+          {" "}
+          <span className="sr-only">in the theory list</span>
+        </>
+      )}
       {problem !== null && (
         <>
           {" "}

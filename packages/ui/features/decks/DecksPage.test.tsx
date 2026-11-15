@@ -139,6 +139,7 @@ const BURN: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  theoryCardCount: 0,
   managedWishlist: "off",
   managedWishlistTokens: false,
   // How the editor was last read. The gallery draws none of the three — they are here because
@@ -763,9 +764,9 @@ describe("DecksPage", () => {
     /** One pip each, in printed order — W, U, B — so the colour sort has three distinct answers
      *  and `sortDecks`' mono-colour arm is what decides them. */
     const PIPS = [
-      { deckId: 11, costs: [{ cost: "{W}", copies: 4 }] },
-      { deckId: 12, costs: [{ cost: "{U}", copies: 4 }] },
-      { deckId: 13, costs: [{ cost: "{B}", copies: 4 }] },
+      { deckId: 11, costs: [{ cost: "{W}", copies: 4 }], theoryCosts: [] },
+      { deckId: 12, costs: [{ cost: "{U}", copies: 4 }], theoryCosts: [] },
+      { deckId: 13, costs: [{ cost: "{B}", copies: 4 }], theoryCosts: [] },
     ];
 
     /**
@@ -2225,6 +2226,62 @@ describe("the card count's fit to the format", () => {
       /Modern decks need at least 60 cards; you have 59\./,
     );
     expect(await tileFor("Full Commander")).not.toHaveAccessibleName(/you have/);
+  });
+
+  /**
+   * Issue #1673: a `THEORY ONLY` deck is a plan being built, so its tile — the count, its
+   * verdict and the colour bar — is about the plan, and the screen reader hears which list the
+   * number is. A deck with an Actual list keeps reading that list, whatever its plan holds.
+   */
+  it("reads a THEORY ONLY deck's count, verdict and colours from its plan", async () => {
+    const PLAN: DeckRow = {
+      ...KENRITH,
+      id: 31,
+      name: "Full Plan",
+      cardCount: 0,
+      theoryCardCount: 100,
+      folderId: null,
+    };
+    const SHORT_PLAN: DeckRow = { ...PLAN, id: 32, name: "Short Plan", theoryCardCount: 73 };
+    const BUILT: DeckRow = { ...PLAN, id: 33, name: "Built", cardCount: 100, theoryCardCount: 40 };
+    deckList.mockResolvedValue([PLAN, SHORT_PLAN, BUILT]);
+    deckPipCosts.mockResolvedValue([
+      { deckId: 31, costs: [], theoryCosts: [{ cost: "{U}", copies: 4 }] },
+      {
+        deckId: 33,
+        costs: [{ cost: "{G}", copies: 4 }],
+        theoryCosts: [{ cost: "{B}", copies: 4 }],
+      },
+    ]);
+    wrap(<DecksPage />);
+
+    // By `data-deck-id` (on the tile's button) rather than by name: a tile with a bar is named
+    // for its colours too — see `wallIds`' note in the sort block.
+    const tileOf = async (id: number) =>
+      waitFor(() => {
+        const tile = document.querySelector<HTMLElement>(`[data-deck-id="${id}"]`);
+        expect(tile).not.toBeNull();
+        return tile!.closest("li")!;
+      });
+
+    const plan = await tileOf(31);
+    await waitFor(() => expect(within(plan).getByText("Blue")).toBeInTheDocument());
+    expect(within(plan).getByText("THEORY ONLY")).toBeInTheDocument();
+    expect(within(plan).getByText("100")).not.toHaveClass("text-destructive");
+    expect(within(plan).getByText("in the theory list")).toHaveClass("sr-only");
+
+    const short = await tileOf(32);
+    expect(within(short).getByText("73")).toHaveClass("text-destructive");
+    expect(within(short).getByRole("button", { name: /^Short Plan/ })).toHaveAccessibleName(
+      /73 cards in the theory list .*you have 73\./,
+    );
+
+    // An Actual list wins the tile back: its count and its colours, not the plan's.
+    const built = await tileOf(33);
+    await waitFor(() => expect(within(built).getByText("Green")).toBeInTheDocument());
+    expect(within(built).queryByText("Black")).not.toBeInTheDocument();
+    expect(within(built).getByText("100")).toBeInTheDocument();
+    expect(within(built).queryByText("in the theory list")).not.toBeInTheDocument();
   });
 
   it("says why on hover", async () => {

@@ -31,7 +31,14 @@ import { notify } from "@/lib/notifications";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { DeckColorBar } from "./DeckColorBar";
-import { coverUrl, deckBadge, hasCover, type DeckBadge } from "./deckCover";
+import {
+  coverUrl,
+  deckBadge,
+  hasCover,
+  tileCardCount,
+  tileList,
+  type DeckBadge,
+} from "./deckCover";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
@@ -359,7 +366,10 @@ export function DeckTile({
     return deckDraggable({ element, payload: () => ({ deckId: id, name }) });
   }, [id, name]);
 
-  /** One derivation of the plural, for the caption and the question that quotes it. */
+  /** The plural for the delete question. **The Actual list's count, never the tile's**: the
+   *  question is about the copies the reader owns going back to Recently removed, and a plan's
+   *  rows are not cardboard — so a `THEORY ONLY` deck's caption may read its plan (issue #1673)
+   *  while this still says what deleting it returns. */
   const unit = deck.cardCount === 1 ? "card" : "cards";
   const colorsLabel = deckColorsLabel(pips);
   const badge = deckBadge(deck);
@@ -1339,14 +1349,15 @@ function TagHover({ tags, edgeTaken }: { tags: readonly string[]; edgeTaken: boo
  * `Modern · Arena · 60 cards` — what rules the list is built to, where it is played and how big
  * it is. One definition for every tile that captions a deck; {@link DeckTile}'s note on the line
  * says why `Any` is never printed and why the bracket is not a fourth segment. The count goes red
- * when it does not fit the format ({@link DeckCardCount}, issue #1524).
+ * when it does not fit the format ({@link DeckCardCount}, issue #1524), and on a `THEORY ONLY`
+ * deck it is the plan's ({@link tileList}, issue #1673).
  */
 function DeckCaption({ deck, sizeProblem }: { deck: DeckRow; sizeProblem: string | null }) {
   return (
     <>
       {deck.formatName ?? deck.formatKey}
       {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-      <DeckCardCount count={deck.cardCount} problem={sizeProblem} />
+      <DeckCardCount count={tileCardCount(deck)} list={tileList(deck)} problem={sizeProblem} />
     </>
   );
 }

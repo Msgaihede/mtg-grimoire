@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { countPips, emptyPips, type ManaKey } from "@/lib/mana";
-import type { DeckPipCosts } from "@/lib/ipc";
-import { deckColorsLabel, deckPips, pipColors, pipTotal } from "./deckPips";
+import type { DeckPipCosts, DeckRow } from "@/lib/ipc";
+import { deckColorsLabel, deckPips, pipColors, pipTotal, tilePips } from "./deckPips";
 
 /**
  * These tests are about the **fold** and nothing else. What a pip is — that a hybrid counts
@@ -11,8 +11,12 @@ import { deckColorsLabel, deckPips, pipColors, pipTotal } from "./deckPips";
  * the accumulation across rows, and the decision that a deck nobody sent rows for is absent.
  */
 
-function rows(...decks: DeckPipCosts[]): DeckPipCosts[] {
-  return decks;
+/** The read's rows, with the plan's half empty unless a test names it — the shape a deck that
+ *  keeps no plan arrives in. */
+function rows(
+  ...decks: (Omit<DeckPipCosts, "theoryCosts"> & Partial<Pick<DeckPipCosts, "theoryCosts">>)[]
+): DeckPipCosts[] {
+  return decks.map((deck) => ({ theoryCosts: [], ...deck }));
 }
 
 /** A `PipCounts` written the short way, for an expectation. Every unnamed colour is zero. */
@@ -112,6 +116,72 @@ describe("deckPips", () => {
 
   it("answers an empty map for an empty read", () => {
     expect(deckPips([]).size).toBe(0);
+  });
+
+  /**
+   * Issue #1673: the read answers both lists, each folded into its own map. A `THEORY ONLY` deck
+   * arrives with an empty Actual half, and it must be **absent** from the Actual map — the same
+   * "told nothing" as a deck the read never mentioned — rather than a record of zeroes.
+   */
+  it("folds the plan's half when asked for the theory list, and each half alone", () => {
+    const answer = rows(
+      { deckId: 1, costs: [{ cost: "{R}", copies: 4 }], theoryCosts: [{ cost: "{U}", copies: 2 }] },
+      { deckId: 2, costs: [], theoryCosts: [{ cost: "{G}{G}", copies: 3 }] },
+    );
+
+    const live = deckPips(answer);
+    const theory = deckPips(answer, "theory");
+
+    expect(live.get(1)).toEqual(pips({ R: 4 }));
+    expect(live.has(2)).toBe(false);
+    expect(theory.get(1)).toEqual(pips({ U: 2 }));
+    expect(theory.get(2)).toEqual(pips({ G: 6 }));
+  });
+});
+
+/** A gallery row with only the fields {@link tilePips} reads through `tileList` set. */
+function deckRow(
+  id: number,
+  shape: Partial<Pick<DeckRow, "theoryEnabled" | "virtualOnly" | "cardCount">>,
+): DeckRow {
+  return { id, theoryEnabled: false, virtualOnly: false, cardCount: 0, ...shape } as DeckRow;
+}
+
+describe("tilePips", () => {
+  const live = new Map([[1, pips({ R: 4 })]]);
+  const theory = new Map([
+    [1, pips({ U: 2 })],
+    [2, pips({ G: 6 })],
+    [3, pips({ B: 1 })],
+  ]);
+
+  /** The badge decides: `THEORY ONLY` (theory on, nothing in the Actual list) reads the plan,
+   *  and every other deck its Actual list — whatever its plan holds. */
+  it("colours a THEORY ONLY deck's tile from its plan and every other tile from its cards", () => {
+    const decks = [
+      deckRow(1, { theoryEnabled: true, cardCount: 4 }),
+      deckRow(2, { theoryEnabled: true, cardCount: 0 }),
+      deckRow(3, { cardCount: 0 }),
+    ];
+
+    const byDeck = tilePips(decks, live, theory);
+
+    expect(byDeck.get(1)).toEqual(pips({ R: 4 }));
+    expect(byDeck.get(2)).toEqual(pips({ G: 6 }));
+    expect(byDeck.has(3)).toBe(false);
+  });
+
+  /** The colour sort's memo and every tile hold still on this map's identity. */
+  it("hands the Actual map back as it is when no deck on the wall reads its plan", () => {
+    const decks = [deckRow(1, { theoryEnabled: true, cardCount: 4 }), deckRow(3, {})];
+
+    expect(tilePips(decks, live, theory)).toBe(live);
+  });
+
+  it("draws no bar for a THEORY ONLY deck whose plan has no costs either", () => {
+    const decks = [deckRow(4, { theoryEnabled: true, cardCount: 0 })];
+
+    expect(tilePips(decks, live, theory).has(4)).toBe(false);
   });
 });
 

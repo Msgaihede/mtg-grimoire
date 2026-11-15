@@ -1540,11 +1540,23 @@ export interface DeckRow {
    * Three exclusions, and they are {@link CategoryKind}'s governing rule applied. The
    * sideboard and the companion are *beside* the deck rather than in it (CR 100.4a; EDH calls
    * a companion "effectively a 101st card", which is exactly the card a 100-card caption must
-   * not add). A **theory** row is a plan and appears on no tile. And an **inactive** category
-   * counts toward nothing whatever its kind, which is how a switched-off Maybeboard stays out
-   * without `maybe` being excluded — a Maybeboard switched *on* counts like any other pile.
+   * not add). A **theory** row is a plan and is counted by {@link DeckRow.theoryCardCount}
+   * instead. And an **inactive** category counts toward nothing whatever its kind, which is how
+   * a switched-off Maybeboard stays out without `maybe` being excluded — a Maybeboard switched
+   * *on* counts like any other pile.
    */
   cardCount: number;
+  /**
+   * {@link DeckRow.cardCount} asked of the **theory** list — the same three exclusions word for
+   * word, so a plan is sized exactly as the deck it becomes will be. `0` on a deck that keeps no
+   * plan (issue #1673).
+   *
+   * **A fact, and which count a tile prints is `deckCover.ts`' `tileList`**: a `THEORY ONLY`
+   * deck — theory on, nothing in its Actual list — captions and colours its tile from the plan,
+   * because `0 cards` under a deck the reader is building says nothing about it. Everywhere
+   * else the Actual count is the deck's size.
+   */
+  theoryCardCount: number;
   /** Unix seconds. The gallery's sort key, and every card write moves it — including a
    *  removal that found nothing to remove. */
   updatedAt: number;
@@ -2022,23 +2034,27 @@ export interface PipCost {
 /**
  * Every deck's colour bar, in one read — {@link ipc.deckPipCosts}' per-deck entry.
  *
- * The pile is `DeckRow.cardCount`'s exactly: the **live** variant, in **active** categories of
- * kind `main`, `commander` or `maybe`. So the bar and the card count on the tile beside it are
- * two readings of one list, and a deck the reader has left on **Theory** shows its plan in the
- * editor and its live list here — the tile is a fact about the deck, the editor a fact about
- * what is on screen.
+ * Two piles, each its count's exactly: {@link costs} is `DeckRow.cardCount`'s — the **live**
+ * variant, in **active** categories of kind `main`, `commander` or `maybe` — and
+ * {@link theoryCosts} is `DeckRow.theoryCardCount`'s, the same rule over the plan. So the bar
+ * and the card count on the tile beside it are always two readings of one list, whichever list
+ * the tile is about (`deckCover.ts`' `tileList`, issue #1673): the Actual list, unless the deck
+ * is `THEORY ONLY`.
  *
  * **A deck with nothing to say is absent from the answer rather than present and empty**, which
  * is what a `GROUP BY` gives and what the caller must be written for: an all-lands pile and a
  * deck that has never been filled read alike, and both draw no bar at all rather than an empty
- * rule.
+ * rule. A deck with something to say in **one** list is present, with the other list's array
+ * empty.
  */
 export interface DeckPipCosts {
   deckId: number;
-  /** Folded by cost string with the copies summed, so a cost appears once. Order is the
-   *  backend's and nothing downstream may depend on it — the bar sums the whole list before it
-   *  draws anything. */
+  /** The Actual list's costs, folded by cost string with the copies summed, so a cost appears
+   *  once. Order is the backend's and nothing downstream may depend on it — the bar sums the
+   *  whole list before it draws anything. */
   costs: PipCost[];
+  /** The theory list's costs, folded the same way — empty on a deck that keeps no plan. */
+  theoryCosts: PipCost[];
 }
 
 /**

@@ -14,10 +14,12 @@
  * Phyrexian hybrid. This file folds; `addPips` decides.
  */
 import { MANA_KEYS, MANA_LABEL, addPips, emptyPips, type ManaKey, type PipCounts } from "@/lib/mana";
-import type { DeckPipCosts } from "@/lib/ipc";
+import type { DeckPipCosts, DeckRow, DeckVariant } from "@/lib/ipc";
+import { tileList } from "./deckCover";
 
 /**
- * Every deck's pip distribution, keyed by deck id.
+ * Every deck's pip distribution in one of its two lists, keyed by deck id — the Actual list's
+ * (`costs`) unless `list` says `theory` (`theoryCosts`, issue #1673).
  *
  * **A deck with no cost rows is absent from the map rather than present with a record of
  * zeroes**, and the difference is a claim about what was asked. An empty record says "this deck
@@ -27,21 +29,60 @@ import type { DeckPipCosts } from "@/lib/ipc";
  * last in a colour sort), so inventing the zeroes would buy nothing and would have the map
  * asserting a fact about every deck id anybody ever handed it.
  *
+ * **A row whose asked-for list is empty is a deck with nothing to say in that list**, and is
+ * absent for the same reason: the read answers a deck that has costs in *either* list, so a
+ * `THEORY ONLY` deck arrives with an empty Actual half and must not become an all-zero record in
+ * the Actual map.
+ *
  * The rows are folded rather than replaced, so a backend that ever answered two rows for one
  * deck adds them instead of losing one — there is no unique index on `(deck, cost)` in the
  * answer's shape, only in the query that builds it.
  */
-export function deckPips(rows: readonly DeckPipCosts[]): Map<number, PipCounts> {
+export function deckPips(
+  rows: readonly DeckPipCosts[],
+  list: DeckVariant = "live",
+): Map<number, PipCounts> {
   const byDeck = new Map<number, PipCounts>();
   for (const row of rows) {
+    const costs = list === "theory" ? row.theoryCosts : row.costs;
+    if (costs.length === 0) continue;
     let pips = byDeck.get(row.deckId);
     if (pips === undefined) {
       pips = emptyPips();
       byDeck.set(row.deckId, pips);
     }
-    for (const cost of row.costs) addPips(pips, cost.cost, cost.copies);
+    for (const cost of costs) addPips(pips, cost.cost, cost.copies);
   }
   return byDeck;
+}
+
+/**
+ * Each deck's colour bar as its **tile** draws it: the Actual list's pips, or the plan's on a deck
+ * whose tile is about its plan — `deckCover.ts`' {@link tileList}, the rule that picks the card
+ * count printed under the bar, so the two stay one list (issue #1673).
+ *
+ * **Hands `live` back as it is when no deck in `decks` reads its plan**, which is every gallery
+ * without a `THEORY ONLY` deck: the map's identity is what the colour sort's memo and the tiles
+ * hold still on, and a copy made for nothing would move both. A theory-only deck's Actual list
+ * is empty by definition — `cardCount` is `0`, and the bar's pile is that count's — so it has no
+ * Actual entry to replace, only a plan entry to add.
+ */
+export function tilePips(
+  decks: readonly DeckRow[],
+  live: Map<number, PipCounts>,
+  theory: Map<number, PipCounts>,
+): Map<number, PipCounts> {
+  let byDeck: Map<number, PipCounts> | null = null;
+  for (const deck of decks) {
+    if (tileList(deck) !== "theory") continue;
+    const plan = theory.get(deck.id);
+    const current = live.get(deck.id);
+    if (plan === current) continue;
+    byDeck ??= new Map(live);
+    if (plan === undefined) byDeck.delete(deck.id);
+    else byDeck.set(deck.id, plan);
+  }
+  return byDeck ?? live;
 }
 
 /**

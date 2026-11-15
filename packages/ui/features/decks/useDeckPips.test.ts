@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { DeckPipCosts } from "@/lib/ipc";
+import type { DeckPipCosts, DeckRow } from "@/lib/ipc";
 
 const deckPipCosts = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -19,9 +19,20 @@ const ROWS: DeckPipCosts[] = [
       { cost: "{1}{R}", copies: 4 },
       { cost: "{W/U}", copies: 1 },
     ],
+    theoryCosts: [],
   },
-  { deckId: 7, costs: [{ cost: "{G}{G}", copies: 2 }] },
+  { deckId: 7, costs: [{ cost: "{G}{G}", copies: 2 }], theoryCosts: [] },
+  // A `THEORY ONLY` deck (issue #1673): nothing in its Actual list, a plan in blue.
+  { deckId: 9, costs: [], theoryCosts: [{ cost: "{U}{U}", copies: 3 }] },
 ];
+
+/** The gallery's rows, as far as which list a tile reads goes. One stable array, as the
+ *  query's answer is, so the memo test below measures the hook rather than this fixture. */
+const DECKS = [
+  { id: 4, theoryEnabled: false, virtualOnly: false, cardCount: 5 },
+  { id: 7, theoryEnabled: true, virtualOnly: false, cardCount: 2 },
+  { id: 9, theoryEnabled: true, virtualOnly: false, cardCount: 0 },
+] as DeckRow[];
 
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
@@ -36,7 +47,7 @@ beforeEach(() => {
 
 describe("useDeckPips", () => {
   it("folds the read into a count per deck", async () => {
-    const { result } = renderHook(() => useDeckPips(), { wrapper });
+    const { result } = renderHook(() => useDeckPips(DECKS), { wrapper });
 
     await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
 
@@ -44,8 +55,17 @@ describe("useDeckPips", () => {
     expect(result.current.byDeck.get(7)).toEqual({ W: 0, U: 0, B: 0, R: 0, G: 4, C: 0 });
   });
 
+  /** Issue #1673: the bar under a `THEORY ONLY` tile is its plan's, as its card count is. */
+  it("hands a THEORY ONLY deck its plan's pips", async () => {
+    const { result } = renderHook(() => useDeckPips(DECKS), { wrapper });
+
+    await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
+
+    expect(result.current.byDeck.get(9)).toEqual({ W: 0, U: 6, B: 0, R: 0, G: 0, C: 0 });
+  });
+
   it("is an empty map until the read answers", () => {
-    const { result } = renderHook(() => useDeckPips(), { wrapper });
+    const { result } = renderHook(() => useDeckPips(DECKS), { wrapper });
 
     expect(result.current.byDeck.size).toBe(0);
   });
@@ -58,7 +78,7 @@ describe("useDeckPips", () => {
    * a literal assertion nobody wrote, and quietly stop refetching.
    */
   it("refetches when any deck write invalidates the decks root", async () => {
-    const { result } = renderHook(() => useDeckPips(), { wrapper });
+    const { result } = renderHook(() => useDeckPips(DECKS), { wrapper });
     await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
     expect(deckPipCosts).toHaveBeenCalledTimes(1);
 
@@ -68,7 +88,7 @@ describe("useDeckPips", () => {
   });
 
   it("caches under the pips key, so a second mount asks nothing", async () => {
-    const first = renderHook(() => useDeckPips(), { wrapper });
+    const first = renderHook(() => useDeckPips(DECKS), { wrapper });
     await waitFor(() => expect(first.result.current.query.isSuccess).toBe(true));
 
     expect(client.getQueryData(["decks", "pips"])).toEqual(ROWS);
@@ -80,7 +100,7 @@ describe("useDeckPips", () => {
    * and every tile re-measure for nothing.
    */
   it("hands back the same map until the answer changes", async () => {
-    const { result, rerender } = renderHook(() => useDeckPips(), { wrapper });
+    const { result, rerender } = renderHook(() => useDeckPips(DECKS), { wrapper });
     await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
 
     const first = result.current.byDeck;
@@ -91,7 +111,7 @@ describe("useDeckPips", () => {
 
   it("says nothing about a deck when the read fails", async () => {
     deckPipCosts.mockRejectedValue(new Error("BUSY"));
-    const { result } = renderHook(() => useDeckPips(), { wrapper });
+    const { result } = renderHook(() => useDeckPips(DECKS), { wrapper });
 
     await waitFor(() => expect(result.current.query.isError).toBe(true));
 

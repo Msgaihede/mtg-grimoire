@@ -8482,6 +8482,23 @@ function categoryById(db: FakeDb, id: number): FakeDeckCategory | undefined {
   return db.deckCategories.find((c) => c.id === id);
 }
 
+/**
+ * Copies in one list of one deck that size it — `DECK_SELECT`'s correlated subquery, asked of
+ * `live` for {@link DeckRow.cardCount} and of `theory` for {@link DeckRow.theoryCardCount}: an
+ * **active** category of one of {@link SIZE_KINDS}. Its `JOIN deck_categories` is an *inner*
+ * join — `category_id` is NOT NULL with an enforced foreign key — which is what the `undefined`
+ * check is.
+ */
+function sizedCopies(db: FakeDb, deckId: number, variant: DeckVariant): number {
+  return db.deckCards
+    .filter((dc) => {
+      if (dc.deckId !== deckId || dc.variant !== variant) return false;
+      const category = categoryById(db, dc.categoryId);
+      return category !== undefined && category.isActive && SIZE_KINDS.includes(category.kind);
+    })
+    .reduce((n, dc) => n + dc.quantity, 0);
+}
+
 function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
   return {
     id: d.id,
@@ -8500,13 +8517,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // kind, which is how the Maybeboard stays out of this without being named here — and how
     // an active one gets *in*. Its `JOIN deck_categories` is an *inner* join — `category_id`
     // is NOT NULL with an enforced foreign key — which is what the `undefined` check is.
-    cardCount: db.deckCards
-      .filter((dc) => {
-        if (dc.deckId !== d.id || dc.variant !== LIVE) return false;
-        const category = categoryById(db, dc.categoryId);
-        return category !== undefined && category.isActive && SIZE_KINDS.includes(category.kind);
-      })
-      .reduce((n, dc) => n + dc.quantity, 0),
+    cardCount: sizedCopies(db, d.id, LIVE),
+    // The same subquery over the plan (issue #1673) — the count a `THEORY ONLY` tile prints.
+    theoryCardCount: sizedCopies(db, d.id, THEORY),
     updatedAt: d.updatedAt,
     // The v8 deck columns still on the row, read off it now that a deck stores them. There
     // were four until user schema v43: `notes` is gone, and what replaced it is rows rather than
@@ -11735,9 +11748,11 @@ export function readHandlers(db: FakeDb) {
      * **The same three exclusions {@link toDeckRow}'s `cardCount` applies, and that is the whole
      * of the definition rather than a resemblance**: the bar is drawn under a caption that
      * already says how many cards the deck has, so a bar counting a different pile than that
-     * number counts is a tile disagreeing with itself. `live`, an **active** category, and
+     * number counts is a tile disagreeing with itself. An **active** category and
      * {@link SIZE_KINDS}' three kinds — the sideboard and the companion are beside the deck
-     * rather than in it, a theory row is a plan, and a switched-off pile counts toward nothing.
+     * rather than in it, and a switched-off pile counts toward nothing — folded per list:
+     * `costs` is the `live` list's (`cardCount`'s pile) and `theoryCosts` the plan's
+     * (`theoryCardCount`'s), so a `THEORY ONLY` tile's bar and count agree too (issue #1673).
      *
      * **A cost string, never a counted pip.** Which of a cost's symbols is a pip, and what a
      * `{W/U}` half is worth, is `packages/ui/lib/mana.ts`'s `countPips` — the facts/conclusions boundary
@@ -11755,31 +11770,35 @@ export function readHandlers(db: FakeDb) {
      * that emitted an entry per deck would let a story be written against `answer[i].costs` and
      * that story would break on the real backend.
      *
-     * Ordered by deck and then by cost — `ORDER BY dc.deck_id, c.mana_cost` — so two runs over
-     * one store answer in one order. It is the grouping's order and not a contract about
+     * Ordered by deck and then by cost — `ORDER BY dc.deck_id, dc.variant, c.mana_cost`, the
+     * variant filing each cost into its own half — so two runs over one store answer in one order. It is the grouping's order and not a contract about
      * presentation: which order the *segments* are drawn in is `MANA_KEYS`', on the other side.
      */
     deck_pip_costs: (): DeckPipCosts[] => {
-      const byDeck = new Map<number, Map<string, number>>();
+      // Each deck's two lists, folded apart (issue #1673): the crate groups by variant too, so a
+      // deck with costs in either list is present and the other list's half is empty.
+      const byDeck = new Map<number, Record<DeckVariant, Map<string, number>>>();
       for (const dc of db.deckCards) {
-        if (dc.variant !== LIVE || isDraftDeck(db, dc.deckId)) continue;
+        if (!VARIANTS.includes(dc.variant) || isDraftDeck(db, dc.deckId)) continue;
         const category = categoryById(db, dc.categoryId);
         if (category === undefined || !category.isActive) continue;
         if (!SIZE_KINDS.includes(category.kind)) continue;
         const cost = cardById(db, dc.cardId)?.manaCost ?? null;
         if (cost === null || cost === "") continue;
-        const costs = byDeck.get(dc.deckId) ?? new Map<string, number>();
+        const lists = byDeck.get(dc.deckId) ?? { live: new Map(), theory: new Map() };
+        const costs = lists[dc.variant];
         // `sum(dc.quantity)`, not a row count: four Lightning Bolts are four red pips.
         costs.set(cost, (costs.get(cost) ?? 0) + dc.quantity);
-        byDeck.set(dc.deckId, costs);
+        byDeck.set(dc.deckId, lists);
       }
+      const folded = (costs: Map<string, number>) =>
+        [...costs].sort(([a], [b]) => cmp(a, b)).map(([cost, copies]) => ({ cost, copies }));
       return [...byDeck]
         .sort(([a], [b]) => a - b)
-        .map(([deckId, costs]) => ({
+        .map(([deckId, lists]) => ({
           deckId,
-          costs: [...costs]
-            .sort(([a], [b]) => cmp(a, b))
-            .map(([cost, copies]) => ({ cost, copies })),
+          costs: folded(lists[LIVE]),
+          theoryCosts: folded(lists[THEORY]),
         }));
     },
 

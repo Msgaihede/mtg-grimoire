@@ -50,7 +50,8 @@ export function wallStyle(zoom: number): CSSProperties {
 
 /** What {@link useDeckWallMarks} answers, and what a wall hands each tile it draws. */
 export interface DeckWallMarks {
-  /** Every deck's printed pips; a deck the read has not reached is missing, and draws no band. */
+  /** Every deck's printed pips, from the list its tile is about (the plan on a `THEORY ONLY`
+   *  deck, issue #1673); a deck the read has not reached is missing, and draws no band. */
   pipsByDeck: Map<number, PipCounts>;
   /** Each Commander deck's estimated bracket floor — the sort's `bracket` key reads it too. */
   floorByDeck: Map<number, number>;
@@ -93,7 +94,7 @@ export const NO_WALL_MARKS: DeckWallMarks = {
  * stable as the table is (`staleTime: Infinity` — it changes once per app version).
  */
 export function useDeckWallMarks(decks: readonly DeckRow[]): DeckWallMarks {
-  const { byDeck: pipsByDeck } = useDeckPips();
+  const { byDeck: pipsByDeck } = useDeckPips(decks);
   const { formatSpecFor } = useFormatSpecs();
   const commanderDeckIds = useMemo(
     () => decks.filter((d) => formatSpecFor(d.formatKey)?.commanderRule != null).map((d) => d.id),

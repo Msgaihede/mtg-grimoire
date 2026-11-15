@@ -604,6 +604,9 @@ mod tests {
             cover_artist: None,
             archived: false,
             card_count: 0,
+            // Issue #1673's column, and `0` because that is what a fresh deck carries; the layout
+            // reads none of the counts.
+            theory_card_count: 0,
             updated_at: 0,
             folder_id: None,
             notes_open: false,
