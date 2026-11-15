@@ -810,9 +810,10 @@ html[data-dragging] * {
    kind before committing; a number that "looks harmless" here is a different foil.
 
    **The light is variables, and the card never moves.** `--foil-px/py` (0..1) and `--foil-mx/my`
-   (as %) place it, `--foil-on` is its strength (0.55 at rest, 1 under the pointer), `--foil-hyp`
-   its distance from the centre, and `--foil-wa/wb/wc` weight ripple's three circle sets. No tilt:
-   the owner's call — "no tilt, but keep the motion follows cursor".
+   (as %) place it, `--foil-on` is its strength (always 1 since 2026-11-15, the owner's call; it
+   rested at 0.55 until then), `--foil-hyp` its distance from the centre, and `--foil-wa/wb/wc`
+   weight ripple's three circle sets. The pointer anywhere in the window moves it. No tilt: the
+   owner's call — "no tilt, but keep the motion follows cursor".
 
    **Every layer blends with the picture itself**, so none of them may sit inside an element with
    a mask, clip-path, opacity, filter or transform: any of those makes an isolated group, the

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { FOIL_EFFECTS, FOIL_PATTERN_LAYERS, FOIL_REST, foilEffect, foilLight } from "./foilEffect";
+import {
+  FOIL_EFFECTS,
+  FOIL_PATTERN_LAYERS,
+  FOIL_REST,
+  foilEffect,
+  foilLight,
+  foilLightFrom,
+} from "./foilEffect";
 import { finishTreatments } from "./treatment";
 
 /** A copy in `finish` of a printing whose `promo_types` are `promo`, as every caller derives it. */
@@ -58,17 +65,17 @@ describe("foilEffect", () => {
 });
 
 describe("foilLight", () => {
-  it("places a resting light at the rest point, at the resting strength", () => {
-    const rest = foilLight(FOIL_REST.x, FOIL_REST.y, false);
+  it("places a resting light at the rest point", () => {
+    const rest = foilLight(FOIL_REST.x, FOIL_REST.y);
     expect(rest["--foil-px"]).toBe("0.320");
     expect(rest["--foil-my"]).toBe("28.0%");
-    expect(rest["--foil-on"]).toBe("0.55");
   });
 
-  it("brings the light up to full strength under a pointer", () => {
-    const lit = foilLight(0.75, 0.5, true);
-    expect(lit["--foil-mx"]).toBe("75.0%");
-    expect(lit["--foil-on"]).toBe("1");
+  /** The owner's call: "put it at full strength even when not hovered". */
+  it("is at full strength wherever it is, resting or not", () => {
+    expect(foilLight(FOIL_REST.x, FOIL_REST.y)["--foil-on"]).toBe("1");
+    expect(foilLight(0.75, 0.5)["--foil-on"]).toBe("1");
+    expect(foilLight(0.75, 0.5)["--foil-mx"]).toBe("75.0%");
   });
 
   /**
@@ -80,11 +87,52 @@ describe("foilLight", () => {
     [0.8, 0.4, "--foil-wb"],
     [0.4, 0.85, "--foil-wc"],
   ])("makes one ripple set the strongest with the light at (%s, %s)", (x, y, strongest) => {
-    const light = foilLight(x, y, true);
+    const light = foilLight(x, y);
     const weights = ["--foil-wa", "--foil-wb", "--foil-wc"].map((k) => Number(light[k]));
     const top = Math.max(...weights);
     expect(Number(light[strongest])).toBe(top);
     // And the others have faded well down, rather than all three showing at once.
     for (const w of weights) if (w !== top) expect(w).toBeLessThan(top / 2);
+  });
+});
+
+/**
+ * The owner's call: "the foils should react to the cursor moving anywhere in the window, not just
+ * when hovering the card".
+ */
+describe("foilLightFrom", () => {
+  const VIEW = { width: 1600, height: 900 };
+  const BOX = { left: 700, top: 300, width: 200, height: 280 };
+  const at = (x: number, y: number) => {
+    const light = foilLightFrom({ x, y }, BOX, VIEW);
+    return [Number(light["--foil-px"]), Number(light["--foil-py"])];
+  };
+
+  it("centres the light under a pointer at the card's middle", () => {
+    expect(at(800, 440)).toEqual([0.5, 0.5]);
+  });
+
+  it("turns the light toward a pointer far from the card, without pinning it to the edge", () => {
+    const [left] = at(0, 440);
+    const [right] = at(1600, 440);
+    expect(left).toBeLessThan(0.1);
+    expect(right).toBeGreaterThan(0.9);
+    // Never quite at the edge, so the far side of the window still moves it.
+    expect(right).toBeLessThan(1);
+    const [nearer] = at(1300, 440);
+    expect(nearer).toBeLessThan(right);
+  });
+
+  it("moves the light up and across alike for the same distance", () => {
+    const [x] = at(800 + 300, 440);
+    const [, y] = at(800, 440 + 300);
+    expect(x).toBe(y);
+  });
+
+  it("moves the light a little as the pointer crosses the card itself", () => {
+    const [left] = at(700, 440);
+    const [right] = at(900, 440);
+    expect(right - left).toBeGreaterThan(0.15);
+    expect(right - left).toBeLessThan(0.4);
   });
 });

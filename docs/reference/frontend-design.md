@@ -390,6 +390,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     their pattern, so those add moving light rather than a second pattern.
   - **The light follows the pointer and the card never moves** — no tilt, the owner's call. A
     finger, or a reader who asked for less motion, gets the resting light (`useFoilLight`).
+  - **The pointer anywhere in the window moves every foil's light, at full strength** (the
+    owner's calls, 2026-11-15: "react to the cursor moving anywhere in the window, not just when
+    hovering the card", and the resting light was too faint, so "full strength even when not
+    hovered"). One window-wide listener lights every foil on screen: each card's light is the
+    pointer's offset from its centre, eased with `tanh` over a quarter of the window's longer side
+    (`foilLightFrom`), so a pointer far away turns the light toward it without pinning it to an
+    edge. Every box is read before any light is written. A scroll or a resize relights the cards
+    under a still pointer, a card mounted while the pointer is in the window is lit at once, and
+    the pointer leaving the window rests them all. `--foil-on` is always 1 (it rested at 0.55).
   - **Etched and surge are drawn on every copy, on purpose** (the owner's call, 2026-11-15) —
     even where Scryfall's picture already shows them: 845 of the 892 etched-only printings wear
     the etched frame, whose scan already shows the frosted metal, and the Warhammer 40,000 `★`

@@ -101,9 +101,9 @@ export const FOIL_PATTERN_LAYERS: Readonly<Record<FoilEffect, 0 | 1 | 2 | 3>> = 
 };
 
 /**
- * Where the light rests when no pointer is over the card: upper left, the angle a card on a desk
- * is usually seen at. Every tile on a wall shows this, so the wall is still and every foil still
- * reads as foil.
+ * Where the light rests while the pointer is outside the window, under a finger and for a reader
+ * who asked for less motion: upper left, the angle a card on a desk is usually seen at. At full
+ * strength like every other light (see {@link foilLight}), so a still wall's foils read as foil.
  */
 export const FOIL_REST = { x: 0.32, y: 0.28 } as const;
 
@@ -124,13 +124,17 @@ function anchorWeight(x: number, y: number, [ax, ay]: readonly [number, number])
 }
 
 /**
- * The CSS custom properties that place the light, for a light at `(x, y)` on the card (0..1 each)
- * that is either `lit` (a pointer is over the card) or resting.
+ * The CSS custom properties that place the light, for a light at `(x, y)` on the card (0..1 each).
  *
  * Every layer of every drawing reads only these, so the card itself never moves — no tilt, the
  * owner's call — while the sheen, the glare and the patterns follow the pointer.
+ *
+ * **`--foil-on` is always `1`**: the owner's call on 2026-11-15 ("the hover effect isn't quite
+ * visible when not hovering, so put it at full strength even when not hovered"). It rested at
+ * 0.55 until then. The property stays, because twenty-odd layers in `index.css` scale by it and
+ * it is the one place a strength would be set again.
  */
-export function foilLight(x: number, y: number, lit: boolean): Record<string, string> {
+export function foilLight(x: number, y: number): Record<string, string> {
   const [wa, wb, wc] = RIPPLE_ANCHORS.map((a) => anchorWeight(x, y, a));
   return {
     "--foil-px": x.toFixed(3),
@@ -138,9 +142,39 @@ export function foilLight(x: number, y: number, lit: boolean): Record<string, st
     "--foil-mx": `${(x * 100).toFixed(1)}%`,
     "--foil-my": `${(y * 100).toFixed(1)}%`,
     "--foil-hyp": Math.min(1, Math.hypot(x - 0.5, y - 0.5) * 2).toFixed(3),
-    "--foil-on": lit ? "1" : "0.55",
+    "--foil-on": "1",
     "--foil-wa": wa.toFixed(3),
     "--foil-wb": wb.toFixed(3),
     "--foil-wc": wc.toFixed(3),
   };
+}
+
+/**
+ * How far the pointer has to be from a card's centre for its light to reach most of the way to
+ * that edge, as a fraction of the window's longer side. A quarter: a pointer half a window away
+ * puts the light 96 % of the way from the centre to that edge, and a pointer crossing a wall's
+ * tile moves it about a fifth of the card.
+ */
+export const FOIL_LIGHT_REACH = 0.25;
+
+/**
+ * The light on a card for a pointer anywhere in the window — the owner's call on 2026-11-15:
+ * "the foils should react to the cursor moving anywhere in the window, not just when hovering the
+ * card".
+ *
+ * Each axis is the pointer's offset from the card's centre, eased with `tanh` over
+ * {@link FOIL_LIGHT_REACH} of the window's longer side: centred under a pointer at the card's
+ * middle, turned toward a pointer anywhere else, and never pinned to an edge, so a pointer moving
+ * across the far side of the window still moves every card's light. One reach for both axes, so
+ * the light moves alike up and across.
+ */
+export function foilLightFrom(
+  cursor: { x: number; y: number },
+  box: { left: number; top: number; width: number; height: number },
+  view: { width: number; height: number },
+): Record<string, string> {
+  const reach = Math.max(view.width, view.height, 1) * FOIL_LIGHT_REACH;
+  const along = (at: number, start: number, size: number) =>
+    0.5 + 0.5 * Math.tanh((at - (start + size / 2)) / reach);
+  return foilLight(along(cursor.x, box.left, box.width), along(cursor.y, box.top, box.height));
 }

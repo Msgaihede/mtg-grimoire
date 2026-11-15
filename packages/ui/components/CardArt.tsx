@@ -41,7 +41,7 @@ const PATTERN_CLASSES = ["foil-pattern", "foil-pattern-2", "foil-pattern-3"] as 
 function foilStyle(effect: FoilEffect): CSSProperties {
   return {
     ...foilTextureVars(effect),
-    ...foilLight(FOIL_REST.x, FOIL_REST.y, false),
+    ...foilLight(FOIL_REST.x, FOIL_REST.y),
   } as CSSProperties;
 }
 
@@ -405,7 +405,7 @@ export function FoilOverlay({
     // decoration; those are the statement.
     //
     // `pointer-events-none` for the second half of the same idea: a full-bleed overlay inside
-    // a button would swallow every click on it. `useFoilLight` listens on the frame instead.
+    // a button would swallow every click on it. `useFoilLight` listens on the window instead.
     //
     // **This span must stay a plain box** — no opacity, filter, transform, mask or clip — because
     // the layers inside it blend with the card's picture, and any of those would make it an
