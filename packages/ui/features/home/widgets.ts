@@ -394,6 +394,24 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     toggles: [],
     chip: "window",
   },
+  /**
+   * Issue #1692 brought this kind up to its neighbours' settings, and the defaults are the fix.
+   *
+   * **`sort` defaults to `Recently changed`** (`options[0]`), where it was `Nearest complete`: a
+   * card that answers *the set I just added to* first is the one that visibly moves when a reader
+   * adds a card, and on the default two-by-two tile the closest-to-complete order cut every set a
+   * reader was just starting off the bottom. A config that stored `complete` keeps it.
+   *
+   * **`measure` is the denominator**: `Printed set size` is Scryfall's printed run, and **every
+   * printing in the set where it publishes none** — every set since early 2023, which is the half
+   * of the issue that drew no figure for any new set; `Every printing` measures every set whole,
+   * variants and all, for a reader who collects the whole set.
+   *
+   * **`scope` is `deckCompletion`'s two words** and its `Chosen…` checklist
+   * (`SetCompletionWidgetSettings`), last of the picks so the row sits directly above the list it
+   * opens. `extras` starts off, `WidgetToggle.dflt`'s reason: a token or promo set is a subject a
+   * reader asks for. `complete` starts on, which keeps the shipped face.
+   */
   setCompletion: {
     label: "Set completion",
     description: "How much of each set you own.",
@@ -405,13 +423,35 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         key: "sort",
         label: "Order",
         options: [
+          { id: "recent", label: "Recently changed" },
           { id: "complete", label: "Nearest complete" },
           { id: "cards", label: "Most cards" },
+          { id: "newest", label: "Newest set" },
           { id: "name", label: "Alphabetical" },
         ],
       },
+      {
+        key: "measure",
+        label: "Count against",
+        options: [
+          { id: "printed", label: "Printed set size" },
+          { id: "all", label: "Every printing" },
+        ],
+      },
+      {
+        key: "scope",
+        label: "Which sets",
+        options: [
+          { id: "all", label: "All sets" },
+          { id: "chosen", label: "Chosen…" },
+        ],
+      },
     ],
-    toggles: [{ key: "bars", label: "Progress bars" }],
+    toggles: [
+      { key: "bars", label: "Progress bars" },
+      { key: "complete", label: "Complete sets" },
+      { key: "extras", label: "Token & promo sets", dflt: false },
+    ],
     chip: "sort",
   },
   recentCards: {

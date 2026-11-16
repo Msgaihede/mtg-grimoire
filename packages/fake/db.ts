@@ -3453,6 +3453,60 @@ const SET_PRINTED_SIZES: Readonly<Record<string, number>> = {
   znr: 280,
 };
 
+/**
+ * Every collector number the real corpus holds for each of the fixture's sets — `set_completion`'s
+ * `total`, the set measured whole (issue #1692). The fixture's 59 printings cannot derive it, so it
+ * is written here as {@link SET_PRINTED_SIZES} is: Scryfall's `card_count` from `/sets` on
+ * 2026-11-16, which is the distinct collector numbers of every set below near enough for a fake. A
+ * set missing here answers the fixture's own distinct numbers, and never fewer than it holds.
+ */
+const SET_TOTALS: Readonly<Record<string, number>> = {
+  "2ed": 302,
+  "2x2": 579,
+  acr: 309,
+  akh: 287,
+  amh2: 162,
+  apc: 143,
+  avr: 244,
+  c21: 409,
+  chk: 307,
+  dom: 280,
+  eld: 397,
+  ema: 249,
+  emn: 208,
+  fca: 65,
+  fin: 598,
+  fut: 180,
+  gtc: 249,
+  iko: 389,
+  isd: 264,
+  kld: 278,
+  lea: 295,
+  mb2: 385,
+  mh2: 492,
+  mp2: 54,
+  msc: 866,
+  mul: 260,
+  nph: 175,
+  ohop: 40,
+  pcy: 144,
+  plst: 5742,
+  roe: 248,
+  sld: 2888,
+  sta: 126,
+  t2xm: 31,
+  tafr: 22,
+  tecl: 13,
+  thob: 15,
+  tmp: 350,
+  tmsc: 32,
+  unf: 639,
+  unh: 168,
+  vma: 325,
+  wwk: 145,
+  znr: 392,
+};
+
 /** `price_history`'s windows, in days back from today — `null` for `all`, which is the oldest
  *  snapshot kept rather than a distance. */
 const PRICE_MOVER_WINDOWS: Readonly<Record<string, number | null>> = {
@@ -13369,11 +13423,20 @@ export function readHandlers(db: FakeDb) {
      * 100 %; with none, every number held. A row at quantity zero holds nothing, and a copy whose
      * printing left the corpus has no set to be counted in.
      *
-     * `size` is {@link SET_PRINTED_SIZES}' — the one column of this answer the fixture cannot
-     * derive. Ordered by name; the widget orders for itself.
+     * `size` is {@link SET_PRINTED_SIZES}' and `total` {@link SET_TOTALS}' — the two columns of
+     * this answer the fixture cannot derive. `ownedAll` is every distinct number held, verbatim;
+     * `setType` is the printing's joined `sets.set_type`; `changedAt` the newest `updatedAt` among
+     * the set's copies. Ordered by name; the widget orders for itself.
      */
     set_completion: (): SetCompletion[] => {
-      type Held = { name: string; releasedAt: string | null; numbers: Set<string> };
+      type Held = {
+        name: string;
+        releasedAt: string | null;
+        setType: string | null;
+        numbers: Set<string>;
+        every: Set<string>;
+        changedAt: number;
+      };
       const sets = new Map<string, Held>();
       for (const e of db.collectionEntries) {
         if (e.quantity <= 0) continue;
@@ -13382,8 +13445,13 @@ export function readHandlers(db: FakeDb) {
         const row = sets.get(card.setCode) ?? {
           name: card.setName,
           releasedAt: card.releasedAt,
+          setType: card.setType,
           numbers: new Set<string>(),
+          every: new Set<string>(),
+          changedAt: 0,
         };
+        row.every.add(card.collectorNumber);
+        row.changedAt = Math.max(row.changedAt, e.updatedAt);
         const size = SET_PRINTED_SIZES[card.setCode] ?? null;
         // `set_completion.rs`'s slot rule: a number counts by its **leading digits** when it starts
         // with one — `123a` fills slot 123 — and not at all when it does not (`★12`), so a set
@@ -13404,6 +13472,15 @@ export function readHandlers(db: FakeDb) {
           releasedAt: row.releasedAt,
           owned: row.numbers.size,
           size: SET_PRINTED_SIZES[setCode] ?? null,
+          ownedAll: row.every.size,
+          total: Math.max(
+            SET_TOTALS[setCode] ??
+              new Set(db.cards.filter((c) => c.setCode === setCode).map((c) => c.collectorNumber))
+                .size,
+            row.every.size,
+          ),
+          setType: row.setType,
+          changedAt: row.changedAt,
         }))
         .sort((a, b) => cmp(a.name, b.name));
     },

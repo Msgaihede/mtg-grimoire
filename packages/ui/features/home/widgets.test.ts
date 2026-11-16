@@ -236,9 +236,16 @@ describe("WIDGETS", () => {
         toggles: {},
         chip: "window",
       },
+      // Issue #1692: `Recently changed` leads so the set just added to is the first row, every
+      // set is measured (`measure`), and `scope` opens the set checklist. Token and promo sets are
+      // a subject to ask for; complete sets stay on, which keeps the shipped face.
       setCompletion: {
-        picks: { sort: { ids: ["complete", "cards", "name"], dflt: undefined } },
-        toggles: { bars: true },
+        picks: {
+          sort: { ids: ["recent", "complete", "cards", "newest", "name"], dflt: undefined },
+          measure: { ids: ["printed", "all"], dflt: undefined },
+          scope: { ids: ["all", "chosen"], dflt: undefined },
+        },
+        toggles: { bars: true, complete: true, extras: false },
         chip: "sort",
       },
       recentCards: {

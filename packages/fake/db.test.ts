@@ -21445,8 +21445,34 @@ describe("set completion", () => {
         releasedAt: at("mh2", "267").releasedAt,
         owned: 2,
         size: 303,
+        ownedAll: 2,
+        total: 492,
+        setType: at("mh2", "267").setType,
+        changedAt: Math.max(...db.collectionEntries.map((e) => e.updatedAt)),
       },
     ]);
+  });
+
+  /** Issue #1692: the set measured whole counts a number past the printed run as itself. */
+  it("counts every number held against the whole set beside the printed run", () => {
+    const db = holding({ cardId: at("eld", "303").id }, { cardId: at("eld", "115").id });
+
+    expect(readHandlers(db).set_completion()).toMatchObject([
+      { setCode: "eld", owned: 1, size: 269, ownedAll: 2, total: 397 },
+    ]);
+  });
+
+  /** `changedAt` is the newest change among the set's copies. */
+  it("answers the newest change to a copy of each set", () => {
+    const db = holding(
+      { cardId: at("mh2", "267").id, updatedAt: 100 },
+      { cardId: at("mh2", "138").id, updatedAt: 300 },
+      { cardId: at("lea", "161").id, updatedAt: 200 },
+    );
+    const got = readHandlers(db).set_completion();
+
+    expect(got.find((s) => s.setCode === "mh2")?.changedAt).toBe(300);
+    expect(got.find((s) => s.setCode === "lea")?.changedAt).toBe(200);
   });
 
   /** No printed size is a real state: every number held counts, and the widget draws a count. */

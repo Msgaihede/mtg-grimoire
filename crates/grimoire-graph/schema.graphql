@@ -2801,6 +2801,10 @@ type ScannerTrayRow {
 }
 
 type SetCompletion {
+	"""
+	When any copy of this set was last changed, in Unix seconds.
+	"""
+	changedAt: Float!
 	name: String!
 	"""
 	Distinct collector numbers the collection holds any copy of (any finish or language)
@@ -2808,14 +2812,30 @@ type SetCompletion {
 	"""
 	owned: Int!
 	"""
+	Distinct collector numbers held, every number counted as itself — variants and numbers
+	past the printed run included. At most `total`.
+	"""
+	ownedAll: Int!
+	"""
 	Release date as `YYYY-MM-DD`, or null where Scryfall published none.
 	"""
 	releasedAt: String
 	setCode: String!
 	"""
-	The set's printed size, or null when unknown.
+	Scryfall's set type (`expansion`, `core`, `commander`, `token`, `promo`, …), or null where
+	the set list does not name the set.
+	"""
+	setType: String
+	"""
+	The set's printed size, or null when unknown — which it is for every set Scryfall has
+	released since early 2023, whose cards print no denominator.
 	"""
 	size: Int
+	"""
+	Every distinct collector number the card data holds for this set: the set whole, variants
+	and all. Known for every set, printed size or none.
+	"""
+	total: Int!
 }
 
 type ShelfCount {
