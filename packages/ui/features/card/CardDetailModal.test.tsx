@@ -1021,6 +1021,35 @@ it("offers the other finishes on a right-click of the picture, and shows the one
   expect(within(again).queryByRole("menuitem", { name: "View as etched" })).not.toBeInTheDocument();
 });
 
+/** Issue #1690: the picture's right-click rows name the kind of foil, as the buttons under it do. */
+it("names the kind of foil on a right-click of the picture", async () => {
+  cardDetail.mockResolvedValue({
+    ...detail,
+    finishes: '["nonfoil","foil"]',
+    promoTypes: '["surgefoil"]',
+  });
+  useAppStore.getState().setSelectedCardId("c1");
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardToDeckProvider>
+        <ContextMenuProvider>
+          <CardDetailModal />
+        </ContextMenuProvider>
+      </CardToDeckProvider>
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByRole("button", { name: "View as surge foil" })).toBeInTheDocument();
+  const picture = await screen.findByAltText("Lightning Bolt");
+  act(() => {
+    picture.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  });
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByRole("menuitem", { name: "View as surge foil" })).toBeInTheDocument();
+  expect(within(menu).queryByRole("menuitem", { name: "View as foil" })).not.toBeInTheDocument();
+});
+
 it("dates the prices it draws, in the footer beside the credit", async () => {
   // **Spec §5: a price is never shown without saying how old it is** — and, with five
   // marketplaces in the picker, whose. This lived under `CardModalArt`'s price cells until

@@ -211,6 +211,13 @@ export interface FinishPick {
    * so reads `Set as …` rather than `View as …`. The same answer the buttons' labels turn on.
    */
   writes: boolean;
+  /**
+   * The printing's `promo_types`, as stored — what names the foil row for **the kind of foil**
+   * (`View as surge foil`, issue #1690), the same word the buttons and the price cell under the
+   * art say. `null` for the four fifths of the corpus with no promo type, which reads plain
+   * `foil`.
+   */
+  promoTypes: string | null;
   /** The reader picked that finish: the same handler the buttons under the art call. */
   pick: (finish: Finish) => void;
 }
@@ -232,7 +239,7 @@ function finishRows(target: CardMenuTarget): MenuItem[] {
     ...others.map((f): MenuItem => ({
       kind: "action",
       id: `finish-${f}`,
-      label: finishChoiceLabel(f, pick.writes),
+      label: finishChoiceLabel(f, pick.writes, pick.promoTypes),
       Icon: FINISH_GLYPH[f],
       onSelect: () => pick.pick(f),
     })),

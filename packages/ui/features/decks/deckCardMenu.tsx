@@ -12,7 +12,8 @@
  * ─────────────────────
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
- * Set as foil             one row per finish other than the one played (greyed on a single finish)
+ * Set as foil             one row per finish other than the one played, foil named by its kind
+ *                         (Set as surge foil); greyed on a single finish
  * Set as deck image       this printing's art crop becomes the deck's cover
  * Split to new printing…  some of this row's copies onto another printing (greyed on one copy)
  * ─────────────────────
@@ -64,8 +65,8 @@ import {
 } from "lucide-react";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
+import { finishChoiceWord } from "@/features/card/finishChoice";
 import { plural } from "@/lib/counts";
-import { FINISH_LABEL } from "@/lib/finish";
 import type {
   DeckCard,
   DeckCategory,
@@ -1176,8 +1177,11 @@ function coverItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  * `packages/ui/CLAUDE.md` grants.
  */
 function finishItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  // **The kind of foil where the printing names one** — `Set as surge foil`, `Set as mana foil`
+  // (issue #1690) — through the card modal's own word, so the row and the modal over the same
+  // card never name its foil two ways. The receipt below says the same word.
   const word = (f: DeckFinish) =>
-    f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase();
+    f === null ? REGULAR.toLowerCase() : finishChoiceWord(f, card.promoTypes);
   const label = (f: DeckFinish) => `Set as ${word(f)}`;
   /**
    * **The same two glyphs `FinishMark` draws**, because a menu row that names a finish is
@@ -1199,7 +1203,9 @@ function finishItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const choices = finishChoices(card.finishes);
   // Nothing to pick. The label names foil rather than the finish the printing *is*, because
   // what the greyed row is saying is "this card has no other finish", and foil is the one a
-  // reader came looking for. An unknown list answers `[null]`, so it greys here too.
+  // reader came looking for — by its kind where the printing names one, so a foil-only Surge Foil
+  // greys `Set as surge foil`, the word its mark and the modal say. An unknown list answers
+  // `[null]`, so it greys here too.
   if (choices.length <= 1) {
     return [
       {

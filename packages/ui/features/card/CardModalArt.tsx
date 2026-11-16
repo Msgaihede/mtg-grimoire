@@ -655,7 +655,9 @@ export function CardModalArt({
                         accessible name, and a labelled image inside a button *joins* the button's
                         name — this control would be called "Foil View as foil". */}
                     <Glyph className="size-3.5 shrink-0" aria-hidden="true" />
-                    <span className="min-w-0 truncate">{finishChoiceLabel(f, deckRow !== null)}</span>
+                    <span className="min-w-0 truncate">
+                      {finishChoiceLabel(f, deckRow !== null, card.promoTypes)}
+                    </span>
                   </button>
                 );
               })}

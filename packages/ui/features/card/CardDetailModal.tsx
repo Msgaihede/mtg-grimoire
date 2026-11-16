@@ -1916,6 +1916,7 @@ function Body({
           shown:
             viewedFinish ?? seededFinish(card.finishes, scope.deck ?? copyAsRow, openedFinish),
           writes: (scope.deck ?? copyAsRow) !== null,
+          promoTypes: card.promoTypes,
           pick: pickFinish,
         };
 
