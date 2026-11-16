@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TOOLTIP_OPEN_MS,
   TOOLTIP_PANEL_ID,
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
+import { FOIL_IDLE, foilAim, foilCard, foilLight } from "@/lib/foilEffect";
 import { CardArt } from "./CardArt";
+import { FOIL_IDLE_BUDGET } from "./useFoilLight";
 
 const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
@@ -152,6 +154,35 @@ describe("CardArt", () => {
       expect(overlayOf(container)).toHaveAttribute("data-foil", "etched");
     });
 
+    /** Issue #1689: a mana foil was drawn as plain foil. Rings and symbols, two pictures. */
+    it("draws a Mana Foil copy as mana, with its rings and its symbols", () => {
+      const mana = [{ id: "manafoil", label: "Mana Foil", foil: true }];
+      const { container } = render(
+        <CardArt cardId="fdn-362" name="Sire of Seven Deaths" finish="foil" treatments={mana} />,
+      );
+      const overlay = overlayOf(container);
+      expect(overlay).toHaveAttribute("data-foil", "mana");
+      expect(overlay?.querySelectorAll(".foil-pattern, .foil-pattern-2")).toHaveLength(2);
+      expect(overlay?.style.getPropertyValue("--foil-tex-1")).toMatch(/^url\(/);
+      expect(overlay?.style.getPropertyValue("--foil-tex-2")).toMatch(/^url\(/);
+    });
+
+    /** Issue #1689: ripple's rings are gradients that grow and fade, in one layer. */
+    it("draws a Ripple Foil copy as nine rings in one layer, resting", () => {
+      const ripple = [{ id: "ripplefoil", label: "Ripple Foil", foil: true }];
+      const { container } = render(
+        <CardArt cardId="m3c-40" name="Hourglass of the Lost" finish="foil" treatments={ripple} />,
+      );
+      const overlay = overlayOf(container);
+      expect(overlay).toHaveAttribute("data-foil", "ripple");
+      expect(overlay?.querySelectorAll(".foil-pattern, .foil-pattern-2")).toHaveLength(1);
+      expect(
+        overlay?.style.getPropertyValue("--foil-tex-1").match(/radial-gradient/g),
+      ).toHaveLength(9);
+      expect(overlay?.style.getPropertyValue("--foil-g9")).not.toBe("");
+      expect(overlay?.style.getPropertyValue("--foil-s9")).not.toBe("");
+    });
+
     /** Traditional foil is the sheen and the glare alone: two spans, and no picture to fetch. */
     it("draws an ordinary foil with no pattern layers and no texture", () => {
       const { container } = render(<CardArt cardId="dmr" name="Counterspell" finish="foil" />);
@@ -169,82 +200,164 @@ describe("CardArt", () => {
   });
 
   /**
-   * **The light follows the pointer anywhere in the window, at full strength, and the card never
-   * moves** — the owner's calls: "no tilt, but keep the motion follows cursor", then "the foils
-   * should react to the cursor moving anywhere in the window" and "full strength even when not
-   * hovered". jsdom lays nothing out, so every frame's box is given here.
+   * **The light moves with the pointer anywhere in the window without following it, and the card
+   * never moves** — the owner's calls on the design canvas for issue #1689: every card drifts a
+   * little, the card the pointer is on moves more, once a frame, and a deck of a hundred foils
+   * relights only a few idle cards a frame. jsdom lays nothing out, so every frame's box is given
+   * here, and animation frames are queued and run by hand.
    */
   describe("the foil's light", () => {
+    const BOX = { left: 0, top: 0, width: 100, height: 140, right: 100, bottom: 140, x: 0, y: 0 };
+    type Box = typeof BOX;
+    /** Every frame at `box`, unless `boxes` says otherwise for its element. */
+    const boxAt = (box: Box, boxes = new Map<Element, Box>()) =>
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+        this: Element,
+      ) {
+        const b = boxes.get(this) ?? box;
+        return { ...b, toJSON: () => b };
+      });
+    let frames: FrameRequestCallback[] = [];
+    beforeEach(() => {
+      frames = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((run) => frames.push(run));
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    });
     // The suite restores nothing by itself, and a reduced-motion `matchMedia` left behind would
     // quietly hold every later light still.
     afterEach(() => vi.restoreAllMocks());
-    const BOX = { left: 0, top: 0, width: 100, height: 140, right: 100, bottom: 140, x: 0, y: 0 };
-    const boxAt = (box: typeof BOX) =>
-      vi
-        .spyOn(Element.prototype, "getBoundingClientRect")
-        .mockReturnValue({ ...box, toJSON: () => box });
-    const mountFoil = () => {
-      const { container } = render(<CardArt cardId="dmr" name="Counterspell" finish="foil" />);
-      const overlay = container.querySelector<HTMLElement>("[data-foil]");
+    /** Runs the frames asked for so far — one light pass. */
+    const frame = () =>
+      act(() => {
+        const due = frames;
+        frames = [];
+        for (const run of due) run(0);
+      });
+    const overlays = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-foil]")];
+    const mountFoil = (cardId = "dmr") => {
+      const { container } = render(<CardArt cardId={cardId} name="Counterspell" finish="foil" />);
+      const [overlay] = overlays(container);
       if (!overlay) throw new Error("no foil overlay");
       return overlay;
     };
     // A `MouseEvent` named `pointermove`, so `clientX` is set whatever jsdom's `PointerEvent` is —
-    // dispatched on the window, nowhere near the card.
-    const pointer = (x: number, y: number, pointerType = "mouse") => {
-      const event = new MouseEvent("pointermove", { clientX: x, clientY: y });
+    // dispatched on `on` (the window: over no card at all) and bubbling to the window's listener.
+    const pointer = (x: number, y: number, pointerType = "mouse", on: EventTarget = window) => {
+      const event = new MouseEvent("pointermove", { clientX: x, clientY: y, bubbles: true });
       Object.defineProperty(event, "pointerType", { value: pointerType });
-      act(() => void window.dispatchEvent(event));
+      act(() => void on.dispatchEvent(event));
     };
-    const light = (overlay: HTMLElement) => ({
-      mx: overlay.style.getPropertyValue("--foil-mx"),
-      on: overlay.style.getPropertyValue("--foil-on"),
-    });
-    const REST = { mx: "32.0%", on: "1" };
+    const mx = (overlay: HTMLElement) =>
+      Number.parseFloat(overlay.style.getPropertyValue("--foil-mx"));
+    const restOf = (cardId: string) => foilLight(foilAim(null, foilCard(cardId)), foilCard(cardId));
 
-    it("rests at full strength, follows a mouse anywhere in the window, and rests when it leaves", () => {
+    it("rests at the approved strength, at the card's own resting light and angle", () => {
+      boxAt(BOX);
+      const overlay = mountFoil("dmr");
+      const rest = restOf("dmr");
+      expect(overlay.style.getPropertyValue("--foil-on")).toBe("0.6");
+      expect(overlay.style.getPropertyValue("--foil-mx")).toBe(rest["--foil-mx"]);
+      expect(overlay.style.getPropertyValue("--foil-angle")).toBe(rest["--foil-angle"]);
+    });
+
+    it("relights on the next frame, not on the move, and rests when the pointer leaves", () => {
       boxAt(BOX);
       const overlay = mountFoil();
-      expect(light(overlay)).toEqual(REST);
-      // Far to the card's right, outside it altogether: the light turns all the way toward it.
+      const rest = mx(overlay);
       pointer(900, 70);
-      expect(Number.parseFloat(light(overlay).mx)).toBeGreaterThan(90);
-      expect(light(overlay).on).toBe("1");
-      // Far to its left now.
-      pointer(-800, 70);
-      expect(Number.parseFloat(light(overlay).mx)).toBeLessThan(10);
+      expect(mx(overlay)).toBe(rest);
+      frame();
+      // Far to the right of a card it is not on: the light drifts the other way, a little.
+      expect(mx(overlay)).toBeLessThan(rest);
+      expect(rest - mx(overlay)).toBeLessThan(FOIL_IDLE * 100);
       // `relatedTarget` null: the pointer has left the window.
       act(() => void window.dispatchEvent(new MouseEvent("pointerout")));
-      expect(light(overlay)).toEqual(REST);
+      expect(mx(overlay)).toBe(rest);
+    });
+
+    /** The card the pointer is on is the one under it — its frame holds the event's target. */
+    it("moves the card the pointer is on across itself, and the one beside it barely", () => {
+      const { container } = render(
+        <>
+          <CardArt cardId="a" name="A" finish="foil" />
+          <CardArt cardId="b" name="B" finish="foil" />
+        </>,
+      );
+      const [a, b] = overlays(container);
+      const besideB = { ...BOX, left: 200, right: 300, x: 200 };
+      boxAt(BOX, new Map([[b.parentElement as Element, besideB]]));
+      const img = a.parentElement?.querySelector("img") as HTMLElement;
+      pointer(20, 70, "mouse", img);
+      frame();
+      const [aLeft, bLeft] = [mx(a), mx(b)];
+      pointer(80, 70, "mouse", img);
+      frame();
+      // Across 60 % of card A: its light moves about half the card, mirrored; B's a hair.
+      expect(aLeft - mx(a)).toBeGreaterThan(30);
+      expect(Math.abs(bLeft - mx(b))).toBeLessThan(3);
+    });
+
+    /** Issue #1689's follow-up: "a whole deck of surge foils was really laggy". */
+    it(`relights at most ${FOIL_IDLE_BUDGET} idle cards a frame, the rest on the next`, () => {
+      boxAt(BOX);
+      const count = 3 * FOIL_IDLE_BUDGET - 1;
+      const { container } = render(
+        <>
+          {Array.from({ length: count }, (_, i) => (
+            <CardArt key={i} cardId={`c${i}`} name="C" finish="foil" />
+          ))}
+        </>,
+      );
+      const all = overlays(container);
+      const before = all.map(mx);
+      const moved = () => all.filter((o, i) => mx(o) !== before[i]).length;
+      pointer(900, 70);
+      // One budget a frame, with no further pointer move: the backlog drains on its own.
+      frame();
+      expect(moved()).toBe(FOIL_IDLE_BUDGET);
+      frame();
+      expect(moved()).toBe(2 * FOIL_IDLE_BUDGET);
+      frame();
+      expect(moved()).toBe(count);
+      // Caught up: nothing more is asked for until the pointer moves again.
+      expect(frames).toHaveLength(0);
     });
 
     it("lights a card mounted while the pointer is already in the window", () => {
       boxAt(BOX);
-      const first = mountFoil();
+      const first = mountFoil("x");
       pointer(900, 70);
-      const second = mountFoil();
-      expect(light(second)).toEqual(light(first));
-      expect(Number.parseFloat(light(second).mx)).toBeGreaterThan(90);
+      frame();
+      const second = mountFoil("x");
+      frame();
+      expect(mx(second)).toBe(mx(first));
     });
 
-    it("relights the cards that moved under a still pointer when the page scrolls", () => {
+    it("relights a card that scrolled under a still pointer", () => {
       const box = boxAt(BOX);
       const overlay = mountFoil();
-      pointer(150, 70);
-      const before = light(overlay).mx;
-      // The wall scrolled the card 600px to the right of where it was, under the same pointer.
-      const moved = { ...BOX, left: 600, right: 700, x: 600 };
-      box.mockReturnValue({ ...moved, toJSON: () => moved });
+      const img = overlay.parentElement?.querySelector("img") as HTMLElement;
+      // Over the card's picture, but past its box: not on it yet.
+      pointer(150, 70, "mouse", img);
+      frame();
+      const before = mx(overlay);
+      // The wall scrolled the card 100px right, so the still pointer is now in its middle.
+      const moved = { ...BOX, left: 100, right: 200, x: 100 };
+      box.mockImplementation(() => ({ ...moved, toJSON: () => moved }));
       act(() => void document.body.dispatchEvent(new Event("scroll")));
-      expect(Number.parseFloat(light(overlay).mx)).toBeLessThan(Number.parseFloat(before));
+      frame();
+      expect(mx(overlay)).not.toBe(before);
+      expect(mx(overlay)).toBeCloseTo(50, 0);
     });
 
     /** A touch has no hover, and a light that jumped to wherever a scroll began would be noise. */
     it("leaves the light at rest under a finger", () => {
       boxAt(BOX);
       const overlay = mountFoil();
+      const rest = mx(overlay);
       pointer(75, 70, "touch");
-      expect(light(overlay)).toEqual(REST);
+      frame();
+      expect(mx(overlay)).toBe(rest);
     });
 
     /** WCAG 2.3.3: a reader who asked the OS for less motion gets a still light. */
@@ -260,8 +373,10 @@ describe("CardArt", () => {
       );
       boxAt(BOX);
       const overlay = mountFoil();
+      const rest = mx(overlay);
       pointer(75, 70);
-      expect(light(overlay)).toEqual(REST);
+      frame();
+      expect(mx(overlay)).toBe(rest);
     });
   });
 
