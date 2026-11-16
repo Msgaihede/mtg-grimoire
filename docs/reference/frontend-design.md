@@ -369,7 +369,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   Scryfall keeps one picture per printing, so a printing sold plain _and_ special (693 surge,
   369 silver, 316 ripple, 326 etched) is photographed plain, and its Surge Foil copy looked like
   any other foil (the owner's report). `FoilOverlay` now draws the kind `lib/foilEffect.ts` reads
-  off the copy's finish and treatments: traditional, etched, surge, silver, ripple, galaxy,
+  off the copy's finish and treatments: traditional, etched, surge, silver, ripple, mana, galaxy,
   rainbow, double rainbow, halo, textured, confetti, fracture (a named foil with no drawing falls
   back to traditional). The drawings are the "Foil" section of `packages/ui/index.css`, with
   patterns from `scripts/foil-textures.ts`, and each was tuned on a design canvas against
@@ -383,22 +383,43 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     Any of them makes an isolated group; the layers then blend with nothing and paint as flat
     colour (the silver drawing came out as a grey sheet). Cut-outs are per layer.
   - **The real patterns, from the owner's own cards:** surge is soft rounded blotches stretched
-    lower-left to upper-right "like tiger stripes" — not thin lines, not sharp; ripple is many
-    large overlapping rainbow circles with their own centres, which fade and drift as the light
-    moves "like a camera obscura" — not concentric rings; etched is frosted metal on the frame
-    with the art left flat. Foil-only halo, fracture, galaxy and confetti scans already show
-    their pattern, so those add moving light rather than a second pattern.
-  - **The light follows the pointer and the card never moves** — no tilt, the owner's call. A
-    finger, or a reader who asked for less motion, gets the resting light (`useFoilLight`).
-  - **The pointer anywhere in the window moves every foil's light, at full strength** (the
-    owner's calls, 2026-11-15: "react to the cursor moving anywhere in the window, not just when
-    hovering the card", and the resting light was too faint, so "full strength even when not
-    hovered"). One window-wide listener lights every foil on screen: each card's light is the
-    pointer's offset from its centre, eased with `tanh` over a quarter of the window's longer side
-    (`foilLightFrom`), so a pointer far away turns the light toward it without pinning it to an
-    edge. Every box is read before any light is written. A scroll or a resize relights the cards
-    under a still pointer, a card mounted while the pointer is in the window is lit at once, and
-    the pointer leaving the window rests them all. `--foil-on` is always 1 (it rested at 0.55).
+    lower-left to upper-right "like tiger stripes" — not thin lines, not sharp; ripple is large
+    rainbow rings with their own centres, red outside and violet inside — not concentric rings;
+    etched is frosted metal on the frame with the art left flat; mana foil (Foundations) is a
+    lattice of rings each holding a mana symbol, measured off a high-passed scan of FDN 362.
+    Foil-only halo, fracture, galaxy and confetti scans already show their pattern, so those add
+    moving light rather than a second pattern.
+  - **Issue #1689's second round (2026-11-16), signed off on a design canvas:** traditional foil
+    is the pre-2026-11-15 sheen again (`screen`, its own alphas); every other kind is toned down
+    to `--foil-on` 0.6 ("too blown out") and reaches the card's edge (the black-border clips are
+    gone; etched still leaves the art window flat); ripple is nine fixed rings drawn as CSS
+    gradients, the five nearest the light shown, each growing as the light crosses it and fading
+    in and out over 0.9 s (`@property --foil-sN`) — it was three drifting pictures; mana foil is
+    two generated masks (`mana-discs`, `mana-glyphs`, from mana-font's own paths) — pictures, not
+    SVG, because an SVG mask is redrawn on every repaint (174 ms a frame for a wall of them).
+  - **The light moves with the pointer but never follows it, and the card never moves** — no
+    tilt. The owner's calls on the canvas: following the pointer "ends up looking like a torch",
+    so every card drifts a fifth of itself across the whole window, mirrored, and the card under
+    the pointer moves 0.9 of itself across itself (blended in over its outer 15 %, so arriving
+    does not snap it); each card sweeps at its own angle, 115° ± 9°, and rests a little off the
+    shared rest, seeded by its printing id, so a wall does not shine in lockstep; and nothing is
+    smoothed in time. A finger, or a reader who asked for less motion, gets the resting light.
+  - **A deck of a hundred foils has to stay smooth** (the owner's report, 2026-11-16: "a whole
+    deck of surge foils was really laggy"). The deck's stacks are not virtualised and put each
+    card under nine others, so relighting one card repainted ten; every card relit on every move
+    cost 57–66 ms a frame for 120 surge foils (headless Edge on the GPU). What fixed it, all four
+    needed (either of the first two alone left 36 and 55 ms): **each foil card's frame is its own
+    compositor layer** (`translateZ(0)` on the frame — the overlay's parent, which holds the
+    picture too, so the blends still see it — only under `hover: hover`); **at most four idle cards
+    are relit a frame** (`FOIL_IDLE_BUDGET`), farthest behind first, the rest on the frames after;
+    **the hovered card is the one whose frame holds the pointer event's target**, never every box
+    the pointer is inside (nine, in a stack); and **an idle ripple keeps its resting rings**, so
+    the 0.9 s fades run on the hovered card alone (85 → 17 ms for 120 ripples). One light pass a
+    frame, every box read before any write, only changed values written, an idle card stepped to
+    about a pixel. In the shipped window (debug build, a 120-foil deck — 100 surge, 17 ripple, 3
+    mana — swept by the pointer one move a frame, 2026-11-16): 7 ms a frame with the foils hidden,
+    13.7–14.7 ms as built, 21–23 without the per-card layers; each idle card relit costs about
+    1.5 ms there, which is why the budget is four (three measured 12.4–12.9, six 15.8–18.5).
   - **Etched and surge are drawn on every copy, on purpose** (the owner's call, 2026-11-15) —
     even where Scryfall's picture already shows them: 845 of the 892 etched-only printings wear
     the etched frame, whose scan already shows the frosted metal, and the Warhammer 40,000 `★`

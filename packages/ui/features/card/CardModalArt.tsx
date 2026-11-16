@@ -490,7 +490,11 @@ export function CardModalArt({
                 className="size-full animate-in bg-bg object-cover fade-in duration-150 motion-reduce:animate-none"
               />
             )}
-            <FoilOverlay finish={marked} treatments={finishTreatments(card.promoTypes, marked)} />
+            <FoilOverlay
+              finish={marked}
+              treatments={finishTreatments(card.promoTypes, marked)}
+              seed={card.id}
+            />
           </span>
         </div>
         {/* Which piece of cardboard this is, in the data face. The set's **name** is pushed right

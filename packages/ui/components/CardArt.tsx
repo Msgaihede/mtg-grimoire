@@ -1,4 +1,4 @@
-import { useMemo, useRef, type CSSProperties } from "react";
+import { useId, useMemo, useRef, type CSSProperties } from "react";
 import { CardImage } from "@/components/CardImage";
 import { FinishMark } from "@/components/FinishMark";
 import { foilTextureVars } from "@/components/foilTextures";
@@ -8,7 +8,9 @@ import { useFoilLight } from "@/components/useFoilLight";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import {
   FOIL_PATTERN_LAYERS,
-  FOIL_REST,
+  foilAim,
+  foilCard,
+  type FoilCard,
   foilEffect,
   foilLight,
   type FoilEffect,
@@ -37,11 +39,15 @@ import { cn } from "@/lib/utils";
  */
 const PATTERN_CLASSES = ["foil-pattern", "foil-pattern-2", "foil-pattern-3"] as const;
 
-/** A drawing's texture properties and the resting light, as the overlay's own style. */
-function foilStyle(effect: FoilEffect): CSSProperties {
+/**
+ * A drawing's texture properties and the card's resting light, as the overlay's own style — every
+ * property the light pass writes, so a style React re-applies (a printing swapped from surge to
+ * foil) leaves nothing of the last drawing behind. `useFoilLight` starts from exactly this.
+ */
+function foilStyle(effect: FoilEffect, card: FoilCard): CSSProperties {
   return {
     ...foilTextureVars(effect),
-    ...foilLight(FOIL_REST.x, FOIL_REST.y),
+    ...foilLight(foilAim(null, card), card, effect === "ripple" ? "rest" : null),
   } as CSSProperties;
 }
 
@@ -270,7 +276,12 @@ export function CardArt({
         </span>
       )}
 
-      <FoilOverlay finish={finish} treatments={treatments} gameChanger={gameChanger} />
+      <FoilOverlay
+        finish={finish}
+        treatments={treatments}
+        gameChanger={gameChanger}
+        seed={cardId ?? name}
+      />
     </span>
   );
 }
@@ -305,6 +316,7 @@ export function FoilOverlay({
   treatments,
   gameChanger = false,
   mark = true,
+  seed,
 }: {
   finish: Finish | null;
   /**
@@ -349,6 +361,12 @@ export function FoilOverlay({
    * is already wearing one.
    */
   mark?: boolean;
+  /**
+   * What makes this card's foil its own — its sweep's angle and resting light (`foilCard`). The
+   * printing's id, so the same card is the same foil on every wall and after every scroll; a frame
+   * that has none gets one for as long as it is mounted.
+   */
+  seed?: string;
 }) {
   const tip = useTooltip();
   // **`nonfoil` is the regular copy and draws exactly what `null` draws** — no sheen, and no chip
@@ -363,9 +381,11 @@ export function FoilOverlay({
   // Which drawing, and its textures and resting light. `null` for no foil, which also attaches
   // no pointer listener: a crown or a trait chip has no light to move.
   const effect = foilEffect(drawn, treatments);
-  const style = useMemo(() => (effect ? foilStyle(effect) : undefined), [effect]);
+  const mounted = useId();
+  const card = useMemo(() => foilCard(seed ?? mounted), [seed, mounted]);
+  const style = useMemo(() => (effect ? foilStyle(effect, card) : undefined), [effect, card]);
   const overlay = useRef<HTMLSpanElement>(null);
-  useFoilLight(overlay, effect !== null);
+  useFoilLight(overlay, effect, card);
   // Two marks, one chip, and either of them is reason enough to draw it — but only if the
   // caller wanted a chip at all.
   const named = treatments !== undefined && treatments.length > 0;

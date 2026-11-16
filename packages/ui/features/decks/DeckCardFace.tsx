@@ -445,6 +445,7 @@ export function DeckCardFace({
         finish={finish}
         treatments={finishTreatments(card.promoTypes, finish)}
         mark={false}
+        seed={card.cardId}
       />
 
       {/* The reveal strip: what the app knows that the printed card cannot. Over the card's own

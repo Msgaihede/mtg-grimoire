@@ -34,6 +34,7 @@ export const FOIL_EFFECTS = [
   "surge",
   "silver",
   "ripple",
+  "mana",
   "galaxy",
   "rainbow",
   "doublerainbow",
@@ -49,6 +50,9 @@ const BY_TREATMENT: Readonly<Record<string, FoilEffect>> = {
   surgefoil: "surge",
   silverfoil: "silver",
   ripplefoil: "ripple",
+  // Foundations' mana foil (FDN 362–421, every one foil-only): drawn as itself since issue #1689,
+  // where it had been drawn as traditional foil.
+  manafoil: "mana",
   galaxyfoil: "galaxy",
   rainbowfoil: "rainbow",
   doublerainbow: "doublerainbow",
@@ -93,88 +97,232 @@ export const FOIL_PATTERN_LAYERS: Readonly<Record<FoilEffect, 0 | 1 | 2 | 3>> = 
   etched: 2,
   surge: 2,
   silver: 2,
+  mana: 2,
   galaxy: 2,
-  ripple: 3,
+  // Nine rings in one layer of gradients (issue #1689); it was three pictures in three layers.
+  ripple: 1,
   textured: 1,
   confetti: 1,
   fracture: 1,
 };
 
 /**
- * Where the light rests while the pointer is outside the window, under a finger and for a reader
- * who asked for less motion: upper left, the angle a card on a desk is usually seen at. At full
- * strength like every other light (see {@link foilLight}), so a still wall's foils read as foil.
+ * **How strong every drawing is: `--foil-on`.** 0.6 since issue #1689 ("all foils are too blown
+ * out"), the strength the owner approved on the design canvas; it was 1. Every layer in
+ * `index.css` scales by it, and traditional foil divides it back out (`/ 0.6`) because that drawing
+ * is the pre-2026-11-15 sheen at its own alphas, which were never blown out.
+ */
+export const FOIL_STRENGTH = 0.6;
+
+/**
+ * Where a card's light rests while the pointer is outside the window, under a finger and for a
+ * reader who asked for less motion: upper left, the angle a card on a desk is usually seen at.
+ * Each card rests a little off it ({@link FoilCard}).
  */
 export const FOIL_REST = { x: 0.32, y: 0.28 } as const;
 
-/**
- * Ripple's three circle sets, each strongest when the light is near its own spot — the owner asked
- * for circles that "fade and fade in new circles in different locations… like a camera obscura".
- * Points on the card, 0..1.
- */
-const RIPPLE_ANCHORS: readonly (readonly [number, number])[] = [
-  [0.22, 0.25],
-  [0.8, 0.4],
-  [0.4, 0.85],
-];
+/** The sweep's direction when nothing turns it: the pre-2026-11-15 sheen's 115°. */
+export const FOIL_ANGLE = 115;
 
-/** A set's weight: a floor so no set ever vanishes outright, plus a Gaussian bump at its anchor. */
-function anchorWeight(x: number, y: number, [ax, ay]: readonly [number, number]): number {
-  return 0.12 + 0.88 * Math.exp(-((x - ax) ** 2 + (y - ay) ** 2) / (2 * 0.28 * 0.28));
+/**
+ * **What makes one card's foil different from its neighbour's** — the owner, on the design canvas
+ * (2026-11-15): "all the foil sheens go in the same direction, and move at the same rate… across a
+ * whole card wall". A card's sweep turns up to 9° either side of {@link FOIL_ANGLE}, and its light
+ * rests up to 0.08 of the card away from {@link FOIL_REST} on each axis.
+ */
+export interface FoilCard {
+  /** The sweep's direction, in degrees. */
+  angle: number;
+  /** The resting light's offset from {@link FOIL_REST}, in card widths and heights. */
+  ox: number;
+  oy: number;
 }
 
 /**
- * The CSS custom properties that place the light, for a light at `(x, y)` on the card (0..1 each).
- *
- * Every layer of every drawing reads only these, so the card itself never moves — no tilt, the
- * owner's call — while the sheen, the glare and the patterns follow the pointer.
- *
- * **`--foil-on` is always `1`**: the owner's call on 2026-11-15 ("the hover effect isn't quite
- * visible when not hovering, so put it at full strength even when not hovered"). It rested at
- * 0.55 until then. The property stays, because twenty-odd layers in `index.css` scale by it and
- * it is the one place a strength would be set again.
+ * A card's constants from a seed — its card id, so the same card is the same foil on every wall
+ * and after every scroll. FNV-1a over the seed, then three draws of a 32-bit LCG.
  */
-export function foilLight(x: number, y: number): Record<string, string> {
-  const [wa, wb, wc] = RIPPLE_ANCHORS.map((a) => anchorWeight(x, y, a));
+export function foilCard(seed: string): FoilCard {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193) >>> 0;
+  const draw = () => (h = (Math.imul(h, 1664525) + 1013904223) >>> 0) / 4294967296;
   return {
-    "--foil-px": x.toFixed(3),
-    "--foil-py": y.toFixed(3),
-    "--foil-mx": `${(x * 100).toFixed(1)}%`,
-    "--foil-my": `${(y * 100).toFixed(1)}%`,
-    "--foil-hyp": Math.min(1, Math.hypot(x - 0.5, y - 0.5) * 2).toFixed(3),
-    "--foil-on": "1",
-    "--foil-wa": wa.toFixed(3),
-    "--foil-wb": wb.toFixed(3),
-    "--foil-wc": wc.toFixed(3),
+    angle: FOIL_ANGLE + (draw() - 0.5) * 18,
+    ox: (draw() - 0.5) * 0.16,
+    oy: (draw() - 0.5) * 0.16,
   };
 }
 
 /**
- * How far the pointer has to be from a card's centre for its light to reach most of the way to
- * that edge, as a fraction of the window's longer side. A quarter: a pointer half a window away
- * puts the light 96 % of the way from the centre to that edge, and a pointer crossing a wall's
- * tile moves it about a fifth of the card.
+ * How far the pointer's place in the window moves a card it is not on: 0.2 of the card across the
+ * whole window, mirrored (the light moves away from the pointer, as a reflection does). The
+ * owner's call on the canvas (2026-11-15): "super reduced light motion" for every card on the
+ * page, the light moving but never *following* the pointer — following it "ends up looking like a
+ * torch".
  */
-export const FOIL_LIGHT_REACH = 0.25;
+export const FOIL_IDLE = 0.2;
+
+/** How far the pointer's place on the card it is on moves that card's light: 0.9 of the card. */
+export const FOIL_HOVER = 0.9;
 
 /**
- * The light on a card for a pointer anywhere in the window — the owner's call on 2026-11-15:
- * "the foils should react to the cursor moving anywhere in the window, not just when hovering the
- * card".
- *
- * Each axis is the pointer's offset from the card's centre, eased with `tanh` over
- * {@link FOIL_LIGHT_REACH} of the window's longer side: centred under a pointer at the card's
- * middle, turned toward a pointer anywhere else, and never pinned to an edge, so a pointer moving
- * across the far side of the window still moves every card's light. One reach for both axes, so
- * the light moves alike up and across.
+ * The step an idle card's light moves in: about a pixel. A card the pointer is not on is relit
+ * every couple of dozen pixels of pointer travel rather than on every move, which no reader sees
+ * and a wall of a hundred foils feels.
  */
-export function foilLightFrom(
-  cursor: { x: number; y: number },
+export const FOIL_IDLE_STEP = 0.004;
+
+/** What the pointer gives one card, all 0..1. */
+export interface FoilPointer {
+  /** The pointer's place in the window. */
+  gx: number;
+  gy: number;
+  /** The pointer's place on this card; the middle when it is not on it. */
+  rx: number;
+  ry: number;
+  /**
+   * How much this card is the one under the pointer: 0 off it, rising to 1 across the outer 15 %
+   * of its edge, so a pointer arriving on a card does not snap its light across.
+   */
+  hover: number;
+}
+
+const smoothstep = (a: number, b: number, x: number): number => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * What a pointer at `at` gives a card drawn in `box`, in a window of `view`. `onCard` is whether
+ * this card is the one the pointer is on — the topmost under it, which the caller knows from the
+ * pointer event's target. A box alone cannot say: in the deck's stacks the pointer is inside nine
+ * cards' boxes at once and only one of them shows there.
+ */
+export function foilPointer(
+  at: { x: number; y: number },
   box: { left: number; top: number; width: number; height: number },
   view: { width: number; height: number },
+  onCard: boolean,
+): FoilPointer {
+  const gx = at.x / Math.max(1, view.width);
+  const gy = at.y / Math.max(1, view.height);
+  const rx = (at.x - box.left) / Math.max(1, box.width);
+  const ry = (at.y - box.top) / Math.max(1, box.height);
+  const inside = onCard && rx >= 0 && rx <= 1 && ry >= 0 && ry <= 1;
+  if (!inside) return { gx, gy, rx: 0.5, ry: 0.5, hover: 0 };
+  const edge = Math.min(rx, 1 - rx, ry, 1 - ry);
+  return { gx, gy, rx, ry, hover: smoothstep(0, 0.15, edge) };
+}
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+
+/**
+ * Where on `card` the light is, for what the pointer gives it — `null` for no pointer at all
+ * (outside the window, a finger, less motion), which is the card's resting light.
+ *
+ * A card the pointer is not on drifts {@link FOIL_IDLE} of itself across the whole window, in
+ * steps of {@link FOIL_IDLE_STEP}; the card it is on moves {@link FOIL_HOVER} of itself across
+ * itself, mirrored, blended in by `hover`. **No easing in time** — the owner's call ("remove the
+ * smooth interpolation too"): the light is wherever the pointer puts it, at once.
+ */
+export function foilAim(given: FoilPointer | null, card: FoilCard): { x: number; y: number } {
+  const restX = FOIL_REST.x + card.ox;
+  const restY = FOIL_REST.y + card.oy;
+  if (given === null) return { x: restX, y: restY };
+  const idleX = restX + FOIL_IDLE * (0.5 - given.gx);
+  const idleY = restY + FOIL_IDLE * (0.5 - given.gy);
+  if (given.hover === 0) {
+    const step = (v: number) => Math.round(clamp01(v) / FOIL_IDLE_STEP) * FOIL_IDLE_STEP;
+    return { x: step(idleX), y: step(idleY) };
+  }
+  const onX = 0.5 + FOIL_HOVER * (0.5 - given.rx);
+  const onY = 0.5 + FOIL_HOVER * (0.5 - given.ry);
+  return {
+    x: clamp01(idleX + given.hover * (onX - idleX)),
+    y: clamp01(idleY + given.hover * (onY - idleY)),
+  };
+}
+
+/**
+ * Ripple's nine rings, in card space: centre `x` across and `y` down (0..1, a few just off the
+ * card), radius in card widths, and the direction (degrees) the light moves to grow it. They never
+ * move — issue #1689 asked for "about half as many circles, which grow/shrink and gradually fade
+ * instead of moving"; the owner then settled on nine with five showing.
+ */
+export const RIPPLE_RINGS: readonly (readonly [number, number, number, number])[] = [
+  [0.2, 0.14, 0.3, 30],
+  [0.8, 0.2, 0.26, 150],
+  [0.46, 0.4, 0.22, 270],
+  [0.08, 0.55, 0.32, 80],
+  [0.9, 0.6, 0.34, 210],
+  [0.52, 0.76, 0.28, 330],
+  [0.2, 0.95, 0.24, 120],
+  [0.8, 1.0, 0.22, 0],
+  [0.52, 0.06, 0.2, 240],
+];
+
+/** How many of the rings show at once: the ones nearest the light. */
+export const RIPPLE_SHOWN = 5;
+
+/**
+ * Each ring's size and visibility for a light at `(x, y)`. A ring's spot is its centre pulled
+ * into the range the light travels; the {@link RIPPLE_SHOWN} spots nearest the light show, and the
+ * line between the fifth and the sixth fades over 0.1 either side, so a ring dissolves rather than
+ * blinks (the fade itself takes 0.9 s, in `index.css`). A ring grows as the light crosses it the
+ * way it faces.
+ */
+export function rippleRings(x: number, y: number): { grow: number; show: number }[] {
+  const spots = RIPPLE_RINGS.map(([cx, cy]) => [0.15 + 0.7 * cx, 0.15 + 0.7 * Math.min(1, cy)]);
+  const d = spots.map(([sx, sy]) => Math.hypot(x - sx, y - sy));
+  const sorted = [...d].sort((a, b) => a - b);
+  const cut = (sorted[RIPPLE_SHOWN - 1] + sorted[RIPPLE_SHOWN]) / 2;
+  return RIPPLE_RINGS.map(([, , , dir], i) => {
+    const a = (dir * Math.PI) / 180;
+    const along = (x - spots[i][0]) * Math.cos(a) + (y - spots[i][1]) * Math.sin(a);
+    return {
+      grow: 0.7 + 0.6 * smoothstep(-0.35, 0.35, along),
+      show: 1 - smoothstep(cut - 0.1, cut + 0.1, d[i]),
+    };
+  });
+}
+
+/**
+ * The CSS custom properties that place the light at `at` (0..1 each) on `card`.
+ *
+ * Every layer of every drawing reads only these, so the card itself never moves — no tilt, the
+ * owner's call. `--foil-angle` turns the card's sweep and `--foil-at` is where along it the bright
+ * band sits: the light's position projected onto the sweep, so the band crosses the card as the
+ * light does.
+ *
+ * `ripple` adds the nine rings' `--foil-gN` (size) and `--foil-sN` (shown). `"rest"` shows the
+ * rings the card's *resting* light shows, whatever `at` is: an idle ripple keeps its rings, so a
+ * deck of them is not a hundred 0.9 s fades repainting every frame — only the card under the
+ * pointer fades rings in and out.
+ */
+export function foilLight(
+  at: { x: number; y: number },
+  card: FoilCard,
+  ripple: "live" | "rest" | null = null,
 ): Record<string, string> {
-  const reach = Math.max(view.width, view.height, 1) * FOIL_LIGHT_REACH;
-  const along = (at: number, start: number, size: number) =>
-    0.5 + 0.5 * Math.tanh((at - (start + size / 2)) / reach);
-  return foilLight(along(cursor.x, box.left, box.width), along(cursor.y, box.top, box.height));
+  const t = (card.angle * Math.PI) / 180;
+  const along = (at.x - 0.5) * Math.sin(t) - (at.y - 0.5) * Math.cos(t);
+  const vars: Record<string, string> = {
+    "--foil-px": at.x.toFixed(3),
+    "--foil-py": at.y.toFixed(3),
+    "--foil-mx": `${(at.x * 100).toFixed(1)}%`,
+    "--foil-my": `${(at.y * 100).toFixed(1)}%`,
+    "--foil-on": String(FOIL_STRENGTH),
+    "--foil-angle": `${card.angle.toFixed(1)}deg`,
+    "--foil-at": `${(50 + 45 * along).toFixed(1)}%`,
+  };
+  if (ripple === null) return vars;
+  const grown = rippleRings(at.x, at.y);
+  const rest = foilAim(null, card);
+  const shown = ripple === "rest" ? rippleRings(rest.x, rest.y) : grown;
+  grown.forEach(({ grow }, i) => {
+    vars[`--foil-g${i + 1}`] = grow.toFixed(2);
+    // In twentieths: a ring's visibility changes, and so repaints, only when it visibly moves.
+    vars[`--foil-s${i + 1}`] = (Math.round(shown[i].show * 20) / 20).toFixed(2);
+  });
+  return vars;
 }

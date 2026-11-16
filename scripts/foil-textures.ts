@@ -14,18 +14,21 @@
 // **Every shape here was tuned against the real thing**, in a design canvas the owner reviewed
 // card by card on 2026-11-15 with photos of his own cards: surge is soft, rounded blotches
 // stretched along the diagonal ("like tiger stripes or stretch marks… blotchier, with rounded
-// edges, not sharp"); ripple is large overlapping rainbow circles with their own centres, in
-// three sets the CSS drifts and cross-fades ("like a camera obscura"). Change a recipe and the
-// picture changes on every card of that kind — look at one before committing.
+// edges, not sharp"); mana foil is the lattice measured off a scan of Foundations' own (issue
+// #1689). Ripple has no picture any more: its rings are CSS gradients, so each can grow and fade
+// on its own. Change a recipe and the picture changes on every card of that kind — look at one
+// before committing.
 //
 // Deterministic: a seeded RNG, so a rerun writes byte-identical files and a diff means a recipe
-// changed. No dependencies: a small PNG encoder over `node:zlib`.
+// changed. No dependencies: a small PNG encoder over `node:zlib`, and mana-font's own SVG paths
+// filled by a scanline rasteriser here.
 //
-// Card-relative patterns are drawn at 504×702 (a 5:7 card) and stretched to the card; fine
+// Card-relative patterns are drawn at 504×702 (a 5:7 card; mana at 750×1050, for its fine
+// rims) and stretched to the card; fine
 // grains are small tiles at screen scale, which the CSS repeats at a fixed pixel size so they
 // stay crisp at every zoom.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
 const OUT = new URL("../packages/ui/assets/foil/", import.meta.url);
@@ -183,50 +186,192 @@ const WHITE: Rgb = [255, 255, 255];
 // ---- the textures -------------------------------------------------------------------------
 
 /**
- * One set of ripple circles: `count` rings with their own centres (some off the card), each a
- * band in rainbow order — red outside, violet inside — brighter along some arcs than others.
- * In colour; overlaps average their hues.
+ * Mana foil (Foundations, FDN 362–421): a lattice of rings, each holding one of the five mana
+ * symbols. Measured on the high-passed scan of FDN 362 (issue #1689): rows 0.1012 of the card's
+ * width apart, rings 0.2083 apart along a row, alternate rows offset by half, ring radius 0.0484,
+ * the first row's first ring at (0.298 W, 0.203 H), each symbol in a box 1.25 of the radius,
+ * W U B R G running along a row and two places on per row.
+ *
+ * Two white masks at 750×1050: `discs` (each ring's rim, and its disc faint around the symbol)
+ * catches the light; `glyphs` (the symbols, and a thinner rim) is darkened under it. Pictures, not
+ * SVG: an SVG mask is redrawn on every repaint, and a wall of mana foils cost 174 ms a frame that
+ * way on the design canvas.
  */
-function rippleSet(seed: number, count: number): Canvas {
-  const c = canvas();
-  const r = rng(seed);
-  const n = noise2(seed + 1, 40);
-  const rings = Array.from({ length: count }, () => ({
-    cx: -60 + r() * (c.w + 120),
-    cy: -60 + r() * (c.h + 120),
-    rad: 50 + r() * 160,
-    band: 15 + r() * 10,
-    phi: r() * 6.28,
-    k: 0.6 + r() * 0.4,
-  }));
-  for (let y = 0; y < c.h; y++)
-    for (let x = 0; x < c.w; x++) {
-      let R = 0;
-      let G = 0;
-      let B = 0;
-      let A = 0;
-      for (const g of rings) {
-        const t = (Math.hypot(x - g.cx, y - g.cy) - g.rad) / g.band;
-        if (Math.abs(t) >= 0.6) continue;
-        const bell = Math.cos((Math.PI * t) / 1.2) ** 2;
-        const arc = 0.25 + 0.75 * (0.5 + 0.5 * Math.cos(Math.atan2(y - g.cy, x - g.cx) - g.phi)) ** 1.5;
-        const a = bell * arc * g.k * (0.85 + 0.15 * n(x, y));
-        const [cr, cg, cb] = hsl((0.5 - Math.max(-0.5, Math.min(0.5, t))) * 270, 1, 0.55);
-        R += cr * a;
-        G += cg * a;
-        B += cb * a;
-        A += a;
-      }
-      if (A > 0) {
-        const i = (y * c.w + x) * 4;
-        c.px[i] = R / A;
-        c.px[i + 1] = G / A;
-        c.px[i + 2] = B / A;
-        c.px[i + 3] = Math.round(Math.min(1, A) * 255);
-      }
+const MANA_SVG = new URL("../node_modules/mana-font/svg/", import.meta.url);
+const MANA_KEYS = ["w", "u", "b", "r", "g"] as const;
+
+type Point = readonly [number, number];
+
+/** A path's subpaths as point lists, curves flattened. Handles M L H V C S Q Z, either case. */
+function flatten(d: string, steps = 12): Point[][] {
+  const tok = d.match(/[a-zA-Z]|-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?/g) ?? [];
+  const polys: Point[][] = [];
+  let poly: Point[] = [];
+  let i = 0;
+  let cmd = "";
+  let [x, y, sx, sy, cx, cy] = [0, 0, 0, 0, 0, 0];
+  const num = () => Number.parseFloat(tok[i++]);
+  const cubic = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) => {
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps;
+      const u = 1 - t;
+      poly.push([
+        u * u * u * x + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+        u * u * u * y + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3,
+      ]);
     }
-  return c;
+    [cx, cy, x, y] = [x2, y2, x3, y3];
+  };
+  while (i < tok.length) {
+    if (/[a-zA-Z]/.test(tok[i])) cmd = tok[i++];
+    const rel = cmd === cmd.toLowerCase();
+    const [ox, oy] = rel ? [x, y] : [0, 0];
+    switch (cmd.toUpperCase()) {
+      case "M":
+        if (poly.length > 1) polys.push(poly);
+        x = ox + num();
+        y = oy + num();
+        [sx, sy, cx, cy] = [x, y, x, y];
+        poly = [[x, y]];
+        cmd = rel ? "l" : "L"; // further pairs are lines
+        break;
+      case "L":
+        x = ox + num();
+        y = oy + num();
+        poly.push([x, y]);
+        [cx, cy] = [x, y];
+        break;
+      case "H":
+        x = ox + num();
+        poly.push([x, y]);
+        [cx, cy] = [x, y];
+        break;
+      case "V":
+        y = oy + num();
+        poly.push([x, y]);
+        [cx, cy] = [x, y];
+        break;
+      case "C": {
+        const a = [num(), num(), num(), num(), num(), num()];
+        cubic(ox + a[0], oy + a[1], ox + a[2], oy + a[3], ox + a[4], oy + a[5]);
+        break;
+      }
+      case "S": {
+        const a = [num(), num(), num(), num()];
+        cubic(2 * x - cx, 2 * y - cy, ox + a[0], oy + a[1], ox + a[2], oy + a[3]);
+        break;
+      }
+      case "Q": {
+        const [qx, qy, ex, ey] = [ox + num(), oy + num(), ox + num(), oy + num()];
+        cubic(x + (2 / 3) * (qx - x), y + (2 / 3) * (qy - y), ex + (2 / 3) * (qx - ex), ey + (2 / 3) * (qy - ey), ex, ey);
+        [cx, cy] = [qx, qy];
+        break;
+      }
+      case "Z":
+        [x, y] = [sx, sy];
+        poly.push([x, y]);
+        polys.push(poly);
+        poly = [[x, y]];
+        [cx, cy] = [x, y];
+        break;
+      default:
+        throw new Error(`path command ${cmd}`);
+    }
+  }
+  if (poly.length > 1) polys.push(poly);
+  return polys;
 }
+
+/** Coverage (0..1 a pixel) of `polys` filled nonzero into a w×h grid, 4×4 samples a pixel. */
+function fill(polys: Point[][], w: number, h: number, ss = 4): Float32Array {
+  const cov = new Float32Array(w * h);
+  const edges: [number, number, number, number][] = [];
+  for (const p of polys)
+    for (let k = 0; k < p.length; k++) {
+      const [x0, y0] = p[k];
+      const [x1, y1] = p[(k + 1) % p.length];
+      if (y0 !== y1) edges.push([x0, y0, x1, y1]);
+    }
+  for (let sy = 0; sy < h * ss; sy++) {
+    const y = (sy + 0.5) / ss;
+    const hits: [number, number][] = [];
+    for (const [x0, y0, x1, y1] of edges)
+      if ((y0 <= y && y < y1) || (y1 <= y && y < y0))
+        hits.push([x0 + ((y - y0) / (y1 - y0)) * (x1 - x0), y1 > y0 ? 1 : -1]);
+    hits.sort((a, b) => a[0] - b[0]);
+    let wind = 0;
+    for (let k = 0; k < hits.length - 1; k++) {
+      wind += hits[k][1];
+      if (wind === 0) continue;
+      const a = Math.max(0, Math.ceil(hits[k][0] * ss - 0.5));
+      const b = Math.min(w * ss - 1, Math.floor(hits[k + 1][0] * ss - 0.5));
+      const row = Math.floor(sy / ss) * w;
+      for (let c = a; c <= b; c++) cov[row + Math.floor(c / ss)] += 1 / (ss * ss);
+    }
+  }
+  return cov;
+}
+
+/** Both mana masks, drawn together because they share the lattice and the glyph tiles. */
+function manaMasks(w = 750): { discs: Canvas; glyphs: Canvas } {
+  const h = Math.round(w * 1.4);
+  const [sx, sy, r, y0, x0] = [w * 0.2083, w * 0.1012, w * 0.0484, h * 0.203, w * 0.298];
+  const cells: { x: number; y: number; k: (typeof MANA_KEYS)[number] }[] = [];
+  for (let i = -Math.ceil(y0 / sy) - 1; y0 + i * sy < h + sy; i++) {
+    const y = y0 + i * sy;
+    const off = ((i % 2) + 2) % 2 === 0 ? 0 : sx / 2;
+    for (let j = -Math.ceil(x0 / sx) - 1; x0 + j * sx < w + sx; j++) {
+      const x = x0 + j * sx + off;
+      if (x < -r || x > w + r || y < -r || y > h + r) continue;
+      cells.push({ x, y, k: MANA_KEYS[(((j + 2 * i) % 5) + 5) % 5] });
+    }
+  }
+  // Each symbol's coverage once, centred in a tile; a cell's tile lands on the nearest pixel.
+  const pad = Math.ceil(r + 3);
+  const size = pad * 2;
+  const scale = (r * 1.25) / 32; // the font's 32-unit box
+  const glyph = Object.fromEntries(
+    MANA_KEYS.map((k) => {
+      const d = readFileSync(new URL(`${k}.svg`, MANA_SVG), "utf8").match(/ d="([^"]+)"/)?.[1];
+      if (!d) throw new Error(`no path in mana-font's ${k}.svg`);
+      const polys = flatten(d).map((p) => p.map(([px, py]): Point => [pad + (px - 16) * scale, pad + (py - 16) * scale]));
+      return [k, fill(polys, size, size)];
+    }),
+  );
+  const discs = canvas(w, h);
+  const glyphs = canvas(w, h);
+  const unit = w / 500; // the rims' widths were set on a 500-wide drawing
+  const ringR = r - 1.2 * unit;
+  for (const cell of cells) {
+    const [ox, oy] = [Math.round(cell.x) - pad, Math.round(cell.y) - pad];
+    const g = glyph[cell.k];
+    for (let ty = 0; ty < size; ty++)
+      for (let tx = 0; tx < size; tx++) {
+        const [x, y] = [ox + tx, oy + ty];
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const dist = Math.hypot(x + 0.5 - cell.x, y + 0.5 - cell.y);
+        const disc = Math.min(1, Math.max(0, r + 0.5 - dist));
+        const rimWide = Math.min(1, Math.max(0, 1.2 * unit + 0.5 - Math.abs(dist - ringR)));
+        const rimThin = Math.min(1, Math.max(0, 0.8 * unit + 0.5 - Math.abs(dist - ringR)));
+        const mark = Math.min(1, g[ty * size + tx]);
+        raise(discs, x, y, Math.max(rimWide, 0.3 * disc * (1 - mark)));
+        raise(glyphs, x, y, Math.max(mark, rimThin));
+      }
+  }
+  return { discs, glyphs };
+}
+
+/** A white pixel at least `a` opaque — overlapping rims keep the stronger, never add. */
+function raise(c: Canvas, x: number, y: number, a: number): void {
+  const i = (y * c.w + x) * 4;
+  const alpha = Math.round(Math.min(1, Math.max(0, a)) * 255);
+  if (alpha <= c.px[i + 3]) return;
+  c.px[i] = c.px[i + 1] = c.px[i + 2] = 255;
+  c.px[i + 3] = alpha;
+}
+
+let mana: ReturnType<typeof manaMasks> | undefined;
+const manaOnce = () => (mana ??= manaMasks());
 
 /**
  * Galaxy: a dense pinpoint starfield, a few dozen small stars, diamonds and rings, and a handful
@@ -290,10 +435,10 @@ const RECIPES: Record<string, () => Canvas> = {
     return c;
   },
 
-  // Ripple: three independent sets the CSS drifts in different directions and cross-fades.
-  "ripple-a": () => rippleSet(55, 9),
-  "ripple-b": () => rippleSet(63, 9),
-  "ripple-c": () => rippleSet(71, 9),
+  // Mana foil's two masks (see manaMasks). Ripple has no picture since issue #1689: its nine
+  // rings are CSS gradients (components/foilTextures.ts), so they can grow and fade one by one.
+  "mana-discs": () => manaOnce().discs,
+  "mana-glyphs": () => manaOnce().glyphs,
 
   "galaxy-a": () => galaxySet(11),
   "galaxy-b": () => galaxySet(29),

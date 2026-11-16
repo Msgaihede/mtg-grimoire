@@ -37,14 +37,16 @@ const meta = {
           "live corpus. The 53,224 printings that merely *have* a foil version are unmarked: a " +
           "sheen on 61% of every wall would be decoration rather than information.\n\n" +
           "**Each kind of foil is its own drawing** (2026-11-15) — traditional, etched, surge, " +
-          "silver, ripple, galaxy, rainbow, double rainbow, halo, textured, confetti and " +
+          "silver, ripple, mana, galaxy, rainbow, double rainbow, halo, textured, confetti and " +
           "fracture, chosen by `lib/foilEffect.ts` from the treatments the chip already reads, " +
           "drawn by the \"Foil\" section of `index.css` with patterns from " +
           "`scripts/foil-textures.ts`. Scryfall photographs a printing sold plain and special as " +
           "the plain card, so without these a Surge Foil copy looked like any other foil. Each " +
           "drawing was tuned against photographs of real cards and signed off by the owner. " +
-          "**The light follows the pointer and the card never moves** (no tilt, the owner's " +
-          "call); a finger, or a reader who asked for less motion, gets the resting light. See " +
+          "**The light moves with the pointer and the card never moves** (no tilt, the owner's " +
+          "call): every foil drifts a little as the pointer crosses the window, each at its own " +
+          "angle, and the one under the pointer moves more (issue #1689). A finger, or a reader " +
+          "who asked for less motion, gets the resting light. See " +
           "*Foil Kinds* below, and hover. Legibility is a screenshot question rather than an " +
           "assertion, so the live CDP pass is what proves it; what a story can prove is that " +
           "the whole overlay is `aria-hidden` and that the chip is still hoverable.\n\n" +
@@ -153,6 +155,7 @@ const FOIL_KINDS = [
   ["Surge Foil", "foil", ["surgefoil"]],
   ["Silver Foil", "foil", ["silverfoil"]],
   ["Ripple Foil", "foil", ["ripplefoil"]],
+  ["Mana Foil", "foil", ["manafoil"]],
   ["Galaxy Foil", "foil", ["galaxyfoil"]],
   ["Rainbow Foil", "foil", ["rainbowfoil"]],
   ["Double Rainbow", "foil", ["doublerainbow"]],
@@ -163,7 +166,7 @@ const FOIL_KINDS = [
 ] as const;
 
 /**
- * **Every kind of foil the app draws.** Hover a card: the light follows the pointer and the card
+ * **Every kind of foil the app draws.** Hover a card: its light moves across it and the card
  * stays put. Synthetic art shows the drawings less well than a real picture does — switch Live
  * on, or look in the app.
  */
@@ -194,6 +197,7 @@ export const FoilKinds: Story = {
       "surge",
       "silver",
       "ripple",
+      "mana",
       "galaxy",
       "rainbow",
       "doublerainbow",
