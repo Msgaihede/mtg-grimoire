@@ -17,6 +17,7 @@ const NO_FILTERS: ScanFilters = {
   released_from: null,
   released_to: null,
   exclude_promos: false,
+  only_finish: null,
 };
 const CAMERAS = [
   { deviceId: "rear", label: "Rear camera" },
@@ -199,6 +200,35 @@ describe("the scanner's options sheet", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     await userEvent.click(toggle);
     expect(props.onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: true });
+  });
+
+  it("matches the Finish choice beside the promo switch, at the touch floor (issue #1688)", async () => {
+    const filters = { sets: ["trk"], released_from: null, released_to: null };
+    const props = mount({ filters, finish: "nonfoil" });
+    await open(/^Filters/);
+    const toggle = screen.getByRole("switch", { name: "Match finish" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveClass("h-11");
+    expect(toggle).toHaveAccessibleDescription(/not made in nonfoil, like a foil-only one/);
+    await userEvent.click(toggle);
+    expect(props.onFilters).toHaveBeenLastCalledWith({ ...filters, only_finish: "nonfoil" });
+  });
+
+  it("refuses the finish switch under Detect, saying where to choose a finish", async () => {
+    const props = mount({ finish: "detect" });
+    await open(/^Filters/);
+    const toggle = screen.getByRole("switch", { name: "Match finish" });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAccessibleDescription(/Pick Nonfoil, Foil or Etched under Finish/);
+    await userEvent.click(toggle);
+    expect(props.onFilters).not.toHaveBeenCalled();
+  });
+
+  it("names a matched finish on the Filters row", async () => {
+    mount({ filters: { ...NO_FILTERS, only_finish: "nonfoil" }, finish: "nonfoil" });
+    expect(within(await sheet()).getByRole("button", { name: /^Filters/ })).toHaveTextContent(
+      "Any set · nonfoil only",
+    );
   });
 
   it("names skipped promos on the Filters row", async () => {

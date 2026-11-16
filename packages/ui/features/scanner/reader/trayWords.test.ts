@@ -84,6 +84,7 @@ describe("the filters", () => {
       released_from: null,
       released_to: null,
       exclude_promos: false,
+      only_finish: null,
     });
   });
 });

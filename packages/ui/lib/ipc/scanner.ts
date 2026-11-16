@@ -18,9 +18,9 @@ import { asciiJson, invoke } from "./invoke";
  * Which printings the scanner may answer with — `ScanFilters` in
  * `crates/card-scanner/src/filters.rs`. **Snake case**, like every scanner struct.
  *
- * Sets, a release-date range and whether promos count, and nothing else — no language, by
- * decision. An empty `sets`, two `null` dates and promos admitted is no filter at all. Dates are
- * `YYYY-MM-DD`, both ends inclusive.
+ * Sets, a release-date range, whether promos count and one finish a printing has to be made in,
+ * and nothing else — no language, by decision. An empty `sets`, two `null` dates, promos admitted
+ * and no finish is no filter at all. Dates are `YYYY-MM-DD`, both ends inclusive.
  */
 export interface ScanFilters {
   /** Set codes, compared case-insensitively. Empty is any set. */
@@ -33,6 +33,18 @@ export interface ScanFilters {
    * before the toggle existed carry no such key.
    */
   exclude_promos?: boolean;
+  /**
+   * Never answer with a printing the corpus says is not made in this finish (issue #1688) — under
+   * `nonfoil`, a foil-only printing that shares its art with the card in the reader's hand. A
+   * printing whose finishes the corpus did not say still passes. **Optional, and absent is
+   * `null`**, for {@link ScanFilters.exclude_promos}'s reason.
+   *
+   * **Set only by the reader's *Match finish* switch, and always to their Finish choice** —
+   * `useScannerPrefs` keeps the two in step, and turns the switch off under `detect`, which is no
+   * finish. Never derived from the Finish choice alone: a reader filing cards as nonfoil must still
+   * be able to scan a foil-only printing.
+   */
+  only_finish?: Finish | null;
 }
 
 /**

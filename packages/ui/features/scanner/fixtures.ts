@@ -450,7 +450,13 @@ export const STATUS = { present, missing, corrupt, unlabelled, store };
  * at the root, developer panels hidden.
  */
 export const DEFAULT_SCANNER_PREFS: ScannerPrefs = {
-  filters: { sets: [], released_from: null, released_to: null, exclude_promos: false },
+  filters: {
+    sets: [],
+    released_from: null,
+    released_to: null,
+    exclude_promos: false,
+    only_finish: null,
+  },
   finish: "detect",
   condition: "NONE",
   folderId: null,

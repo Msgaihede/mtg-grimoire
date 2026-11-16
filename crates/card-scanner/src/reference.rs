@@ -3,7 +3,7 @@
 //! The recogniser answers with a 16-byte Scryfall id, which is the right thing to store and the
 //! wrong thing to show anyone. This module joins that id back to the corpus so a match can be
 //! read as "Forest — HOB 0193", and keeps the facts a filter is built from: set, release date,
-//! promo and token.
+//! promo, token and finishes.
 //!
 //! **The labels are loaded into memory once rather than queried per match.** 118,000 rows of
 //! name, set and collector number is a few megabytes, and the alternative is a SQL round trip
@@ -70,7 +70,8 @@ pub struct Reference {
     oracle: HashMap<Id, Id>,
     /// Which finishes each printing exists in, as the corpus's `finishes` column lists them —
     /// `nonfoil`, `foil`, `etched` — as a place in [`Reference::finish_lists`]. See
-    /// [`Reference::finishes_of`].
+    /// [`Reference::finishes_of`]. What [`ScanFilters::only_finish`] reads, through
+    /// [`Reference::mask_for`].
     finishes: HashMap<Id, u32>,
     /// Every distinct list of finishes a printing has been given, once each. The corpus has
     /// eight (counted 2026-10-07), where each printing used to own a `Vec` of `String`s.
@@ -148,9 +149,11 @@ impl Reference {
     /// The finishes a printing exists in — `nonfoil`, `foil`, `etched` — or none when the
     /// corpus did not say.
     ///
-    /// **A fact the page draws a conclusion from, never one this crate acts on.** More than half
-    /// the corpus exists in one finish (counted 2026-10-01: 48,239 non-foil only, 13,548 foil
-    /// only, 892 etched only, of 118,610), and for those the tray's finish needs no asking.
+    /// **A fact the page draws a conclusion from, never one this crate acts on of its own
+    /// accord.** More than half the corpus exists in one finish (counted 2026-10-01: 48,239
+    /// non-foil only, 13,548 foil only, 892 etched only, of 118,610), and for those the tray's
+    /// finish needs no asking. The one place it narrows a search is a filter the reader turned on,
+    /// [`ScanFilters::only_finish`] (issue #1688) — never the finish a tray row lands in.
     ///
     /// **Kept as a place in a list of the distinct lists**, for the browser, where a module's
     /// memory is never given back (the light app's step 7.5).
@@ -230,7 +233,10 @@ impl Reference {
             return Mask::all();
         }
         Mask::allow_only(
-            self.labels.iter().filter(|(id, l)| f.permits(l, self.is_promo(id))).map(|(id, _)| *id),
+            self.labels
+                .iter()
+                .filter(|(id, l)| f.permits(l, self.is_promo(id), self.finishes_of(id)))
+                .map(|(id, _)| *id),
         )
     }
 
@@ -247,7 +253,9 @@ impl Reference {
         Mask::allow_only(
             self.labels
                 .iter()
-                .filter(|(id, l)| !self.is_token(id) && f.permits(l, self.is_promo(id)))
+                .filter(|(id, l)| {
+                    !self.is_token(id) && f.permits(l, self.is_promo(id), self.finishes_of(id))
+                })
                 .map(|(id, _)| *id),
         )
     }
@@ -355,6 +363,33 @@ mod tests {
         // And a printing marked and then unmarked is no promo.
         r.set_promo(id(2), false);
         assert!(r.mask_for(&no_promos).permits(&id(2)));
+    }
+
+    #[test]
+    fn a_finish_leaves_out_the_printings_not_made_in_it() {
+        // Issue #1688, as the reader met it: TRK 404 is made in nonfoil and foil, TRK 528 in foil
+        // alone, and the two photograph alike.
+        let mut r = labelled(&[
+            (1, 10, "Federation Resupply", "trk", "404", "2025-11-14"),
+            (2, 10, "Federation Resupply", "trk", "528", "2025-11-14"),
+            (3, 20, "Shock", "trk", "1", "2025-11-14"),
+        ]);
+        r.set_finishes(id(1), vec!["nonfoil".into(), "foil".into()]);
+        r.set_finishes(id(2), vec!["foil".into()]);
+        // Shock's finishes were never said: no constraint, so no exclusion.
+        let nonfoil = ScanFilters { only_finish: Some("nonfoil".into()), ..Default::default() };
+        let m = r.mask_for(&nonfoil);
+        assert!(!m.is_unrestricted());
+        assert!(m.permits(&id(1)) && !m.permits(&id(2)) && m.permits(&id(3)));
+        // The tokens' mask narrows the same way.
+        let m = r.mask_without_tokens(&nonfoil);
+        assert!(m.permits(&id(1)) && !m.permits(&id(2)) && m.permits(&id(3)));
+        // Under foil both printings are answers again: 404 is made in foil too.
+        let foil = ScanFilters { only_finish: Some("foil".into()), ..Default::default() };
+        let m = r.mask_for(&foil);
+        assert!(m.permits(&id(1)) && m.permits(&id(2)));
+        // And off, nothing about a finish narrows anything.
+        assert!(r.mask_for(&ScanFilters::default()).is_unrestricted());
     }
 
     #[test]
@@ -478,6 +513,7 @@ mod tests {
                 released_from: Some("2025-01-01".into()),
                 released_to: Some("2025-01-01".into()),
                 exclude_promos: false,
+                only_finish: None,
             };
             let mask = reference.mask_for(&filters);
             assert!(mask.permits(&id(p)));

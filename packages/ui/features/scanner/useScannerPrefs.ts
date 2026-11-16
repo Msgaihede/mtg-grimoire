@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { registerUnsavedCheck } from "@/lib/crossWindow";
 import { ipc, ipcError } from "@/lib/ipc";
+import { finishFollowing } from "./reader/readerText";
 import type { ScanFilters, ScannerPrefs } from "./types";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import { refusalPasses, scannerUnavailable, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
@@ -55,6 +56,7 @@ const NO_FILTERS: ScanFilters = {
   released_from: null,
   released_to: null,
   exclude_promos: false,
+  only_finish: null,
 };
 
 /**
@@ -96,7 +98,10 @@ export interface ScannerPrefsState {
   prefs: ScannerPrefs;
   /** The row has loaded **and** its filters have reached the session, accepted or refused. */
   loaded: boolean;
-  /** Applied at once; persisted whole. A `filters` change persists only once the session takes it. */
+  /**
+   * Applied at once; persisted whole. A `filters` change persists only once the session takes it.
+   * A `finish` change while *Match finish* is on is a `filters` change too — see the hook's doc.
+   */
   update: (patch: Partial<ScannerPrefs>) => void;
   /**
    * **The filters the session is searching under**: the last ones it accepted, and none until it
@@ -181,6 +186,14 @@ function current(qc: QueryClient): ScannerPrefs {
  * sent frame after frame into the same refusal. So it settles nothing, reverts nothing and is
  * never sent again; `unavailable` carries the sentence for the page to draw in place of the
  * picture. The prefs themselves still read and write — they are a row, and a page has the row.
+ *
+ * **The finish switch follows the Finish choice, here and nowhere else** (issue #1688). While
+ * *Match finish* is on, `filters.only_finish` is the Finish choice, so every `update` that moves
+ * the finish moves the filter with it ({@link finishFollowing}) and pushes it like any filter
+ * change — the next frame is read under the finish the menu now says. Under `detect`, which is no
+ * finish, the switch goes off. The finish itself is the reader's alone and is stored at once, not
+ * when the session answers: a refused narrowing keeps the filters in force and says so in the
+ * popover, but it is no reason to forget which finish new cards land in.
  */
 export function useScannerPrefs(): ScannerPrefsState {
   const qc = useQueryClient();
@@ -366,9 +379,18 @@ export function useScannerPrefs(): ScannerPrefsState {
 
   const update = useCallback(
     (patch: Partial<ScannerPrefs>) => {
-      qc.setQueryData<ScannerPrefs>(PREFS_KEY, { ...current(qc), ...patch });
-      if (patch.filters !== undefined) push(patch.filters, true);
-      else persist();
+      const was = current(qc);
+      const next = { ...was, ...patch };
+      // Only a change to one of the two moves the other: an unrelated field pushes nothing, even
+      // where a refused narrowing has left them apart.
+      if (patch.finish !== undefined || patch.filters !== undefined) {
+        next.filters = finishFollowing(next.filters, next.finish);
+      }
+      qc.setQueryData<ScannerPrefs>(PREFS_KEY, next);
+      const narrowed = patch.filters !== undefined || next.filters !== was.filters;
+      if (narrowed) push(next.filters, true);
+      // Anything beside the filters is stored now, carrying the filters in force — `persistable`.
+      if (!narrowed || Object.keys(patch).some((key) => key !== "filters")) persist();
     },
     [qc, push, persist],
   );

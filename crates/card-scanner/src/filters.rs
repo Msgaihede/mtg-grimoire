@@ -1,5 +1,5 @@
-//! What a reader can narrow a scan to: sets, a release-date range, and whether promos count.
-//! Nothing else.
+//! What a reader can narrow a scan to: sets, a release-date range, whether promos count, and
+//! one finish a printing has to be made in. Nothing else.
 //!
 //! **Tokens are not a filter.** A session leaves them out whatever the filters say until it is
 //! told to admit them ([`crate::session::Session::set_tokens`], issue #1323), and folds that into
@@ -30,6 +30,19 @@ pub struct ScanFilters {
     /// printing it promotes often enough that the recogniser reads one for the other, and a
     /// reader sorting a box of boosters never wants the promo answered.
     pub exclude_promos: bool,
+    /// Leave out every printing the corpus says is not made in this finish — `nonfoil`, `foil`
+    /// or `etched` (issue #1688). Under `nonfoil`, the foil-only printing that shares its artwork
+    /// and its markings with the regular one (TRK 528 beside TRK 404) is no longer a candidate,
+    /// so the scanner settles on the printing the reader can actually be holding.
+    ///
+    /// **A deliberate switch, never implied by the finish a tray row lands in.** The page sets it
+    /// from the reader's Finish choice only while *Match finish* is on: a reader who files every
+    /// card as nonfoil and then holds up a foil-only printing must still be able to scan it.
+    ///
+    /// A printing whose finishes the corpus did not say passes — "not said" is no constraint,
+    /// as the page reads it too ([`crate::reference::Reference::finishes_of`]). Compared
+    /// case-insensitively, and a blank string is absent, as a blank date is.
+    pub only_finish: Option<String>,
 }
 
 impl ScanFilters {
@@ -44,17 +57,25 @@ impl ScanFilters {
             && bound(&self.released_from).is_none()
             && bound(&self.released_to).is_none()
             && !self.exclude_promos
+            && bound(&self.only_finish).is_none()
     }
 
     /// Does this printing pass? Dates compare lexicographically, which is chronological for
     /// `YYYY-MM-DD`. A printing with no release date fails any date bound — it cannot be shown
     /// to lie inside the range.
     ///
-    /// `promo` is whether the corpus marks the printing a promo — a fact the reference keeps
-    /// beside the label ([`crate::reference::Reference::is_promo`]), not on it.
-    pub fn permits(&self, label: &Label, promo: bool) -> bool {
+    /// `promo` is whether the corpus marks the printing a promo, and `finishes` the finishes it
+    /// is made in — facts the reference keeps beside the label
+    /// ([`crate::reference::Reference::is_promo`], [`crate::reference::Reference::finishes_of`]),
+    /// not on it. An empty `finishes` is a printing the corpus said nothing about, and passes.
+    pub fn permits(&self, label: &Label, promo: bool, finishes: &[String]) -> bool {
         if self.exclude_promos && promo {
             return false;
+        }
+        if let Some(finish) = bound(&self.only_finish) {
+            if !finishes.is_empty() && !finishes.iter().any(|f| f.eq_ignore_ascii_case(finish)) {
+                return false;
+            }
         }
         let mut sets = self.set_codes().peekable();
         if sets.peek().is_some() && !sets.any(|s| s.eq_ignore_ascii_case(&label.set)) {
@@ -93,6 +114,8 @@ impl ScanFilters {
             && bound(&self.released_from) == bound(&other.released_from)
             && bound(&self.released_to) == bound(&other.released_to)
             && self.exclude_promos == other.exclude_promos
+            && bound(&self.only_finish).map(str::to_ascii_lowercase)
+                == bound(&other.only_finish).map(str::to_ascii_lowercase)
     }
 
     fn set_codes(&self) -> impl Iterator<Item = &str> {
@@ -138,10 +161,11 @@ mod tests {
             released_from: Some(String::new()),
             released_to: Some(String::new()),
             exclude_promos: false,
+            only_finish: Some(" ".into()),
         };
         assert!(f.is_empty());
-        assert!(f.permits(&label("ltr", "2023-06-23"), false));
-        assert!(f.permits(&label("ltr", "2023-06-23"), true));
+        assert!(f.permits(&label("ltr", "2023-06-23"), false, &[]));
+        assert!(f.permits(&label("ltr", "2023-06-23"), true, &[]));
     }
 
     #[test]
@@ -151,12 +175,14 @@ mod tests {
             released_from: Some("2023-01-01".into()),
             released_to: None,
             exclude_promos: false,
+            only_finish: Some("nonfoil".into()),
         };
         let respelled = ScanFilters {
             sets: vec![" LTR".into(), "".into(), "Hob ".into(), "hob".into()],
             released_from: Some(" 2023-01-01 ".into()),
             released_to: Some(String::new()),
             exclude_promos: false,
+            only_finish: Some(" NonFoil ".into()),
         };
         assert!(hob.same_as(&respelled));
         assert!(ScanFilters::default().same_as(&ScanFilters {
@@ -164,6 +190,7 @@ mod tests {
             released_from: Some(String::new()),
             released_to: None,
             exclude_promos: false,
+            only_finish: Some(String::new()),
         }));
 
         let other_set = ScanFilters { sets: vec!["hob".into()], ..hob.clone() };
@@ -175,6 +202,10 @@ mod tests {
             ..hob.clone()
         };
         assert!(!hob.same_as(&no_promos));
+        let foil = ScanFilters { only_finish: Some("foil".into()), ..hob.clone() };
+        assert!(!hob.same_as(&foil));
+        let any_finish = ScanFilters { only_finish: None, ..hob.clone() };
+        assert!(!hob.same_as(&any_finish));
         assert!(!hob.same_as(&ScanFilters::default()));
     }
 
@@ -185,12 +216,12 @@ mod tests {
             sets: vec!["HOB".into()],
             ..Default::default()
         };
-        assert!(by_set.permits(&undated, false));
+        assert!(by_set.permits(&undated, false, &[]));
         let by_date = ScanFilters {
             released_to: Some("2030-01-01".into()),
             ..Default::default()
         };
-        assert!(!by_date.permits(&undated, false));
+        assert!(!by_date.permits(&undated, false, &[]));
     }
 
     #[test]
@@ -201,21 +232,49 @@ mod tests {
             "the toggle alone is a filter — it must leave the fast path"
         );
         let ltr = label("ltr", "2023-06-23");
-        assert!(f.permits(&ltr, false));
-        assert!(!f.permits(&ltr, true));
+        assert!(f.permits(&ltr, false, &[]));
+        assert!(!f.permits(&ltr, true, &[]));
         // With a set: a promo of an admitted set is still out, a non-promo of another set too.
         let both = ScanFilters {
             sets: vec!["ltr".into()],
             ..f.clone()
         };
-        assert!(both.permits(&ltr, false));
-        assert!(!both.permits(&ltr, true));
-        assert!(!both.permits(&label("hob", "2023-06-23"), false));
+        assert!(both.permits(&ltr, false, &[]));
+        assert!(!both.permits(&ltr, true, &[]));
+        assert!(!both.permits(&label("hob", "2023-06-23"), false, &[]));
         // Off, a promo is any printing.
         assert!(ScanFilters {
             exclude_promos: false,
             ..both
         }
-        .permits(&ltr, true));
+        .permits(&ltr, true, &[]));
+    }
+
+    #[test]
+    fn a_finish_leaves_out_the_printings_not_made_in_it() {
+        // Issue #1688: TRK 404 and TRK 528 share their art and their markings, and 528 is made
+        // in foil alone. Under nonfoil it is no answer for the card in the reader's hand.
+        let f: ScanFilters = serde_json::from_str(r#"{"only_finish":"nonfoil"}"#).expect("parse");
+        assert!(!f.is_empty(), "the switch alone is a filter — it must leave the fast path");
+        let both = ["nonfoil".to_string(), "foil".to_string()];
+        let foil_only = ["foil".to_string()];
+        let (trk404, trk528) = (label("trk", "2025-11-14"), label("trk", "2025-11-14"));
+        assert!(f.permits(&trk404, false, &both));
+        assert!(!f.permits(&trk528, false, &foil_only));
+        assert!(!f.permits(&trk528, false, &["etched".to_string()]));
+        // A printing the corpus said nothing about is not shown to fail.
+        assert!(f.permits(&trk528, false, &[]));
+        // Spelled any way, it is the same finish; a blank is none.
+        let shouted = ScanFilters { only_finish: Some(" FOIL ".into()), ..Default::default() };
+        assert!(shouted.permits(&trk528, false, &foil_only));
+        assert!(!shouted.permits(&trk404, false, &["nonfoil".to_string()]));
+        let blank = ScanFilters { only_finish: Some("  ".into()), ..Default::default() };
+        assert!(blank.is_empty());
+        assert!(blank.permits(&trk528, false, &foil_only));
+        // It narrows alongside the rest rather than in place of it.
+        let with_promos = ScanFilters { exclude_promos: true, ..f.clone() };
+        assert!(!with_promos.permits(&trk404, true, &both));
+        let with_set = ScanFilters { sets: vec!["ltr".into()], ..f };
+        assert!(!with_set.permits(&trk404, false, &both));
     }
 }

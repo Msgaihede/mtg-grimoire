@@ -6,7 +6,9 @@ import {
   CONTINUOUS,
   filtering,
   filterSummary,
+  finishFollowing,
   HOLD_NOTE,
+  matchFinishNote,
   HOLD_TITLE,
   matchStrip,
   NO_FILTERS,
@@ -239,6 +241,14 @@ describe("filterSummary", () => {
     expect(filterSummary({ ...base, exclude_promos: false })).toBe("HOB · from 2023-06-23");
     expect(filterSummary(base)).toBe("HOB · from 2023-06-23");
   });
+
+  it("says a matched finish after the promos, and nothing of a finish not matched", () => {
+    expect(filterSummary({ ...NO_FILTERS, only_finish: "nonfoil" })).toBe("Any set · nonfoil only");
+    expect(
+      filterSummary({ ...NO_FILTERS, sets: ["trk"], exclude_promos: true, only_finish: "foil" }),
+    ).toBe("TRK · no promos · foil only");
+    expect(filterSummary({ ...NO_FILTERS, only_finish: null })).toBe("Any set");
+  });
 });
 
 describe("filtering", () => {
@@ -248,6 +258,48 @@ describe("filtering", () => {
     expect(filtering({ ...NO_FILTERS, exclude_promos: true })).toBe(true);
     expect(filtering({ ...NO_FILTERS, sets: ["hob"] })).toBe(true);
     expect(filtering({ ...NO_FILTERS, released_to: "2024-12-31" })).toBe(true);
+    expect(filtering({ ...NO_FILTERS, only_finish: "nonfoil" })).toBe(true);
+    expect(filtering({ ...NO_FILTERS, only_finish: null })).toBe(false);
+  });
+});
+
+/**
+ * **The finish switch is the Finish choice's and nothing else's** (issue #1688): on, it moves with
+ * the choice; under Detect, which is no finish, it goes off; off, no choice turns it on — leaving
+ * out a finish is something the reader asks for, never what the tray's default does on its own.
+ */
+describe("finishFollowing", () => {
+  const on = { ...NO_FILTERS, sets: ["trk"], only_finish: "nonfoil" as const };
+
+  it("moves a switch that is on with the Finish choice, keeping the other filters", () => {
+    expect(finishFollowing(on, "foil")).toEqual({ ...on, only_finish: "foil" });
+    expect(finishFollowing(on, "etched")).toEqual({ ...on, only_finish: "etched" });
+  });
+
+  it("turns the switch off under Detect", () => {
+    expect(finishFollowing(on, "detect")).toEqual({ ...on, only_finish: null });
+  });
+
+  it("hands the same filters back when nothing moves, so nothing is pushed", () => {
+    expect(finishFollowing(on, "nonfoil")).toBe(on);
+    for (const finish of ["detect", "nonfoil", "foil", "etched"] as const) {
+      expect(finishFollowing(NO_FILTERS, finish)).toBe(NO_FILTERS);
+      const unsaid = { sets: [], released_from: null, released_to: null };
+      expect(finishFollowing(unsaid, finish)).toBe(unsaid);
+    }
+  });
+});
+
+describe("matchFinishNote", () => {
+  it("names the finish matched, and where to choose one under Detect", () => {
+    expect(matchFinishNote("nonfoil")).toBe(
+      "Never match a printing not made in nonfoil, like a foil-only one. Uses your Finish choice.",
+    );
+    expect(matchFinishNote("foil")).toMatch(/not made in foil, like a nonfoil-only one/);
+    expect(matchFinishNote("etched")).toMatch(/not made in etched/);
+    expect(matchFinishNote("detect")).toBe(
+      "Pick Nonfoil, Foil or Etched under Finish to use this.",
+    );
   });
 });
 

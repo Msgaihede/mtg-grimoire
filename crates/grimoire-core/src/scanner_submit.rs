@@ -1199,6 +1199,7 @@ mod tests {
             released_from: Some("  ".to_owned()),
             released_to: Some("2022-07-08".to_owned()),
             exclude_promos: false,
+            only_finish: None,
         };
         assert_eq!(
             labelled(&state, &sent).expect("a label").scanner.filters,
@@ -1294,6 +1295,7 @@ mod tests {
                 released_from: Some("1993-08-05".to_owned()),
                 released_to: Some("2026-10-11".to_owned()),
                 exclude_promos: false,
+                only_finish: None,
             }),
         };
         label.run = vec![tidy_frame(&worst, widest); MAX_RUN_FRAMES];
