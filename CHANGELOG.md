@@ -30,6 +30,21 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.71.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.70.0...v0.71.0) (2026-11-16)
+
+
+### Features
+
+* **cards:** redraw the foils for [#1689](https://github.com/Msgaihede/mtg-grimoire/issues/1689) and keep a deck of 100+ foils smooth ([#1693](https://github.com/Msgaihede/mtg-grimoire/issues/1693)) ([ec30227](https://github.com/Msgaihede/mtg-grimoire/commit/ec30227fb023454ba4eb8a4fad686ce35b7fadcf))
+* **cards:** redraw the foils for issue [#1689](https://github.com/Msgaihede/mtg-grimoire/issues/1689) and keep a deck of 100+ foils smooth ([ec30227](https://github.com/Msgaihede/mtg-grimoire/commit/ec30227fb023454ba4eb8a4fad686ce35b7fadcf))
+* **scanner:** Match finish leaves out printings not made in your finish ([#1697](https://github.com/Msgaihede/mtg-grimoire/issues/1697)) ([4f5c4b8](https://github.com/Msgaihede/mtg-grimoire/commit/4f5c4b837b6edf12db3cd5a0c397ae8da223335e)), closes [#1688](https://github.com/Msgaihede/mtg-grimoire/issues/1688)
+
+
+### Bug Fixes
+
+* **cards:** name the kind of foil on "Set as" / "View as" ([#1690](https://github.com/Msgaihede/mtg-grimoire/issues/1690)) ([#1695](https://github.com/Msgaihede/mtg-grimoire/issues/1695)) ([2b4e42f](https://github.com/Msgaihede/mtg-grimoire/commit/2b4e42f5abc4182048d774283e79ddeef62e3b3a))
+* **home:** measure every set in Set completion and bring its settings up to the other widgets ([#1696](https://github.com/Msgaihede/mtg-grimoire/issues/1696)) ([aa2d1b0](https://github.com/Msgaihede/mtg-grimoire/commit/aa2d1b09a53e42ce04cf7c84d75e6607650dabb0)), closes [#1692](https://github.com/Msgaihede/mtg-grimoire/issues/1692)
+
 ## [0.70.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.69.0...v0.70.0) (2026-11-15)
 
 
