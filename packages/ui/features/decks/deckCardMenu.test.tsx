@@ -311,6 +311,42 @@ describe("buildDeckCardMenu", () => {
     });
 
     /**
+     * Issue #1690: a Surge Foil reads `Set as surge foil`, a Mana Foil `Set as mana foil` — the
+     * word the card's mark, its price cell and the card modal's own button say. Etched stays
+     * etched, and a trait (true of every finish) never names a row.
+     */
+    it("names the kind of foil where the printing has one", () => {
+      const setFinish = vi.fn();
+      const surge = bolt({ finishes: BOTH, finish: null, promoTypes: '["surgefoil"]' });
+      const row = finishRow(buildDeckCardMenu(surge, deps({ setFinish })));
+      expect(row.label).toBe("Set as surge foil");
+      if (row.kind === "action") row.onSelect();
+      expect(setFinish).toHaveBeenCalledWith(surge, "foil");
+
+      const labelsOf = (c: DeckCard) =>
+        buildDeckCardMenu(c, deps())
+          .filter((i): i is MenuAction => i.kind === "action" && /^finish(-|$)/.test(i.id))
+          .map((r) => r.label);
+      const three = '["nonfoil","foil","etched"]';
+      expect(labelsOf(bolt({ finishes: three, finish: null, promoTypes: '["manafoil"]' }))).toEqual(
+        ["Set as mana foil", "Set as etched"],
+      );
+      // The way back from the foil is still `regular`, whatever kind of foil it was.
+      expect(
+        labelsOf(bolt({ finishes: three, finish: "foil", promoTypes: '["manafoil"]' })),
+      ).toEqual(["Set as regular", "Set as etched"]);
+      expect(
+        labelsOf(bolt({ finishes: BOTH, finish: null, promoTypes: '["serialized"]' })),
+      ).toEqual(["Set as foil"]);
+      // A foil-only Surge Foil greys its one row in its own word.
+      expect(
+        finishRow(
+          buildDeckCardMenu(bolt({ finishes: '["foil"]', promoTypes: '["surgefoil"]' }), deps()),
+        ).label,
+      ).toBe("Set as surge foil");
+    });
+
+    /**
      * **Greyed, and silent.** This menu's own precedent (`zoneItem`) rather than
      * `cardMenu.tsx`'s greyed-with-a-reason: a menu row is sized by its widest content, so a
      * sentence on a row that greys on a large minority of cards would set the width of every
@@ -1608,6 +1644,24 @@ describe("the menu's receipts", () => {
     await waitFor(() =>
       expect(notices()[0]).toMatchObject({
         title: "Moved “Lightning Bolt” to “Recursion”",
+        tone: "success",
+      }),
+    );
+  });
+
+  it("says the kind of foil a finish press set (issue #1690)", async () => {
+    const setFinish = vi.fn(() => Promise.resolve());
+    const surge = bolt({
+      finishes: '["nonfoil","foil"]',
+      finish: null,
+      promoTypes: '["surgefoil"]',
+    });
+    (
+      find(buildDeckCardMenu(surge, deps({ setFinish })), "Set as surge foil") as MenuAction
+    ).onSelect();
+    await waitFor(() =>
+      expect(notices()[0]).toMatchObject({
+        title: "Set “Lightning Bolt” as surge foil",
         tone: "success",
       }),
     );

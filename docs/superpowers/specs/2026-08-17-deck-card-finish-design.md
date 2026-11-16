@@ -209,6 +209,13 @@ one answer is not a choice):
 > per finish the printing has, the one on screen `aria-pressed`, and a right-click on the modal's
 > picture offers the same choices as menu rows — every finish but the one on screen, beside
 > `Flip card` (`cardMenu.tsx`'s `finishPick`; the rules shared in `features/card/finishChoice.ts`).
+>
+> **The foil row names its kind (issue #1690, 2026-11-16).** Wherever one of these rows or buttons
+> names the foil copy of a printing whose `promo_types` carry a foil word, it says that word:
+> `Set as surge foil`, `View as mana foil` — the word the price cell under the modal's art already
+> said. `finishChoiceWord` is the one rule for the modal's buttons, its right-click rows and the
+> deck card menu (label and receipt): a foil word only, never a trait such as Serialized, and on
+> the foil copy only — etched stays `etched` and the plain copy `regular` / `nonfoil`.
 
 **Greyed silently is a decision, not an omission.** `zoneItem` in this same file is already the
 menu's greyed-without-a-reason row, and its site says why; a reason string on a row that is greyed

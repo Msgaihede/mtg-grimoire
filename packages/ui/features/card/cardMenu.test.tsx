@@ -334,7 +334,11 @@ describe("buildCardMenu", () => {
     it("offers every finish but the one on screen, in the printing's own order", () => {
       const pick = vi.fn();
       const items = buildCardMenu(
-        { ...BOLT, finishes: THREE, finishPick: { shown: "foil", writes: false, pick } },
+        {
+          ...BOLT,
+          finishes: THREE,
+          finishPick: { shown: "foil", writes: false, promoTypes: null, pick },
+        },
         deps(),
       );
       expect(finishIds(items)).toEqual(["View as nonfoil", "View as etched"]);
@@ -348,10 +352,31 @@ describe("buildCardMenu", () => {
 
     it("says Set as where the press writes, and regular for the plain copy", () => {
       const items = buildCardMenu(
-        { ...BOLT, finishes: THREE, finishPick: { shown: "etched", writes: true, pick: vi.fn() } },
+        {
+          ...BOLT,
+          finishes: THREE,
+          finishPick: { shown: "etched", writes: true, promoTypes: null, pick: vi.fn() },
+        },
         deps(),
       );
       expect(finishIds(items)).toEqual(["Set as regular", "Set as foil"]);
+    });
+
+    /** Issue #1690: the foil row names the kind of foil the printing is, as the buttons do. */
+    it("names the kind of foil where the printing has one", () => {
+      const pickOf = (writes: boolean) => ({
+        shown: "nonfoil" as const,
+        writes,
+        promoTypes: '["manafoil"]',
+        pick: vi.fn(),
+      });
+      const viewing = buildCardMenu(
+        { ...BOLT, finishes: THREE, finishPick: pickOf(false) },
+        deps(),
+      );
+      expect(finishIds(viewing)).toEqual(["View as mana foil", "View as etched"]);
+      const writing = buildCardMenu({ ...BOLT, finishes: THREE, finishPick: pickOf(true) }, deps());
+      expect(finishIds(writing)).toEqual(["Set as mana foil", "Set as etched"]);
     });
 
     it("sits under Flip card where the surface offers both", () => {
@@ -360,7 +385,7 @@ describe("buildCardMenu", () => {
           ...BOLT,
           flip: true,
           finishes: '["nonfoil","foil"]',
-          finishPick: { shown: "nonfoil", writes: false, pick: vi.fn() },
+          finishPick: { shown: "nonfoil", writes: false, promoTypes: null, pick: vi.fn() },
         },
         deps(),
       );
@@ -369,7 +394,10 @@ describe("buildCardMenu", () => {
 
     it("draws nothing — not even its rule — on a printing with one finish", () => {
       const items = buildCardMenu(
-        { ...BOLT, finishPick: { shown: "nonfoil", writes: false, pick: vi.fn() } },
+        {
+          ...BOLT,
+          finishPick: { shown: "nonfoil", writes: false, promoTypes: null, pick: vi.fn() },
+        },
         deps(),
       );
       expect(finishIds(items)).toEqual([]);

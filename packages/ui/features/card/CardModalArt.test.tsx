@@ -153,6 +153,27 @@ describe("CardModalArt", () => {
     expect(screen.getByRole("button", { name: "Set as foil" })).toBeInTheDocument();
   });
 
+  it("names the kind of foil on its button, the word the price cell under it says (issue #1690)", () => {
+    // The report: the cell read `Surge Foil  $1.33` while the button over it said `Set as foil`.
+    const surge = card({
+      promoTypes: '["surgefoil"]',
+      finishes: '["nonfoil","foil"]',
+      finishPrices: { nonfoil: 0.23, foil: 1.33, etched: null },
+    });
+    const { unmount } = render(<CardModalArt card={surge} {...rest} />);
+    const buttons = () =>
+      Array.from(
+        screen.getByRole("group", { name: "Finish" }).querySelectorAll("button"),
+        (b) => b.textContent,
+      );
+    expect(buttons()).toEqual(["View as nonfoil", "View as surge foil"]);
+    expect(screen.getByText("Surge Foil")).toBeInTheDocument();
+    unmount();
+
+    render(<CardModalArt card={surge} {...rest} deckRow={{ finish: null }} />);
+    expect(buttons()).toEqual(["Set as regular", "Set as surge foil"]);
+  });
+
   it("reports the press with no deck row behind it, and reports the way back too", async () => {
     // **`onPickFinish` fires on every press, and the words above are about what the press *does*
     // rather than about whether the host hears it.** The host reads this callback for two
