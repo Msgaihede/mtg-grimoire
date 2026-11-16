@@ -77,8 +77,10 @@ impl LabelFilters {
             released_from: self.from.clone(),
             released_to: self.to.clone(),
             // A label does not carry the promo toggle (the scan inbox keeps what it checks,
-            // and it checks no such field), so a replay admits promos.
+            // and it checks no such field), so a replay admits promos — and, for the same
+            // reason, the finish switch (issue #1688), so it admits every finish.
             exclude_promos: false,
+            only_finish: None,
         }
     }
 }

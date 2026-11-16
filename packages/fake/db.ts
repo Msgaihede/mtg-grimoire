@@ -28875,7 +28875,8 @@ export function scannerHandlers(db: FakeDb) {
         f.sets.length === 0 &&
         f.released_from === null &&
         f.released_to === null &&
-        f.exclude_promos !== true;
+        f.exclude_promos !== true &&
+        !f.only_finish;
       if (empty) return;
       if (db.fault === "scannerMissing") throw refuse(FILTERS_NEED_NAMES);
       if (f.sets.some((s) => s.toLowerCase() === "zzz")) throw refuse(NO_PRINTING_MATCHES);

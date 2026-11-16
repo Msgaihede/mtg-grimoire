@@ -29,6 +29,8 @@ import {
   CONTINUOUS_HINT,
   filtering,
   filterSummary,
+  MATCH_FINISH,
+  matchFinishNote,
   NO_FILTERS,
   POINT_AND_SHOOT,
   POINT_AND_SHOOT_CLICK_HINT,
@@ -208,7 +210,12 @@ export function ScanDock({
           className={bar ? undefined : "ml-auto @max-[34.125rem]/dock:order-last"}
           panelClassName="w-72"
         >
-          <FiltersBody filters={filters} onFilters={onFilters} filterError={filterError} />
+          <FiltersBody
+            filters={filters}
+            onFilters={onFilters}
+            filterError={filterError}
+            finish={finish}
+          />
         </DockPopover>
 
         {!bar && <span aria-hidden="true" className="h-2.5 basis-full" />}
@@ -589,7 +596,8 @@ function DateField({
 }
 
 /**
- * What the scan is narrowed to: sets, a release window, and the way back to everything.
+ * What the scan is narrowed to: sets, promos, the finish, a release window, and the way back to
+ * everything.
  *
  * **Every change is sent as it is made** — a set ticked, a date settled ({@link DateField}) —
  * rather than held for an Apply. The camera is running while this is open, so the next frame the reader holds up should
@@ -603,10 +611,13 @@ function FiltersBody({
   filters,
   onFilters,
   filterError,
+  finish,
 }: {
   filters: ScanFilters;
   onFilters: (f: ScanFilters) => void;
   filterError: string | null;
+  /** The Finish choice — what *Match finish* matches, and nothing under `Detect`. */
+  finish: ScannerFinishPref;
 }) {
   const id = useId();
   const toggle = (code: string) =>
@@ -617,6 +628,10 @@ function FiltersBody({
         : [...filters.sets, code],
     });
   const skipPromos = filters.exclude_promos === true;
+  const matchFinish = Boolean(filters.only_finish);
+  // Out of reach under Detect, which is no finish — and never while on, so it can always be
+  // turned off. Said in its note, not a tooltip.
+  const finishOutOfReach = finish === DETECT && !matchFinish;
 
   return (
     <div className="flex flex-col gap-3">
@@ -650,6 +665,39 @@ function FiltersBody({
         </button>
         <p id={`${id}-promos`} className="text-xs leading-snug text-dim">
           {SKIP_PROMOS_NOTE}
+        </p>
+      </div>
+
+      {/* Beside *Skip promos*, the owner's call on issue #1688: a printing made only in another
+          finish is the other one a card is mistaken for, and leaving it out is a choice the
+          reader makes — never what the Finish choice does on its own. */}
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={matchFinish}
+          aria-disabled={finishOutOfReach || undefined}
+          aria-describedby={`${id}-finish`}
+          onClick={() => {
+            if (finishOutOfReach) return;
+            onFilters({
+              ...filters,
+              only_finish: matchFinish || finish === "detect" ? null : finish,
+            });
+          }}
+          className={cn(
+            FILTER_CONTROL,
+            "inline-flex items-center gap-1.5 self-start px-2.5",
+            FOCUS,
+            filterChipState(matchFinish, finishOutOfReach),
+          )}
+        >
+          {matchFinish && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
+          {MATCH_FINISH}
+        </button>
+        <p id={`${id}-finish`} className="text-xs leading-snug text-dim">
+          {/* What is in force when on — a refused change of finish leaves the old one there. */}
+          {matchFinishNote(filters.only_finish ?? finish)}
         </p>
       </div>
 

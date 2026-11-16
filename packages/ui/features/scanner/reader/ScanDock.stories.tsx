@@ -239,6 +239,29 @@ export const FilterRefused: Story = {
 };
 
 /**
+ * *Match finish* beside *Skip promos* (issue #1688): with the Finish choice on Nonfoil, the switch
+ * leaves out every printing not made in nonfoil — TRK 528, foil only, beside TRK 404 — and the
+ * trigger says so. Off until it is pressed: the Finish choice alone never narrows the scan.
+ */
+export const MatchFinish: Story = {
+  args: {
+    filters: { sets: ["trk"], released_from: null, released_to: null },
+    finish: "nonfoil",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Filters: TRK" }));
+    const toggle = await canvas.findByRole("switch", { name: "Match finish" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(toggle);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(
+      canvas.getByRole("button", { name: "Filters: TRK · nonfoil only" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
  * Filters out of reach, with the reason as the trigger's tooltip — still in the tab order, still
  * reading what it would narrow to, and refusing the press rather than hiding.
  */

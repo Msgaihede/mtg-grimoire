@@ -362,8 +362,8 @@ rung and `unknown` are the whole rule.
 
 ## 6. Filters and tokens
 
-**Sets, a release-date range and promos, and nothing else.**
-`filters::ScanFilters { sets, released_from, released_to, exclude_promos }`; set codes compare
+**Sets, a release-date range, promos and one finish, and nothing else.**
+`filters::ScanFilters { sets, released_from, released_to, exclude_promos, only_finish }`; set codes compare
 case-insensitively, dates as `YYYY-MM-DD` strings inclusive at both ends. **A blank string is no
 bound** — a cleared HTML date input sends `""`, and every date is `>= ""` while none is `<= ""`. A
 printing with no release date fails any date bound. **Language is absent rather than
@@ -375,6 +375,17 @@ printing's language is not something its picture says.
 promo packs, buy-a-box. The reference keeps the promos as a set beside the labels
 (`Reference::is_promo`), not a flag on every label. Both faces draw it as a *Skip promos* switch
 under the set picker. A sent scan does not carry it, so a replay admits promos.
+
+**`only_finish` leaves out every printing the corpus says is not made in that finish** (issue
+#1688): under `nonfoil`, the foil-only printing that shares its art and markings with the one in
+the reader's hand (TRK 528 beside TRK 404). The mask reads `Reference::finishes_of`; a printing
+whose finishes the corpus did not say passes. **It is a switch the reader turns on, never what the
+Finish choice does by itself** — the owner's call on the issue: a reader filing every card as
+nonfoil must still be able to scan a foil-only printing. Both faces draw it as *Match finish*,
+beside *Skip promos*, and it always holds the Finish choice: `useScannerPrefs`' `update` moves it
+with every change of finish (`readerText.finishFollowing`) and pushes the change like any filter,
+and under `detect`, which is no finish, it turns off and is refused (`aria-disabled`) with a note
+saying where to choose one. A sent scan does not carry it either, so a replay admits every finish.
 
 **Tokens are left out of every scan by default — the session's rule, not a filter** (issue #1323).
 A reader sorting a collection is not sorting its tokens, and a token that shares a card's name or

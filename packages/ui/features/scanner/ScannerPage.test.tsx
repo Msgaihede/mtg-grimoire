@@ -2526,6 +2526,7 @@ describe("ScannerPage sending a scan", () => {
         released_from: "2020-01-01",
         released_to: null,
         exclude_promos: false,
+        only_finish: null,
       };
       expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(2);
       expect(ipc.scannerSetFilters).toHaveBeenLastCalledWith(pending);
@@ -2584,6 +2585,7 @@ describe("ScannerPage sending a scan", () => {
         released_from: "2020-01-01",
         released_to: null,
         exclude_promos: false,
+        only_finish: null,
       };
       await waitFor(() =>
         expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith(

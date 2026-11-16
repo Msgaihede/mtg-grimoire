@@ -188,6 +188,90 @@ describe("useScannerPrefs", () => {
   });
 
   /**
+   * **Match finish follows the Finish choice** (issue #1688). On, a change of finish is a change
+   * of filters: pushed to the session, so the next frame is read under it, and stored once taken.
+   */
+  it("moves a matched finish with the Finish choice and pushes it", async () => {
+    const matching: ScanFilters = { ...HOB, only_finish: "nonfoil" };
+    scannerPrefs.mockResolvedValue({
+      ...DEFAULT_SCANNER_PREFS,
+      filters: matching,
+      finish: "nonfoil",
+    });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    act(() => result.current.update({ finish: "foil" }));
+    const foil: ScanFilters = { ...HOB, only_finish: "foil" };
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(foil);
+    await waitFor(() => expect(result.current.prefs.filters).toEqual(foil));
+    await waitFor(() =>
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        filters: foil,
+        finish: "foil",
+      }),
+    );
+    expect(result.current.inForce).toEqual(foil);
+
+    // Detect is no finish: the switch goes off, and the session searches every finish again.
+    act(() => result.current.update({ finish: "detect" }));
+    const off: ScanFilters = { ...HOB, only_finish: null };
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(off);
+    await waitFor(() => expect(result.current.inForce).toEqual(off));
+    expect(result.current.prefs.finish).toBe("detect");
+  });
+
+  it("pushes nothing for a change of finish while Match finish is off", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const pushes = scannerSetFilters.mock.calls.length;
+
+    act(() => result.current.update({ finish: "nonfoil" }));
+    await waitFor(() =>
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, finish: "nonfoil" }),
+    );
+    expect(scannerSetFilters).toHaveBeenCalledTimes(pushes);
+    expect(result.current.prefs.filters).toBe(HOB);
+  });
+
+  /**
+   * A refused narrowing keeps the finish filter in force — the session's — but the Finish choice
+   * is the reader's alone and is stored at once, so a later launch still files cards as asked.
+   */
+  it("stores a change of finish whose narrowing the session refuses, beside the filters in force", async () => {
+    const matching: ScanFilters = { ...HOB, only_finish: "nonfoil" };
+    scannerPrefs.mockResolvedValue({
+      ...DEFAULT_SCANNER_PREFS,
+      filters: matching,
+      finish: "nonfoil",
+    });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    scannerSetFilters.mockRejectedValueOnce(REFUSED);
+    act(() => result.current.update({ finish: "etched" }));
+    await waitFor(() => expect(result.current.filterError).toBe(REFUSED));
+    expect(result.current.prefs.filters).toEqual(matching);
+    expect(result.current.prefs.finish).toBe("etched");
+    expect(setScannerPrefs).toHaveBeenLastCalledWith({
+      ...DEFAULT_SCANNER_PREFS,
+      filters: matching,
+      finish: "etched",
+    });
+    // An unrelated change after it pushes nothing: only a change of finish or filters moves one.
+    const pushes = scannerSetFilters.mock.calls.length;
+    act(() => result.current.update({ condition: "NM" }));
+    await waitFor(() =>
+      expect(setScannerPrefs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ condition: "NM" }),
+      ),
+    );
+    expect(scannerSetFilters).toHaveBeenCalledTimes(pushes);
+  });
+
+  /**
    * **`inForce` is what the session is searching under, which is not always what is drawn.**
    * `prefs.filters` is the popover's: it moves when the reader moves it. `inForce` moves only
    * when the session accepts — so a frame being judged is judged under it, and a scan that is

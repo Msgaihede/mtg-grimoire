@@ -295,6 +295,7 @@ describe("ScanDock", () => {
       released_from: null,
       released_to: null,
       exclude_promos: false,
+      only_finish: null,
     });
     expect(panel).toBeInTheDocument();
   });
@@ -321,6 +322,70 @@ describe("ScanDock", () => {
     );
     await user.click(screen.getByRole("switch", { name: "Skip promos" }));
     expect(onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: false });
+  });
+
+  /**
+   * Issue #1688: the reader files every card as nonfoil, and TRK 528 — foil only, the same art as
+   * TRK 404 — kept being offered. The switch beside *Skip promos* leaves it out, matching the
+   * Finish choice; it is never on by itself, so a foil-only card can still be scanned.
+   */
+  it("matches the Finish choice beside the promo switch, and says so on the dock", async () => {
+    const user = userEvent.setup();
+    const onFilters = vi.fn();
+    const filters = { sets: ["trk"], released_from: null, released_to: null };
+    const { rerender } = wrap(<ScanDock {...props({ onFilters, filters, finish: "nonfoil" })} />);
+    await user.click(screen.getByRole("button", { name: /^Filters:/ }));
+    const toggle = await screen.findByRole("switch", { name: "Match finish" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).not.toHaveAttribute("aria-disabled");
+    expect(toggle).toHaveAccessibleDescription(/not made in nonfoil, like a foil-only one/);
+    await user.click(toggle);
+    expect(onFilters).toHaveBeenLastCalledWith({ ...filters, only_finish: "nonfoil" });
+
+    rerender(
+      <ScanDock
+        {...props({
+          onFilters,
+          filters: { ...filters, only_finish: "nonfoil" },
+          finish: "nonfoil",
+        })}
+      />,
+    );
+    expect(screen.getByRole("switch", { name: "Match finish" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /^Filters:/ })).toHaveAccessibleName(
+      /TRK · nonfoil only/,
+    );
+    await user.click(screen.getByRole("switch", { name: "Match finish" }));
+    expect(onFilters).toHaveBeenLastCalledWith({ ...filters, only_finish: null });
+  });
+
+  it("refuses the finish switch under Detect in words, and still lets it be turned off", async () => {
+    const user = userEvent.setup();
+    const onFilters = vi.fn();
+    const filters = { sets: [], released_from: null, released_to: null };
+    const { rerender } = wrap(<ScanDock {...props({ onFilters, filters, finish: "detect" })} />);
+    await user.click(screen.getByRole("button", { name: /^Filters:/ }));
+    const toggle = await screen.findByRole("switch", { name: "Match finish" });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAccessibleDescription(/Pick Nonfoil, Foil or Etched under Finish/);
+    await user.click(toggle);
+    expect(onFilters).not.toHaveBeenCalled();
+
+    // On from a stored row (a refused change of finish can leave it so): it says what it matches,
+    // and a press turns it off.
+    rerender(
+      <ScanDock
+        {...props({ onFilters, filters: { ...filters, only_finish: "foil" }, finish: "detect" })}
+      />,
+    );
+    const on = screen.getByRole("switch", { name: "Match finish" });
+    expect(on).not.toHaveAttribute("aria-disabled");
+    expect(on).toHaveAccessibleDescription(/not made in foil/);
+    await user.click(on);
+    expect(onFilters).toHaveBeenLastCalledWith({ ...filters, only_finish: null });
   });
 
   it("draws the last refusal inside the open popover as an alert", async () => {

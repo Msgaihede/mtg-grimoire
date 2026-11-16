@@ -9,7 +9,13 @@
  * card's name are not that vocabulary: the bar is `barFill`'s number and nothing of how it was
  * reached, which is the one thing this file takes from that one.
  */
-import type { ScanFilters, ScannerChoice, ScannerLabel, ScannerVerdict } from "@/lib/ipc";
+import type {
+  ScanFilters,
+  ScannerChoice,
+  ScannerFinishPref,
+  ScannerLabel,
+  ScannerVerdict,
+} from "@/lib/ipc";
 import { barFill } from "../verdictText";
 
 /**
@@ -59,6 +65,7 @@ export const NO_FILTERS: ScanFilters = {
   released_from: null,
   released_to: null,
   exclude_promos: false,
+  only_finish: null,
 };
 
 /** The promo toggle's name, beside the set picker on both Scanner surfaces. */
@@ -68,6 +75,36 @@ export const SKIP_PROMOS = "Skip promos";
 export const SKIP_PROMOS_NOTE =
   "Never match promo printings: prerelease stamps, promo packs, buy-a-box.";
 
+/**
+ * The finish switch's name, beside *Skip promos* on both Scanner surfaces (issue #1688). One name
+ * whatever the Finish choice is, so the switch a reader turned on is the one they find again; the
+ * note under it says which finish it is matching.
+ */
+export const MATCH_FINISH = "Match finish";
+
+/**
+ * What the finish switch does, under it on both surfaces — **the finish named**, because the
+ * switch is the Finish choice's and moves with it. Under `detect` there is no one finish to match,
+ * and the switch is off and refused; the note says where to choose one.
+ */
+export function matchFinishNote(finish: ScannerFinishPref): string {
+  if (finish === "detect") return "Pick Nonfoil, Foil or Etched under Finish to use this.";
+  const other = finish === "nonfoil" ? "foil" : "nonfoil";
+  return `Never match a printing not made in ${finish}, like a ${other}-only one. Uses your Finish choice.`;
+}
+
+/**
+ * The filters with the finish switch set to follow `finish` — `null`, the switch off, under
+ * `detect`. **What keeps `only_finish` the Finish choice and nothing else**: the switch sets it
+ * through here, and so does every change of the Finish choice while the switch is on
+ * (`useScannerPrefs`' `update`). Filters with the switch off are handed back as they are.
+ */
+export function finishFollowing(filters: ScanFilters, finish: ScannerFinishPref): ScanFilters {
+  if (!filters.only_finish) return filters;
+  const only_finish = finish === "detect" ? null : finish;
+  return only_finish === filters.only_finish ? filters : { ...filters, only_finish };
+}
+
 /** Whether any filter is in force — what lights the desktop's Filters trigger. A cleared date
  *  field reports `""`, which is no bound. */
 export function filtering(filters: ScanFilters): boolean {
@@ -75,7 +112,8 @@ export function filtering(filters: ScanFilters): boolean {
     filters.sets.length > 0 ||
     Boolean(filters.released_from) ||
     Boolean(filters.released_to) ||
-    filters.exclude_promos === true
+    filters.exclude_promos === true ||
+    Boolean(filters.only_finish)
   );
 }
 
@@ -257,7 +295,7 @@ function datesPart(from: string | null, to: string | null): string | null {
 
 /**
  * What the Filters button says: `Any set`, `HOB, LTR`, `HOB · from 2023-06-23`,
- * `3 sets · 2020-01-01 – 2024-12-31`, `Any set · no promos`.
+ * `3 sets · 2020-01-01 – 2024-12-31`, `Any set · no promos`, `Any set · nonfoil only`.
  *
  * **Two codes and then a count**, because the trigger shares a wrapping row with three other
  * controls and a reader scanning a pile rarely narrows to more than a pair; past two, the codes
@@ -269,5 +307,6 @@ export function filterSummary(filters: ScanFilters): string {
   const to = filters.released_to === "" ? null : filters.released_to;
   const parts = [setsPart(filters.sets), datesPart(from, to)];
   if (filters.exclude_promos === true) parts.push("no promos");
+  if (filters.only_finish) parts.push(`${filters.only_finish} only`);
   return parts.filter((p) => p !== null).join(" · ");
 }

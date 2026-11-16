@@ -1,8 +1,11 @@
 import { useId, useState } from "react";
 import { Camera, Check, Gauge, ListFilter, Sparkles } from "lucide-react";
+import { FILTER_UNAVAILABLE } from "@grimoire/ui/components/FilterChips";
 import {
   CAMERA_CHOICE_NOTE,
   filterSummary,
+  MATCH_FINISH,
+  matchFinishNote,
   NO_FILTERS,
   SKIP_PROMOS,
   SKIP_PROMOS_NOTE,
@@ -48,7 +51,7 @@ const DATE_FIELD = cn(
  * anchored. Every choice is written as it is pressed, as on the desktop — the camera is running
  * behind the sheet, and the next card should be read under what the sheet says.
  *
- * - **Filters** — the set picker, the promo switch and the release window, sent as they are changed. A refusal from
+ * - **Filters** — the set picker, the promo and finish switches and the release window, sent as they are changed. A refusal from
  *   the session (*No printing matches these filters.*) is said in words under the fields, and the
  *   row itself is refused, with its reason, where the scanner has no card names to filter by.
  * - **Finish** and **Condition** — the tray's two defaults. A finish moves the *next* card; the
@@ -170,7 +173,12 @@ export function OptionsSheet({
       {showing === "filters" && (
         <>
           <SheetBack label="Filters" onBack={back} />
-          <FiltersPage filters={filters} onFilters={onFilters} filterError={filterError} />
+          <FiltersPage
+            filters={filters}
+            onFilters={onFilters}
+            filterError={filterError}
+            finish={finish}
+          />
         </>
       )}
 
@@ -243,7 +251,8 @@ export function OptionsSheet({
 }
 
 /**
- * What the scan is narrowed to: sets, promos, a release window, and the way back to everything.
+ * What the scan is narrowed to: sets, promos, the finish, a release window, and the way back to
+ * everything.
  *
  * **Every change is sent as it is made** — the desktop popover's rule and its reason: the camera
  * is running while this is open. **No language**, for the desktop's reason too: the bundle holds
@@ -253,10 +262,13 @@ function FiltersPage({
   filters,
   onFilters,
   filterError,
+  finish,
 }: {
   filters: ScanFilters;
   onFilters: (filters: ScanFilters) => void;
   filterError: string | null;
+  /** The Finish choice — what *Match finish* matches, and nothing under `Detect`. */
+  finish: ScannerFinishPref;
 }) {
   const id = useId();
   const toggle = (code: string) =>
@@ -269,6 +281,9 @@ function FiltersPage({
   // A cleared date field reports `""`; the session's word for "no bound" is `null`.
   const dateOf = (raw: string): string | null => (raw === "" ? null : raw);
   const skipPromos = filters.exclude_promos === true;
+  // The desktop popover's switch and its rule: out of reach under Detect unless it is on.
+  const matchFinish = Boolean(filters.only_finish);
+  const finishOutOfReach = finish === DETECT && !matchFinish;
 
   return (
     <div className="flex flex-col gap-4 px-4 pt-3 pb-4">
@@ -302,6 +317,37 @@ function FiltersPage({
         </button>
         <p id={`${id}-promos`} className="text-xs leading-snug text-dim">
           {SKIP_PROMOS_NOTE}
+        </p>
+      </div>
+
+      {/* Beside *Skip promos*, as the desktop popover has it (issue #1688), at the touch floor. */}
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={matchFinish}
+          aria-disabled={finishOutOfReach || undefined}
+          aria-describedby={`${id}-finish`}
+          onClick={() => {
+            if (finishOutOfReach) return;
+            onFilters({
+              ...filters,
+              only_finish: matchFinish || finish === "detect" ? null : finish,
+            });
+          }}
+          className={cn(
+            "inline-flex h-11 items-center gap-2 self-start rounded-md border px-4 text-sm",
+            matchFinish ? "border-accent text-accent" : "border-border text-text",
+            PRESS,
+            FOCUS,
+            finishOutOfReach && FILTER_UNAVAILABLE,
+          )}
+        >
+          {matchFinish && <Check className="size-4 shrink-0" aria-hidden="true" />}
+          {MATCH_FINISH}
+        </button>
+        <p id={`${id}-finish`} className="text-xs leading-snug text-dim">
+          {matchFinishNote(filters.only_finish ?? finish)}
         </p>
       </div>
 
