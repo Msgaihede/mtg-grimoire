@@ -66,7 +66,11 @@ vi.mock("./widgets/ValueHistoryWidget", () => ({
 }));
 vi.mock("./widgets/WishlistValueWidget", () => ({ WishlistValueWidget: stubs.body }));
 vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body }));
-vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
+vi.mock("./widgets/SetCompletionWidget", () => ({
+  SetCompletionWidget: stubs.body,
+  // Its own `Chosen…` set checklist since issue #1692 — a sentence, for the Decks stub's reason.
+  SetCompletionWidgetSettings: () => "the set picker",
+}));
 vi.mock("./widgets/PriceMoversWidget", () => ({
   PriceMoversWidget: stubs.body,
   // The folders and cards behind `Chosen` (issue #906).

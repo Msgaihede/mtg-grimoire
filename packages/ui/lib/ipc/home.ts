@@ -98,9 +98,14 @@ export interface RecentCard {
  *
  * `owned` counts **distinct collector numbers** the collection holds any copy of, in any finish
  * or language, inside `1..=size`. `size` is Scryfall's `printed_size` and is `null` for a set the
- * corpus has no printed size for — a corpus that has not synced since the column arrived, or a
- * set Scryfall publishes none for — in which case `owned` counts every collector number held.
- * Only sets holding at least one owned card are answered.
+ * corpus has no printed size for — **every set Scryfall has released since early 2023**, whose
+ * cards print no denominator, and a corpus that has not synced since the column arrived — in which
+ * case `owned` counts every collector number held.
+ *
+ * `ownedAll` of `total` is the same set measured whole (issue #1692): every distinct collector
+ * number held, verbatim, of every distinct number the corpus holds for the set — variants and
+ * numbers past the printed run included. `total` is known for every answered set and is never
+ * below 1. Only sets holding at least one owned card are answered.
  */
 export interface SetCompletion {
   setCode: string;
@@ -109,6 +114,13 @@ export interface SetCompletion {
   releasedAt: string | null;
   owned: number;
   size: number | null;
+  ownedAll: number;
+  total: number;
+  /** Scryfall's `set_type` (`expansion`, `token`, `promo`, …), or `null` where the corpus's set
+   *  list does not name the set. */
+  setType: string | null;
+  /** Unix seconds of the latest change to any of the reader's copies of this set. */
+  changedAt: number;
 }
 
 /** Which baseline {@link ipc.priceMovers} measures against. `all` is the oldest snapshot kept. */

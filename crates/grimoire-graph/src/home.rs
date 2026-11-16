@@ -245,9 +245,29 @@ impl SetCompletion {
     async fn owned(&self) -> i64 {
         self.0.owned
     }
-    /// The set's printed size, or null when unknown.
+    /// The set's printed size, or null when unknown — which it is for every set Scryfall has
+    /// released since early 2023, whose cards print no denominator.
     async fn size(&self) -> Option<i64> {
         self.0.size
+    }
+    /// Distinct collector numbers held, every number counted as itself — variants and numbers
+    /// past the printed run included. At most `total`.
+    async fn owned_all(&self) -> i64 {
+        self.0.owned_all
+    }
+    /// Every distinct collector number the card data holds for this set: the set whole, variants
+    /// and all. Known for every set, printed size or none.
+    async fn total(&self) -> i64 {
+        self.0.total
+    }
+    /// Scryfall's set type (`expansion`, `core`, `commander`, `token`, `promo`, …), or null where
+    /// the set list does not name the set.
+    async fn set_type(&self) -> Option<&str> {
+        self.0.set_type.as_deref()
+    }
+    /// When any copy of this set was last changed, in Unix seconds.
+    async fn changed_at(&self) -> f64 {
+        self.0.changed_at as f64
     }
 }
 
@@ -965,7 +985,7 @@ mod tests {
             r#"{
               homeLayout { version widgets { id kind x y w h span config } }
               recentCards { cardId name setCode viewedAt }
-              setCompletion { setCode name releasedAt owned size }
+              setCompletion { setCode name releasedAt owned size ownedAll total setType changedAt }
               priceMovers { movers { cardId name setCode setName finish now then delta } since days }
               scoped: priceMovers(window: ALL, direction: up, limit: 5,
                                   scope: { collectionFolders: [0], cards: ["c-bolt"],

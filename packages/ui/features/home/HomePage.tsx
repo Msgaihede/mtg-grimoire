@@ -141,7 +141,7 @@ import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
 import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
 import { PriceMoversWidget, PriceMoversWidgetSettings } from "./widgets/PriceMoversWidget";
 import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
-import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
+import { SetCompletionWidget, SetCompletionWidgetSettings } from "./widgets/SetCompletionWidget";
 import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
 import { ToReviewWidget } from "./widgets/ToReviewWidget";
@@ -300,6 +300,9 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <DeckTodosWidgetSettings widget={widget} onConfig={onConfig} />;
     case "wishlistSavings":
       return <WishlistSavingsWidgetSettings widget={widget} onConfig={onConfig} />;
+    // The sets behind `Which sets → Chosen…` (issue #1692).
+    case "setCompletion":
+      return <SetCompletionWidgetSettings widget={widget} onConfig={onConfig} />;
     // The folders and cards behind `Chosen` (issue #906).
     case "priceMovers":
       return <PriceMoversWidgetSettings widget={widget} onConfig={onConfig} />;

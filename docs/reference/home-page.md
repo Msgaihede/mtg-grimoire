@@ -170,7 +170,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `wishlistValueHistory` | the wishlist's money over time — `valueHistory`'s body over the wishlist's history, its last point the `wishlistValue` figure (§14, *The Wishlist value graph*) | `{ split: total·type·color·set, window: 30d·90d·1y·all, measure: value·change, figures, markers }` |
 | `activity` | recent actions grouped by local calendar day, each day headed by its `+7 / −6` roll-up | `{ limit: 25·50·100, times }` |
 | `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
-| `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
+| `setCompletion` | every set the reader holds a card from, and how much of it, each row opening its set on the Search page (§11, issue #1692) | `{ sort: recent·complete·cards·newest·name, measure: printed·all, scope: all·chosen, setCodes, bars, complete, extras }` |
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
 | `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
 | `deckTodos` | every deck's To-do band gathered: a heading per deck, each of its lists' titles under that, and the to-dos under each title, ticked off in place (§16) | `{ scope: all·chosen, deckIds, order: edited·name·open, done, nested, archived, counts }` |
@@ -559,7 +559,7 @@ Each goes **in the module its data lives in** — `search.rs` is the pattern.
 | `deck_values` | `deck.rs` | `[{ deckId, value, unpriced }]` — every deck, one query |
 | `activity_recent` | `activity.rs` | the union feed |
 | `recent_cards` / `record_recent_card` | `recent_cards.rs` | the cards this device opened, newest first (added with the grid, §11) |
-| `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size }]` (§11) |
+| `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size, ownedAll, total, setType, changedAt }]` (§11) |
 | `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
 | `price_history` | `price_history.rs` | `{ points, now, today }` — one copy's kept snapshots, for the mover popup (§11) |
 | `collection_value_history` | `value_history.rs` | `{ buckets, points, today }` — the collection's value per kept period plus a live point for today, split one way, each point carrying its price-only part (§14) |
@@ -848,7 +848,33 @@ table that holds rows and not one size, so an existing database fills the column
 rather than at the next bulk rotation. **`owned` counts slots, not printings**: a collector number
 counts by its leading digits when it starts with one (`123a` fills 123) and not at all when it does
 not (`★12`), inside `1..=size`, so a set can never read more than complete; with no size known every
-distinct number counts and the widget draws a count with no percentage.
+distinct number counts.
+
+**Every set has a denominator since [issue #1692](https://github.com/Msgaihede/mtg-grimoire/issues/1692).**
+Scryfall stopped publishing `printed_size` with Phyrexia: All Will Be One (February 2023), because
+the cards stopped printing one — on `/sets` of 2026-11-16, 169 of 1,068 sets carried a size and none
+released after `one` did. The widget used to draw such a set as a count with an em dash and no track,
+and sort it **last** under `Nearest complete`, below every row a two-by-two tile has room for — so
+adding a card from any new set changed nothing a reader could see, and adding a showcase or a
+Commander reprint of an older set (numbered past its run: `voc` prints 38 of 188 numbers) changed
+nothing either. The read now also answers the set **whole**: `total`, every distinct collector
+number `cards` holds for the set (variants and every language's numbers included; `idx_cards_set_cn`
+answers it without reading a row), and `ownedAll`, how many of those are held, verbatim. **No main
+run is derived for a set with no size**: where the variants start is a different number in every set
+(`dsk` 302, `blb` 282 with plain cards after it, `fdn` 292), so any rule would be a guess stored as a
+fact. The widget's `Count against` pick reads the two: `Printed set size` takes the printed run where
+there is one and **every printing where there is none** (the row's hint says so), and `Every
+printing` measures every set whole.
+
+The read also answers `setType` (`sets.set_type`) and `changedAt` (the newest `updated_at` among the
+reader's copies of the set). **`Recently changed` is the default order**, so the set a reader just
+added to is the first row; `Nearest complete`, `Most cards`, `Newest set` and `Alphabetical` are the
+other readings, and a config that stored one keeps it. Token, promo, art-series and minigame sets
+are left off until `Token & promo sets` is on; `Complete sets` can take finished sets off the list;
+`Which sets → Chosen…` opens a checklist of the sets held (`setCodes`), `deckCompletion`'s shape —
+a choice the type switch hides is kept, not dropped. From three cells wide a footer says how many
+sets are in scope whenever some are not on the card. A row opens the set on the Search page
+(`showSetInSearch`).
 
 ### Price movers — user schema 45, `price_snapshots`
 

@@ -223,7 +223,8 @@ describe("chipLabel", () => {
     expect(chipLabel(widget("collectionValue", { dimension: "color" }))).toBe("Color");
     expect(chipLabel(widget("decks", { scope: "pinned" }))).toBe("Pinned");
     expect(chipLabel(widget("priceMovers", { window: "all", direction: "up" }))).toBe("All time");
-    expect(chipLabel(widget("setCompletion"))).toBe("Nearest complete");
+    expect(chipLabel(widget("setCompletion"))).toBe("Recently changed");
+    expect(chipLabel(widget("setCompletion", { sort: "complete" }))).toBe("Nearest complete");
   });
 
   it("answers the default's words for a stored word no option carries", () => {
