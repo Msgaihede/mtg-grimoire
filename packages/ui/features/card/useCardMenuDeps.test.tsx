@@ -12,6 +12,8 @@ const collectionSetFolder = vi.hoisted(() => vi.fn());
 const collectionSetFolderMany = vi.hoisted(() => vi.fn());
 const collectionAdd = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+const collectionAddMany = vi.hoisted(() => vi.fn());
+const wishlistAddMany = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -23,6 +25,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionSetFolderMany,
     collectionAdd,
     wishlistAdd,
+    collectionAddMany,
+    wishlistAddMany,
   },
 }));
 
@@ -60,6 +64,11 @@ beforeEach(() => {
   collectionSetFolderMany.mockReset().mockResolvedValue({ changes: [], undoId: 77 });
   collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  // Every item lands, one copy each, with a ticket — what the backend answers for a clean press.
+  const landedAll = (items: readonly unknown[]) =>
+    Promise.resolve({ added: items.length, copies: items.length, refused: [], undoId: 88 });
+  collectionAddMany.mockReset().mockImplementation(landedAll);
+  wishlistAddMany.mockReset().mockImplementation(landedAll);
   resetBulkUndo();
 });
 
@@ -129,9 +138,8 @@ const card = (cardId: string, name: string): CardMenuTarget => ({
 });
 
 /**
- * The adds and the single move — **one toast per press**, the owner's rule: a picked set's
- * `Add 3 cards to → Collection` calls the dep once per card in one tick, and the reader made one
- * press.
+ * The adds and the single move — **one write and one toast per press**: a picked set's
+ * `Add 3 cards to → Collection` reaches the batch dep once, and the reader made one press.
  */
 describe("useCardMenuDeps — receipts", () => {
   async function mounted() {
@@ -151,36 +159,116 @@ describe("useCardMenuDeps — receipts", () => {
     );
   });
 
-  it("says a picked set's add as exactly one notice with the count", async () => {
+  it("says a picked set's add as one write and exactly one notice with the count", async () => {
     const { result } = await mounted();
-    act(() => {
-      // What `buildCardMenu`'s `fileAll` does for a picked set: one call per card, one tick.
-      for (const name of ["Sol Ring", "Arcane Signet", "Mind Stone"]) {
-        result.current.deps.addToCollection(card(name, name), "nonfoil", 3);
-      }
-    });
+    const names = ["Sol Ring", "Arcane Signet", "Mind Stone"];
+    act(() =>
+      result.current.deps.addManyToCollection?.(
+        names.map((name) => ({ target: card(name, name), finish: "nonfoil" as const })),
+        3,
+      ),
+    );
     await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
     expect(useNotifications.getState().notices[0]?.title).toBe("Added 3 cards to “Trade binder”");
-    expect(collectionAdd).toHaveBeenCalledTimes(3);
+    expect(collectionAdd).not.toHaveBeenCalled();
+    expect(collectionAddMany).toHaveBeenCalledTimes(1);
+    // Each item exactly as the single add builds its one: the finish, no grade named, one copy,
+    // and the folder — never omitted.
+    expect(collectionAddMany.mock.calls[0][0]).toEqual(
+      names.map((name) => ({
+        cardId: name,
+        finish: "nonfoil",
+        condition: "NONE",
+        quantity: 1,
+        folderId: 3,
+      })),
+    );
+  });
+
+  it("adds fifty picked cards in one write, one toast and one refresh, and offers it back", async () => {
+    const { result } = await mounted();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const set = Array.from({ length: 50 }, (_, i) => ({
+      target: card(`c${i}`, `Card ${i}`),
+      finish: "nonfoil" as const,
+    }));
+    act(() => result.current.deps.addManyToCollection?.(set, null));
+
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(collectionAddMany).toHaveBeenCalledTimes(1);
+    expect((collectionAddMany.mock.calls[0][0] as unknown[]).length).toBe(50);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 50 cards to your collection",
+      tone: "success",
+    });
+    expect(useBulkUndo.getState().offers.collection).toMatchObject({
+      id: 88,
+      label: "Added 50 cards to your collection.",
+    });
+    // One refresh round: each owned-write root once, not once per card.
+    const roots = invalidate.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
+    expect(roots.filter((key) => key === '["collection"]')).toHaveLength(1);
+    expect(roots.filter((key) => key === '["decks"]')).toHaveLength(1);
   });
 
   it("folds a partly refused set into one warning carrying the first refusal", async () => {
-    wishlistAdd
-      .mockResolvedValueOnce({ id: 1, quantity: 1, removed: false })
-      .mockRejectedValueOnce("The wishlist is locked")
-      .mockRejectedValueOnce("Something else");
-    const { result } = await mounted();
-    act(() => {
-      for (const name of ["Sol Ring", "Arcane Signet", "Mind Stone"]) {
-        result.current.deps.addToWishlist(card(name, name), null);
-      }
+    wishlistAddMany.mockResolvedValue({
+      added: 1,
+      copies: 1,
+      refused: [
+        { index: 1, reason: "The wishlist is locked" },
+        { index: 2, reason: "Something else" },
+      ],
+      undoId: 90,
     });
+    const { result } = await mounted();
+    act(() =>
+      result.current.deps.addManyToWishlist?.(
+        ["Sol Ring", "Arcane Signet", "Mind Stone"].map((name) => card(name, name)),
+        null,
+      ),
+    );
     await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(wishlistAdd).not.toHaveBeenCalled();
+    expect(wishlistAddMany.mock.calls[0][0]).toEqual(
+      ["Sol Ring", "Arcane Signet", "Mind Stone"].map((cardId) => ({
+        cardId,
+        quantity: 1,
+        preferredFinish: undefined,
+        folderId: null,
+      })),
+    );
     expect(useNotifications.getState().notices[0]).toMatchObject({
       title: "Added 1 of 3 cards to your wishlist",
       body: "The wishlist is locked",
       tone: "warning",
     });
+    expect(useBulkUndo.getState().offers.wishlist).toMatchObject({
+      id: 90,
+      label: "Added 1 card to your wishlist.",
+    });
+  });
+
+  it("says a rejected batch as the error arm, and offers nothing back", async () => {
+    collectionAddMany.mockRejectedValue("database is busy");
+    const { result } = await mounted();
+    act(() =>
+      result.current.deps.addManyToCollection?.(
+        [card("a", "Sol Ring"), card("b", "Mind Stone")].map((target) => ({
+          target,
+          finish: "nonfoil" as const,
+        })),
+        3,
+      ),
+    );
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't add 2 cards to “Trade binder”",
+        body: "database is busy",
+        tone: "error",
+      }),
+    );
+    expect(useBulkUndo.getState().offers.collection).toBeNull();
   });
 
   it("says a refused single add as an error naming the card", async () => {

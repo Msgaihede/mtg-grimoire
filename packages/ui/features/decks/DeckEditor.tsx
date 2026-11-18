@@ -32,6 +32,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { useScrollPaddingTop } from "@/lib/useScrollPaddingTop";
 import { useUndocked } from "@/lib/useUndocked";
 import { cn } from "@/lib/utils";
+import { trackWork } from "@/lib/work";
 import { handled, newestWrite, toasted, writeFailure } from "@/lib/writes";
 import { DECK_CARD_VARIANT, focusDeckGroup, keepsSelection } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
@@ -44,7 +45,10 @@ import {
   notifyRefusal,
   quickAddReceipt,
   reportPresses,
+  reportSettled,
+  settledEdits,
   withTokenRemoveReceipt,
+  workLabel,
 } from "./receipts";
 import { tracksCollection } from "./deckKind";
 import { DeckBracket } from "./DeckBracket";
@@ -118,6 +122,7 @@ import {
   useMissingPlan,
   useOwnedElsewhere,
   usePullPlan,
+  type DeckEdit,
 } from "./useDeck";
 import { NO_LAST_BATCH, useDeckDrops, type LastBatch } from "./useDeckDrops";
 import { useDeckKeyboard } from "./useDeckKeyboard";
@@ -794,12 +799,36 @@ export function DeckEditor({
   /**
    * One label onto every slot the dialog was opened over, **reported once** (`./receipts`): the
    * dialog has closed by the time the writes answer, so the toast is the press's receipt, and a
-   * picked set of twelve is one sentence with a count rather than twelve. Each write goes
-   * through {@link handled}, so a refusal leaves no unhandled rejection; the toast is its one
+   * picked set of twelve is one sentence with a count rather than twelve. The toast is its one
    * report, since the banner seats `setLabel` `toasted`.
+   *
+   * **A set is one `deck_apply`** (issue #1164) — one write, one Ctrl+Z, one re-read — read back
+   * as one settled result per slot ({@link settledEdits}), so `Labeled 11 of 12 cards` and its
+   * first refusal read as they did when each slot was its own write. One slot is the single
+   * `setLabel` it always was, through {@link handled} so a refusal leaves no unhandled rejection.
+   * Not `useDeckDrops`' `editBatch`, which is declared a thousand lines below this and would be a
+   * temporal-dead-zone `ReferenceError` here; the redo clear and the re-read after a refusal are
+   * {@link lastOfAny}'s, which hears `applyEdits` itself.
    */
+  const writeEdits = deck.applyEdits.mutateAsync;
   const labelSlots = useCallback(
-    (slots: readonly AddLabelSlot[], labelId: number, labelName: string) =>
+    (slots: readonly AddLabelSlot[], labelId: number, labelName: string) => {
+      const names = slots.map((slot) => slot.name);
+      if (slots.length > 1) {
+        const edits = slots.map((slot): DeckEdit => ({
+          edit: "setLabel",
+          cardId: slot.cardId,
+          categoryId: slot.categoryId,
+          finish: slot.finish,
+          labelId,
+        }));
+        const outcome = trackWork(
+          workLabel("Labeling", slots.length, `“${labelName}”`),
+          writeEdits({ edits }),
+        );
+        reportSettled(settledEdits(outcome, edits.length), names, labelWording(labelName));
+        return;
+      }
       reportPresses(
         slots.map((slot) =>
           handled(
@@ -811,10 +840,11 @@ export function DeckEditor({
             }),
           ),
         ),
-        slots.map((slot) => slot.name),
+        names,
         labelWording(labelName),
-      ),
-    [setLabelOnSlot],
+      );
+    },
+    [setLabelOnSlot, writeEdits],
   );
 
   const createLabelFor = useCallback(
@@ -984,10 +1014,11 @@ export function DeckEditor({
   ] as const;
   /**
    * **The last batch of card writes, as one write** — a multi-card drop or Delete over a picked
-   * set (issue #553). Each card in a batch is its own call on the same observer, so the observer
-   * only ever remembers the last card, and a refusal in the middle of a batch that ended well
-   * was said nowhere. `useDeckDrops`' `reportBatch` gathers every outcome into this record, and
-   * `reportToasted` every outcome of a press that toasts; `batchWrite`'s doc has the rest.
+   * set (issue #553). A set is one `deck_apply` since issue #1164, answered with a refusal **per
+   * card**, which no observer can carry — the mutation succeeded — so a refusal in the middle of a
+   * set that otherwise landed would be said nowhere. `useDeckDrops`' `editBatch` files every
+   * card's outcome into this record (seated toasted for a press that toasts), and `reportToasted`
+   * a single toasted press's; `batchWrite`'s doc has the rest.
    * **Last in both lists**, so a tie with its own final member goes to it.
    */
   const [lastBatch, setLastBatch] = useState<LastBatch>(NO_LAST_BATCH);
@@ -1484,6 +1515,11 @@ export function DeckEditor({
   const lastOfAny = newestWrite([
     ...writes,
     deck.addCard,
+    // **The batched card writes** (issue #1164) — a drop of a set, Delete over one, a plural menu
+    // row. Their refusals are `lastBatch`'s below (one per card, which this observer cannot
+    // carry); what this one adds is the label dialog's set, which files no `lastBatch`, so that its
+    // success throws the redo stack away like any other write.
+    deck.applyEdits,
     deck.missingToWishlist,
     deck.swapPrinting,
     ...deckTokens.writes,
@@ -1927,7 +1963,16 @@ export function DeckEditor({
   /** Every write a drop makes, and the caret's hand-off after one — see `useDeckDrops`. Called
    *  where these callbacks were declared, so the order of this component's effects is unchanged.
    *  `handOffTo` and `refile` stay inside it: nothing out here calls either but a drop. */
-  const { addTo, setQuantityAt, moveTo, applyDrop, reportToasted, applyDrops } = useDeckDrops({
+  const {
+    addTo,
+    setQuantityAt,
+    moveTo,
+    applyDrop,
+    reportToasted,
+    editBatch,
+    applyWrites,
+    applyDrops,
+  } = useDeckDrops({
     deck,
     cards: deck.cards,
     markAdded,
@@ -2010,11 +2055,12 @@ export function DeckEditor({
    * drop onto a drawn heading goes through rather than a second copy of it.
    *
    * **Every card the drag carried** (issue #1534), the way the three zones beside it and every
-   * pile heading take a picked set: one write per card, as `applyDrops` sends them, said as one
-   * toast with the count (`reportPresses`, the owner's one-action-one-toast rule), and the set
-   * put down afterwards because its members have left the piles it points at. Not `applyDrops`
-   * itself, only because that files the outcome for the banner and this one is the toast's — the
-   * dialog went through a question the reader answered and then watched close.
+   * pile heading take a picked set: one card is its single write, several are **one batch**
+   * (`applyWrites`, issue #1164 — one write, one Ctrl+Z), said as one toast with the count (the
+   * owner's one-action-one-toast rule), and the set put down afterwards because its members have
+   * left the piles it points at. Not `applyDrops` itself, only because that files the outcome for
+   * the banner and this one is the toast's — the dialog went through a question the reader
+   * answered and then watched close.
    */
   const createCategory = meta.createCategory.mutate;
   const resetCreateCategory = meta.createCategory.reset;
@@ -2050,16 +2096,25 @@ export function DeckEditor({
           // once, as a toast — a drag onto a drawn heading says nothing, but this one went
           // through a question the reader answered and then watched disappear.
           if (filed.length > 0) {
-            const presses = filed.map(({ write }) => applyDrop(write));
-            reportToasted(presses);
-            reportPresses(
-              presses,
-              filed.map((f) => f.name),
-              {
-                done: (what) => `Created “${category.name}” and moved ${what} into it`,
-                failed: (what) => `Couldn't move ${what} to “${category.name}”`,
-              },
-            );
+            const say = {
+              done: (what: string) => `Created “${category.name}” and moved ${what} into it`,
+              failed: (what: string) => `Couldn't move ${what} to “${category.name}”`,
+            };
+            const names = filed.map((f) => f.name);
+            if (filed.length > 1) {
+              reportSettled(
+                applyWrites(
+                  filed.map((f) => f.write),
+                  true,
+                ),
+                names,
+                say,
+              );
+            } else {
+              const presses = filed.map(({ write }) => applyDrop(write));
+              reportToasted(presses);
+              reportPresses(presses, names, say);
+            }
             // `applyDrops`' rule: the cards have moved, so a set still pointing at where they
             // were would carry slots that no longer exist into its next drag.
             if (filed.length > 1) setCardSelection(null);
@@ -2070,7 +2125,15 @@ export function DeckEditor({
         },
       });
     },
-    [applyDrop, reportToasted, close, createCategory, quickCategoryPayloads, setCardSelection],
+    [
+      applyDrop,
+      applyWrites,
+      reportToasted,
+      close,
+      createCategory,
+      quickCategoryPayloads,
+      setCardSelection,
+    ],
   );
 
   /** The stepper's write, addressed by the card's own slot. */
@@ -2366,8 +2429,11 @@ export function DeckEditor({
             ? { variant: variant === "theory" ? "live" : "theory", add: addToOtherList }
             : undefined,
           // Every row's outcomes, into the same record a multi-card drop and Delete use — marked
-          // as toasted, so the banner leaves their refusals to the toast.
+          // as toasted, so the banner leaves their refusals to the toast. A single card's write
+          // reports through `batch`; a plural row's set is one `deck_apply` through `edits`
+          // (issue #1164), which files that record itself.
           batch: reportToasted,
+          edits: editBatch,
           // **The `Collection ▸` submenu's three rows** (2026-09-03, issue #350). All three are
           // callbacks and none of them is a mutation, which is this builder's contract — and
           // here it is load-bearing rather than ceremonial: two of the three *read* before they
@@ -2460,6 +2526,7 @@ export function DeckEditor({
       variant,
       addToOtherList,
       reportToasted,
+      editBatch,
       tracks,
       quickAdd,
       quickAddAndUnwish,
@@ -3189,8 +3256,7 @@ export function DeckEditor({
     runRedo: undo.runRedo,
     layerOpen: layer !== null,
     pickedRef,
-    setQuantityAt,
-    reportToasted,
+    editBatch,
     setCardSelection,
   });
 

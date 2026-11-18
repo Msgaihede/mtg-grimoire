@@ -2000,6 +2000,7 @@ export function CollectionPage() {
    */
   const {
     addDropped,
+    addDroppedMany,
     crossing,
     setCrossing,
     readersOwnLevel,
@@ -2370,6 +2371,7 @@ export function CollectionPage() {
     toasted(moveCopy),
     toasted(setFolderMany),
     toasted(addDropped),
+    toasted(addDroppedMany),
     folders.create,
     folders.rename,
     toasted(folders.move),

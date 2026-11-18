@@ -1402,6 +1402,64 @@ describe("buildDeckCardMenu with a picked set", () => {
     expect(moveTo.mock.calls.map((call) => (call[0] as DeckCard).name)).toEqual(["Lightning Bolt"]);
   });
 
+  /**
+   * **With a batch wired, a plural row is one call** (issue #1164): the set's edits in its order,
+   * one busy sentence, and no single write at all. The toast is read off the batch's answer.
+   */
+  it("hands a plural row to the surface's batch as one call", async () => {
+    const moveTo = vi.fn();
+    const remove = vi.fn();
+    const setLabel = vi.fn();
+    const edits = vi.fn<NonNullable<DeckCardMenuDeps["edits"]>>((list) =>
+      Promise.resolve(
+        list.map((): PromiseSettledResult<unknown> => ({ status: "fulfilled", value: null })),
+      ),
+    );
+    const items = buildDeckCardMenu(
+      BOLT,
+      deps({ picked: PICKED, moveTo, remove, setLabel, edits }),
+    );
+
+    (find(rowsOf(find(items, "Category for 3 cards")), "Sideboard") as MenuAction).onSelect();
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(edits).toHaveBeenCalledTimes(1);
+    expect(edits.mock.calls[0][0]).toEqual(
+      PICKED.map((row) => ({
+        edit: "move",
+        cardId: row.cardId,
+        from: row.categoryId,
+        to: 2,
+        finish: row.finish,
+      })),
+    );
+    expect(edits.mock.calls[0][1]).toBe("Moving 3 cards to “Sideboard”…");
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]?.title).toBe("Moved 3 cards to “Sideboard”"),
+    );
+
+    (find(items, "Remove 3 cards") as MenuAction).onSelect();
+    expect(remove).not.toHaveBeenCalled();
+    expect(edits.mock.calls[1][0]).toEqual(
+      PICKED.map((row) => ({
+        edit: "remove",
+        cardId: row.cardId,
+        categoryId: row.categoryId,
+        finish: row.finish,
+      })),
+    );
+    expect(edits.mock.calls[1][1]).toBe("Removing 3 cards…");
+  });
+
+  it("keeps a single card's write when a batch is wired", () => {
+    const remove = vi.fn();
+    const edits = vi.fn();
+    (
+      find(buildDeckCardMenu(BOLT, deps({ remove, edits })), "Remove card") as MenuAction
+    ).onSelect();
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(edits).not.toHaveBeenCalled();
+  });
+
   it("greys a destination every picked card is already in", () => {
     const here = card({ name: "Bear", quantity: 2, categoryId: 2 });
     const there = card({ name: "Ponder", quantity: 1, categoryId: 2 });

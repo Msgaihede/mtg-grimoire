@@ -387,10 +387,10 @@ page.
 
 **The fetching ahead stops at 1 000 tiles on a catalogue wall** (`SELECT_ALL_LIMIT`,
 `CardGrid.tsx`). An unfiltered search is the whole database, and what a catalogue wall's menu does
-with a picked set — add to the collection, the wishlist, a deck — is **one write per card**
-(`features/card/cardMenu.tsx`), so the limit is also the largest batch of those one keypress can
-arm. A thousand is past any one set's card list. Past it the set still grows with whatever the
-reader scrolls to. A batched write for those rows is what would let it rise to the 5 000 the
+with a picked set — add to the collection, the wishlist, a deck — is a write the reader waits on
+(`features/card/cardMenu.tsx`; a deck's is one `deck_apply` for the whole set since issue #1164), so
+the limit is also the largest batch of those one keypress can arm. A thousand is past any one set's card list. Past it the set still grows with whatever the
+reader scrolls to. A batched write for every one of those rows is what would let it rise to the 5 000 the
 search's caption counts to. **A wall over the reader's own list passes `Infinity`** — the
 collection, the wishlist, the deck editor's collection tab — because those lists end, half of one
 is the worse failure, and the collection's own bulk writes (a move, a removal) are one command for
@@ -419,8 +419,11 @@ the whole set.
 `selectStacks`, the rule in `lib/multiSelect.ts`): every card of each stack that holds a picked
 card, and nothing in a stack that holds none. A stack is a group as the view on screen draws it,
 and one hidden in Stacks view is skipped. **With nothing picked it picks nothing**, deliberately:
-`Delete` removes a picked set there and undo is one press per card, so a `Ctrl+A` that took the
-whole deck from nothing would be a deck emptied in two keys and put back in a hundred. A press
+`Delete` removes a picked set there — one `deck_apply` since
+[issue #1164](https://github.com/Msgaihede/mtg-grimoire/issues/1164), and on the live list a cut
+files no undo step at all (one `Ctrl+Z` for the set on a theory list or a virtual deck) — so a
+`Ctrl+A` that took the whole deck from nothing would be a deck emptied in two keys with no key that
+puts it back. A press
 inside the docked column is still the column's; anywhere else on the desk it is the deck's.
 
 It yields three ways, each at the call site for the reason the next section gives: to a **text

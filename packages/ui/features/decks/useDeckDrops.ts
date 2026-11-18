@@ -81,7 +81,9 @@ export function useDeckDrops({
   // answers with a promise of its own, and a `.then` on it is that card's and nobody else's.
   // Every one is passed through {@link handled}, so a caller that ignores the answer — the
   // stepper, a menu row — leaves no unhandled rejection behind: the observer's state still
-  // carries the refusal to the banner exactly as `mutate` did.
+  // carries the refusal to the banner exactly as `mutate` did. (A drop of several cards is one
+  // batch since issue #1164 — {@link editBatch} — so these are the one-card path now; the
+  // argument still holds for a quick press repeated before its answer.)
   const writeQuantity = deck.setQuantity.mutateAsync;
   const writeMove = deck.moveCard.mutateAsync;
   const writeAdd = deck.addCard.mutateAsync;

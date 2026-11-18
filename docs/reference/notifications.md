@@ -88,8 +88,11 @@ or confirm, a sidebar drop, a bulk action, an import, the scanner, a finished tr
   `Removed 12 cards from the collection`.
 - **One action is one toast.** A picked set moved, removed or added in one press (50 cards
   dragged to a deck, a multi-select `Move to`, a bulk remove) is a single toast with the count:
-  `Moved 50 cards to “Trade binder”`. Never one toast per card. A loop of per-card writes reports
-  once, after the loop. A partial failure is folded into that one toast:
+  `Moved 50 cards to “Trade binder”`. Never one toast per card — and, since 2026-11-18, never one
+  *write* per card either: a press over a picked set is one batch write (`collection_add_many`,
+  `wishlist_add_many`, `wishlist_set_folder_many`, one `deck_apply`), so the toast is said off its
+  one answer, with the batch's per-card refusals folded in. A partial failure is folded into that
+  one toast:
   `notify.warning("Moved 47 of 50 cards to “Trade binder”", { body: firstRefusal })`, or
   `notify.error` when none landed. `useCardToDeck`'s `deckAddReceipt` is the pattern.
 - Failure is `notify.error("Couldn't …", { body: ipcError(e) })`, never swallowed. A page banner
@@ -157,8 +160,8 @@ The sweep of 2026-10-12 put every surface on it. By area:
 
 | Area | Toasts | Stays inline / no toast |
 | --- | --- | --- |
-| Card menu, card modal, All printings (`features/card/`) | Adds to collection / wishlist / deck (one per press, picked sets batched by `menuReceipts.ts`'s `filingBatcher`), moves, printing swaps and splits, copy name/image, set deck image; refused `Open on …` links (`refusedOpen.ts`) | Steppers; category/label/printing pickers inside the open modal |
-| Sidebar drops (`components/useSidebarDrops.ts`) | `Added N cards to “Deck”` / `… to the wishlist`, one per drop, partials folded | — (the rail's self-clearing report line is gone) |
+| Card menu, card modal, All printings (`features/card/`) | Adds to collection / wishlist / deck (one per press: a picked set is one batch write, said off its one answer by `menuReceipts.ts`' `reportBulkFiling`, with an undo offer on the collection or wishlist page), moves, printing swaps and splits, copy name/image, set deck image; refused `Open on …` links (`refusedOpen.ts`) | Steppers; category/label/printing pickers inside the open modal |
+| Sidebar drops (`components/useSidebarDrops.ts`) | `Added N cards to “Deck”` / `… to the wishlist`, one per drop (one `deck_apply` / `wishlist_add_many` for a set), partials folded | — (the rail's self-clearing report line is gone) |
 | Collection (`features/collection/`, wording in `collectionReceipts.ts`) | Removes (row, menu, bulk confirm), Recently removed clear, copy-picker moves, drops from the search column, a picked set dragged onto a shelf (one `collection_set_folder_many`, one receipt — issue #1501), folder create/rename/move/delete/lock, Edit copy save, share link copy / publish / stop | Steppers, Quick Add popup, a single copy dragged between shelves of the open wall, folder reorders. `UndoNotice` stays beside the receipt |
 | Wishlist (`features/wishlist/`) | Removes, panel moves, search-column drops, a picked set dragged onto a shelf (one receipt, partials folded — issue #1501), folder move/delete/clear | Steppers, a single wish dragged inside the list, folder reorders, rename/create in place |
 | Deck gallery (`features/decks/` gallery side, `useDecks.ts`'s `receipt`) | Deck/folder move, duplicate, archive/restore, delete, menu tags, create (`CreateDeckDialog`, one receipt for every host — `receipt` prop to override), settings folder move, Clear list | Autosaving settings fields, renames, folder reorders |

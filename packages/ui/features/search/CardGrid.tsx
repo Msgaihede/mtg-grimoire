@@ -360,13 +360,15 @@ const FIELD_SELECTOR = "input, textarea, select, [contenteditable=''], [contente
  * trips for one keypress, to pick a set nobody could act on.
  *
  * **1 000, and what sets it is what a set is *for*.** Everything a catalogue wall's menu does with
- * a picked set — add to the collection, to the wishlist, to a deck — is one write per card
- * (`features/card/cardMenu.tsx`), so the limit is also the largest batch of those one keypress can
+ * a picked set — add to the collection, to the wishlist, to a deck — is a write the reader waits on
+ * (`features/card/cardMenu.tsx`; a deck's is one `deck_apply` for the whole set since issue #1164,
+ * `useDeckCore`'s `addCards`), so the limit is also the largest batch of those one keypress can
  * arm. A thousand is past any one set's card list and past any `all the goblins`; it was twenty
  * 50-row round trips to fetch, and is six since the walk says how many rows it is owed and the
  * search asks for 200 at a time (`onNeedNextPage`'s `want`, `lib/pageLimit.ts`). Past the limit nothing is fetched ahead, and the set goes on growing with
- * whatever the reader scrolls to — every tile drawn is still picked. **A batched write for those
- * menu rows is what would let this rise**, to the 5 000 the search's own caption counts to.
+ * whatever the reader scrolls to — every tile drawn is still picked. **A batched write for every
+ * one of those menu rows is what would let this rise**, to the 5 000 the search's own caption
+ * counts to.
  *
  * A wall over the reader's **own** list passes `Infinity` instead (`selectAllLimit`): a collection
  * is as long as it is, half of one moved to a folder is the worse failure, and the collection's

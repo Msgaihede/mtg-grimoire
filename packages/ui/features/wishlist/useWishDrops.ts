@@ -12,8 +12,9 @@
  * is shared one level down — `reorderedLevel`, `folderDescendants`, `folderLevel`.
  *
  * What it is handed is the page's census and the page's writes, held still: the folder rows, the
- * reader's tree and the level each folder is drawn in, the managed folders, and the two writes a
- * drop reuses (`setFolder` and the folder reorder) as their `mutate`.
+ * reader's tree and the level each folder is drawn in, the managed folders, and the writes a drop
+ * reuses (`setFolder` and the folder reorder as their `mutate`; `moveWish` and `moveWishes` as
+ * their promise).
  */
 import { useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -25,6 +26,8 @@ import { ipc, ipcError, type WishlistFolder } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import type { Shelf } from "@/lib/shelves";
 import { plural } from "@/lib/counts";
+import { trackWork } from "@/lib/work";
+import { useWishlistAddMany } from "@/features/card/useCardAdds";
 import type { WishDrop, WishSingleDrop } from "./wishDrag";
 import type { CardDrops } from "./WishShelfHeading";
 import { ROOT_LABEL } from "./WishFolderPanel";
@@ -53,6 +56,7 @@ export function useWishDrops({
   managed,
   setFolder,
   moveWish,
+  moveWishes,
   reorder,
   settleWhole,
 }: {
@@ -68,8 +72,15 @@ export function useWishDrops({
    *  is `moveWish`, an observer of its own, because it toasts and a drag does not. */
   setFolder: (variables: { id: number; folderId: number | null }) => void;
   /** The same write on the page's **toasted** observer (`moveWish`'s `mutateAsync`) — a picked
-   *  set's refiles (issue #1501), which are one bulk action and so one receipt. */
+   *  set's one refile (issue #1501), which is a bulk action and so has a receipt. */
   moveWish: (variables: { id: number; folderId: number | null }) => Promise<unknown>;
+  /** `useWishEntryWrites`' `moveWishes`, as its `mutateAsync` — a picked set's refiles in **one**
+   *  `wishlist_set_folder_many`, all or nothing, which offers its own undo. */
+  moveWishes: (variables: {
+    ids: readonly number[];
+    folderId: number | null;
+    destination: string;
+  }) => Promise<unknown>;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
   /** How every write on the page finishes — `useWishEntryWrites`' `settleWhole`. */
@@ -114,6 +125,13 @@ export function useWishDrops({
   // which TanStack fires for the newest call alone: two cards dropped in quick succession are two
   // receipts.
   const { mutateAsync: addWishAsync } = addWish;
+  /**
+   * **A picked set of them, as one write** — `useWishlistAddMany`, the card menu's own batch add:
+   * one `wishlist_add_many` for the set, each item built as {@link addWish} builds its one, the
+   * wishlist and the search's hearts settled once, and an undo offer for the set.
+   */
+  const addWishes = useWishlistAddMany();
+  const { mutateAsync: addWishesAsync } = addWishes;
 
   /**
    * Where what is in the air may be let go — asked per target, because the answer differs per
@@ -163,40 +181,92 @@ export function useWishDrops({
    * **one receipt** for the lot with refusals folded in (the owner's rule: one action, one toast).
    *
    * A single wish dragged between shelves says nothing, being the list rearranging itself under
-   * the pointer; a set is a bulk action, which the rule names among the moves that toast. There is
-   * no bulk wish refile, so each goes through the toasted observer as its own write.
+   * the pointer; a set is a bulk action, which the rule names among the moves that toast.
+   *
+   * **At most two writes, whatever the set's size**: the cards off the search column in one
+   * `wishlist_add_many`, and the wishes already on the list in one `wishlist_set_folder_many` — where
+   * each member used to be its own write and its own re-read of the whole wishlist, which froze the
+   * page over a few hundred. A half of exactly one keeps its single command. The add refuses card
+   * by card and lands the rest; the move is all or nothing, as the collection's beside it is.
    */
   const fileGroup = useCallback(
     (members: readonly WishSingleDrop[], to: number | null) => {
       const into = to === null ? ROOT_LABEL : (census.find((f) => f.id === to)?.name ?? "a folder");
       const takes = members.filter((member) => canFileOne(member, to));
       if (takes.length === 0) return;
-      const writes = takes.map((member) =>
-        member.kind === "wish"
-          ? moveWish({ id: member.wish.wishId, folderId: to })
-          : addWishAsync({ card: member.card, folderId: to }),
+      const cards = takes.flatMap((member) => (member.kind === "new" ? [member.card] : []));
+      const wishIds = takes.flatMap((member) =>
+        member.kind === "wish" ? [member.wish.wishId] : [],
       );
-      const moved = takes.some((member) => member.kind === "wish");
+      const wishes = (n: number) => plural(n, "wish", "wishes");
+      // Each half answers one slot per member, in the order dropped: `undefined` where it landed,
+      // its refusal where it did not — the add's by index, a rejected call's for every member.
+      const LANDED = undefined;
+      const adds: Promise<unknown[]> =
+        cards.length === 0
+          ? Promise.resolve([])
+          : cards.length === 1
+            ? addWishAsync({ card: cards[0], folderId: to }).then(
+                () => [LANDED],
+                (error: unknown) => [error ?? "refused"],
+              )
+            : trackWork(
+                `Adding ${wishes(cards.length)} to “${into}”…`,
+                addWishesAsync({
+                  items: cards.map((card) => ({
+                    cardId: card.cardId,
+                    quantity: 1,
+                    preferredFinish: card.finish,
+                    folderId: to,
+                  })),
+                  destination: into,
+                }),
+              ).then(
+                (outcome) => {
+                  const slots: unknown[] = cards.map(() => LANDED);
+                  for (const { index, reason } of outcome.refused) slots[index] = reason;
+                  return slots;
+                },
+                (error: unknown) => cards.map(() => error ?? "refused"),
+              );
+      const moves: Promise<unknown[]> =
+        wishIds.length === 0
+          ? Promise.resolve([])
+          : (wishIds.length === 1
+              ? moveWish({ id: wishIds[0], folderId: to })
+              : trackWork(
+                  `Moving ${wishes(wishIds.length)} to “${into}”…`,
+                  moveWishes({ ids: wishIds, folderId: to, destination: into }),
+                )
+            ).then(
+              () => wishIds.map(() => LANDED),
+              (error: unknown) => wishIds.map(() => error ?? "refused"),
+            );
+      const moved = wishIds.length > 0;
       const verb = moved ? "Moved" : "Added";
       const failVerb = moved ? "move" : "add";
-      void Promise.allSettled(writes).then((outcomes) => {
-        const refused = outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : []));
-        const landed = outcomes.length - refused.length;
+      void Promise.all([moves, adds]).then(([moveSlots, addSlots]) => {
+        // Back into the order the set was dropped in, so the refusal said is the first member's.
+        let nextMove = 0;
+        let nextAdd = 0;
+        const refused = takes
+          .map((member) => (member.kind === "wish" ? moveSlots[nextMove++] : addSlots[nextAdd++]))
+          .filter((slot) => slot !== LANDED);
+        const landed = takes.length - refused.length;
         if (refused.length === 0) {
-          notify.success(`${verb} ${plural(landed, "wish", "wishes")} to “${into}”`);
+          notify.success(`${verb} ${wishes(landed)} to “${into}”`);
         } else if (landed === 0) {
-          notify.error(
-            `Couldn't ${failVerb} ${plural(takes.length, "wish", "wishes")} to “${into}”`,
-            { body: ipcError(refused[0]) },
-          );
+          notify.error(`Couldn't ${failVerb} ${wishes(takes.length)} to “${into}”`, {
+            body: ipcError(refused[0]),
+          });
         } else {
-          notify.warning(`${verb} ${plural(landed, "wish", "wishes")} to “${into}”`, {
-            body: `${plural(refused.length, "wish", "wishes")} couldn't be ${moved ? "moved" : "added"} — ${ipcError(refused[0])}`,
+          notify.warning(`${verb} ${wishes(landed)} to “${into}”`, {
+            body: `${wishes(refused.length)} couldn't be ${moved ? "moved" : "added"} — ${ipcError(refused[0])}`,
           });
         }
       });
     },
-    [canFileOne, moveWish, addWishAsync, census],
+    [canFileOne, moveWish, moveWishes, addWishAsync, addWishesAsync, census],
   );
 
   //
@@ -334,6 +404,7 @@ export function useWishDrops({
 
   return {
     addWish,
+    addWishes,
     canFile,
     fileWish,
     folderPlacement,

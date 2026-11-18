@@ -120,7 +120,6 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
   };
 }
 
-
 /**
  * What a per-row write may answer: nothing, or the promise of its outcome — which is what lets a
  * plural row hand a whole batch to {@link DeckCardMenuDeps.batch}.
@@ -284,9 +283,10 @@ export interface DeckCardMenuDeps {
    */
   otherList?: { variant: DeckVariant; add: (card: DeckCard) => Press };
   /**
-   * **Every outcome of a row's writes, handed back as one batch** (issue #553) — `Move N cards
-   * to`, `Add N cards to …`, `Label N cards` and `Remove N cards` each make one write per picked
-   * row, and a single-card row makes one. Every one of them is toasted here, so the surface's
+   * **Every outcome of a row's writes, handed back as one batch** (issue #553) — a single-card
+   * row's one write, and a plural row's write per card on a surface with no {@link edits} (where
+   * there is one, the set is one `deck_apply` and the surface files it). Every one of them is
+   * toasted here, so the surface's
    * banner must *not* repeat the refusal — yet each write is a call on an observer the stepper
    * and the drags share, whose refusals that banner does report. Handing the batch over is what
    * lets the surface tell the two apart (the editor's `reportToasted`). Called with the promises
@@ -518,8 +518,9 @@ function splitItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  *
  * `Category`, `Label` and `Remove` act on **every** picked card when the right-clicked one is
  * in the set (issue #214), and so does `Add to actual` / `Add to theory` (issue #592). All four are
- * per-row writes over an address the row already carries, so plural is a loop and the label is the
- * only thing that has to change.
+ * per-row writes over an address the row already carries, so plural is the same write over a set
+ * — sent as one `deck_apply` where the surface wires {@link DeckCardMenuDeps.edits} (issue #1164:
+ * one transaction, one Ctrl+Z) — and the label is the only thing that has to change.
  *
  * **`Finish`, `Set as commander` and `Set as companion` stay about the one card, and that is a
  * statement rather than an omission.** A finish is a property of a *printing* — the two-finish
@@ -926,7 +927,7 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const block =
     pressed.length > 0
       ? null
-      : (blocks.every((b) => b === blocks[0]) ? blocks[0] : null) ?? "nothing-missing";
+      : ((blocks.every((b) => b === blocks[0]) ? blocks[0] : null) ?? "nothing-missing");
   const reason = block === null ? undefined : QUICK_ADD_REASON[block];
   const pressedCards = pressed.map((target) => target.card);
   /** One row: live, or greyed **with** its reason — never greyed with a live `onSelect` behind
@@ -978,11 +979,8 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
         // already owns loose and moves them — one of these presses changes what the binder holds
         // and the other only changes where it is, which is a different act and is drawn as one.
         { kind: "separator", id: "sep-pull" },
-        row(
-          "pull-from-collection",
-          `Pull ${copies} from your collection`,
-          PackageOpen,
-          () => pullCard(pressedCards),
+        row("pull-from-collection", `Pull ${copies} from your collection`, PackageOpen, () =>
+          pullCard(pressedCards),
         ),
       ],
     },
@@ -1089,14 +1087,12 @@ export function deckCardNoteRows(
     // **`submenu` and never `lazy`.** The notes are already in hand — the surface read them for
     // the band and for the cards' own marks — so there is nothing to fetch when the row expands,
     // which is exactly the test `types.ts` states for the two kinds.
-    items: mine.map(
-      (note): MenuItem => ({
-        kind: "action",
-        id: `note-${note.id}`,
-        label: noteTitle(note),
-        onSelect: () => onOpen(note),
-      }),
-    ),
+    items: mine.map((note): MenuItem => ({
+      kind: "action",
+      id: `note-${note.id}`,
+      label: noteTitle(note),
+      onSelect: () => onOpen(note),
+    })),
   });
   return rows;
 }
@@ -1141,7 +1137,6 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     ),
   );
 }
-
 
 /**
  * One zone row: live, or greyed — and **greyed silently**, which is this menu's one row that
@@ -1292,8 +1287,6 @@ function finishItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     }));
 }
 
-
-
 /**
  * The label choices, as rows.
  *
@@ -1334,14 +1327,12 @@ export function deckCardLabelRows(
       checked: card.labelId === null,
       onSelect: () => setLabel(card, null),
     },
-    ...labels.map(
-      (label): MenuItem => ({
-        kind: "radio",
-        id: `label-${label.id}`,
-        label: label.name,
-        checked: card.labelId === label.id,
-        onSelect: () => setLabel(card, label.id),
-      }),
-    ),
+    ...labels.map((label): MenuItem => ({
+      kind: "radio",
+      id: `label-${label.id}`,
+      label: label.name,
+      checked: card.labelId === label.id,
+      onSelect: () => setLabel(card, label.id),
+    })),
   ];
 }

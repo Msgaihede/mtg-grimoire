@@ -17,6 +17,8 @@
  */
 import { useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { offerUndo } from "@/lib/bulkUndo";
+import { plural } from "@/lib/counts";
 import { ipc, type WishRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { useLatestPress } from "@/lib/useLatestPress";
@@ -249,6 +251,37 @@ export function useWishEntryWrites() {
   const moveWish = useMutation(filing);
 
   /**
+   * {@link setFolder} over several wishes in **one** write — `wishlist_set_folder_many`, the same
+   * merge per wish in one transaction with one activity row and one undo ticket, the twin of the
+   * collection's `useSetCollectionFolderMany` (issue #555). **All or nothing**: any refusal rolls the
+   * whole press back. Settled as every filing here is, once for the press — a picked set of wishes
+   * dropped on a shelf used to be one `wishlist_set_folder` and one `settleWhole` per wish.
+   *
+   * **The undo offer is made here**, that hook's rule: whoever presses a bulk write, the ticket goes
+   * to `@/lib/bulkUndo` under the wishlist's scope (`WishlistPage` draws it), with the destination
+   * the caller names. The receipt stays at the caller.
+   */
+  const moveWishes = useMutation({
+    mutationFn: ({
+      ids,
+      folderId: to,
+    }: {
+      ids: readonly number[];
+      folderId: number | null;
+      /** What the destination is called, for `Moved 3 wishes to Ordered.` */
+      destination: string;
+    }) => ipc.wishlistSetFolderMany(ids, to),
+    onSettled: settleWhole,
+    onSuccess: (outcome, { ids, destination }) => {
+      offerUndo(
+        "wishlist",
+        outcome.undoId,
+        `Moved ${plural(outcome.changes.length || ids.length, "wish", "wishes")} to ${destination}.`,
+      );
+    },
+  });
+
+  /**
    * Back to **any printing** — the second of spec §5's two printing writes, and the only one
    * this page makes itself: pinning a wish to a printing is a press in the All printings modal,
    * which owns that half (spec §6).
@@ -314,6 +347,7 @@ export function useWishEntryWrites() {
     remove,
     setFolder,
     moveWish,
+    moveWishes,
     anyPrinting,
     setPrinting,
   };

@@ -17,9 +17,10 @@ const wishlistList = vi.hoisted(() => vi.fn());
 // `readOnly.test.ts` — one read of the reader's own cabinet, one write into their own wishlist.
 const wishlistFolderList = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+const wishlistAddMany = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { shareOpen, collectionList, wishlistList, wishlistFolderList, wishlistAdd },
+  ipc: { shareOpen, collectionList, wishlistList, wishlistFolderList, wishlistAdd, wishlistAddMany },
 }));
 
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -86,6 +87,9 @@ beforeEach(() => {
     { id: 7, parentId: null, name: "Trade targets", sortOrder: 0 },
   ]);
   wishlistAdd.mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  wishlistAddMany.mockImplementation((items: readonly unknown[]) =>
+    Promise.resolve({ added: items.length, copies: items.length, refused: [], undoId: 1 }),
+  );
   useAppStore.setState({ openedShares: [LINK] });
 });
 
@@ -445,8 +449,13 @@ describe("building a want list out of somebody else's binder", () => {
     await user.selectOptions(screen.getByLabelText("Add to"), "7");
     await user.click(screen.getByRole("button", { name: "Add 2 cards" }));
 
-    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
-    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: 7 });
+    // One write for the two picks.
+    await waitFor(() => expect(wishlistAddMany).toHaveBeenCalledTimes(1));
+    expect(wishlistAddMany.mock.calls[0][0]).toContainEqual({
+      cardId: "bolt",
+      quantity: 1,
+      folderId: 7,
+    });
     // Said as a toast, since the dialog has closed over it — the verb the button used, in the
     // past tense, naming the destination the reader chose.
     await waitFor(() =>

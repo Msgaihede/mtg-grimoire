@@ -58,6 +58,7 @@ import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
 import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
 import { resetViewMemory } from "@grimoire/ui/lib/viewMemory";
+import { resetWork } from "@grimoire/ui/lib/work";
 import { resetPackMarketplaces } from "@grimoire/ui/features/draft/packs/marketplacePick";
 import { resetPackReduced } from "@grimoire/ui/features/draft/packs/reducedPick";
 import { resetSideboard } from "@grimoire/ui/features/draft/pick/split";
@@ -305,6 +306,9 @@ export function installWorld(
   if (options.resetStore !== false) resetSideboard();
   // The draft pick screen's pool layout (issue #1474), kept the same way. Same gate, same reason.
   if (options.resetStore !== false) resetDraftTrayLayout();
+  // The busy indicator's store (`@/lib/work`): a story whose batch was still out when the next one
+  // mounted would hand it a pill and a `progress` cursor for work it never started. Same gate.
+  if (options.resetStore !== false) resetWork();
 
   const removeCorpus = installCorpus(db.cards);
   const client = worldQueryClient(scope);

@@ -102,20 +102,24 @@ const BACK_DOORS: readonly { form: RegExp; what: string }[] = [
 const READS: readonly string[] = ["shareOpen", "shareList", "collectionList", "wishlistList"];
 
 /**
- * The commands this directory is allowed to name that are **not** reads. There is one.
+ * The commands this directory is allowed to name that are **not** reads. There is one write,
+ * spelled twice.
  *
  * * `wishlistAdd` — the want list (spec decision 8), in `AddToWishlist.tsx`. It writes
  *   `wishlist_entries`, which is the reader's **own** list, from an explicit press, into a folder
  *   they already have. Nothing it does reaches the binder on screen, and it needs no new table,
  *   no synced column and no schema rung — a want list is the wishlist this app has always had,
  *   reached from a new place.
+ * * `wishlistAddMany` — the same write over the press's whole set, in one transaction (since
+ *   2026-11-18; a press over one card is still `wishlistAdd`). Not a second promise: the rows it
+ *   can touch are exactly `wishlistAdd`'s.
  *
  * **Adding a second name here is a change to what this view promises**, not a formality: the
  * promise is that a shared collection is a document, and every write named here has to be a write
  * to something else the reader owns. A `shareRefresh` or a `collectionAdd` on this list would be
  * the promise gone, whatever the sweep then said.
  */
-const WRITES: readonly string[] = ["wishlistAdd"];
+const WRITES: readonly string[] = ["wishlistAdd", "wishlistAddMany"];
 
 /** The three commands that change a share. None of them belongs on a viewer. */
 const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRevoke"];

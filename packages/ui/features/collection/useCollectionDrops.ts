@@ -33,6 +33,8 @@ import { ipc, ipcError, type CollectionFolder, type CollectionRow } from "@/lib/
 import { notify } from "@/lib/notifications";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { plural } from "@/lib/counts";
+import { trackWork } from "@/lib/work";
+import { useCollectionAddMany } from "@/features/card/useCardAdds";
 import type { CollectionDrop, CollectionSingleDrop } from "./collectionDrag";
 import { ROOT_LABEL } from "./CollectionFolderPanel";
 import { addedReceipt, movedReceipt, report } from "./collectionReceipts";
@@ -191,6 +193,13 @@ export function useCollectionDrops({
   // around it is a new object every render. The promise rather than `mutate`, so two cards
   // dropped in quick succession are two receipts (`collectionReceipts.ts`' `report`).
   const { mutateAsync: addDroppedAsync } = addDropped;
+  /**
+   * **A picked set of them, as one write** — `useCollectionAddMany`, the card menu's own batch add:
+   * one `collection_add_many`, the four keys above settled once rather than once per card, and an
+   * undo offer for the set. Each item is the add above's, built by that hook's one definition.
+   */
+  const addDroppedMany = useCollectionAddMany();
+  const { mutateAsync: addDroppedManyAsync } = addDroppedMany;
 
   /**
    * The question a **drag** asks when it crosses the edge of a drawer the reader has set aside,
@@ -409,17 +418,33 @@ export function useCollectionDrops({
    */
   const commitGroup = useCallback(
     (members: readonly CollectionSingleDrop[], to: number | null, destination: string) => {
-      // **The adds** — a picked set off the search column. One write per card, because there is
-      // no bulk add to make, and **one toast** for the lot with any refusals folded in (the
-      // owner's rule: one action, one toast).
+      // **The adds** — a picked set off the search column, as **one** write (`addDroppedMany`):
+      // one transaction and one refresh for the set, where a write per card was N of each and froze
+      // the page over a few hundred. One card is still the single add. **One toast** for the lot
+      // with any refusals folded in (the owner's rule: one action, one toast).
       const added = members.flatMap((member) => (member.kind === "new" ? [member.card] : []));
       if (added.length > 0) {
-        const writes = added.map((card) =>
-          addDroppedAsync({ cardId: card.cardId, finish: card.finish, folderId: to }),
-        );
-        void Promise.allSettled(writes).then((outcomes) => {
-          const refused = outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : []));
-          const landed = outcomes.length - refused.length;
+        const items = added.map((card) => ({
+          cardId: card.cardId,
+          finish: card.finish,
+          folderId: to,
+        }));
+        // Every card's refusal, in the order dropped — the batch's by index, or the whole call's.
+        const refusals: Promise<unknown[]> =
+          items.length === 1
+            ? addDroppedAsync(items[0]).then(
+                () => [],
+                (error: unknown) => [error],
+              )
+            : trackWork(
+                `Adding ${plural(items.length, "card")} to “${destination}”…`,
+                addDroppedManyAsync({ items, destination }),
+              ).then(
+                (outcome) => outcome.refused.map((refusal) => refusal.reason),
+                (error: unknown) => items.map(() => error),
+              );
+        void refusals.then((refused) => {
+          const landed = added.length - refused.length;
           const only = added.length === 1 ? added[0].name : null;
           if (refused.length === 0) {
             notify.success(addedReceipt(only ?? "", destination, landed));
@@ -475,7 +500,7 @@ export function useCollectionDrops({
         failed: `Couldn't move ${plural(entryIds.length, "card")} to “${destination}”`,
       });
     },
-    [addDroppedAsync, canMoveCopy, moveMany, setPicking],
+    [addDroppedAsync, addDroppedManyAsync, canMoveCopy, moveMany, setPicking],
   );
 
   const commitFile = useCallback(
@@ -754,6 +779,7 @@ export function useCollectionDrops({
 
   return {
     addDropped,
+    addDroppedMany,
     crossing,
     setCrossing,
     readersOwnLevel,

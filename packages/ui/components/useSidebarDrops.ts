@@ -1,12 +1,15 @@
 import { useCallback, type RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useWishlistAddMany } from "@/features/card/useCardAdds";
 import { readCards, readDragData, type DragPayload } from "@/features/decks/dnd";
-import { useDeck } from "@/features/decks/useDeck";
+import { useDeck, type DeckAddRequest } from "@/features/decks/useDeck";
+import { plural } from "@/lib/counts";
 import { useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
 import { ipc, ipcError } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { trackWork } from "@/lib/work";
 
 /** What the Decks entry says while it cannot take a card, on the one gesture that asks. */
 const NO_OPEN_DECK = "Open a deck to drop cards into it";
@@ -41,34 +44,56 @@ export function dropReceipt(added: number, payloads: readonly DragPayload[], whe
   return `Added ${what} to ${where}`;
 }
 
+/** How one drop's write went: how many of its cards landed, and the first refusal (in the order
+ *  the cards were carried) or `null` when none was refused. */
+interface DropOutcome {
+  added: number;
+  refusal: string | null;
+}
+
 /**
- * Write every card of one drop, then say once what happened — **one gesture, one toast**, however
- * many cards it carried. All landed: a receipt. Some refused: one warning, `Added 47 of 50 cards
- * to …`, carrying the **first** refusal (a deck deleted under the drop refuses every card in the
- * same words, so one is the sentence). None landed: the refusal, as an error.
+ * Write one drop, then say once what happened — **one gesture, one toast**, however many cards it
+ * carried. All landed: a receipt. Some refused: one warning, `Added 47 of 50 cards to …`, carrying
+ * the **first** refusal (a deck deleted under the drop refuses every card in the same words, so one
+ * is the sentence). None landed: the refusal, as an error.
+ *
+ * **One write per drop**, whatever it carried: one card is the single command it always was, and a
+ * set is one batch — `deck_apply` or `wishlist_add_many` — which answers each card's refusal in its
+ * own slot while the rest land. Until 2026-11-18 a set was one write per card, fired together: N
+ * transactions, N refresh rounds, and past a few hundred a `database is busy` — and on the deck, two
+ * adds racing to make the same auto pile. A rejected call is a write that landed nothing.
  *
  * `mutateAsync` rather than `mutate`, because `mutate`'s per-call callbacks fire for the
- * **latest** call only, and a multi-card drop reported on its last card alone (`cardMenu.tsx`'s
- * deck queue learnt the same in issue #954). The writes go out together, as they always have from
- * here; only the reporting waits for all of them.
+ * **latest** call only (`cardMenu.tsx`'s deck queue learnt that in issue #954): a second drop made
+ * before the first answered would take the first one's report with it.
  */
 async function writeAndReport(
   payloads: readonly DragPayload[],
-  write: (payload: DragPayload) => Promise<unknown>,
+  write: () => Promise<DropOutcome>,
   where: string,
 ) {
-  const settled = await Promise.allSettled(payloads.map(write));
-  const added = settled.filter((s) => s.status === "fulfilled").length;
-  const refused = settled.find((s): s is PromiseRejectedResult => s.status === "rejected");
-  if (refused === undefined) notify.success(dropReceipt(added, payloads, where));
-  else if (added === 0)
-    notify.error(`Couldn't add to ${where}`, { body: ipcError(refused.reason) });
+  let outcome: DropOutcome;
+  try {
+    outcome = await write();
+  } catch (failure) {
+    outcome = { added: 0, refusal: ipcError(failure) };
+  }
+  const { added, refusal } = outcome;
+  if (refusal === null) notify.success(dropReceipt(added, payloads, where));
+  else if (added === 0) notify.error(`Couldn't add to ${where}`, { body: refusal });
   else {
     notify.warning(`Added ${added} of ${payloads.length} cards to ${where}`, {
-      body: ipcError(refused.reason),
+      body: refusal,
     });
   }
 }
+
+/** A single write's outcome: it landed, or it is the refusal. */
+const one = (write: Promise<unknown>): Promise<DropOutcome> =>
+  write.then(
+    () => ({ added: 1, refusal: null }),
+    (failure: unknown) => ({ added: 0, refusal: ipcError(failure) }),
+  );
 
 /**
  * The sidebar's two drop targets: what they accept, what they write, and what they say
@@ -130,8 +155,17 @@ export function useSidebarDrops() {
     // nothing and deleted nothing, so there is no list on screen that has gone wrong. The
     // refusal is said by the drop that asked (`writeAndReport`).
   });
+  /**
+   * The same wish over a carried set, in **one** `wishlist_add_many` — the card menu's batch add,
+   * which settles the two keys above once for the set and offers the set back for undo (the
+   * wishlist page draws it).
+   */
+  const addWishes = useWishlistAddMany();
 
   const writeToDeck = deck.addCard.mutateAsync;
+  // A carried set's adds, as one `deck_apply` — `useDeck`'s `addCards`, filed card by card by the
+  // single add's rule, one default-pile and one tag read for the set, one undo step, one re-read.
+  const writeManyToDeck = deck.addCards.mutateAsync;
   // Whatever the shared read last answered. `useSwapFromPane` reads `deckGone` off the same
   // query for the same reason: with an editor open there is always an answer here.
   const deckName = deck.deck?.name;
@@ -144,48 +178,76 @@ export function useSidebarDrops() {
       // The fallback is the sliver where the editor's read has not landed yet — the drop
       // still writes, and the sentence says what it can.
       const where = deckName === undefined ? "the open deck" : `“${deckName}”`;
+      // **One copy, and the pile is whatever the payload knows.** A sidebar entry is a
+      // destination rather than a form: it is a nav item several views away from the deck, so for
+      // a card off a wall there is no column here a reader could have pointed at. So that card
+      // names no category and lands where **the deck** says its adds land — `deckDefault`, the
+      // setting the editor's own Add button honours (issue #693) — and on a deck left on Auto it
+      // rides its **type line** instead, which `useDeck`'s add files through `autoCategoryFor` — a
+      // Ramp artifact dropped here lands under Artifact, found or created. The line comes from the
+      // payload rather than a lookup, which is what keeps this a gesture and not a query: every
+      // source that carries a `"card"` has it in hand when it registers its draggable (`dnd.ts`).
+      // `null` — an orphaned collection row whose printing has left `cards` — files under
+      // `Uncategorized`.
+      //
+      // **A card dragged out of the open deck keeps its own category**, because it has one:
+      // `fromCategoryId` is a pile of *this* deck (a deck card exists only while its editor is
+      // mounted), so the rule that a drag names its own destination holds here too. It used to land
+      // in a found-or-created "Main deck" instead, which quietly moved a Sideboard card's extra copy
+      // into the main deck.
+      const requests = payloads.map((payload): DeckAddRequest =>
+        payload.kind === "deck-card"
+          ? { cardId: payload.cardId, categoryId: payload.fromCategoryId, quantity: 1 }
+          : {
+              cardId: payload.cardId,
+              deckDefault: true,
+              typeLine: payload.typeLine,
+              quantity: 1,
+            },
+      );
       void writeAndReport(
         payloads,
-        (payload) =>
-          writeToDeck(
-            // **One copy, and the pile is whatever the payload knows.** A sidebar entry is a
-            // destination rather than a form: it is a nav item several views away from the deck,
-            // so for a card off a wall there is no column here a reader could have pointed at. So
-            // that card names no category and lands where **the deck** says its adds land —
-            // `deckDefault`, the setting the editor's own Add button honours (issue #693) — and
-            // on a deck left on Auto it rides its **type line** instead, which `useDeck`'s
-            // `addCard` files through `autoCategoryFor` — a Ramp artifact dropped here lands
-            // under Artifact, found or created. The line comes from the payload rather than a
-            // lookup, which is what keeps this a gesture and not a query: every source that
-            // carries a `"card"` has it in hand when it registers its draggable (`dnd.ts`).
-            // `null` — an orphaned collection row whose printing has left `cards` — files under
-            // `Uncategorized`.
-            //
-            // **A card dragged out of the open deck keeps its own category**, because it has
-            // one: `fromCategoryId` is a pile of *this* deck (a deck card exists only while its
-            // editor is mounted), so the rule that a drag names its own destination holds here
-            // too. It used to land in a found-or-created "Main deck" instead, which quietly moved
-            // a Sideboard card's extra copy into the main deck.
-            payload.kind === "deck-card"
-              ? { cardId: payload.cardId, categoryId: payload.fromCategoryId, quantity: 1 }
-              : {
-                  cardId: payload.cardId,
-                  deckDefault: true,
-                  typeLine: payload.typeLine,
-                  quantity: 1,
-                },
-          ),
+        () =>
+          requests.length === 1
+            ? one(writeToDeck(requests[0]))
+            : trackWork(
+                `Adding ${plural(requests.length, "card")} to ${where}…`,
+                writeManyToDeck({ cards: requests }),
+              ).then(({ results }) => ({
+                added: results.filter((result) => result.refusal === null).length,
+                refusal: results.find((result) => result.refusal !== null)?.refusal ?? null,
+              })),
         where,
       );
     },
-    [openDeckId, writeToDeck, deckName],
+    [openDeckId, writeToDeck, writeManyToDeck, deckName],
   );
 
   const writeWish = addWish.mutateAsync;
+  const writeWishes = addWishes.mutateAsync;
   const dropOnWishlist = useCallback(
-    (payloads: readonly DragPayload[]) =>
-      void writeAndReport(payloads, (payload) => writeWish(payload.cardId), "your wishlist"),
-    [writeWish],
+    (payloads: readonly DragPayload[]) => {
+      const where = "your wishlist";
+      void writeAndReport(
+        payloads,
+        () =>
+          payloads.length === 1
+            ? one(writeWish(payloads[0].cardId))
+            : trackWork(
+                `Adding ${plural(payloads.length, "card")} to ${where}…`,
+                writeWishes({
+                  // Each item the single add's: the printing pinned, no finish, the root.
+                  items: payloads.map((payload) => ({ cardId: payload.cardId, quantity: 1 })),
+                  destination: where,
+                }),
+              ).then(({ refused }) => ({
+                added: payloads.length - refused.length,
+                refusal: refused[0]?.reason ?? null,
+              })),
+        where,
+      );
+    },
+    [writeWish, writeWishes],
   );
 
   const noDeck = openDeckId === null;

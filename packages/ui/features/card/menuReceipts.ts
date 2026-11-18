@@ -1,18 +1,18 @@
 /**
  * One toast per press for the card menu's filing writes — however many cards the press filed.
  *
- * **Why this exists at all.** `buildCardMenu` turns a press on a picked set into one call of a dep
- * per card (`Add 4 cards to → Collection` calls `addToCollection` four times, synchronously, in
- * the row's `onSelect`), and the deps are the write's only observer — the menu has closed. A
- * receipt per call would be four toasts for one press, which is the owner's rule broken
- * (2026-10-12: one action, one toast) and, past `TOAST_CAP`, a column of toasts pushing each other
- * off the corner. So each call hands its write here under a key naming the press's destination,
- * and every call made **in the same tick** under the same key is one batch: the menu's loop runs
- * to the end before a microtask can, so a batch is exactly one press.
+ * **A press is one write now, so it is one answer.** `Add N cards to → Collection / Wishlist` over
+ * a picked set used to call a dep once per card, and this module folded those N writes back into
+ * one toast with a microtask batcher keyed by destination (the owner's rule, 2026-10-12: one
+ * action, one toast). The N writes were the real cost — N transactions, N activity rows and N
+ * refresh rounds, which froze the window for seconds over a few hundred cards — so the menu hands
+ * the whole set to one batch dep instead (`addManyToCollection`, `addManyToWishlist`), whose single
+ * answer reports the press: {@link reportBulkFiling}. A single card's write — a one-card press, the
+ * card modal's buttons, `Move to` on one row — answers through {@link reportFiling}.
  *
- * **The receipt waits for every write in the batch** and then says once what landed, folding a
- * partial refusal into that one sentence — `deckAddReceipt`'s shape for the deck picker, reached
- * from the other two cabinets.
+ * **Both say it through {@link sayFiling}**, so a set and one card read the same three ways: all
+ * landed, some landed (`Added 47 of 50 cards to …` with the first refusal under it —
+ * `deckAddReceipt`'s shape for the deck picker, reached from the other two cabinets), none landed.
  */
 import { plural } from "@/lib/counts";
 import { ipcError } from "@/lib/ipc";
@@ -63,44 +63,35 @@ export function sayFiling(outcome: FilingOutcome, words: FilingWords): void {
   });
 }
 
-/**
- * A batcher: hand it each write of a press under a key, and it reports the whole press once.
- *
- * `words` is read off the **first** call of a batch — every call under one key names the same
- * destination, which is what the key is.
- */
-export function filingBatcher(): (
-  key: string,
+/** One single write's answer, said — the card by name where the press knew it. */
+export function reportFiling(
   name: string | undefined,
   work: Promise<unknown>,
   words: FilingWords,
-) => void {
-  const open = new Map<
-    string,
-    { names: (string | undefined)[]; work: Promise<unknown>[]; words: FilingWords }
-  >();
-  return (key, name, work, words) => {
-    let batch = open.get(key);
-    if (batch === undefined) {
-      const fresh = { names: [] as (string | undefined)[], work: [] as Promise<unknown>[], words };
-      batch = fresh;
-      open.set(key, fresh);
-      // Closed at the end of the tick the press ran in — after the menu's loop, before any
-      // answer can have come back.
-      queueMicrotask(() => {
-        open.delete(key);
-        void Promise.allSettled(fresh.work).then((results) => {
-          let refusal: unknown = undefined;
-          let landed = 0;
-          for (const result of results) {
-            if (result.status === "fulfilled") landed += 1;
-            else if (refusal === undefined) refusal = result.reason ?? "refused";
-          }
-          sayFiling({ names: fresh.names, landed, refusal }, fresh.words);
-        });
-      });
-    }
-    batch.names.push(name);
-    batch.work.push(work);
-  };
+): void {
+  void work.then(
+    () => sayFiling({ names: [name], landed: 1, refusal: undefined }, words),
+    (error: unknown) => sayFiling({ names: [name], landed: 0, refusal: error ?? "refused" }, words),
+  );
+}
+
+/**
+ * A batch write's answer, said once for the whole press. `refused` is the backend's own list (by
+ * index, in the single add's words), so **the first refusal is the first card refused in the
+ * order the press named them**; a rejected call is a write that landed nothing and is the error
+ * arm with the backend's sentence.
+ */
+export function reportBulkFiling(
+  names: readonly (string | undefined)[],
+  work: Promise<{ refused: readonly { reason: string }[] }>,
+  words: FilingWords,
+): void {
+  void work.then(
+    ({ refused }) =>
+      sayFiling(
+        { names, landed: names.length - refused.length, refusal: refused[0]?.reason },
+        words,
+      ),
+    (error: unknown) => sayFiling({ names, landed: 0, refusal: error ?? "refused" }, words),
+  );
 }

@@ -11,7 +11,7 @@ import { ORACLE_TAGGED_NAMES } from "@grimoire/fake/db";
 import { installWorld } from "@grimoire/fake/world";
 import type { DeckCard, EntryChange } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
-import { useDeckCore, type DeckAddRequest, type DeckAnchor } from "./useDeckCore";
+import { useDeckCore, type DeckAddRequest, type DeckAnchor, type DeckEdit } from "./useDeckCore";
 
 /**
  * `useDeckCore` is `useDeck`'s body with the app store taken out — the light app's phone face
@@ -273,6 +273,158 @@ describe("useDeckCore's batched writes", () => {
     expect(await batch.result.current.addCards.mutateAsync({ cards: [] })).toMatchObject({
       landed: 0,
     });
+    expect(apply).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `applyEdits` — the editor's multi-card gestures (issue #1164): its own write requests, planned by
+ * the single writes' rules, sent as one `deck_apply` in the gesture's order.
+ */
+describe("useDeckCore's applyEdits", () => {
+  async function openEdits() {
+    const world = installWorld({ seed: "starter" });
+    onTestFinished(world.mount());
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={world.client}>{children}</QueryClientProvider>
+    );
+    const hook = renderHook(() => useDeckCore(1, "live"), { wrapper });
+    await waitFor(() => expect(hook.result.current.deck?.id).toBe(1));
+    const side = hook.result.current.categories.find((c) => c.kind === "side")!.id;
+    const decksRead = () => {
+      const spy = vi.spyOn(world.client, "invalidateQueries");
+      return () =>
+        spy.mock.calls.filter(([f]) => (f?.queryKey as unknown[])?.[0] === "decks").length;
+    };
+    return { world, hook, side, decksRead };
+  }
+
+  const rowOf = (card: DeckCard) => ({
+    cardId: card.cardId,
+    categoryId: card.categoryId,
+    finish: card.finish,
+  });
+
+  it("sends a drop that mixes adds, moves and a removal as one deck_apply, in order", async () => {
+    const { world, hook, side, decksRead } = await openEdits();
+    const [first, second] = hook.result.current.cards;
+    const outside = world.db.cards.find(
+      (c) => !hook.result.current.cards.some((d) => d.cardId === c.id) && c.typeLine !== null,
+    )!;
+    const apply = vi.spyOn(world.scope.commands, "deck_apply");
+    const single = ["deck_add_card", "deck_move_card", "deck_set_card_quantity"].map((name) =>
+      vi.spyOn(world.scope.commands, name as "deck_add_card"),
+    );
+    const read = decksRead();
+
+    const outcome = await hook.result.current.applyEdits.mutateAsync({
+      edits: [
+        { edit: "add", card: { cardId: outside.id, categoryId: side, quantity: 1 } },
+        {
+          edit: "move",
+          cardId: first.cardId,
+          from: first.categoryId,
+          to: side,
+          finish: first.finish,
+        },
+        { edit: "remove", ...rowOf(second) },
+      ],
+    });
+
+    expect(apply).toHaveBeenCalledTimes(1);
+    for (const spy of single) expect(spy).not.toHaveBeenCalled();
+    const sent = (apply.mock.calls[0][0] as { ops: { op: string }[] }).ops.map((o) => o.op);
+    expect(sent).toEqual(["add", "move", "remove"]);
+    expect(read()).toBe(1);
+    expect(outcome.landed).toBe(3);
+    expect(outcome.results.map((r) => r.sent)).toEqual([true, true, true]);
+    expect(outcome.results[0].change?.id).toEqual(expect.any(Number));
+    expect(outcome.results[1].categoryId).toBe(side);
+  });
+
+  it("files an Auto set with one tag read, and sends no op for a refile already home", async () => {
+    const { world, hook } = await openEdits();
+    const bolt = hook.result.current.cards.find((c) => c.name === "Lightning Bolt")!;
+    const refileOf = (card: DeckCard): DeckEdit => ({
+      edit: "refile",
+      cardId: card.cardId,
+      from: card.categoryId,
+      finish: card.finish,
+      typeLine: card.typeLine,
+      categoryName: card.categoryName,
+    });
+    // Filed once, so the second pass finds it where the rule puts it.
+    const first = await hook.result.current.applyEdits.mutateAsync({ edits: [refileOf(bolt)] });
+    const filed = first.results[0].filedAs!;
+    await waitFor(() =>
+      expect(hook.result.current.cards.find((c) => c.cardId === bolt.cardId)?.categoryName).toBe(
+        filed,
+      ),
+    );
+    const home = hook.result.current.cards.find((c) => c.cardId === bolt.cardId)!;
+    const others = world.db.cards
+      .filter((c) => c.typeLine !== null && !/\b(Token|Emblem)\b/.test(c.typeLine))
+      .slice(0, 5);
+
+    const tags = vi.spyOn(world.scope.commands, "oracle_tags_for_printings");
+    const apply = vi.spyOn(world.scope.commands, "deck_apply");
+    const outcome = await hook.result.current.applyEdits.mutateAsync({
+      edits: [
+        refileOf(home),
+        ...others.map((c): DeckEdit => ({
+          edit: "add",
+          card: { cardId: c.id, typeLine: c.typeLine, quantity: 1 },
+        })),
+      ],
+    });
+
+    expect(tags).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(outcome.results[0]).toMatchObject({ sent: false, filedAs: filed, refusal: null });
+    expect((apply.mock.calls[0][0] as { ops: unknown[] }).ops).toHaveLength(others.length);
+    expect(outcome.results.slice(1).every((r) => r.sent && r.filedAs !== null)).toBe(true);
+  });
+
+  it("takes removed rows off the desk at the press and puts them back on a refusal", async () => {
+    const { world, hook } = await openEdits();
+    const [a, b] = hook.result.current.cards;
+    let refuse: (reason: string) => void = () => {};
+    vi.spyOn(world.scope.commands, "deck_apply").mockImplementation(
+      () => new Promise((_, reject) => (refuse = reject)) as never,
+    );
+
+    const press = hook.result.current.applyEdits.mutateAsync({
+      edits: [
+        { edit: "remove", ...rowOf(a) },
+        { edit: "remove", ...rowOf(b) },
+      ],
+    });
+    press.catch(() => {});
+    await waitFor(() =>
+      expect(hook.result.current.cards.some((c) => c.id === a.id || c.id === b.id)).toBe(false),
+    );
+
+    refuse("The database is busy.");
+    await expect(press).rejects.toBe("The database is busy.");
+    await waitFor(() =>
+      expect(hook.result.current.cards.filter((c) => c.id === a.id || c.id === b.id)).toHaveLength(
+        2,
+      ),
+    );
+  });
+
+  it("refuses to mix an add to the other list with this list's writes", async () => {
+    const { world, hook, side } = await openEdits();
+    const [a, b] = hook.result.current.cards;
+    const apply = vi.spyOn(world.scope.commands, "deck_apply");
+    await expect(
+      hook.result.current.applyEdits.mutateAsync({
+        edits: [
+          { edit: "addToOtherList", ...rowOf(a) },
+          { edit: "move", cardId: b.cardId, from: b.categoryId, to: side, finish: b.finish },
+        ],
+      }),
+    ).rejects.toThrow();
     expect(apply).not.toHaveBeenCalled();
   });
 });

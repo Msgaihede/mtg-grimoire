@@ -625,7 +625,7 @@ export function WishlistPage() {
    * light app's phone face presses the same four mutations with the same patches and the same
    * `settleWhole`; the doc for each is at its new home.
    */
-  const { settleWhole, setQuantity, remove, setFolder, moveWish, anyPrinting } =
+  const { settleWhole, setQuantity, remove, setFolder, moveWish, moveWishes, anyPrinting } =
     useWishEntryWrites();
   // The four writes' `mutate`, held still where the result objects around them are not (issue
   // #557) — the handlers below are what the memoised wall and table are handed.
@@ -641,6 +641,8 @@ export function WishlistPage() {
   // drags' `mutate` (silent, `useWishDrops`) and the panel's promise (said, {@link onSetFolder}).
   const { mutate: setFolderMutate } = setFolder;
   const { mutateAsync: moveWishAsync } = moveWish;
+  // And a picked set's refiles, as one write (`useWishDrops`, said there).
+  const { mutateAsync: moveWishesAsync } = moveWishes;
   const { mutate: anyPrintingMutate } = anyPrinting;
 
   const onSetQuantity = useCallback(
@@ -1027,6 +1029,7 @@ export function WishlistPage() {
    */
   const {
     addWish,
+    addWishes,
     canFile,
     fileWish,
     folderPlacement,
@@ -1041,6 +1044,7 @@ export function WishlistPage() {
     managed,
     setFolder: setFolderMutate,
     moveWish: moveWishAsync,
+    moveWishes: moveWishesAsync,
     reorder: reorderMutate,
     settleWhole,
   });
@@ -2031,7 +2035,9 @@ export function WishlistPage() {
     toasted(remove),
     setFolder,
     toasted(moveWish),
+    toasted(moveWishes),
     toasted(addWish),
+    toasted(addWishes),
     anyPrinting,
     folders.create,
     folders.rename,
