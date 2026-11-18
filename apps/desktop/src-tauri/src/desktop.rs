@@ -550,6 +550,7 @@ pub fn run() {
             deck::deck_last_format,
             deck::deck_add_card,
             deck::deck_add_card_to_other_list,
+            deck::deck_apply,
             deck::deck_set_card_quantity,
             deck::deck_category_clear,
             deck::deck_clear,

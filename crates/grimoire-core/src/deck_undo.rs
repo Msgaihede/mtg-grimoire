@@ -70,7 +70,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// What an apply says when the id it was handed is not the deck's cursor (or, for a redo, not
 /// [`next_redo`]), or when a redo finds the deck no longer the way the undo left it.
@@ -799,23 +799,143 @@ pub fn record_cells(
     before: Vec<CardRow>,
     made: Option<Vec<i64>>,
 ) -> Result<(), String> {
+    let step = cells_step(tx, deck_id, cells, before, made, None)?;
+    record_step(tx, audit_id, deck_id, &step)
+}
+
+/// [`record_cells`] for a **batch** of card writes (`crate::deck_apply`): one step over every cell
+/// the batch's writes noted in `log`, plus the token half from `tokens` — the token entries the
+/// batch's rerouted adds filed, which each file a step of their own when pressed one at a time.
+///
+/// `audit_id` is the batch's last journalled history row — [`record_step`]'s rule for a press
+/// that writes several rows: one press is one Ctrl+Z, keyed on the last of them.
+pub(crate) fn record_logged(
+    tx: &Connection,
+    audit_id: i64,
+    deck_id: i64,
+    log: CellLog,
+    made: Option<Vec<i64>>,
+    tokens: &crate::deck_tokens::TokenLog,
+) -> Result<(), String> {
+    let step = cells_step(tx, deck_id, log.cells, log.before, made, Some(tokens))?;
+    record_step(tx, audit_id, deck_id, &step)
+}
+
+/// The step [`record_cells`] and [`record_logged`] file.
+///
+/// With a token log, a batch that touched no cell (every add was a token) carries no
+/// [`Op::Cards`] at all, and the token pair goes **last** on both sides, after the reconcile's —
+/// the reconcile's share is filtered to the tokens the log does not hold, so the two never name
+/// one token and their order is free.
+fn cells_step(
+    tx: &Connection,
+    deck_id: i64,
+    cells: Vec<Cell>,
+    before: Vec<CardRow>,
+    made: Option<Vec<i64>>,
+    tokens: Option<&crate::deck_tokens::TokenLog>,
+) -> Result<Step, String> {
     let after = read_cells(tx, deck_id, &cells)?;
     // **The token reconcile, inside this write's own transaction** (spec §4.2 rule 7): a list
     // that stopped deriving a token loses that token's entries, and they ride this step so one
     // Ctrl+Z puts back the card *and* the reader's printings of what it made. Read after the
     // write and before the step is built, because what it removed is part of the step.
-    let removed = crate::deck_tokens::reconcile_in(tx, deck_id, &variants_of(&cells))?;
-    let mut undo = vec![Op::Cards {
-        scope: cells.clone(),
-        rows: before,
-    }];
-    let mut redo = vec![Op::Cards {
-        scope: cells,
-        rows: after,
-    }];
+    let mut removed = crate::deck_tokens::reconcile_in(tx, deck_id, &variants_of(&cells))?;
+    let (mut undo, mut redo) = (Vec::new(), Vec::new());
+    if tokens.is_none() || !cells.is_empty() {
+        undo.push(Op::Cards {
+            scope: cells.clone(),
+            rows: before,
+        });
+        redo.push(Op::Cards {
+            scope: cells,
+            rows: after,
+        });
+    }
     push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
+    if let Some(tokens) = tokens {
+        removed = tokens.without_mine(removed);
+    }
     push_removed_tokens(removed, &mut undo, &mut redo);
-    record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
+    if let Some((back, forth)) = tokens.map(|t| t.settle(tx, deck_id)).transpose()?.flatten() {
+        undo.push(back);
+        redo.push(forth);
+    }
+    Ok(Step::new(undo, redo))
+}
+
+/// The cells a batch of card writes is about, **found as the writes go**, each read the first
+/// time a write names it — so its "before" is the cell as the batch found it, whatever the
+/// batch's later writes do to it (`crate::deck_apply`).
+///
+/// **Found as they go because the batch cannot know them up front**: an add filed by name makes
+/// its pile partway through, and the cell is in a pile that did not exist when the batch began.
+/// Read at first sight rather than before the batch is the same fact: a cell no earlier write in
+/// the batch named is a cell no earlier write changed.
+///
+/// **Each cell once.** Two adds of one printing into one pile are one cell; a scope naming it
+/// twice would delete it once and insert its rows twice on Ctrl+Z.
+#[derive(Debug, Default)]
+pub struct CellLog {
+    cells: Vec<Cell>,
+    before: Vec<CardRow>,
+    seen: HashSet<(String, i64, Option<String>)>,
+}
+
+impl CellLog {
+    /// Name `cell` as one the write about to happen changes, reading its rows if this is the
+    /// first write to name it. Called **before** that write, inside its transaction.
+    pub fn note(&mut self, tx: &Connection, deck_id: i64, cell: Cell) -> Result<(), String> {
+        let key = (cell.variant.clone(), cell.category_id, cell.card_id.clone());
+        if self.seen.contains(&key) {
+            return Ok(());
+        }
+        let rows = read_cells(tx, deck_id, std::slice::from_ref(&cell))?;
+        self.seen.insert(key);
+        self.before.extend(rows);
+        self.cells.push(cell);
+        Ok(())
+    }
+
+    /// How far the log has got — taken before one write of a batch, so a write the batch rolls
+    /// back can be [`CellLog::rewind`]ed out of it.
+    pub fn mark(&self) -> (usize, usize) {
+        (self.cells.len(), self.before.len())
+    }
+
+    /// Forget every cell noted since `mark`: the write that named them was rolled back.
+    pub fn rewind(&mut self, (cells, before): (usize, usize)) {
+        for cell in self.cells.drain(cells..) {
+            self.seen
+                .remove(&(cell.variant, cell.category_id, cell.card_id));
+        }
+        self.before.truncate(before);
+    }
+
+    /// Take one narrow cell out of the step altogether — what a write the journal deliberately
+    /// does not record (a live cut, `crate::collection_alloc::deck_to_collection`'s argument)
+    /// does to a cell an earlier write of the batch named. A later write that names it again
+    /// reads it afresh, as the cell the cut left.
+    pub fn forget(&mut self, variant: &str, category_id: i64, card_id: &str) {
+        let key = (variant.to_owned(), category_id, Some(card_id.to_owned()));
+        if !self.seen.remove(&key) {
+            return;
+        }
+        self.cells.retain(|c| {
+            !(c.variant == variant
+                && c.category_id == category_id
+                && c.card_id.as_deref() == Some(card_id))
+        });
+        self.before.retain(|r| {
+            !(r.variant == variant && r.category_id == category_id && r.card_id == card_id)
+        });
+    }
+
+    /// The scope and its "before", for a write that records its own step through
+    /// [`record_cells`].
+    pub fn into_parts(self) -> (Vec<Cell>, Vec<CardRow>) {
+        (self.cells, self.before)
+    }
 }
 
 /// Every list a scope names, once each and in the schema's order — what
@@ -1050,8 +1170,10 @@ pub fn record_variant(
 pub fn read_cells(conn: &Connection, deck_id: i64, cells: &[Cell]) -> Result<Vec<CardRow>, String> {
     let mut rows = Vec::new();
     for cell in cells {
+        // Cached: a batch (`crate::deck_apply`) reads a cell per write, and a step over many
+        // cells reads them all twice and checks them once more on Ctrl+Z.
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
                         label_id, quantity, needs_review, finish
                    FROM deck_cards

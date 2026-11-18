@@ -1713,13 +1713,20 @@ impl Change {
 ///   already at, a swap onto the entry's own art. `deck_set_card_quantity` removing a card
 ///   that is not there is the precedent: a history of a change that never happened is a line the
 ///   drawer would have to explain.
+///
+/// **Who files the step is [`Stepping`]'s to say.** Every command files its own
+/// ([`Stepping::Own`]); a batch of deck writes (`crate::deck_apply`) files one step for the whole
+/// press, so it hands in its [`TokenLog`], which keeps the token as it stood before the batch's
+/// first write to it — and the history row is written here either way. Answers that row's id, or
+/// `None` for a write that changed nothing and so recorded nothing.
 fn journal_in(
     tx: &Connection,
     deck_id: i64,
     list: &str,
     oracle_id: &str,
+    stepping: Stepping<'_>,
     f: impl FnOnce(&Connection) -> Result<Change, String>,
-) -> Result<(), String> {
+) -> Result<Option<i64>, String> {
     let there: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM decks WHERE id = ?1)",
@@ -1737,10 +1744,14 @@ fn journal_in(
         ))
     };
     let (entries_before, state_before) = read(tx)?;
+    let mut stepping = stepping;
+    if let Stepping::Into(log) = &mut stepping {
+        log.note(list, oracle_id, &entries_before, &state_before);
+    }
     let change = f(tx)?;
     let (entries_after, state_after) = read(tx)?;
     if entries_before == entries_after && state_before == state_after {
-        return Ok(());
+        return Ok(None);
     }
     crate::deck::touch_deck(tx, deck_id)?;
 
@@ -1768,6 +1779,9 @@ fn journal_in(
         &payload,
         0,
     )?;
+    let Stepping::Own = stepping else {
+        return Ok(Some(audit_id));
+    };
 
     let moved = state_before != state_after;
     let undo = Op::Tokens {
@@ -1780,7 +1794,137 @@ fn journal_in(
         delete: entries_before,
         states: if moved { vec![state_after] } else { vec![] },
     };
-    crate::deck_undo::record_step(tx, audit_id, deck_id, &Step::new(vec![undo], vec![redo]))
+    crate::deck_undo::record_step(tx, audit_id, deck_id, &Step::new(vec![undo], vec![redo]))?;
+    Ok(Some(audit_id))
+}
+
+/// Who files a token write's undo step — see [`journal_in`].
+pub(crate) enum Stepping<'a> {
+    /// The write files its own: one press, one step. Every command.
+    Own,
+    /// A batch files one step for all of its writes, and this log is what it builds the token
+    /// half of that step from.
+    Into(&'a mut TokenLog),
+}
+
+/// The tokens a batch of deck writes touched, each as it stood **before the batch's first write
+/// to it** — what one step for the whole batch has to put back (`crate::deck_apply`).
+///
+/// **Net, never per write**: two adds of one Treasure in a batch are one "before" and one
+/// "after". A step carrying each write's own pair would be refused by its own check at the first
+/// Ctrl+Z — the first write's "after" is not what the deck holds once the second has run — since
+/// `crate::deck_undo::apply_reversal` holds every recorded side to be one real state of the deck.
+#[derive(Debug, Default)]
+pub struct TokenLog {
+    touched: Vec<Touched>,
+}
+
+/// One token of a [`TokenLog`]: its entries in the list written, and its state, before.
+#[derive(Debug)]
+struct Touched {
+    list: String,
+    oracle_id: String,
+    entries: Vec<TokenEntryRow>,
+    state: TokenStateRow,
+}
+
+impl TokenLog {
+    /// Keep a token's "before", unless the batch has written it already — then what it holds
+    /// now is the batch's own doing, and the earlier read stands.
+    fn note(
+        &mut self,
+        list: &str,
+        oracle_id: &str,
+        entries: &[TokenEntryRow],
+        state: &TokenStateRow,
+    ) {
+        if self
+            .touched
+            .iter()
+            .any(|t| t.list == list && t.oracle_id == oracle_id)
+        {
+            return;
+        }
+        self.touched.push(Touched {
+            list: list.to_owned(),
+            oracle_id: oracle_id.to_owned(),
+            entries: entries.to_vec(),
+            state: state.clone(),
+        });
+    }
+
+    /// How far the log has got — taken before one write of a batch, so a write the batch rolls
+    /// back can be [`TokenLog::rewind`]ed out of the log too.
+    pub(crate) fn mark(&self) -> usize {
+        self.touched.len()
+    }
+
+    /// Forget every token noted since `mark`: its write was rolled back, so its "before" says
+    /// nothing about the batch.
+    pub(crate) fn rewind(&mut self, mark: usize) {
+        self.touched.truncate(mark);
+    }
+
+    /// What a card write's [`reconcile_in`] did, less every token this log holds: the log's own
+    /// pair is read after the reconcile and so already carries it, and a step carrying both would
+    /// hold two "before"s for one token.
+    pub(crate) fn without_mine(&self, reconciled: Reconciled) -> Reconciled {
+        let mine = |oracle_id: &str| self.touched.iter().any(|t| t.oracle_id == oracle_id);
+        let Reconciled {
+            removed,
+            states_before,
+            states_after,
+        } = reconciled;
+        let (states_before, states_after): (Vec<_>, Vec<_>) = states_before
+            .into_iter()
+            .zip(states_after)
+            .filter(|(before, _)| !mine(&before.oracle_id))
+            .unzip();
+        Reconciled {
+            removed: removed
+                .into_iter()
+                .filter(|row| !mine(&row.oracle_id))
+                .collect(),
+            states_before,
+            states_after,
+        }
+    }
+
+    /// The token half of a batch's step — [`journal_in`]'s [`Op::Tokens`] pair over every token
+    /// the batch changed, read **now** against the "before" each was noted with. `None` when the
+    /// batch left every token it touched as it found it.
+    pub(crate) fn settle(&self, tx: &Connection, deck_id: i64) -> Result<Option<(Op, Op)>, String> {
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        let (mut states_before, mut states_after) = (Vec::new(), Vec::new());
+        for t in &self.touched {
+            let entries = entries_of(tx, deck_id, &t.list, &t.oracle_id)?;
+            let state = state_of(tx, deck_id, &t.oracle_id)?;
+            if entries == t.entries && state == t.state {
+                continue;
+            }
+            before.extend(t.entries.iter().cloned());
+            after.extend(entries);
+            // `journal_in`'s rule: the state rides only where it moved.
+            if state != t.state {
+                states_before.push(t.state.clone());
+                states_after.push(state);
+            }
+        }
+        if before.is_empty() && after.is_empty() && states_before.is_empty() {
+            return Ok(None);
+        }
+        let undo = Op::Tokens {
+            restore: before.clone(),
+            delete: after.clone(),
+            states: states_before,
+        };
+        let redo = Op::Tokens {
+            restore: after,
+            delete: before,
+            states: states_after,
+        };
+        Ok(Some((undo, redo)))
+    }
 }
 
 /// [`journal_in`] in a transaction of its own — what three of the four writes are. The fourth,
@@ -1794,7 +1938,7 @@ fn write_tokens(
     f: impl FnOnce(&Connection) -> Result<Change, String>,
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    journal_in(&tx, deck_id, list, oracle_id, f)?;
+    journal_in(&tx, deck_id, list, oracle_id, Stepping::Own, f)?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -2038,6 +2182,44 @@ pub fn add_printing_in(
     finish: Option<&str>,
     quantity: i64,
 ) -> Result<i64, String> {
+    add_printing_stepped(
+        tx,
+        deck_id,
+        variant,
+        card_id,
+        finish,
+        quantity,
+        Stepping::Own,
+    )
+    .map(|(landed, _)| landed)
+}
+
+/// [`add_printing_in`] inside a batch of deck writes (`crate::deck_apply`): the same write and the
+/// same history row, with the undo step left to the batch through `log`. Answers the quantity the
+/// entry landed on and the history row's id (`None` for an add that changed nothing).
+pub(crate) fn add_printing_logged(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+    card_id: &str,
+    finish: Option<&str>,
+    quantity: i64,
+    log: &mut TokenLog,
+) -> Result<(i64, Option<i64>), String> {
+    let stepping = Stepping::Into(log);
+    add_printing_stepped(tx, deck_id, variant, card_id, finish, quantity, stepping)
+}
+
+/// [`add_printing_in`] and [`add_printing_logged`], once.
+fn add_printing_stepped(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+    card_id: &str,
+    finish: Option<&str>,
+    quantity: i64,
+    stepping: Stepping<'_>,
+) -> Result<(i64, Option<i64>), String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
     if quantity <= 0 {
         return Err(crate::collection::ZERO_ADD.to_owned());
@@ -2049,7 +2231,7 @@ pub fn add_printing_in(
     let finish = entry_finish(&printing, finish)?;
     let oracle_id = printing.oracle_id.clone();
     let mut landed = 0;
-    journal_in(tx, deck_id, variant, &oracle_id, |tx| {
+    let audit_id = journal_in(tx, deck_id, variant, &oracle_id, stepping, |tx| {
         let best = derived_printing(tx, deck_id, variant, &oracle_id)?;
         let derived = best.is_some();
         // **A stale `hidden` comes back at zero, and before the implicit entry is written** (the
@@ -2103,7 +2285,7 @@ pub fn add_printing_in(
             .about(&printing.id, &finish)
             .with("quantity", json!(quantity)))
     })?;
-    Ok(landed)
+    Ok((landed, audit_id))
 }
 
 /// **Remove printing** (the token-improvements spec §3.4): delete one entry of a token in one
