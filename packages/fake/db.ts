@@ -22587,13 +22587,9 @@ export function writeHandlers(db: FakeDb) {
               single.deck_card_set_label({ deckId, variant, ...op });
               return { change: null, categoryId: null, refusal: null };
             case "addToOtherList": {
-              // The list it goes **into** is the other one: the op's pile is in this batch's
-              // list, which is what `useDeckCore`'s single press sends as well.
-              const change = single.deck_add_card_to_other_list({
-                deckId,
-                ...op,
-                variant: variant === LIVE ? "theory" : LIVE,
-              });
+              // The batch's `variant` is the list the copies go **into**, and the op's pile is in
+              // the other one — Rust's reading (`deck_apply.rs`), and the single command's.
+              const change = single.deck_add_card_to_other_list({ deckId, ...op, variant });
               return { change, categoryId: pileOf(change), refusal: null };
             }
           }
