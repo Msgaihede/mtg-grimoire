@@ -47,7 +47,7 @@ const PATTERN_CLASSES = ["foil-pattern", "foil-pattern-2", "foil-pattern-3"] as 
 function foilStyle(effect: FoilEffect, card: FoilCard): CSSProperties {
   return {
     ...foilTextureVars(effect),
-    ...foilLight(foilAim(null, card), card, effect === "ripple" ? "rest" : null),
+    ...foilLight(foilAim(null, card), card, effect === "ripple"),
   } as CSSProperties;
 }
 

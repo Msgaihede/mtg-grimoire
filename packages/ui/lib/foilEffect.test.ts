@@ -3,8 +3,6 @@ import {
   FOIL_ANGLE,
   FOIL_EFFECTS,
   FOIL_HOVER,
-  FOIL_IDLE,
-  FOIL_IDLE_STEP,
   FOIL_PATTERN_LAYERS,
   FOIL_REST,
   FOIL_STRENGTH,
@@ -77,7 +75,6 @@ describe("foilEffect", () => {
 
 /** A card at the plain constants: the shared rest, the shared angle. */
 const PLAIN = { angle: FOIL_ANGLE, ox: 0, oy: 0 };
-const VIEW = { width: 1600, height: 900 };
 const BOX = { left: 700, top: 300, width: 200, height: 280 };
 
 /**
@@ -103,29 +100,26 @@ describe("foilCard", () => {
 });
 
 /**
- * The light does not follow the pointer (the owner: following it "ends up looking like a torch").
- * Every card drifts a little with the pointer's place in the window; the card it is on moves more.
+ * Only the card the pointer is on moves its light (the owner, 2026-11-18, from readers' feedback);
+ * every other card keeps its resting light. It never follows the pointer either — following it
+ * "ends up looking like a torch".
  */
 describe("foilAim", () => {
-  const off = (x: number, y: number) => foilAim(foilPointer({ x, y }, BOX, VIEW, false), PLAIN);
-  const on = (x: number, y: number) => foilAim(foilPointer({ x, y }, BOX, VIEW, true), PLAIN);
+  const off = (x: number, y: number) => foilAim(foilPointer({ x, y }, BOX, false), PLAIN);
+  const on = (x: number, y: number) => foilAim(foilPointer({ x, y }, BOX, true), PLAIN);
 
   it("rests at the card's own resting light with no pointer", () => {
     expect(foilAim(null, PLAIN)).toEqual(FOIL_REST);
     expect(foilAim(null, { angle: 110, ox: 0.05, oy: -0.02 })).toEqual({ x: 0.37, y: 0.26 });
   });
 
-  it("drifts a card the pointer is not on by a fifth of it across the whole window, mirrored", () => {
-    const left = off(0, 450);
-    const right = off(1600, 450);
-    expect(left.x - right.x).toBeCloseTo(FOIL_IDLE, 2);
-    expect(left.y).toBe(right.y);
-  });
-
-  it("moves an idle card's light in steps of about a pixel", () => {
-    const { x, y } = off(523, 211);
-    expect(Math.abs(x / FOIL_IDLE_STEP - Math.round(x / FOIL_IDLE_STEP))).toBeLessThan(1e-9);
-    expect(Math.abs(y / FOIL_IDLE_STEP - Math.round(y / FOIL_IDLE_STEP))).toBeLessThan(1e-9);
+  it("keeps a card the pointer is not on at rest, wherever the pointer is", () => {
+    for (const [x, y] of [
+      [0, 0],
+      [1600, 900],
+      [650, 440],
+    ])
+      expect(off(x, y)).toEqual(FOIL_REST);
   });
 
   it("moves the card the pointer is on across most of itself, mirrored", () => {
@@ -135,18 +129,18 @@ describe("foilAim", () => {
     expect(nearLeft.x - nearRight.x).toBeCloseTo(FOIL_HOVER * 0.6, 2);
   });
 
-  /** Arriving on a card blends in over its outer edge, so its light never snaps across. */
+  /** Arriving on a card blends in from its rest over the outer edge, so the light never snaps. */
   it("does not jump when the pointer crosses onto the card", () => {
-    const outside = off(699, 440);
-    const edge = on(700, 440);
-    expect(Math.abs(edge.x - outside.x)).toBeLessThan(0.01);
-    expect(foilPointer({ x: 700, y: 440 }, BOX, VIEW, true).hover).toBe(0);
-    expect(foilPointer({ x: 800, y: 440 }, BOX, VIEW, true).hover).toBe(1);
+    expect(on(700, 440)).toEqual(FOIL_REST);
+    expect(Math.abs(on(702, 440).x - FOIL_REST.x)).toBeLessThan(0.01);
+    expect(foilPointer({ x: 700, y: 440 }, BOX, true).hover).toBe(0);
+    expect(foilPointer({ x: 800, y: 440 }, BOX, true).hover).toBe(1);
   });
 
   /** In the deck's stacks the pointer is inside nine boxes; only the card on top is hovered. */
-  it("treats a card the pointer is inside but not on as idle", () => {
-    expect(foilPointer({ x: 800, y: 440 }, BOX, VIEW, false).hover).toBe(0);
+  it("treats a card the pointer is inside but not on as resting", () => {
+    expect(foilPointer({ x: 800, y: 440 }, BOX, false).hover).toBe(0);
+    expect(off(800, 440)).toEqual(FOIL_REST);
   });
 });
 
@@ -194,17 +188,16 @@ describe("foilLight", () => {
 
   it("writes ripple's rings only for a ripple", () => {
     expect(foilLight(FOIL_REST, PLAIN)["--foil-g1"]).toBeUndefined();
-    const ripple = foilLight(FOIL_REST, PLAIN, "live");
+    const ripple = foilLight(FOIL_REST, PLAIN, true);
     expect(Object.keys(ripple).filter((k) => /^--foil-[gs]\d$/.test(k))).toHaveLength(18);
   });
 
-  /** An idle ripple keeps its resting rings, so a deck of them is not a hundred fades. */
-  it("shows an idle ripple's resting rings wherever its light is", () => {
+  /** The rings shown follow the light: the five nearest it. */
+  it("shows different rings as the light crosses the card", () => {
     const shown = (light: Record<string, string>) =>
       Object.entries(light).filter(([k]) => k.startsWith("--foil-s"));
-    const rest = foilLight(FOIL_REST, PLAIN, "rest");
-    const moved = foilLight({ x: 0.9, y: 0.9 }, PLAIN, "rest");
-    expect(shown(moved)).toEqual(shown(rest));
-    expect(shown(foilLight({ x: 0.9, y: 0.9 }, PLAIN, "live"))).not.toEqual(shown(rest));
+    expect(shown(foilLight({ x: 0.9, y: 0.9 }, PLAIN, true))).not.toEqual(
+      shown(foilLight(FOIL_REST, PLAIN, true)),
+    );
   });
 });

@@ -43,10 +43,9 @@ const meta = {
           "`scripts/foil-textures.ts`. Scryfall photographs a printing sold plain and special as " +
           "the plain card, so without these a Surge Foil copy looked like any other foil. Each " +
           "drawing was tuned against photographs of real cards and signed off by the owner. " +
-          "**The light moves with the pointer and the card never moves** (no tilt, the owner's " +
-          "call): every foil drifts a little as the pointer crosses the window, each at its own " +
-          "angle, and the one under the pointer moves more (issue #1689). A finger, or a reader " +
-          "who asked for less motion, gets the resting light. See " +
+          "**Only the card under the pointer moves its light, and the card never moves** (no " +
+          "tilt, the owner's call): every other foil rests, each at its own angle. A finger, or a " +
+          "reader who asked for less motion, gets the resting light. See " +
           "*Foil Kinds* below, and hover. Legibility is a screenshot question rather than an " +
           "assertion, so the live CDP pass is what proves it; what a story can prove is that " +
           "the whole overlay is `aria-hidden` and that the chip is still hoverable.\n\n" +

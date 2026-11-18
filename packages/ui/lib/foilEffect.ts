@@ -154,29 +154,15 @@ export function foilCard(seed: string): FoilCard {
 }
 
 /**
- * How far the pointer's place in the window moves a card it is not on: 0.2 of the card across the
- * whole window, mirrored (the light moves away from the pointer, as a reflection does). The
- * owner's call on the canvas (2026-11-15): "super reduced light motion" for every card on the
- * page, the light moving but never *following* the pointer — following it "ends up looking like a
- * torch".
+ * How far the pointer's place on the card it is on moves that card's light: 0.9 of the card,
+ * mirrored. **Only that card's light moves** — the owner's call on 2026-11-18, from readers'
+ * feedback: a card the pointer is not on keeps its resting light. (It drifted a fifth of itself as
+ * the pointer crossed the window from 2026-11-16, and followed the pointer before that.)
  */
-export const FOIL_IDLE = 0.2;
-
-/** How far the pointer's place on the card it is on moves that card's light: 0.9 of the card. */
 export const FOIL_HOVER = 0.9;
-
-/**
- * The step an idle card's light moves in: about a pixel. A card the pointer is not on is relit
- * every couple of dozen pixels of pointer travel rather than on every move, which no reader sees
- * and a wall of a hundred foils feels.
- */
-export const FOIL_IDLE_STEP = 0.004;
 
 /** What the pointer gives one card, all 0..1. */
 export interface FoilPointer {
-  /** The pointer's place in the window. */
-  gx: number;
-  gy: number;
   /** The pointer's place on this card; the middle when it is not on it. */
   rx: number;
   ry: number;
@@ -193,53 +179,44 @@ const smoothstep = (a: number, b: number, x: number): number => {
 };
 
 /**
- * What a pointer at `at` gives a card drawn in `box`, in a window of `view`. `onCard` is whether
- * this card is the one the pointer is on — the topmost under it, which the caller knows from the
- * pointer event's target. A box alone cannot say: in the deck's stacks the pointer is inside nine
- * cards' boxes at once and only one of them shows there.
+ * What a pointer at `at` gives a card drawn in `box`. `onCard` is whether this card is the one the
+ * pointer is on — the topmost under it, which the caller knows from the pointer event's target. A
+ * box alone cannot say: in the deck's stacks the pointer is inside nine cards' boxes at once and
+ * only one of them shows there.
  */
 export function foilPointer(
   at: { x: number; y: number },
   box: { left: number; top: number; width: number; height: number },
-  view: { width: number; height: number },
   onCard: boolean,
 ): FoilPointer {
-  const gx = at.x / Math.max(1, view.width);
-  const gy = at.y / Math.max(1, view.height);
   const rx = (at.x - box.left) / Math.max(1, box.width);
   const ry = (at.y - box.top) / Math.max(1, box.height);
   const inside = onCard && rx >= 0 && rx <= 1 && ry >= 0 && ry <= 1;
-  if (!inside) return { gx, gy, rx: 0.5, ry: 0.5, hover: 0 };
+  if (!inside) return { rx: 0.5, ry: 0.5, hover: 0 };
   const edge = Math.min(rx, 1 - rx, ry, 1 - ry);
-  return { gx, gy, rx, ry, hover: smoothstep(0, 0.15, edge) };
+  return { rx, ry, hover: smoothstep(0, 0.15, edge) };
 }
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 /**
  * Where on `card` the light is, for what the pointer gives it — `null` for no pointer at all
- * (outside the window, a finger, less motion), which is the card's resting light.
+ * (outside the window, a finger, less motion), which is the card's resting light, as is a card the
+ * pointer is not on.
  *
- * A card the pointer is not on drifts {@link FOIL_IDLE} of itself across the whole window, in
- * steps of {@link FOIL_IDLE_STEP}; the card it is on moves {@link FOIL_HOVER} of itself across
- * itself, mirrored, blended in by `hover`. **No easing in time** — the owner's call ("remove the
- * smooth interpolation too"): the light is wherever the pointer puts it, at once.
+ * The card the pointer is on moves {@link FOIL_HOVER} of itself across itself, mirrored, blended in
+ * from its rest by `hover`. **No easing in time** — the owner's call ("remove the smooth
+ * interpolation too"): the light is wherever the pointer puts it, at once.
  */
 export function foilAim(given: FoilPointer | null, card: FoilCard): { x: number; y: number } {
   const restX = FOIL_REST.x + card.ox;
   const restY = FOIL_REST.y + card.oy;
-  if (given === null) return { x: restX, y: restY };
-  const idleX = restX + FOIL_IDLE * (0.5 - given.gx);
-  const idleY = restY + FOIL_IDLE * (0.5 - given.gy);
-  if (given.hover === 0) {
-    const step = (v: number) => Math.round(clamp01(v) / FOIL_IDLE_STEP) * FOIL_IDLE_STEP;
-    return { x: step(idleX), y: step(idleY) };
-  }
+  if (given === null || given.hover === 0) return { x: restX, y: restY };
   const onX = 0.5 + FOIL_HOVER * (0.5 - given.rx);
   const onY = 0.5 + FOIL_HOVER * (0.5 - given.ry);
   return {
-    x: clamp01(idleX + given.hover * (onX - idleX)),
-    y: clamp01(idleY + given.hover * (onY - idleY)),
+    x: clamp01(restX + given.hover * (onX - restX)),
+    y: clamp01(restY + given.hover * (onY - restY)),
   };
 }
 
@@ -294,15 +271,14 @@ export function rippleRings(x: number, y: number): { grow: number; show: number 
  * band sits: the light's position projected onto the sweep, so the band crosses the card as the
  * light does.
  *
- * `ripple` adds the nine rings' `--foil-gN` (size) and `--foil-sN` (shown). `"rest"` shows the
- * rings the card's *resting* light shows, whatever `at` is: an idle ripple keeps its rings, so a
- * deck of them is not a hundred 0.9 s fades repainting every frame — only the card under the
- * pointer fades rings in and out.
+ * `ripple` adds the nine rings' `--foil-gN` (size) and `--foil-sN` (shown). Only the card under the
+ * pointer moves its light, so only it fades rings in and out: a deck of ripples is not a hundred
+ * 0.9 s fades repainting every frame.
  */
 export function foilLight(
   at: { x: number; y: number },
   card: FoilCard,
-  ripple: "live" | "rest" | null = null,
+  ripple = false,
 ): Record<string, string> {
   const t = (card.angle * Math.PI) / 180;
   const along = (at.x - 0.5) * Math.sin(t) - (at.y - 0.5) * Math.cos(t);
@@ -315,14 +291,11 @@ export function foilLight(
     "--foil-angle": `${card.angle.toFixed(1)}deg`,
     "--foil-at": `${(50 + 45 * along).toFixed(1)}%`,
   };
-  if (ripple === null) return vars;
-  const grown = rippleRings(at.x, at.y);
-  const rest = foilAim(null, card);
-  const shown = ripple === "rest" ? rippleRings(rest.x, rest.y) : grown;
-  grown.forEach(({ grow }, i) => {
+  if (!ripple) return vars;
+  rippleRings(at.x, at.y).forEach(({ grow, show }, i) => {
     vars[`--foil-g${i + 1}`] = grow.toFixed(2);
     // In twentieths: a ring's visibility changes, and so repaints, only when it visibly moves.
-    vars[`--foil-s${i + 1}`] = (Math.round(shown[i].show * 20) / 20).toFixed(2);
+    vars[`--foil-s${i + 1}`] = (Math.round(show * 20) / 20).toFixed(2);
   });
   return vars;
 }
