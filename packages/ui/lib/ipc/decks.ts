@@ -2866,6 +2866,72 @@ export interface SwapResult {
 }
 
 /**
+ * One step of a batched deck write — Rust's `DeckOp` (serde tag `op`, camelCase), sent in a list
+ * to {@link deckCommands.deckApply}.
+ *
+ * **Each arm is one single command's arguments, less the deck and the variant**, which the batch
+ * names once: `add` is `deck_add_card`, `move` is `deck_move_card`, `remove` takes the whole row
+ * out (releasing the copies a live list's group held, as a cut does), `setLabel` is
+ * `deck_card_set_label` and `addToOtherList` is `deck_add_card_to_other_list`. So every rule those
+ * commands carry — the id-or-name pile, the fold, the token reroute — holds inside a batch too.
+ */
+export type DeckOp =
+  | {
+      op: "add";
+      cardId: string;
+      categoryId: number | null;
+      categoryName: string | null;
+      finish: DeckFinish;
+      quantity: number;
+    }
+  | {
+      op: "move";
+      cardId: string;
+      fromCategoryId: number;
+      toCategoryId: number | null;
+      toCategoryName: string | null;
+      finish: DeckFinish;
+    }
+  | { op: "remove"; cardId: string; categoryId: number; finish: DeckFinish }
+  | {
+      op: "setLabel";
+      cardId: string;
+      categoryId: number;
+      finish: DeckFinish;
+      labelId: number | null;
+    }
+  | {
+      op: "addToOtherList";
+      cardId: string;
+      fromCategoryId: number;
+      finish: DeckFinish;
+      quantity: number;
+    };
+
+/** What one {@link DeckOp} of a batch did — the batch's answer holds one per op, in order. */
+export interface DeckOpResult {
+  /** What the single command would answer (add: id 0 for a token; remove: removed true); null when refused or not applicable. */
+  change: EntryChange | null;
+  /** The pile the row ended in where the op knows it (add: found-or-created pile, null for a token; move: target pile). */
+  categoryId: number | null;
+  /** The refusal sentence when this op was refused (rolled back alone; the rest of the batch stands). */
+  refusal: string | null;
+}
+
+/**
+ * What `deck_apply` answers — the batch's per-op results, and the two facts a caller's
+ * invalidation is gated on.
+ */
+export interface DeckApplyOutcome {
+  /** One per op, in input order. */
+  results: DeckOpResult[];
+  /** How many ops landed. */
+  landed: number;
+  /** Whether any collection row changed (a removal on a live list released copies). */
+  collectionMoved: boolean;
+}
+
+/**
  * One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
  *
  * A new format is a seeded row rather than a code branch, and that is only true if nothing
@@ -3771,6 +3837,18 @@ export const deckCommands = {
       finish,
       quantity,
     }),
+  /**
+   * Many card writes to one list of one deck in **one** command — the multi-card gestures (Add N
+   * cards, a drag of a picked set, Delete over a picked set, a label over several rows).
+   *
+   * One transaction, the ops applied in order, each doing exactly what its single command does,
+   * and **one undo step** for the lot. A refused op is rolled back alone and answered in its own
+   * {@link DeckOpResult.refusal}; the rest land. A deck-level failure (busy, a deck that is gone)
+   * rejects the whole call. Sent as N single commands, the same gesture was N transactions, N
+   * Ctrl+Z presses and N re-reads of the deck. An empty list answers an empty outcome.
+   */
+  deckApply: (deckId: number, variant: DeckVariant, ops: DeckOp[]) =>
+    invoke<DeckApplyOutcome>("deck_apply", { deckId, variant, ops }),
   /**
    * An absolute quantity — **the stepper's write**, and the one that works on a row whose
    * printing has left the card database.

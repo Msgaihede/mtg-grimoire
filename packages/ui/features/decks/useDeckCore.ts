@@ -19,6 +19,7 @@ import { useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ipc,
+  type DeckApplyOutcome,
   type DeckCard,
   type DeckCategory,
   type DeckDetail,
@@ -26,6 +27,7 @@ import {
   type DeckPatch,
   type DeckLabel,
   type DeckMissingPick,
+  type DeckOp,
   type DeckPullPick,
   type DeckVariant,
   type DeckViewState,
@@ -181,12 +183,29 @@ export const NO_ANCHOR: DeckAnchor = {
  * absent.
  */
 export async function oracleTagsFor(cardId: string): Promise<readonly string[]> {
+  return (await oracleTagsForMany([cardId])).get(cardId) ?? [];
+}
+
+/**
+ * {@link oracleTagsFor} over many printings in **one** read — what `addCards` files a batch by,
+ * the importer's `tagsFor` shape. The ids are deduplicated first, the answers matched back by
+ * `cardId` (never by position, for the reason above), and **a failed read is `[]` for every
+ * card**, never a failed add. No ids asks nothing.
+ */
+export async function oracleTagsForMany(
+  cardIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const byId = new Map<string, readonly string[]>();
+  const unique = [...new Set(cardIds)];
+  if (unique.length === 0) return byId;
   try {
-    const answers = await ipc.oracleTagsForPrintings([cardId]);
-    return answers.find((entry) => entry.cardId === cardId)?.slugs ?? [];
+    for (const answer of await ipc.oracleTagsForPrintings(unique)) {
+      byId.set(answer.cardId, answer.slugs);
+    }
   } catch {
-    return [];
+    // The floor — see {@link oracleTagsFor}. Every card files by its type line.
   }
+  return byId;
 }
 
 /**
@@ -225,6 +244,111 @@ export interface QuantityResult {
   removed: boolean;
   outcome: MoveOutcome | null;
 }
+
+/**
+ * One card to put into the deck — what {@link useDeckCore}'s `addCard` takes for one card and
+ * `addCards` takes a list of. **One shape for both**, so a field added for one press is a field
+ * the batch files by too; the rule that reads it is {@link fileAdd}, on this one definition.
+ */
+export interface DeckAddRequest {
+  cardId: string;
+  categoryId?: number | null;
+  /**
+   * **File an add that names no pile where the deck says its adds land** —
+   * `decks.default_category_id`, the setting Deck settings asks once (issue #693).
+   *
+   * Set by the surfaces that add to a deck from **outside its editor** — the card menu's
+   * `Add to → Deck`, the card modal's picker, the cabinet's `Decks` rows (all three through
+   * `useCardToDeck`) and the sidebar's Decks entry. The editor resolves the setting itself,
+   * against piles it already has on screen, and hands a real `categoryId` down; a surface
+   * with no editor has nothing on screen to resolve it against, so the read is done in the
+   * hook, on the deck it is open on. Until it was, every one of those adds took the Auto arm
+   * whatever the deck said, and a deck pointed at its Sideboard filled its main piles.
+   *
+   * **Opt-in rather than the rule for every add with no category, and the reason is the
+   * quick zones' `Auto`.** That drop is the reader *choosing* Auto over the deck's setting —
+   * the editor's one gesture that names the rule rather than a pile — and it sends the same
+   * `{ cardId, typeLine }` shape. Reading the setting for it would turn an explicit choice
+   * back into the default.
+   *
+   * Ignored when `categoryId` is given — a caller that named a pile has already answered. A
+   * setting of {@link AUTO_CATEGORY}, or one that names no pile on this list, falls through
+   * to the Auto arm exactly as before: {@link defaultPileFor} is the editor's own rule, so
+   * the two can never disagree about where an add lands.
+   */
+  deckDefault?: boolean;
+  /**
+   * Which object to add — the regular copy unless a caller says otherwise.
+   *
+   * **Optional here and required on {@link Slot}, and the asymmetry is the honest one.** An
+   * add coming off a search wall, a drag or the quick-add field is a card being put into a
+   * deck, and the regular copy is what that means until the reader says which one they have;
+   * `deckSetCardFinish` is where the finish is the subject. A *write to an existing row*
+   * has no such default — the row is already one or the other, and guessing would step the
+   * wrong one.
+   */
+  finish?: DeckFinish;
+  /** The card's own `type_line`, for the caller that named no category — the **fallback**
+   *  half of the rule now that the tags are read here rather than passed in. `null` is a
+   *  card whose printing has left `cards`; **absent** is a caller with nothing to say, which
+   *  is not the same thing and is the one arm that consults nothing — see
+   *  {@link DEFAULT_CATEGORY_NAME}. */
+  typeLine?: string | null;
+  /**
+   * What the card *does*, from a caller that has **already read it** — and absent from every
+   * caller that has not, which is most of them and costs them the hook's one read.
+   *
+   * The docked search is the caller that has: its Add button names the pile before the press,
+   * so it reads the wall's tags to name it (`useWallOracleTags`) and hands the same slugs
+   * here. **That is what makes the button's word and this hook's word one answer rather than
+   * two that usually agree** — the rule is still applied on this one definition, over the
+   * very facts the label was drawn from, so a taxonomy replaced between the paint and the
+   * press cannot file a card somewhere the button did not say. Until 2026-10-04 the button
+   * computed its word from the type line alone and this read the tags: `Add Rampant Growth to
+   * Sorcery`, filed under Ramp.
+   *
+   * Read only in the arm {@link typeLine} is read in. `[]` is an answer — a card known to
+   * carry no tag — and is not read again.
+   */
+  oracleTags?: readonly string[];
+  quantity: number;
+  /*
+   * **An `owned` field stood here from 2026-08-23 to 2026-08-25**, set by the docked panel's
+   * own/need pair, and every add in this app now means what an absent one always meant: the
+   * deck holds a card nothing in the collection backs, so the row reads as *missing* — which
+   * is what the deck→wishlist sweep is built on. Putting a copy the reader owns into a deck
+   * is `collection_to_deck`, which the Collection Search tab presses.
+   */
+}
+
+/** The `add` arm of a batch — what {@link DeckAddRequest} becomes once it has been filed. */
+type AddOp = Extract<DeckOp, { op: "add" }>;
+
+/**
+ * **The filing rule, once, for the single add and the batch alike** — where a card with no pile
+ * of its own lands. `pileId` is the pile the request named or, for `deckDefault`, the deck's
+ * default pile (already resolved, once per batch); `slugs` is what the card does, read once per
+ * batch or handed in. A pile wins; with none, `autoCategoryFor` names one from the type line and
+ * the tags; with no type line either, {@link DEFAULT_CATEGORY_NAME}. See `addCard`'s doc for why
+ * each arm is what it is.
+ */
+function fileAdd(
+  request: DeckAddRequest,
+  pileId: number | null,
+  slugs: readonly string[],
+): Pick<AddOp, "categoryId" | "categoryName"> {
+  if (pileId !== null) return { categoryId: pileId, categoryName: null };
+  return {
+    categoryId: null,
+    categoryName:
+      request.typeLine === undefined
+        ? DEFAULT_CATEGORY_NAME
+        : autoCategoryFor({ typeLine: request.typeLine, oracleTags: slugs }),
+  };
+}
+
+/** A batch's answer to an empty batch — no command sent, nothing to say. */
+const emptyOutcome = (): DeckApplyOutcome => ({ results: [], landed: 0, collectionMoved: false });
 
 /**
  * One deck, everything in it, and every write that changes what is in it.
@@ -291,6 +415,38 @@ export function useDeckCore(
         : undefined;
     const pile = defaultPileFor(detail.deck.defaultCategoryId, detail.categories, livePiles);
     return pile === AUTO_CATEGORY ? null : pile;
+  };
+
+  /**
+   * Turn adds into `add` ops by {@link fileAdd} — **with at most one read of each kind for the
+   * whole list**, which is what lets `addCards` file two hundred cards for what `addCard` pays
+   * for one: the deck's default pile ({@link defaultPileOf}) once, if any card asks for it and
+   * names no pile, and the Oracle tags of every card the Auto arm files and nobody has read
+   * ({@link oracleTagsForMany}) in one command. A card with a pile, or with no type line, asks
+   * nothing — the same arms `addCard` always skipped the read in. A land still pays the read:
+   * the Land pin lives inside `autoCategoryFor`, and short-circuiting it here would be a second
+   * copy of that rule. One op per card, in input order.
+   */
+  const planAdds = async (deckId: number, cards: readonly DeckAddRequest[]): Promise<AddOp[]> => {
+    const named = cards.map((card) => card.categoryId ?? null);
+    const defaultPile = cards.some((card, i) => named[i] === null && card.deckDefault === true)
+      ? await defaultPileOf(deckId)
+      : null;
+    const piles = cards.map((card, i) => named[i] ?? (card.deckDefault ? defaultPile : null));
+    const tags = await oracleTagsForMany(
+      cards.flatMap((card, i) =>
+        piles[i] === null && card.typeLine !== undefined && card.oracleTags === undefined
+          ? [card.cardId]
+          : [],
+      ),
+    );
+    return cards.map((card, i) => ({
+      op: "add",
+      cardId: card.cardId,
+      ...fileAdd(card, piles[i], card.oracleTags ?? tags.get(card.cardId) ?? []),
+      finish: card.finish ?? null,
+      quantity: card.quantity,
+    }));
   };
 
   const query = useQuery(detailRead);
@@ -567,7 +723,7 @@ export function useDeckCore(
    * row of a wall of search results to serve the one row somebody eventually drags.
    *
    * So this pays **one extra round trip to local SQLite**, on a deliberate act by the reader —
-   * a press or a drop, one card, {@link oracleTagsFor} over a single id — and only in the arm
+   * a press or a drop, one card, {@link oracleTagsForMany} over a single id — and only in the arm
    * that has no category *and* has a type line. The comment that stood here promised no add
    * would pay one; that promise is spent, knowingly, and what it buys is a decklist filed by
    * function rather than by card type. Neither of the other two arms asks anything: a drop onto
@@ -576,6 +732,10 @@ export function useDeckCore(
    *
    * **A tag read that fails never fails the add** — see {@link oracleTagsFor}. The card lands in
    * its type-line pile, which is where every card landed before the taxonomy existed.
+   *
+   * **The rule itself is {@link fileAdd}, and {@link planAdds} reads its facts** — shared with
+   * `addCards` below, so a card added alone and the same card added in a batch of two hundred
+   * cannot be filed into different piles.
    *
    * So: the card id and the type line come in, the name goes out, and `null` — an orphan, or a
    * layout with no bucket word — answers `UNCATEGORIZED` whatever the tags said.
@@ -597,102 +757,20 @@ export function useDeckCore(
    * left painted is not a cost that trades against it.
    */
   const addCard = useMutation({
-    mutationFn: async ({
-      cardId,
-      categoryId = null,
-      deckDefault = false,
-      typeLine,
-      oracleTags,
-      finish = null,
-      quantity,
-    }: {
-      cardId: string;
-      categoryId?: number | null;
-      /**
-       * **File an add that names no pile where the deck says its adds land** —
-       * `decks.default_category_id`, the setting Deck settings asks once (issue #693).
-       *
-       * Set by the surfaces that add to a deck from **outside its editor** — the card menu's
-       * `Add to → Deck`, the card modal's picker, the cabinet's `Decks` rows (all three through
-       * `useCardToDeck`) and the sidebar's Decks entry. The editor resolves the setting itself,
-       * against piles it already has on screen, and hands a real `categoryId` down; a surface
-       * with no editor has nothing on screen to resolve it against, so the read is done here, on
-       * the deck this hook is open on. Until it was, every one of those adds took the Auto arm
-       * below whatever the deck said, and a deck pointed at its Sideboard filled its main piles.
-       *
-       * **Opt-in rather than the rule for every add with no category, and the reason is the
-       * quick zones' `Auto`.** That drop is the reader *choosing* Auto over the deck's setting —
-       * the editor's one gesture that names the rule rather than a pile — and it sends the same
-       * `{ cardId, typeLine }` shape. Reading the setting for it would turn an explicit choice
-       * back into the default.
-       *
-       * Ignored when `categoryId` is given — a caller that named a pile has already answered. A
-       * setting of {@link AUTO_CATEGORY}, or one that names no pile on this list, falls through
-       * to the Auto arm exactly as before: {@link defaultPileFor} is the editor's own rule, so
-       * the two can never disagree about where an add lands.
-       */
-      deckDefault?: boolean;
-      /**
-       * Which object to add — the regular copy unless a caller says otherwise.
-       *
-       * **Optional here and required on {@link Slot}, and the asymmetry is the honest one.** An
-       * add coming off a search wall, a drag or the quick-add field is a card being put into a
-       * deck, and the regular copy is what that means until the reader says which one they have;
-       * `deckSetCardFinish` is where the finish is the subject. A *write to an existing row*
-       * has no such default — the row is already one or the other, and guessing would step the
-       * wrong one.
-       */
-      finish?: DeckFinish;
-      /** The card's own `type_line`, for the caller that named no category — the **fallback**
-       *  half of the rule now that the tags are read here rather than passed in. `null` is a
-       *  card whose printing has left `cards`; **absent** is a caller with nothing to say, which
-       *  is not the same thing and is the one arm that consults nothing — see
-       *  {@link DEFAULT_CATEGORY_NAME}. */
-      typeLine?: string | null;
-      /**
-       * What the card *does*, from a caller that has **already read it** — and absent from every
-       * caller that has not, which is most of them and costs them the one read below.
-       *
-       * The docked search is the caller that has: its Add button names the pile before the press,
-       * so it reads the wall's tags to name it (`useWallOracleTags`) and hands the same slugs
-       * here. **That is what makes the button's word and this hook's word one answer rather than
-       * two that usually agree** — the rule is still applied on this one definition, over the
-       * very facts the label was drawn from, so a taxonomy replaced between the paint and the
-       * press cannot file a card somewhere the button did not say. Until 2026-10-04 the button
-       * computed its word from the type line alone and this read the tags: `Add Rampant Growth to
-       * Sorcery`, filed under Ramp.
-       *
-       * Read only in the arm {@link typeLine} is read in. `[]` is an answer — a card known to
-       * carry no tag — and is not read again.
-       */
-      oracleTags?: readonly string[];
-      quantity: number;
-      /*
-       * **An `owned` field stood here from 2026-08-23 to 2026-08-25**, set by the docked panel's
-       * own/need pair, and every add in this app now means what an absent one always meant: the
-       * deck holds a card nothing in the collection backs, so the row reads as *missing* — which
-       * is what the deck→wishlist sweep is built on. Putting a copy the reader owns into a deck
-       * is `collection_to_deck`, which the Collection Search tab presses.
-       */
-    }) => {
+    mutationFn: async (request: DeckAddRequest) => {
       // Before anything is asked about the card: a write with no deck open is refused here and
       // not one round trip later.
       const deckId = opened(id);
-      const pileId = categoryId === null && deckDefault ? await defaultPileOf(deckId) : categoryId;
-      // The `await` sits inside the one arm that needs it, so the other two cost exactly what
-      // they always did — a named category and a caller with nothing to say each make one IPC
-      // call in total. A land still pays the read: the Land pin lives inside `autoCategoryFor`,
-      // and short-circuiting it here would be a second copy of that rule.
-      const categoryName =
-        pileId !== null
-          ? null
-          : typeLine === undefined
-            ? DEFAULT_CATEGORY_NAME
-            : autoCategoryFor({
-                typeLine,
-                oracleTags: oracleTags ?? (await oracleTagsFor(cardId)),
-              });
-      return ipc.deckAddCard(deckId, cardId, pileId, categoryName, variant, finish, quantity);
+      const [op] = await planAdds(deckId, [request]);
+      return ipc.deckAddCard(
+        deckId,
+        op.cardId,
+        op.categoryId,
+        op.categoryName,
+        variant,
+        op.finish,
+        op.quantity,
+      );
     },
     // **{@link invalidate} for every add, on success and on refusal alike.** This write touches
     // `deck_cards` — **or, for a token, the deck's token entries and nothing in `deck_cards`**
@@ -704,6 +782,66 @@ export function useDeckCore(
     // row out of the binder as well, and firing it here would be three refetches per press that
     // can only re-answer what is already on screen.
     onSuccess: invalidate,
+    onError: invalidate,
+  });
+
+  /**
+   * What every batched write does once its answer is in: the deck root **once** for the whole
+   * batch — the reason the batch exists, since N single writes were N re-reads of ~15 `["decks"]`
+   * queries — and the collection only when the batch says a row of it moved (a removal on the
+   * live list releases the copies its group held; see {@link invalidateCollection}).
+   */
+  const settleBatch = (outcome: DeckApplyOutcome) => {
+    invalidate();
+    if (outcome.collectionMoved) invalidateCollection();
+  };
+
+  /**
+   * **Many card writes in one command** — `deck_apply`: the ops land in order in one transaction,
+   * each exactly as its single command would, as **one** undo step. A refused op is answered in
+   * its own result (`results[i].refusal`) and the rest land; a deck-level failure (busy, a deck
+   * that is gone) rejects the whole call.
+   *
+   * **No optimistic patch and no anchor.** The gestures that send a batch — a drag of a picked
+   * set, Delete over one, a label over several rows — are one press each, not a held stepper, and
+   * a guess at two hundred rows' folds is two hundred chances to draw something the read then
+   * takes back. The card modal's address is the caller's to settle, from the results.
+   *
+   * {@link settleBatch} on success; {@link invalidate} on a refusal, `addCard`'s reason (a deck
+   * that is gone must not stay painted) — a whole-call refusal moved nothing in the collection.
+   * An empty list sends nothing and re-reads nothing: it answers an empty outcome.
+   */
+  const applyOps = useMutation({
+    mutationFn: async ({ ops }: { ops: DeckOp[] }): Promise<DeckApplyOutcome> => {
+      const deckId = opened(id);
+      if (ops.length === 0) return emptyOutcome();
+      return ipc.deckApply(deckId, variant, ops);
+    },
+    onSuccess: (outcome) => {
+      if (outcome.results.length > 0) settleBatch(outcome);
+    },
+    onError: invalidate,
+  });
+
+  /**
+   * {@link addCard} for many cards — the Add N cards press, a picked set dropped on the deck —
+   * filed by **the same rule** ({@link fileAdd}, through {@link planAdds}) and sent as **one**
+   * `deck_apply`. That is one default-pile read and one Oracle-tag read for the whole list rather
+   * than one of each per card, one transaction, one undo step and one re-read.
+   *
+   * `results[i]` is card `i`'s answer: its `change` is what `deck_add_card` would have answered
+   * (`id: 0` for a token, which no pile holds), and a refused card carries its sentence while the
+   * others land. Invalidates as {@link applyOps} does.
+   */
+  const addCards = useMutation({
+    mutationFn: async ({ cards }: { cards: DeckAddRequest[] }): Promise<DeckApplyOutcome> => {
+      const deckId = opened(id);
+      if (cards.length === 0) return emptyOutcome();
+      return ipc.deckApply(deckId, variant, await planAdds(deckId, cards));
+    },
+    onSuccess: (outcome) => {
+      if (outcome.results.length > 0) settleBatch(outcome);
+    },
     onError: invalidate,
   });
 
@@ -1514,6 +1652,12 @@ export function useDeckCore(
      *  mutation's own doc, and `DeckEditor`'s `newest([...])`, which this is not in. */
     rememberView,
     addCard,
+    /** {@link addCard} for many cards, filed by the same rule and sent as one `deck_apply` —
+     *  `results[i]` is card `i`'s answer. */
+    addCards,
+    /** Many card writes as one `deck_apply`: one transaction, one undo step, one re-read, and a
+     *  refusal per op rather than for the batch. */
+    applyOps,
     /** One copy of a row into the deck's other list, filed in the pile there that stands for
      *  the row's own — see the mutation's doc. */
     addToOtherList,

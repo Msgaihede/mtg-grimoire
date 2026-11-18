@@ -192,6 +192,9 @@ import type {
   DeckPullOutcome,
   DeckPullPick,
   DeckPullRow,
+  DeckApplyOutcome,
+  DeckOp,
+  DeckOpResult,
   DeckOwnedElsewhere,
   DeckElsewherePlace,
   DeckQuickAddOutcome,
@@ -22415,6 +22418,101 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_apply` — many card writes to one list of one deck, in **one** command and one undo
+     * step: the multi-card gestures (Add N cards, a drag of a picked set, Delete over a picked
+     * set, a label over several rows).
+     *
+     * **Composed of the single handlers above rather than a second copy of them**, which is the
+     * crate's arrangement too — each op does exactly what its own command does, so a batch can
+     * never file, fold or refuse a card differently from a press. They are this table's own
+     * handlers, unwrapped: {@link journalled} wraps `deck_apply` itself, so the batch's history
+     * rows are filed as **one** step keyed on the last of them, and one Ctrl+Z puts the lot back.
+     *
+     * **A refused op is rolled back alone and answered in its own result**; the rest land. The
+     * crate does it with a savepoint per op, and this stands one in by copying out every table an
+     * op can write before it runs and putting them back when it throws — a refusal after the name
+     * arm invented a pile must not leave that pile standing. The deck-level refusals (busy, an
+     * unknown variant, a deck that is gone) are asked first and reject the whole call.
+     *
+     * `remove` is the whole row out, `deck_set_card_quantity`'s zero: on a live list that already
+     * releases the copies the group held (issue #1494), which is what the app's cut does, and a
+     * virtual deck has no group to release from. `collectionMoved` is read off the collection
+     * itself, before and after, rather than added up from the ops.
+     */
+    deck_apply: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      ops: DeckOp[];
+    }): DeckApplyOutcome => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      requireDeck(db, args.deckId);
+      if (args.ops.length === 0) return { results: [], landed: 0, collectionMoved: false };
+      const single = writeHandlers(db);
+      const { deckId } = args;
+      const collection = () =>
+        JSON.stringify(db.collectionEntries.map((e) => [e.id, e.folderId, e.quantity]));
+      const collectionBefore = collection();
+      /** The pile a deck row now sits in, or `null` for a token's `id: 0`. */
+      const pileOf = (change: EntryChange): number | null =>
+        db.deckCards.find((dc) => dc.id === change.id)?.categoryId ?? null;
+      const results = args.ops.map((op): DeckOpResult => {
+        const saved = structuredClone({
+          collectionEntries: db.collectionEntries,
+          collectionFolders: db.collectionFolders,
+          decks: db.decks,
+          deckCategories: db.deckCategories,
+          deckCards: db.deckCards,
+          deckTokens: db.deckTokens,
+          deckTokenPrintings: db.deckTokenPrintings,
+          deckAudit: db.deckAudit,
+          activity: db.activity,
+        });
+        try {
+          switch (op.op) {
+            case "add": {
+              const change = single.deck_add_card({ deckId, variant, ...op });
+              return { change, categoryId: pileOf(change), refusal: null };
+            }
+            case "move": {
+              const categoryId = single.deck_move_card({ deckId, variant, ...op });
+              return { change: null, categoryId, refusal: null };
+            }
+            case "remove": {
+              const change = single.deck_set_card_quantity({ deckId, variant, ...op, quantity: 0 });
+              return { change, categoryId: null, refusal: null };
+            }
+            case "setLabel":
+              single.deck_card_set_label({ deckId, variant, ...op });
+              return { change: null, categoryId: null, refusal: null };
+            case "addToOtherList": {
+              // The list it goes **into** is the other one: the op's pile is in this batch's
+              // list, which is what `useDeckCore`'s single press sends as well.
+              const change = single.deck_add_card_to_other_list({
+                deckId,
+                ...op,
+                variant: variant === LIVE ? "theory" : LIVE,
+              });
+              return { change, categoryId: pileOf(change), refusal: null };
+            }
+          }
+        } catch (error) {
+          Object.assign(db, saved);
+          return {
+            change: null,
+            categoryId: null,
+            refusal: error instanceof Error ? error.message : String(error),
+          };
+        }
+      });
+      return {
+        results,
+        landed: results.filter((r) => r.refusal === null).length,
+        collectionMoved: collection() !== collectionBefore,
+      };
+    },
+
+    /**
      * `deck::swap_printing` — the card pane's "Use this printing".
      *
      * The one card write whose identity comes from a **fresh `cards` lookup** rather than
@@ -29154,6 +29252,7 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * `deck_split_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`), so each
  * files a step here as it does in the app. Until issue #1186 they recorded none, and a Ctrl+Z
  * labelled with an older write restored a snapshot taken before them — and took them with it.
+ * `deck_apply` runs several of them under its own name, so its whole batch is **one** step.
  *
  * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
  * are not among those, and closing the gap on the add side alone would have left the pair

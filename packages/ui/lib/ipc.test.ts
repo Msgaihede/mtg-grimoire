@@ -168,6 +168,7 @@ import {
   type ComboProgress,
   type DbChanged,
   type DeckNote,
+  type DeckOp,
   type DeckTodoList,
   type DeckTodoListEntry,
   type DeckTokenRow,
@@ -1684,6 +1685,80 @@ describe("ipc argument names match the Rust command signatures", () => {
     // How many wishes were *touched*, not how many copies were added — clicking twice raises
     // one line rather than making two, which is `add_wish`'s fold.
     expect(wishes).toBe(2);
+  });
+
+  /**
+   * **`deck_apply`, the batched card write** — one command for a multi-card gesture.
+   *
+   * Three keys, and the third is a list of tagged objects whose own keys are serde's: the op's
+   * fields travel exactly as the single commands' parameters do (`fromCategoryId`,
+   * `toCategoryName`, …), so a `DeckOp` arm that spelled one differently deserialises to a refusal
+   * per op rather than a type error anywhere. The shapes are held by the walks below (`DeckOp` to
+   * `pub enum DeckOp`, the two answers to their structs); this case holds the command's own
+   * parameters and its registration, found by search rather than by path — `deck_apply.rs` or
+   * `deck.rs`, whichever the crate keeps it in.
+   */
+  it("sends a batch of deck writes under `deckId`, `variant` and `ops`", async () => {
+    const ops: DeckOp[] = [
+      {
+        op: "add",
+        cardId: "p1",
+        categoryId: null,
+        categoryName: "Ramp",
+        finish: null,
+        quantity: 1,
+      },
+      {
+        op: "move",
+        cardId: "p2",
+        fromCategoryId: 3,
+        toCategoryId: 4,
+        toCategoryName: null,
+        finish: "foil",
+      },
+      { op: "remove", cardId: "p3", categoryId: 3, finish: null },
+      { op: "setLabel", cardId: "p4", categoryId: 3, finish: null, labelId: 2 },
+      { op: "addToOtherList", cardId: "p5", fromCategoryId: 3, finish: null, quantity: 1 },
+    ];
+    const answer = {
+      results: ops.map(() => ({ change: null, categoryId: null, refusal: null })),
+      landed: 5,
+      collectionMoved: false,
+    };
+    invoke.mockResolvedValue(answer);
+
+    expect(await ipc.deckApply(4, "live", ops)).toEqual(answer);
+    expect(invoke).toHaveBeenCalledWith("deck_apply", { deckId: 4, variant: "live", ops });
+
+    const sources = import.meta.glob<string>(
+      [
+        "/crates/grimoire-core/src/**/*.rs",
+        "/apps/desktop/src-tauri/src/**/*.rs",
+        "!/{crates/grimoire-core/src,apps/desktop/src-tauri/src}/**/tests/**",
+        "!/{crates/grimoire-core/src,apps/desktop/src-tauri/src}/**/*tests.rs",
+      ],
+      { query: "?raw", import: "default", eager: true },
+    );
+    const commandAt = /#\[tauri::command[^\]]*\]\s*pub (?:async )?fn deck_apply\(/;
+    const homes = Object.entries(sources).flatMap(([path, src]) => {
+      const m = commandAt.exec(src);
+      return m === null ? [] : [[path, src.slice(m.index + m[0].length)] as const];
+    });
+    expect(
+      homes.map(([path]) => path),
+      "`deck_apply` should be one `#[tauri::command]`",
+    ).toHaveLength(1);
+    const params = [
+      ...`,${homes[0][1].slice(0, homes[0][1].indexOf(")"))}`.matchAll(
+        /,\s*(?:mut\s+)?(\w+)\s*:(?!:)/g,
+      ),
+    ].map((m) => m[1] ?? "");
+    const sent = payloadKeys(ipcSource, "deck_apply").map(snake);
+    expect(sent).toEqual(["deck_id", "variant", "ops"]);
+    for (const key of sent) {
+      expect(params, `\`deck_apply\` is sent \`${key}\` and does not declare it`).toContain(key);
+    }
+    expect(desktopRs, "`deck_apply` is not registered in desktop.rs").toMatch(/::deck_apply,/);
   });
 
   /**
@@ -4049,7 +4124,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.customWidgetDelete(1);
     expect(invoke).toHaveBeenLastCalledWith("custom_widget_delete", { id: 1 });
 
-    for (const command of ["custom_widget_create", "custom_widget_update", "custom_widget_delete"]) {
+    for (const command of [
+      "custom_widget_create",
+      "custom_widget_update",
+      "custom_widget_delete",
+    ]) {
       const sent = payloadKeys(ipcSource, command).map(snake);
       const declared = commandParams(customWidgetsRs, command);
       expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).not.toHaveLength(0);
