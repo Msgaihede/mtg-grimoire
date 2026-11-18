@@ -151,7 +151,7 @@ struct Prepared {
 /// * `rarity` — the **single**-valued field, which is the printings modal's `<select>` and
 ///   not the filter row's chips — still has no dimension to narrow by, so a request carrying
 ///   it is faceted as though it were unfiltered and every count reads high. Its multi-valued
-///   neighbour `rarities` *is* a dimension now ([`CardIndex::rarity`], [`Skip::Rarities`]);
+///   neighbour `rarities` *is* a dimension now ([`crate::index::Corpus::rarity`], [`Skip::Rarities`]);
 ///   this one would need to fold into that base to join it, and nothing sends it with facets.
 /// * `priceMin`/`priceMax` have no dimension either, and cannot cheaply have one: a price is
 ///   a function of the reader's marketplace — two of the four read a table the corpus scan
@@ -2686,7 +2686,8 @@ mod tests {
         // measured 2026-08-11.
         let n = 116_694u32;
         let cap = BitSet::new(n as usize + 1).capacity();
-        let mut ix = CardIndex {
+        let mut owned = BitSet::new(cap);
+        let mut ix = crate::index::Corpus {
             capacity: cap,
             all: BitSet::new(cap),
             paper: BitSet::new(cap),
@@ -2703,7 +2704,6 @@ mod tests {
             finishes: std::array::from_fn(|_| BitSet::new(cap)),
             set_ord: vec![0; cap],
             set_codes: (0..1047).map(|i| format!("s{i}")).collect(),
-            owned: BitSet::new(cap),
         };
         for d in 1..=n {
             ix.all.set(d);
@@ -2779,10 +2779,14 @@ mod tests {
                 ix.finishes[2].set(d);
             }
             if d % 100 == 0 {
-                ix.owned.set(d);
+                owned.set(d);
             }
         }
 
+        let ix = CardIndex {
+            corpus: std::sync::Arc::new(ix),
+            owned,
+        };
         let cases: [(&str, SearchRequest); 6] = [
             ("unfiltered browse", req(|_| {})),
             ("colours (R)", req(|r| r.colors = Some("R".into()))),

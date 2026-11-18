@@ -7,9 +7,9 @@
 //! the honest answer is to say so at once rather than to spin until a deadline.
 //!
 //! So [`pause`] answers whether pausing was worth anything. `db::lock_for` and
-//! `db::lock_background` are its callers: natively they sleep between attempts exactly as they
-//! did, and in a browser `lock_for` gives up on its first contended attempt, which every caller
-//! already reads as `db::BUSY`.
+//! `db::lock_background` are its callers: natively they sleep between attempts as they always
+//! have (`lock_for` on a graduated schedule since 2026-11-18), and in a browser `lock_for` gives
+//! up on its first contended attempt, which every caller already reads as `db::BUSY`.
 //!
 //! `maintenance::reclaim_freed_pages` is a third, since the domain step: it stands aside between
 //! chunks so a waiter can take the connection, and ignores the answer — with nobody to stand
