@@ -92,7 +92,8 @@ import { quickAddBlock, quickAddShort, type QuickAddTarget } from "./quickCollec
 // The rules a deck card's rows are greyed by — moved to a leaf on 2026-10-03 so the light app's
 // phone face asks them too, rather than a second spelling of each.
 import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "./deckCardRules";
-import { reportPresses, type PressWording } from "./receipts";
+import { reportPresses, reportSettled, workLabel, type PressWording } from "./receipts";
+import type { DeckEdit } from "./useDeckCore";
 
 /**
  * The card a right-click on a deck row is about, as `CardMenuTarget` describes it.
@@ -126,6 +127,9 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
  */
 type Press = void | Promise<unknown>;
 
+/** A row's slot — what every batched edit is addressed by. */
+const slotOf = ({ cardId, categoryId, finish }: DeckCard) => ({ cardId, categoryId, finish });
+
 /** Hand a plural row's presses to the surface as one batch — see {@link DeckCardMenuDeps.batch}. */
 function reportBatch(deps: DeckCardMenuDeps, presses: readonly Press[]) {
   deps.batch?.(presses.filter((press): press is Promise<unknown> => press instanceof Promise));
@@ -153,6 +157,34 @@ function pressRows(
     rows.map((row) => row.name),
     say,
   );
+}
+
+/**
+ * **A row's writes over several cards, as one batch when the surface can send one** (issue #1164).
+ *
+ * With {@link DeckCardMenuDeps.edits} wired and more than one row, the row is one `deck_apply` —
+ * `edit(row)` per card, in the set's order — and its one toast is read off that batch's answer
+ * ({@link reportSettled}), so `Moved 47 of 50 cards` and its first refusal read exactly as they did
+ * when each card was its own write. A single card, and a surface with no batch (a story's spies),
+ * keep the single write each row always made, through {@link pressRows}.
+ */
+function pressMany(
+  deps: DeckCardMenuDeps,
+  rows: readonly DeckCard[],
+  single: (row: DeckCard) => Press,
+  edit: (row: DeckCard) => DeckEdit,
+  work: string,
+  say: PressWording,
+) {
+  if (rows.length > 1 && deps.edits !== undefined) {
+    reportSettled(
+      deps.edits(rows.map(edit), work),
+      rows.map((row) => row.name),
+      say,
+    );
+    return;
+  }
+  pressRows(deps, rows, rows.map(single), say);
 }
 
 /** Everything the deck's own rows need that is not the card. Built once per surface, never
@@ -264,6 +296,20 @@ export interface DeckCardMenuDeps {
    * workbench's stories build this menu with bare `act` spies.
    */
   batch?: (presses: readonly Promise<unknown>[]) => void;
+  /**
+   * **A plural row's writes as one batch** (issue #1164) — `Category for N cards`, `Label N cards`,
+   * `Remove N cards` and `Add N cards to …` each hand their set here as {@link DeckEdit}s and get
+   * one settled result per card back, which is what their one toast is read from. `work` is the
+   * busy indicator's sentence. The surface sends one `deck_apply` and files the banner's record
+   * itself (the editor's `editBatch`), so {@link batch} is not called for them.
+   *
+   * Optional: without it a plural row is one write per card, as it was — the workbench's stories
+   * build this menu with bare spies.
+   */
+  edits?: (
+    edits: readonly DeckEdit[],
+    work: string,
+  ) => Promise<readonly PromiseSettledResult<unknown>[]>;
   /**
    * **Quick add to collection** — record the copies this row is short of and file them in the
    * deck's own group, and write nothing to the wishlist (`deck_quick_add_to_collection` with no
@@ -532,10 +578,12 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       items: [
         ...deckCardLabelRows(card, deps.labels, (_card, labelId) => {
           const label = deps.labels.find((l) => l.id === labelId)?.name;
-          pressRows(
+          pressMany(
             deps,
             rows,
-            rows.map((row) => deps.setLabel(row, labelId)),
+            (row) => deps.setLabel(row, labelId),
+            (row) => ({ edit: "setLabel", ...slotOf(row), labelId }),
+            workLabel("Labeling", rows.length),
             labelWording(label),
           );
         }),
@@ -582,15 +630,18 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       // menus — a deck, a folder, a pile — and this takes a card out of a pile that stays.
       Icon: CircleMinus,
       // **Still no confirmation, and the plural is where that is worth re-arguing.** One card is
-      // one add to put back; four is four, and four presses of Ctrl+Z, because `deck_audit` has a
-      // row per write. What keeps it unconfirmed is that the reader picked those four themselves,
-      // one Ctrl-click at a time, and every one of them is wearing a gold ring while they read
-      // this row — the pile's `Clear stack…` asks because a pile is a column nobody enumerated.
+      // one add to put back; four is four — one batch since issue #1164, so one Ctrl+Z off the
+      // live list (a live cut files no step, one card or forty). What keeps it unconfirmed is that
+      // the reader picked those four themselves, one Ctrl-click at a time, and every one of them
+      // is wearing a gold ring while they read this row — the pile's `Clear stack…` asks because a
+      // pile is a column nobody enumerated.
       onSelect: () =>
-        pressRows(
+        pressMany(
           deps,
           rows,
-          rows.map((row) => deps.remove(row)),
+          (row) => deps.remove(row),
+          (row) => ({ edit: "remove", ...slotOf(row) }),
+          workLabel("Removing", rows.length),
           {
             done: (what) => `Removed ${what} from the deck`,
             failed: (what) => `Couldn't remove ${what} from the deck`,
@@ -683,10 +734,18 @@ function categoryItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
         id: `move-${category.id}`,
         label: category.name,
         onSelect: () =>
-          pressRows(
+          pressMany(
             deps,
             moving,
-            moving.map((row) => deps.moveTo(row, category.id)),
+            (row) => deps.moveTo(row, category.id),
+            (row) => ({
+              edit: "move",
+              cardId: row.cardId,
+              from: row.categoryId,
+              to: category.id,
+              finish: row.finish,
+            }),
+            workLabel("Moving", moving.length, `to “${category.name}”`),
             {
               done: (what) => `Moved ${what} to “${category.name}”`,
               failed: (what) => `Couldn't move ${what} to “${category.name}”`,
@@ -727,10 +786,12 @@ function otherListItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     {
       ...item,
       onSelect: () =>
-        pressRows(
+        pressMany(
           deps,
           addable,
-          addable.map((row) => otherList.add(row)),
+          (row) => otherList.add(row),
+          (row) => ({ edit: "addToOtherList", ...slotOf(row) }),
+          workLabel("Adding", addable.length, `to the ${list} list`),
           {
             done: (what) => `Added ${what} to the ${list} list`,
             failed: (what) => `Couldn't add ${what} to the ${list} list`,

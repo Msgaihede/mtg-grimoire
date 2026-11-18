@@ -28,6 +28,7 @@ import {
   type DeckLabel,
   type DeckMissingPick,
   type DeckOp,
+  type DeckOpResult,
   type DeckPullPick,
   type DeckVariant,
   type DeckViewState,
@@ -350,6 +351,64 @@ function fileAdd(
 /** A batch's answer to an empty batch — no command sent, nothing to say. */
 const emptyOutcome = (): DeckApplyOutcome => ({ results: [], landed: 0, collectionMoved: false });
 
+/** A {@link Slot} out of anything that carries one — the anchor's argument. */
+const slotOf = ({ cardId, categoryId, finish }: Slot): Slot => ({ cardId, categoryId, finish });
+
+/** A slot as one comparable string, for a set of them. */
+const slotKey = ({ cardId, categoryId, finish }: Slot) =>
+  JSON.stringify([cardId, categoryId, finish]);
+
+/**
+ * One card write the **editor** makes, in its own words — what {@link useDeckCore}'s `applyEdits`
+ * takes a list of (issue #1164). Each arm is the request one of this hook's single-card mutations
+ * takes, so the batch and the single press are two ways of sending one request rather than two
+ * requests that happen to agree:
+ *
+ * - `add` is {@link DeckAddRequest} whole — a pile, the deck's default, or Auto by the type line —
+ *   filed by {@link fileAdd} exactly as `addCard` files it;
+ * - `refile` is `refileCard`'s variables — the quick zones' `Auto` for a card the deck holds;
+ * - `move` is `moveCard`'s, `remove` the stepper's zero, `setLabel` `setLabel`'s, and
+ *   `addToOtherList` `addToOtherList`'s (one copy into the list this hook is *not* reading).
+ *
+ * **`addToOtherList` cannot share a batch with the others**: `deck_apply` writes one list, and
+ * that arm writes the other one. A list that mixes them is refused before anything is sent.
+ */
+export type DeckEdit =
+  | { edit: "add"; card: DeckAddRequest }
+  | {
+      edit: "refile";
+      cardId: string;
+      from: number;
+      finish: DeckFinish;
+      typeLine: string | null;
+      /** The pile the row is in now, by name — "already filed" is answered against it. */
+      categoryName: string;
+    }
+  | { edit: "move"; cardId: string; from: number; to: number; finish: DeckFinish }
+  | ({ edit: "remove" } & Slot)
+  | ({ edit: "setLabel"; labelId: number | null } & Slot)
+  | ({ edit: "addToOtherList" } & Slot);
+
+/** What one {@link DeckEdit} did — its op's {@link DeckOpResult}, and two facts the op cannot say. */
+export interface DeckEditResult extends DeckOpResult {
+  /**
+   * `false` only for a `refile` whose rule named the pile the card is already in — `refileCard`'s
+   * `moved: false`, which sends nothing. `change`, `categoryId` and `refusal` are then all `null`.
+   */
+  sent: boolean;
+  /** The pile name the rule produced — an `add` filed by Auto (or by name), and every `refile`;
+   *  `null` for every other edit. */
+  filedAs: string | null;
+}
+
+/** What `applyEdits` answers: one result per edit, in input order. */
+export interface DeckEditsOutcome {
+  results: DeckEditResult[];
+  /** How many edits landed — refused ones excluded, an unsent refile counted. */
+  landed: number;
+  collectionMoved: boolean;
+}
+
 /**
  * One deck, everything in it, and every write that changes what is in it.
  *
@@ -427,26 +486,127 @@ export function useDeckCore(
    * the Land pin lives inside `autoCategoryFor`, and short-circuiting it here would be a second
    * copy of that rule. One op per card, in input order.
    */
-  const planAdds = async (deckId: number, cards: readonly DeckAddRequest[]): Promise<AddOp[]> => {
+  const planAdds = async (
+    deckId: number,
+    cards: readonly DeckAddRequest[],
+    /** More printings to read the tags of **in the same read** — `planEdits`' refiles. */
+    alsoTag: readonly string[] = [],
+  ): Promise<{ ops: AddOp[]; tags: ReadonlyMap<string, readonly string[]> }> => {
     const named = cards.map((card) => card.categoryId ?? null);
     const defaultPile = cards.some((card, i) => named[i] === null && card.deckDefault === true)
       ? await defaultPileOf(deckId)
       : null;
     const piles = cards.map((card, i) => named[i] ?? (card.deckDefault ? defaultPile : null));
-    const tags = await oracleTagsForMany(
-      cards.flatMap((card, i) =>
+    const tags = await oracleTagsForMany([
+      ...cards.flatMap((card, i) =>
         piles[i] === null && card.typeLine !== undefined && card.oracleTags === undefined
           ? [card.cardId]
           : [],
       ),
-    );
-    return cards.map((card, i) => ({
+      ...alsoTag,
+    ]);
+    const ops = cards.map((card, i): AddOp => ({
       op: "add",
       cardId: card.cardId,
       ...fileAdd(card, piles[i], card.oracleTags ?? tags.get(card.cardId) ?? []),
       finish: card.finish ?? null,
       quantity: card.quantity,
     }));
+    return { ops, tags };
+  };
+
+  /**
+   * Turn the editor's {@link DeckEdit}s into one batch's ops — **every Auto rule on its one
+   * definition, every read once.** The adds go through {@link planAdds} (one default-pile read,
+   * one tag read), and the refiles' printings ride in that **same** tag read, so a drop that adds
+   * forty cards by Auto and refiles sixty is one `oracle_tags_for_printings`, not a hundred.
+   *
+   * A refile is `refileCard`'s rule verbatim: `autoCategoryFor` over the row's type line and its
+   * tags, then a move **by name** — Rust finds or makes the pile (`origin: 'auto'`) in the move's
+   * own savepoint — and **no op at all** when the name is the pile the card is already in, which
+   * `refileCard` answers `moved: false` for without a round trip. `ops` holds only what is sent;
+   * `sentAt[i]` is edit `i`'s index in it, or `null` for an unsent refile.
+   */
+  const planEdits = async (deckId: number, edits: readonly DeckEdit[]) => {
+    const adds = edits.flatMap((e) => (e.edit === "add" ? [e.card] : []));
+    const refiled = edits.flatMap((e) => (e.edit === "refile" ? [e.cardId] : []));
+    const planned =
+      adds.length > 0 || refiled.length > 0
+        ? await planAdds(deckId, adds, refiled)
+        : { ops: [], tags: new Map<string, readonly string[]>() };
+    const other = variant === "theory" ? "live" : "theory";
+    const ops: DeckOp[] = [];
+    const sentAt: (number | null)[] = [];
+    const filedAs: (string | null)[] = [];
+    let nextAdd = 0;
+    for (const e of edits) {
+      let op: DeckOp | null = null;
+      let named: string | null = null;
+      switch (e.edit) {
+        case "add":
+          op = planned.ops[nextAdd++];
+          named = op.categoryName;
+          break;
+        case "refile":
+          named = autoCategoryFor({
+            typeLine: e.typeLine,
+            oracleTags: planned.tags.get(e.cardId) ?? [],
+          });
+          if (named !== e.categoryName) {
+            op = {
+              op: "move",
+              cardId: e.cardId,
+              fromCategoryId: e.from,
+              toCategoryId: null,
+              toCategoryName: named,
+              finish: e.finish,
+            };
+          }
+          break;
+        case "move":
+          op = {
+            op: "move",
+            cardId: e.cardId,
+            fromCategoryId: e.from,
+            toCategoryId: e.to,
+            toCategoryName: null,
+            finish: e.finish,
+          };
+          break;
+        case "remove":
+          op = { op: "remove", cardId: e.cardId, categoryId: e.categoryId, finish: e.finish };
+          break;
+        case "setLabel":
+          op = {
+            op: "setLabel",
+            cardId: e.cardId,
+            categoryId: e.categoryId,
+            finish: e.finish,
+            labelId: e.labelId,
+          };
+          break;
+        case "addToOtherList":
+          // One copy, `addToOtherList`'s rule: every Add in the app adds one.
+          op = {
+            op: "addToOtherList",
+            cardId: e.cardId,
+            fromCategoryId: e.categoryId,
+            finish: e.finish,
+            quantity: 1,
+          };
+          break;
+      }
+      sentAt.push(op === null ? null : ops.length);
+      if (op !== null) ops.push(op);
+      filedAs.push(named);
+    }
+    // The list the batch writes: this hook's, or — for `Add to theory/actual` — the other one.
+    // Never both: `deck_apply` names one variant for the whole call.
+    const toOther = edits.filter((e) => e.edit === "addToOtherList").length;
+    if (toOther > 0 && toOther < edits.length) {
+      throw new Error("An add to the other list cannot share a batch with this list's writes.");
+    }
+    return { ops, sentAt, filedAs, target: toOther > 0 ? other : variant };
   };
 
   const query = useQuery(detailRead);
@@ -761,7 +921,9 @@ export function useDeckCore(
       // Before anything is asked about the card: a write with no deck open is refused here and
       // not one round trip later.
       const deckId = opened(id);
-      const [op] = await planAdds(deckId, [request]);
+      const {
+        ops: [op],
+      } = await planAdds(deckId, [request]);
       return ipc.deckAddCard(
         deckId,
         op.cardId,
@@ -791,7 +953,7 @@ export function useDeckCore(
    * queries — and the collection only when the batch says a row of it moved (a removal on the
    * live list releases the copies its group held; see {@link invalidateCollection}).
    */
-  const settleBatch = (outcome: DeckApplyOutcome) => {
+  const settleBatch = (outcome: Pick<DeckApplyOutcome, "collectionMoved">) => {
     invalidate();
     if (outcome.collectionMoved) invalidateCollection();
   };
@@ -837,12 +999,105 @@ export function useDeckCore(
     mutationFn: async ({ cards }: { cards: DeckAddRequest[] }): Promise<DeckApplyOutcome> => {
       const deckId = opened(id);
       if (cards.length === 0) return emptyOutcome();
-      return ipc.deckApply(deckId, variant, await planAdds(deckId, cards));
+      return ipc.deckApply(deckId, variant, (await planAdds(deckId, cards)).ops);
     },
     onSuccess: (outcome) => {
       if (outcome.results.length > 0) settleBatch(outcome);
     },
     onError: invalidate,
+  });
+
+  /**
+   * **The editor's multi-card gestures as one write** (issue #1164) — a drop of a picked set (adds
+   * from the search wall and rows off the desk, in the drop's order), Delete over a set, and the
+   * card menu's plural rows. Before this each card was its own command, fired in parallel: N
+   * transactions queued on the write lock (and, at a few hundred, told the database was busy),
+   * N undo steps where the journal keeps 200, a tag read per card for Auto, and a `["decks"]`
+   * re-read per card that froze the editor for seconds.
+   *
+   * Now it is {@link planEdits} — every Auto rule on its one definition, the default pile and the
+   * tags read once — then **one** `deck_apply`: one transaction, one undo step, one re-read
+   * ({@link settleBatch}). A refused edit is answered in its own result and the rest land; a
+   * refile that would land where it already is is answered `sent: false` and sends nothing, as
+   * `refileCard` does. An edit list that sends no op at all writes and re-reads nothing.
+   *
+   * **The removals come off the desk at the press**, the stepper's zero's patch over a set: one
+   * `setQueryData` that drops every removed slot, restored if the whole call is refused. A
+   * removal refused *inside* a batch that landed comes back with the re-read. The other edits are
+   * not guessed — a move or an add can fold into a row the pile already holds, and a guess at
+   * two hundred folds is two hundred chances to draw something the read takes back.
+   *
+   * **The card modal's address is kept in step as each single write keeps it** ({@link DeckAnchor}):
+   * a landed move or refile re-anchors, a landed removal lets go — planned at the press, before the
+   * patch, for `setQuantity`'s reason. None of the gestures that send a batch can be made with the
+   * modal up, so this is parity rather than a path a reader takes.
+   */
+  const applyEdits = useMutation({
+    mutationFn: async ({ edits }: { edits: readonly DeckEdit[] }): Promise<DeckEditsOutcome> => {
+      const deckId = opened(id);
+      const { ops, sentAt, filedAs, target } = await planEdits(deckId, edits);
+      const outcome = ops.length === 0 ? emptyOutcome() : await ipc.deckApply(deckId, target, ops);
+      const results = edits.map((_, i): DeckEditResult => {
+        const at = sentAt[i];
+        if (at === null) {
+          return {
+            change: null,
+            categoryId: null,
+            refusal: null,
+            sent: false,
+            filedAs: filedAs[i],
+          };
+        }
+        return { ...outcome.results[at], sent: true, filedAs: filedAs[i] };
+      });
+      return {
+        results,
+        landed: results.filter((r) => r.refusal === null).length,
+        collectionMoved: outcome.collectionMoved,
+      };
+    },
+    onMutate: async ({ edits }) => {
+      const removals = edits.flatMap((e) => (e.edit === "remove" ? [e] : []));
+      if (removals.length === 0) return { saved: undefined, departures: [] };
+      await queryClient.cancelQueries({ queryKey: detailKey });
+      const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
+      const departures = removals.map((r) =>
+        anchor.planRemoval({ deckId: id, variant, ...slotOf(r) }),
+      );
+      const gone = new Set(removals.map((r) => slotKey(r)));
+      queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
+        if (!data) return data;
+        const cards = data.cards.filter((c) => c.variant !== variant || !gone.has(slotKey(c)));
+        return cards.length === data.cards.length ? data : { ...data, cards };
+      });
+      return { saved, departures };
+    },
+    onError: (_error, _vars, context) => {
+      if (context?.saved !== undefined) queryClient.setQueryData(detailKey, context.saved);
+      invalidate();
+    },
+    onSuccess: (outcome, { edits }, context) => {
+      let removal = 0;
+      edits.forEach((e, i) => {
+        const result = outcome.results[i];
+        const departure = e.edit === "remove" ? (context?.departures[removal++] ?? null) : null;
+        if (!result.sent || result.refusal !== null) return;
+        if (e.edit === "remove" && result.change?.removed === true) {
+          anchor.removed({ deckId: id, variant, ...slotOf(e) }, departure);
+        } else if ((e.edit === "move" || e.edit === "refile") && result.categoryId !== null) {
+          const name = e.edit === "refile" ? result.filedAs : categoryNameFor(result.categoryId);
+          anchor.moved(
+            { deckId: id, variant, cardId: e.cardId, categoryId: e.from, finish: e.finish },
+            name === null
+              ? { categoryId: result.categoryId }
+              : { categoryId: result.categoryId, categoryName: name },
+          );
+        }
+      });
+      // Nothing sent — every edit a refile already where it belongs — re-reads nothing, as
+      // `refileCard`'s "already filed" answer does not.
+      if (outcome.results.some((r) => r.sent)) settleBatch(outcome);
+    },
   });
 
   /**
@@ -1658,6 +1913,10 @@ export function useDeckCore(
     /** Many card writes as one `deck_apply`: one transaction, one undo step, one re-read, and a
      *  refusal per op rather than for the batch. */
     applyOps,
+    /** The editor's multi-card gestures — adds, Auto refiles, moves, removals, labels, or adds to
+     *  the other list — planned by this hook's own rules and sent as one `deck_apply`. See the
+     *  mutation's doc. */
+    applyEdits,
     /** One copy of a row into the deck's other list, filed in the pile there that stands for
      *  the row's own — see the mutation's doc. */
     addToOtherList,
