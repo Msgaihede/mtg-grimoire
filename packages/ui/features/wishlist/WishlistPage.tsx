@@ -720,13 +720,21 @@ export function WishlistPage() {
   // The four fields rather than `query`, which is a new object on every render (issue #557): the
   // memoised wall and table are both handed this, and keyed on `query` it was new on every
   // keystroke. `fetchNextPage` is the observer's own bound method and holds still.
-  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
-  const onNeedNextPage = useCallback(() => {
-    if (levelHeld) return;
-    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
-      void fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, levelHeld]);
+  //
+  // `want` is a Ctrl+A walk's — fetched in pages as large as the backend answers (`useWishlist`'s
+  // `fetchMore`) — and the answer is whether rows are still to come, which keeps the app's busy
+  // mark up while the walk fetches (`CardGrid`'s `onNeedNextPage`).
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchMore } = wishlist;
+  const onNeedNextPage = useCallback(
+    (want?: number) => {
+      if (levelHeld) return false;
+      const more = hasNextPage && !isFetchNextPageError;
+      if (more && !isFetchingNextPage) fetchMore(want);
+      return more;
+    },
+    [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchMore, levelHeld],
+  );
 
   const currency = marketplace.currency;
 

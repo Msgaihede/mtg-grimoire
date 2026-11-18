@@ -744,7 +744,7 @@ export const CardStack = memo(function CardStack({
   tracksCollection = true,
   onSelect,
   actions,
-  picked,
+  picked: pickedSlots,
   zoom = DEFAULT_ZOOM,
   selectedSlot = null,
   landed = NONE_LANDED,
@@ -759,7 +759,7 @@ export const CardStack = memo(function CardStack({
   const onMenuFrom = useCallback((cardId: number, el: HTMLElement) => {
     setMenuFrom((prev) => (prev?.cardId === cardId && prev.el === el ? prev : { cardId, el }));
   }, []);
-  const marking = usePickedMarking(actions, picked);
+  const marking = usePickedMarking(actions, pickedSlots);
   if (cards.length === 0) return null;
 
   // `-1` for a pile that does not hold the picked card, which is every pile but one — folded to

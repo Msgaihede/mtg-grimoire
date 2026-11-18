@@ -328,3 +328,32 @@ describe("readCards", () => {
     expect(readCards({})).toBeNull();
   });
 });
+
+/**
+ * **A drag's group is parsed once** (2026-11). Every drop target's `accept` asks for it on every
+ * collision pass, and a picked set of a thousand was a thousand members re-validated per target
+ * per pointer move. The record is one object for the gesture, so the answer is kept by it.
+ */
+describe("readDragGroup — once per drag", () => {
+  const ROW: DragPayload = {
+    kind: "deck-card",
+    cardId: "c1",
+    name: "Island",
+    fromCategoryId: 1,
+    finish: null,
+  };
+  const OTHER: DragPayload = { ...ROW, cardId: "c2", name: "Swamp" };
+
+  it("answers the same list for the same drag record, and reads a new record afresh", () => {
+    const record = dragData(ROW, [OTHER]);
+    const first = readDragGroup(record);
+    expect(first.map((p) => p.cardId)).toEqual(["c1", "c2"]);
+    expect(readDragGroup(record)).toBe(first);
+    expect(readCards(record)).toBe(first);
+
+    const next = dragData(ROW, [OTHER]);
+    expect(readDragGroup(next)).not.toBe(first);
+    expect(readDragGroup(next)).toEqual(first);
+  });
+
+});

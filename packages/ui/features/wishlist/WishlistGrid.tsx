@@ -517,7 +517,9 @@ export const WishlistGrid = memo(function WishlistGrid({
    * ({@link placedCaption}). Held still by the caller. Absent: the plain caption.
    */
   folderOf?: (row: WishRow) => Shelf | undefined;
-  onNeedNextPage: () => void;
+  /** `CardGrid`'s `onNeedNextPage`, handed straight through — `want` is a Ctrl+A walk's, and the
+   *  answer is whether rows are still to come. */
+  onNeedNextPage: (want?: number) => boolean | void;
   /**
    * How many copies this wish is for — reached from **two** controls on one tile since issue
    * #284: the stepper in the action strip, and the panel behind the pencil beside it. One prop

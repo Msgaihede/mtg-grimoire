@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
+import { ipcError } from "@/lib/ipc";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { useMemo } from "react";
@@ -76,7 +77,8 @@ function Panel({
    */
   return (
     <DeckSearchPanel
-      add={deck.addCard}
+      add={deck.addCard.mutateAsync}
+      addFailure={deck.addCard.isError ? ipcError(deck.addCard.error) : null}
       categories={deck.categories}
       deckId={deckId}
       targetCategoryId={deck.deck?.defaultCategoryId ?? AUTO_CATEGORY}

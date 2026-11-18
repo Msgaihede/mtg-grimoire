@@ -2210,3 +2210,58 @@ describe("remembering a search across a view switch", () => {
     expect(result.current.allPrintings).toBe(true);
   });
 });
+
+/**
+ * **A Ctrl+A walk fetches in pages as large as the backend answers** (2026-11). The wall says how
+ * many rows it is owed (`CardGrid`'s `onNeedNextPage`), `fetchMore` hands that to the next page,
+ * and a refetch keeps the page sizes the cache holds — or a list fetched in big pages would come
+ * back a quarter of its length on the next refocus.
+ */
+describe("fetchMore — a select-all's pages", () => {
+  /** A corpus of 5 000+ printings, answered by the request's own offset and limit. */
+  function corpus(req: SearchRequest) {
+    const limit = Math.min(req.limit ?? 50, 200);
+    const offset = req.offset ?? 0;
+    const items = Array.from({ length: limit }, (_, i) => ({ id: `c${offset + i}` }));
+    return Promise.resolve({ items, total: 5000, totalIsCapped: true });
+  }
+
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockImplementation(corpus);
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("walks a thousand rows in six round trips rather than twenty, and refetches them at those sizes", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toHaveLength(50));
+
+    // What `CardGrid`'s walk does as each page lands: ask for the rest of the limit.
+    while (result.current.rows.length < 1000) {
+      const had = result.current.rows.length;
+      act(() => result.current.fetchMore(1000 - had));
+      await waitFor(() => expect(result.current.rows.length).toBeGreaterThan(had));
+    }
+
+    const limits = () => searchCards.mock.calls.map(([req]) => (req as SearchRequest).limit);
+    // The last page asks for exactly what is left of the thousand.
+    expect(limits()).toEqual([50, 200, 200, 200, 200, 150]);
+    expect(result.current.rows).toHaveLength(1000);
+
+    // A refetch — a refocus past the stale time, an invalidation — asks for the same pages, so the
+    // wall comes back as long as it was.
+    searchCards.mockClear();
+    await act(() => result.current.query.refetch());
+    // The last page asks for exactly what is left of the thousand.
+    expect(limits()).toEqual([50, 200, 200, 200, 200, 150]);
+    expect(result.current.rows).toHaveLength(1000);
+  });
+
+  it("asks for the ordinary page when no wall says it is owed more", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toHaveLength(50));
+    act(() => result.current.fetchMore());
+    await waitFor(() => expect(result.current.rows).toHaveLength(100));
+    expect(lastSearchRequest().limit).toBe(50);
+  });
+});

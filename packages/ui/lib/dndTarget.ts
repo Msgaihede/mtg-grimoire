@@ -212,6 +212,13 @@ export function useDndDropTarget<T>({
 
     /** The payload this target would act on, or `null` — both questions at once, because every
      *  caller below asks them together and asking them apart is how they drift. */
+    /** The last `accept` answer, and the drag record and render it was given for. */
+    let accepted: {
+      data: Record<string, unknown>;
+      rules: typeof latest.current;
+      answer: boolean;
+    } | null = null;
+
     const taken = (source: { data: Record<string, unknown> } | null | undefined): T | null => {
       if (!source) return null;
       const drop = latest.current.read(source.data);
@@ -226,7 +233,24 @@ export function useDndDropTarget<T>({
         register: false,
         // Asked once per collision pass rather than at registration, which is what lets it read
         // live state through the ref above.
-        accept: (source) => taken(source) !== null,
+        //
+        // **And answered once per drag per render of this target** (2026-11): a pass is a pointer
+        // move, every registered target is asked, and a deck pile's question is a walk over the
+        // whole carried group (`dropWrites`) — a Ctrl+A's thousand cards, times the piles, per
+        // move. The record is one object for the gesture and `latest` is replaced on every render
+        // of the target, so the pair names exactly one answer: a new drag or a target re-rendered
+        // with new rules (its `armed`/`over` changing is one) asks again. `dragstart`, `dragover`
+        // and the drop itself still ask afresh — they are once per gesture, and the drop is the
+        // one that writes.
+        accept: (source) => {
+          const memo = accepted;
+          if (memo !== null && memo.data === source.data && memo.rules === latest.current) {
+            return memo.answer;
+          }
+          const answer = taken(source) !== null;
+          accepted = { data: source.data, rules: latest.current, answer };
+          return answer;
+        },
         ...(overlay
           ? { collisionDetector: pointerIntersection, collisionPriority: CollisionPriority.Highest }
           : pointerOnly

@@ -47,14 +47,35 @@ export function readRecordGroup<T>(
   data: Record<string, unknown>,
   read: (member: Record<string, unknown>) => T | null,
 ): T[] {
+  // One drag, one reader, one parse — `dnd.ts`' `readDragGroup` memo and its reason: a folder's
+  // `accept` asks this on every collision pass, and a picked set of a thousand tiles was a
+  // thousand records re-read per pointer move. The readers are module functions, so the inner
+  // map holds one or two entries; the outer one lets a drag's answers go with its record.
+  let byReader = READ_GROUPS.get(data);
+  const known = byReader?.get(read);
+  if (known !== undefined) return known as T[];
   const group = data[RECORD_GROUP_KEY];
-  if (!Array.isArray(group)) return [];
-  return group.flatMap((member) => {
-    if (typeof member !== "object" || member === null || Array.isArray(member)) return [];
-    const one = read(member as Record<string, unknown>);
-    return one === null ? [] : [one];
-  });
+  const answer = !Array.isArray(group)
+    ? []
+    : group.flatMap((member) => {
+        if (typeof member !== "object" || member === null || Array.isArray(member)) return [];
+        const one = read(member as Record<string, unknown>);
+        return one === null ? [] : [one];
+      });
+  if (byReader === undefined) {
+    byReader = new Map();
+    READ_GROUPS.set(data, byReader);
+  }
+  byReader.set(read, answer);
+  return answer;
 }
+
+/** {@link readRecordGroup}'s answers, by drag record and then by reader. Shared between every
+ *  caller of one drag: never change an answer in place. */
+const READ_GROUPS = new WeakMap<
+  Record<string, unknown>,
+  Map<(member: Record<string, unknown>) => unknown, unknown[]>
+>();
 
 /** How many tiles a record carries: the primary and its members. For the drag's count chip, which
  *  must not under-count a group whose primary carries no card payload (an any-printing wish). */

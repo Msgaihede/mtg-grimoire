@@ -471,6 +471,32 @@ export function withDragGroup(
  * seeing in a test.
  */
 export function readDragGroup(data: Record<string, unknown>): DragPayload[] {
+  const parsed = PARSED_GROUPS.get(data);
+  if (parsed !== undefined) return parsed;
+  const read = parseDragGroup(data);
+  PARSED_GROUPS.set(data, read);
+  return read;
+}
+
+/**
+ * Every {@link readDragGroup} answer, **by the drag record it was read from** — so one drag is
+ * parsed once, however many times it is asked.
+ *
+ * It is asked a great deal. A drop target's `accept` runs on every collision pass — every pointer
+ * move — for every registered target (`lib/dndTarget.ts`), and every deck pile, quick zone, the
+ * remove tray, the price strip and the sidebar's Decks entry reads cards through here. With a
+ * picked set of a thousand that was a thousand members re-validated field by field, times the
+ * targets, times the moves: the drag that a Ctrl+A makes possible was the drag that stuttered.
+ * The record is one object for the whole gesture (`dndManager.ts`' `carryAtDragStart` writes it
+ * once, at `beforedragstart`), so its identity is the drag's, and a `WeakMap` lets it go with it.
+ *
+ * **The answer is shared between every reader of the same drag — never change it in place.** No
+ * caller does (each hands it to {@link dropWrites}, a `.map` or a dialog's state); the type stays a
+ * plain array only so the targets typed against it before this need not change.
+ */
+const PARSED_GROUPS = new WeakMap<Record<string, unknown>, DragPayload[]>();
+
+function parseDragGroup(data: Record<string, unknown>): DragPayload[] {
   const primary = readDragData(data);
   if (primary === null) return [];
   const group = data[GROUP_KEY];
@@ -522,6 +548,16 @@ export function dropWrites(payloads: readonly DragPayload[], target: DropTarget)
     const write = dropWrite(payload, target);
     return write === null ? [] : [write];
   });
+}
+
+/**
+ * Whether **at least one** member of a drag writes on `target` — {@link dropWrites}' `canDrop`
+ * question, answered without building the list: it stops at the first member that writes, which
+ * for any real drag is the first. A target asks this per collision pass, and the list it would
+ * otherwise build for a picked set is as long as the set.
+ */
+export function anyDropWrites(payloads: readonly DragPayload[], target: DropTarget): boolean {
+  return payloads.some((payload) => dropWrite(payload, target) !== null);
 }
 
 /** The drag store's `finish`, as {@link DeckFinish}. Anything that is not one of the two

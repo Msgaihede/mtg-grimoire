@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -398,11 +398,13 @@ export function CollectionSearchTab({
     targetCategoryId === AUTO_CATEGORY || !categories.some((c) => c.id === targetCategoryId);
   const wallIds = useMemo(() => tiles.map((tile) => tile.id), [tiles]);
   const wallTags = useWallOracleTags(wallIds, auto);
-  const landingOf = (tile: CopyTile) =>
-    landingCategory(categories, targetCategoryId, tile, wallTags.get(tile.id));
+  const landingOf = useCallback(
+    (tile: CopyTile) => landingCategory(categories, targetCategoryId, tile, wallTags.get(tile.id)),
+    [categories, targetCategoryId, wallTags],
+  );
 
   /** Send it. The confirm — where there is one — has already been answered by the time this runs. */
-  const commit = (tile: CopyTile, pile: DeckPile | null) => {
+  const commitNow = (tile: CopyTile, pile: DeckPile | null) => {
     setAsking(null);
     // **A receipt per press** (the owner's rule: every move of a card between the collection and
     // a deck says so — this tab's press is none of the exempt three). The line under the wall
@@ -435,6 +437,70 @@ export function CollectionSearchTab({
       );
     }
   };
+  /**
+   * {@link commitNow}, held still — it closes over `move`, a mutation object that is new on every
+   * render, and it is handed to every tile's Add button through the wall's memoised `action` slot.
+   * Read at the press, which comes after the commit that drew the button.
+   */
+  const commitRef = useRef(commitNow);
+  useEffect(() => {
+    commitRef.current = commitNow;
+  });
+  const commit = useCallback(
+    (tile: CopyTile, pile: DeckPile | null) => commitRef.current(tile, pile),
+    [],
+  );
+
+  // **The wall's slots, held still on what each reads** (2026-11): `CardGrid` and its tiles are
+  // memoised, and an arrow written inline here was a changed prop on every tile per render of
+  // this tab — every keystroke, every page of a Ctrl+A walk, every write's re-read.
+  const currency = marketplace.currency;
+  const tileMoney = useCallback(
+    (tile: CopyTile) => formatPrice(tile.unitPrice, currency),
+    [currency],
+  );
+  const tileBadge = useCallback(
+    (tile: CopyTile) => (
+      <OwnedBadge
+        owned={tile.copies}
+        inDeck={tile.oracleId === null ? 0 : (inDeck.get(tile.oracleId) ?? 0)}
+      />
+    ),
+    [inDeck],
+  );
+  const openTile = useCallback(
+    (cardId: string, tile: CopyTile) => selectCard(cardId, tile.finish),
+    [selectCard],
+  );
+  const tileAction = useCallback(
+    (tile: CopyTile) => (
+      <AddButton
+        tile={tile}
+        // The second axis, per tile and never per copy — see `PlayState`. It is computed
+        // here rather than inside the button so that the *one* place a tile's press is
+        // decided stays the hook's model: this file branches on the answer and never on the
+        // census.
+        play={playStateOf(tile)}
+        lands={landingOf(tile)}
+        tip={tip}
+        onAsk={setAsking}
+        onCommit={commit}
+      />
+    ),
+    [playStateOf, landingOf, tip, commit],
+  );
+  // On the four fields rather than `query`, which is new per render; says whether rows are still to
+  // come and passes on how many a Ctrl+A walk is owed — `CardGrid`'s `onNeedNextPage`.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchMore } = search;
+  const onNeedNextPage = useCallback(
+    (want?: number) => {
+      const more = hasNextPage && !isFetchNextPageError;
+      if (more && !isFetchingNextPage) fetchMore(want);
+      return more;
+    },
+    [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchMore],
+  );
 
   /**
    * Every tile's finish, as `CardArt`'s chip reads it — **`null` for the regular copy**, which a
@@ -614,7 +680,7 @@ export function CollectionSearchTab({
           // pointed at rather than the plain one — and so the ring above lands on the tile they
           // pressed rather than on its sibling. The tile is `CardGrid`'s second argument because a
           // tile here is a printing *and* a finish; the wall itself knows nothing about finishes.
-          onSelect={(cardId, tile) => selectCard(cardId, tile.finish)}
+          onSelect={openTile}
           // The arrows walk this tab as they walk the card-search tab beside it (issue #1672).
           arrowNav
           finish={tileFinish}
@@ -625,36 +691,14 @@ export function CollectionSearchTab({
           // marketplace this hook's query named, so nothing here recomputes or converts it, and a
           // printing the marketplace does not quote draws an em dash rather than borrowing
           // another one's number.
-          money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
+          money={tileMoney}
           // The copies behind the art, in the corner the collection page's own wall marks them in.
           // No `wishlisted`: this wall shows what is owned and has no opinion about what is wanted.
-          badge={(tile) => (
-            <OwnedBadge
-              owned={tile.copies}
-              inDeck={tile.oracleId === null ? 0 : (inDeck.get(tile.oracleId) ?? 0)}
-            />
-          )}
+          badge={tileBadge}
           // A two-sided card turns over from its tile, as on every other wall (issue #844).
           flips={rowHasBackFace}
-          action={(tile) => (
-            <AddButton
-              tile={tile}
-              // The second axis, per tile and never per copy — see `PlayState`. It is computed
-              // here rather than inside the button so that the *one* place a tile's press is
-              // decided stays the hook's model: this file branches on the answer and never on the
-              // census.
-              play={playStateOf(tile)}
-              lands={landingOf(tile)}
-              tip={tip}
-              onAsk={setAsking}
-              onCommit={commit}
-            />
-          )}
-          onNeedNextPage={() => {
-            if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
-              void query.fetchNextPage();
-            }
-          }}
+          action={tileAction}
+          onNeedNextPage={onNeedNextPage}
         />
       )}
 

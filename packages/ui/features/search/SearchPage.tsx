@@ -920,10 +920,13 @@ function Results({ search }: { search: CardSearch }) {
                 }}
               />
             )}
-            onNeedNextPage={() => {
-              if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
-                void query.fetchNextPage();
-              }
+            // `want` is a Ctrl+A walk's — the rows it is still owed, fetched in pages as large as
+            // the backend answers (`useCardSearch`'s `fetchMore`) — and the answer is whether
+            // rows are still to come, which keeps the app's busy mark up while the walk fetches.
+            onNeedNextPage={(want) => {
+              const more = query.hasNextPage && !query.isFetchNextPageError;
+              if (more && !query.isFetchingNextPage) search.fetchMore(want);
+              return more;
             }}
           />
         ) : (

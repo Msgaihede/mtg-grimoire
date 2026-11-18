@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
+import { pageLimit } from "@/lib/pageLimit";
 import {
   bordersParam,
   colorParam,
@@ -81,6 +83,15 @@ export const COLLECTION_TRAY: readonly TrayCell[] = [
  * thousands of rows rather than the search's 116 k, so the page is twice the search's.
  */
 export const COLLECTION_PAGE_SIZE = 100;
+
+/**
+ * The most rows one page may ask for — `collection.rs`' `MAX_LIMIT`, which clamps anything larger.
+ * What a Ctrl+A walk's pages ask for on a collection wall (`lib/pageLimit.ts`), which is uncapped:
+ * a three-thousand-card collection was thirty round trips at {@link COLLECTION_PAGE_SIZE}, and is
+ * seven at this. The wishlist's wall and the deck editor's collection tab use it too — the same
+ * clamp, in `wishlist.rs` and on the same `collection_list`.
+ */
+export const COLLECTION_MAX_PAGE_SIZE = 500;
 
 /** The sort key the backend understands. Re-exported so call sites keep one import. */
 export type CollectionSort = CollectionSortKey;
@@ -617,6 +628,11 @@ export function useCollection({
   const fetchKey = viewAll ? "all" : toFetch.join(",");
   const listKey = ["collection", "list", filterKey, sortKey, fetchKey];
 
+  /** How many rows the page {@link fetchMore} is asking for is owed — read at the fetch, which
+   *  TanStack runs synchronously inside `fetchNextPage`; unset for every other fetch. */
+  const wantRef = useRef<number | undefined>(undefined);
+  const queryClient = useQueryClient();
+
   const query = useInfiniteQuery({
     queryKey: listKey,
     queryFn: ({ pageParam }) =>
@@ -632,7 +648,15 @@ export function useCollection({
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces exactly
         // the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
-        limit: COLLECTION_PAGE_SIZE,
+        // The ordinary page unless a Ctrl+A walk asked for more — `lib/pageLimit.ts`, which keeps
+        // a refetch to the page sizes the cache holds.
+        limit: pageLimit(
+          pageParam,
+          queryClient.getQueryData<InfiniteData<CollectionPage>>(listKey)?.pages,
+          COLLECTION_PAGE_SIZE,
+          COLLECTION_MAX_PAGE_SIZE,
+          wantRef.current,
+        ),
         offset: pageParam,
       }),
     initialPageParam: 0,
@@ -640,6 +664,25 @@ export function useCollection({
     placeholderData: keepPreviousData,
     enabled: censusReady,
   });
+
+  /**
+   * The next page, **as many rows as `want` says the wall is owed** (up to the backend's ceiling) —
+   * what a wall's `onNeedNextPage` hands over during a Ctrl+A walk (`CardGrid`, `lib/pageLimit.ts`).
+   * No `want` is the ordinary page. The caller keeps its own guard around it, as around
+   * `query.fetchNextPage`, which this calls.
+   */
+  const { fetchNextPage } = query;
+  const fetchMore = useCallback(
+    (want?: number) => {
+      wantRef.current = want;
+      try {
+        void fetchNextPage();
+      } finally {
+        wantRef.current = undefined;
+      }
+    },
+    [fetchNextPage],
+  );
 
   const summary = useQuery({
     queryKey: ["collection", "summary", filterKey, countKey, ...minimumKey],
@@ -795,6 +838,7 @@ export function useCollection({
   );
 
   return {
+    fetchMore,
     valueSettings,
     text,
     setText,

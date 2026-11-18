@@ -2422,13 +2422,18 @@ export function DeckEditor({
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
-          picked: pickedCards.some(
+          //
+          // **Read through `pickedRef`, at the press** (2026-11): `build` runs when the menu
+          // opens, and naming `pickedCards` in this callback's dependencies made it — and so the
+          // desk's `actions` bag, a prop of every pile — new on every Ctrl-click, which drew every
+          // face on the desk again to move one ring.
+          picked: pickedRef.current.some(
             (row) =>
               row.cardId === card.cardId &&
               row.categoryId === card.categoryId &&
               row.finish === card.finish,
           )
-            ? pickedCards
+            ? pickedRef.current
             : [],
         });
         // A draft deck is built without the collection (spec §5), so the shared half's two binder
@@ -2468,7 +2473,6 @@ export function DeckEditor({
       openNote,
       coverCardId,
       setCoverFrom,
-      pickedCards,
       draft,
     ],
   );
@@ -2781,9 +2785,18 @@ export function DeckEditor({
    * required — one source cannot disagree with itself, and the deck row carries its own copy of
    * the name.
    */
+  // Held still on the two words it is made of rather than on the deck row: the row is a new
+  // object on every re-read (a write bumps `updated_at`), and this is a prop of the memoised docked
+  // search column — keyed on the row, every add redrew the column's whole wall for a format that
+  // had not moved.
+  const seedFormatKey = row?.formatKey ?? null;
+  const seedFormatLabel = spec?.hasLegalityData ? spec.displayName : null;
   const searchFormatDefault = useMemo(
-    () => (row && spec?.hasLegalityData ? { value: row.formatKey, label: spec.displayName } : null),
-    [row, spec],
+    () =>
+      seedFormatKey !== null && seedFormatLabel !== null
+        ? { value: seedFormatKey, label: seedFormatLabel }
+        : null,
+    [seedFormatKey, seedFormatLabel],
   );
 
   /**
@@ -3863,8 +3876,12 @@ export function DeckEditor({
         <DeckSearchPanel
           // `deck.addCard` unwrapped since 2026-08-25 — it was `panelAdd`, the same mutation
           // with the own/need answer folded into every `mutate` on the way past, and there is
-          // no answer left to fold.
-          add={deck.addCard}
+          // no answer left to fold. **Its `mutateAsync` and its refusal in words, never the
+          // object** (2026-11): the object is new on every render of this editor, and the panel
+          // is memoised — handed the object, it and its whole wall of tiles were drawn again for
+          // every query a write settles. See `DeckSearchPanelProps.add`.
+          add={deck.addCard.mutateAsync}
+          addFailure={deck.addCard.isError ? ipcError(deck.addCard.error) : null}
           // `markAdded`, never `markLanded` bare: an add the backend filed as a token answers
           // {@link NO_DECK_CARD}, and there is no deck card to point at.
           onAdded={markAdded}

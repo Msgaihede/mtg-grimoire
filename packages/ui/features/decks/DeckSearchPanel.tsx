@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -229,8 +230,8 @@ function useDeckSearchTab(tabs: readonly DeckSearchTabDef[]): {
 
 export interface DeckSearchPanelProps {
   /**
-   * The editor's own `useDeck().addCard`, handed down rather than mounted again here — the
-   * shape every other control in this editor takes: the four views are handed a
+   * The editor's own `useDeck().addCard.mutateAsync`, handed down rather than mounted again here —
+   * the shape every other control in this editor takes: the four views are handed a
    * `DeckCardActions` of plain callbacks (`cardControl.tsx`) and reach for no hook of their own.
    *
    * Handed down rather than re-mounted for a measured reason: `useDeck` carries the deck's
@@ -238,8 +239,21 @@ export interface DeckSearchPanelProps {
    * first has settled is a background refetch on a query whose `staleTime` is zero — one
    * extra `deck_get` every time a deck is opened, and, where a test scripts consecutive
    * answers, the second one arriving a beat early.
+   *
+   * **`mutateAsync` and not the mutation object** (2026-11), which is `packages/ui/features/
+   * decks/CLAUDE.md` §5a's rule reaching this prop: the object is new on every render of the
+   * editor, and the editor renders a dozen times as a write's queries land — so this panel, and
+   * the whole wall of tiles inside it, was drawn again for each of them. `mutateAsync` is the
+   * observer's own bound method and holds still; the one other thing the panel read off the
+   * object, its refusal, arrives as {@link DeckSearchPanelProps.addFailure}.
    */
-  add: Deck["addCard"];
+  add: Deck["addCard"]["mutateAsync"];
+  /**
+   * Why the last add was refused, in words (`ipcError` over the mutation's error), or `null` —
+   * the line drawn above the filter row. A string rather than the error, so an editor render that
+   * changed nothing hands the panel an equal prop. Absent is no refusal.
+   */
+  addFailure?: string | null;
   /**
    * A press on this panel's Add button landed — `EntryChange.id`, which is the deck row the write
    * **created or folded into**, or **`0` when no deck row was made at all**.
@@ -477,8 +491,9 @@ export interface DeckSearchPanelProps {
  * the art opens the card exactly as it does on the search view, and the Add button beside it does
  * not.
  */
-export function DeckSearchPanel({
+export const DeckSearchPanel = memo(function DeckSearchPanel({
   add,
+  addFailure = null,
   onAdded,
   categories,
   deckId,
@@ -584,6 +599,7 @@ export function DeckSearchPanel({
       ) : (
         <OpenPanel
           add={add}
+          addFailure={addFailure}
           onAdded={onAdded}
           categories={categories}
           targetCategoryId={targetCategoryId}
@@ -596,7 +612,7 @@ export function DeckSearchPanel({
       )}
     </CardSearchPanel>
   );
-}
+});
 
 /**
  * Which of the two searches this column is showing — **a full-width tab bar above the search
@@ -751,6 +767,7 @@ function TabStrip({
  */
 function OpenPanel({
   add,
+  addFailure,
   onAdded,
   categories,
   deckId,
@@ -762,6 +779,7 @@ function OpenPanel({
 }: Pick<
   DeckSearchPanelProps,
   | "add"
+  | "addFailure"
   | "onAdded"
   | "categories"
   | "deckId"
@@ -925,6 +943,145 @@ function OpenPanel({
     [],
   );
 
+  /**
+   * The owned/wishlisted/in-deck mark on each tile — **held still on the one fact it reads that can
+   * move** (`inDeck`), so the memoised tiles are handed the same slot across every render of this
+   * panel that changed nothing about the deck. A fresh arrow here drew every tile again per render.
+   */
+  const badge = useCallback(
+    (card: CardSummary) => (
+      <OwnedBadge
+        owned={card.ownedQuantity}
+        wishlisted={card.wishlisted}
+        inDeck={card.oracleId === null ? 0 : (inDeck.get(card.oracleId) ?? 0)}
+      />
+    ),
+    [inDeck],
+  );
+
+  /**
+   * `onAdded` read at the press, so a host that hands a fresh one per render (a story) does not
+   * redraw every tile's Add button for it. The editor's is already stable.
+   */
+  const onAddedRef = useRef(onAdded);
+  useEffect(() => {
+    onAddedRef.current = onAdded;
+  }, [onAdded]);
+
+  /**
+   * Each tile's **Add to deck** — held still on what the button *says* (the pile, the tags it was
+   * named from, the finish it sends), so a memoised tile is drawn again when its button's word can
+   * have changed and not on every render of the panel. Everything the press itself needs beyond
+   * that is stable: `add` is `mutateAsync`, `onAdded` is read through a ref.
+   */
+  const action = useCallback(
+    (card: CardSummary) => {
+      // Where this card would land, named before the press rather than reported after it.
+      // Under `Auto` that is the rule's own answer for *this* card — over its **Oracle tags
+      // and then its type line**, the two facts `useDeck.addCard` files by. Found or created
+      // on the way in, so a deck with no Ramp pile grows one and the button said so.
+      //
+      // **`null` is a pile this button cannot promise, and it then names none.** The comment
+      // that stood here said the rule "reads the type line and nothing else", which was the
+      // whole reason a button could promise its answer in advance — and it stopped being
+      // true when the rule learnt to read tags, while this went on handing it a type line.
+      // So the button read `Add Rampant Growth to Sorcery` and the card landed in Ramp
+      // (2026-10-04, over the real engine with the taxonomy downloaded). Until this card's
+      // tags are in hand the type line's pile is exactly the word that may be wrong;
+      // `autoCategoryIfKnown` answers only what no later read can change.
+      //
+      // **A token lands in Tokens & Emblems whatever pile is picked** (user schema v52):
+      // `deck::add_card` reroutes it into a token entry, so a button naming a pile would
+      // promise a place the press never goes — the live pass's `Add Dinosaur // Treasure to
+      // Creature`. `isTokenPrinting` is Rust's router's twin.
+      const tags = wallTags.get(card.id);
+      const landsIn = isTokenPrinting(card.layout, card.typeLine)
+        ? TOKENS_HEADING
+        : (targetName ?? autoCategoryIfKnown({ typeLine: card.typeLine, oracleTags: tags }));
+      return (
+        <button
+          type="button"
+          // The tile is draggable and this is its one control: a press that slips a few
+          // pixels is a press, not a drag (`cardDraggable`).
+          data-no-drag=""
+          // Named for the card *and* where it is going: two tiles' buttons both called
+          // "Add" are two controls a screen reader cannot tell apart, and the category is
+          // the one thing about this press that is not visible on the tile.
+          aria-label={landsIn === null ? `Add ${card.name}` : `Add ${card.name} to ${landsIn}`}
+          {...tip(landsIn === null ? UNNAMED_PILE_TIP : `Add to ${landsIn}`, {
+            describes: false,
+          })}
+          // Never disabled while a write is in flight, and that is the behaviour rather
+          // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
+          // three times is three copies. Disabling would drop presses two and three, and
+          // "press it again for another one" is how a deck gets built.
+          //
+          // Under `Auto` this sends **no category, the card's type line and the slugs the
+          // button was named from**, which is what puts the rule on `useDeck`'s single
+          // definition rather than here: this component computes the *word on the button*
+          // and the hook computes the word it sends, from the same function over the same
+          // facts. With no slugs in hand it sends none, and the hook reads them itself —
+          // which is the press a button that named no pile makes.
+          // The per-press answer carries the row the write landed in back to the editor,
+          // which marks it for five seconds — the whole point being that the deck is over
+          // *there* and the reader is looking *here*. It is per press rather than on the
+          // mutation because the mutation is shared: `useDeck`'s own `onSuccess` answers for
+          // every surface that borrows it, including one with no editor on screen. See
+          // {@link DeckSearchPanelProps.onAdded}.
+          //
+          // **`mutateAsync(...).then` and not `mutate(..., { onSuccess, onError })`**
+          // (issue #1162), because this button is never disabled mid-write: a `mutate`
+          // call's own callbacks belong to the *observer*, and the next press replaces them,
+          // so three quick presses were three adds, one toast and one landed mark — and a
+          // refusal of an earlier press said nothing at all. Each `mutateAsync` is a promise
+          // of its own, and its `.then` is that press's and nobody else's; the rejection arm
+          // is the handler, and the observer still carries the refusal to the line beside
+          // the panel. `useDeckDrops` makes the same choice for a multi-card drop (#553).
+          onClick={() =>
+            add(
+              auto
+                ? {
+                    cardId: card.id,
+                    typeLine: card.typeLine,
+                    oracleTags: tags,
+                    finish: wanted,
+                    quantity: 1,
+                  }
+                : {
+                    cardId: card.id,
+                    categoryId: targetCategoryId,
+                    finish: wanted,
+                    quantity: 1,
+                  },
+            ).then(
+              (change) => {
+                onAddedRef.current?.(change.id);
+                // **A receipt** (the owner's rule: every deliberate add to a deck says so —
+                // this panel's press is not one of the exempt three, the stepper, Quick Add
+                // and a drag). Per press, so three quick presses are three adds and three
+                // toasts, each about its own copy; the cap keeps the corner from filling.
+                notify.success(
+                  landsIn === null
+                    ? `Added “${card.name}” to the deck`
+                    : `Added “${card.name}” to “${landsIn}”`,
+                );
+              },
+              // Said beside the panel too; the toast is the rule's, and the inbox keeps it.
+              (error) =>
+                notify.error(`Couldn't add “${card.name}” to the deck`, {
+                  body: ipcError(error),
+                }),
+            )
+          }
+          className={cn(ADD_BUTTON, "hover:border-accent hover:text-accent")}
+        >
+          <Plus className="size-3.5" aria-hidden="true" />
+        </button>
+      );
+    },
+    [wallTags, targetName, auto, targetCategoryId, wanted, tip, add],
+  );
+
   return (
     <CardSearchBody
       search={search}
@@ -940,7 +1097,7 @@ function OpenPanel({
       // the deck's own `deck:<id>` — which is what makes a press on a tile in here put the
       // deck's selection down, since a pick in a new scope replaces the whole set.
       selectionScope="deck-panel"
-      addFailure={add.isError ? ipcError(add.error) : null}
+      addFailure={addFailure}
       dragPayload={tileDrag}
       selectedId={selectedCardId}
       // The search page's left/right (issue #1672): the arrows walk the column and open each card
@@ -951,119 +1108,8 @@ function OpenPanel({
       cardMenu={cardMenu}
       cardMenuKey={cardMenuKey}
       finish={tileFinish}
-      badge={(card) => (
-        <OwnedBadge
-          owned={card.ownedQuantity}
-          wishlisted={card.wishlisted}
-          inDeck={card.oracleId === null ? 0 : (inDeck.get(card.oracleId) ?? 0)}
-        />
-      )}
-      action={(card) => {
-        // Where this card would land, named before the press rather than reported after it.
-        // Under `Auto` that is the rule's own answer for *this* card — over its **Oracle tags
-        // and then its type line**, the two facts `useDeck.addCard` files by. Found or created
-        // on the way in, so a deck with no Ramp pile grows one and the button said so.
-        //
-        // **`null` is a pile this button cannot promise, and it then names none.** The comment
-        // that stood here said the rule "reads the type line and nothing else", which was the
-        // whole reason a button could promise its answer in advance — and it stopped being
-        // true when the rule learnt to read tags, while this went on handing it a type line.
-        // So the button read `Add Rampant Growth to Sorcery` and the card landed in Ramp
-        // (2026-10-04, over the real engine with the taxonomy downloaded). Until this card's
-        // tags are in hand the type line's pile is exactly the word that may be wrong;
-        // `autoCategoryIfKnown` answers only what no later read can change.
-        //
-        // **A token lands in Tokens & Emblems whatever pile is picked** (user schema v52):
-        // `deck::add_card` reroutes it into a token entry, so a button naming a pile would
-        // promise a place the press never goes — the live pass's `Add Dinosaur // Treasure to
-        // Creature`. `isTokenPrinting` is Rust's router's twin.
-        const tags = wallTags.get(card.id);
-        const landsIn = isTokenPrinting(card.layout, card.typeLine)
-          ? TOKENS_HEADING
-          : (targetName ?? autoCategoryIfKnown({ typeLine: card.typeLine, oracleTags: tags }));
-        return (
-          <button
-            type="button"
-            // The tile is draggable and this is its one control: a press that slips a few
-            // pixels is a press, not a drag (`cardDraggable`).
-            data-no-drag=""
-            // Named for the card *and* where it is going: two tiles' buttons both called
-            // "Add" are two controls a screen reader cannot tell apart, and the category is
-            // the one thing about this press that is not visible on the tile.
-            aria-label={landsIn === null ? `Add ${card.name}` : `Add ${card.name} to ${landsIn}`}
-            {...tip(landsIn === null ? UNNAMED_PILE_TIP : `Add to ${landsIn}`, {
-              describes: false,
-            })}
-            // Never disabled while a write is in flight, and that is the behaviour rather
-            // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
-            // three times is three copies. Disabling would drop presses two and three, and
-            // "press it again for another one" is how a deck gets built.
-            //
-            // Under `Auto` this sends **no category, the card's type line and the slugs the
-            // button was named from**, which is what puts the rule on `useDeck`'s single
-            // definition rather than here: this component computes the *word on the button*
-            // and the hook computes the word it sends, from the same function over the same
-            // facts. With no slugs in hand it sends none, and the hook reads them itself —
-            // which is the press a button that named no pile makes.
-            // The per-press answer carries the row the write landed in back to the editor,
-            // which marks it for five seconds — the whole point being that the deck is over
-            // *there* and the reader is looking *here*. It is per press rather than on the
-            // mutation because the mutation is shared: `useDeck`'s own `onSuccess` answers for
-            // every surface that borrows it, including one with no editor on screen. See
-            // {@link DeckSearchPanelProps.onAdded}.
-            //
-            // **`mutateAsync(...).then` and not `mutate(..., { onSuccess, onError })`**
-            // (issue #1162), because this button is never disabled mid-write: a `mutate`
-            // call's own callbacks belong to the *observer*, and the next press replaces them,
-            // so three quick presses were three adds, one toast and one landed mark — and a
-            // refusal of an earlier press said nothing at all. Each `mutateAsync` is a promise
-            // of its own, and its `.then` is that press's and nobody else's; the rejection arm
-            // is the handler, and the observer still carries the refusal to the line beside
-            // the panel. `useDeckDrops` makes the same choice for a multi-card drop (#553).
-            onClick={() =>
-              add
-                .mutateAsync(
-                  auto
-                    ? {
-                        cardId: card.id,
-                        typeLine: card.typeLine,
-                        oracleTags: tags,
-                        finish: wanted,
-                        quantity: 1,
-                      }
-                    : {
-                        cardId: card.id,
-                        categoryId: targetCategoryId,
-                        finish: wanted,
-                        quantity: 1,
-                      },
-                )
-                .then(
-                  (change) => {
-                    onAdded?.(change.id);
-                    // **A receipt** (the owner's rule: every deliberate add to a deck says so —
-                    // this panel's press is not one of the exempt three, the stepper, Quick Add
-                    // and a drag). Per press, so three quick presses are three adds and three
-                    // toasts, each about its own copy; the cap keeps the corner from filling.
-                    notify.success(
-                      landsIn === null
-                        ? `Added “${card.name}” to the deck`
-                        : `Added “${card.name}” to “${landsIn}”`,
-                    );
-                  },
-                  // Said beside the panel too; the toast is the rule's, and the inbox keeps it.
-                  (error) =>
-                    notify.error(`Couldn't add “${card.name}” to the deck`, {
-                      body: ipcError(error),
-                    }),
-                )
-            }
-            className={cn(ADD_BUTTON, "hover:border-accent hover:text-accent")}
-          >
-            <Plus className="size-3.5" aria-hidden="true" />
-          </button>
-        );
-      }}
+      badge={badge}
+      action={action}
     />
   );
 }

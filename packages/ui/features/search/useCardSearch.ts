@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import {
   ipc,
   ipcError,
@@ -10,6 +16,7 @@ import {
   type TagNamespace,
 } from "@/lib/ipc";
 import { BORDERS, type Border } from "@/lib/border";
+import { pageLimit } from "@/lib/pageLimit";
 import type { Universe } from "@/lib/universe";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
@@ -51,6 +58,13 @@ const EMPTY_TAG_TERMS: Pick<SearchRequest, "artTags" | "oracleTags" | "artWeight
 
 /** Rows per request. The backend clamps at 200; 50 is one screenful plus slack. */
 export const PAGE_SIZE = 50;
+
+/**
+ * The most rows one page may ask for — `search.rs`' `MAX_LIMIT`, which clamps anything larger.
+ * What a Ctrl+A walk's pages ask for (`fetchMore`'s `want`, `lib/pageLimit.ts`), so a thousand
+ * cards are a 50-row first page and five of these rather than twenty of {@link PAGE_SIZE}.
+ */
+export const MAX_PAGE_SIZE = 200;
 
 /** How long the search box stays quiet before a keystroke becomes a query. */
 export const DEBOUNCE_MS = 300;
@@ -1260,6 +1274,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     tagKey,
   ];
 
+  /**
+   * How many rows the page being asked for is owed, while {@link fetchMore} is asking — read by the
+   * query function at the fetch, which TanStack runs synchronously inside `fetchNextPage`. Unset
+   * for every other fetch (the first page, a refetch, a caller's plain `fetchNextPage`), which ask
+   * for what `pageLimit` says they always did.
+   */
+  const wantRef = useRef<number | undefined>(undefined);
+  const queryClient = useQueryClient();
+
   const query = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) =>
@@ -1339,7 +1362,17 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         // this view wants. Sending `true` explicitly would be the same request with more
         // ways to get it wrong. `playableOnly` is the neighbour with the opposite default and
         // rides up with `format` above, for the reason written at {@link formatParams}.
-        limit: PAGE_SIZE,
+        //
+        // **`PAGE_SIZE`, unless a wall said it is owed more** — `lib/pageLimit.ts`, which also
+        // keeps a refetch to the page sizes the cache already holds, so a list fetched in big pages
+        // for a Ctrl+A is refetched as the same rows rather than a quarter of them.
+        limit: pageLimit(
+          pageParam,
+          queryClient.getQueryData<InfiniteData<SearchResponse>>(queryKey)?.pages,
+          PAGE_SIZE,
+          MAX_PAGE_SIZE,
+          wantRef.current,
+        ),
         offset: pageParam,
       }),
     initialPageParam: 0,
@@ -1375,6 +1408,25 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const rows = useMemo(
     () => (tagQueryBlocked ? [] : (query.data?.pages.flatMap((p) => p.items) ?? [])),
     [query.data, tagQueryBlocked],
+  );
+
+  /**
+   * The next page, **as many rows as `want` says the wall is owed** (up to {@link MAX_PAGE_SIZE}) —
+   * what `CardGrid`'s `onNeedNextPage` hands over during a Ctrl+A walk. No `want` is the ordinary
+   * page. The caller keeps its own guard (a next page exists, none is in flight), as it does
+   * around `query.fetchNextPage`, which this calls.
+   */
+  const { fetchNextPage } = query;
+  const fetchMore = useCallback(
+    (want?: number) => {
+      wantRef.current = want;
+      try {
+        void fetchNextPage();
+      } finally {
+        wantRef.current = undefined;
+      }
+    },
+    [fetchNextPage],
   );
 
   /**
@@ -1497,6 +1549,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   return {
     text,
     setText,
+    fetchMore,
     /**
      * The tags the reader typed into the box, resolved — what the chip row under it draws.
      *
