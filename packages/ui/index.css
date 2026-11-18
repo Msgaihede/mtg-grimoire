@@ -816,7 +816,8 @@ html[data-dragging] * {
    (as %) place it; `--foil-angle` is the card's own sweep (115° ± 9°, so a wall of foils does not
    shine in lockstep) and `--foil-at` the band's place along it; `--foil-gN`/`--foil-sN` size and
    show ripple's rings. `--foil-on` is the strength, 0.6 (issue #1689: "too blown out"); every
-   layer scales by it. The pointer moves the light without following it (`useFoilLight`).
+   layer scales by it. Only the card under the pointer moves its light; every other card rests
+   (`useFoilLight`).
 
    **Every layer blends with the picture itself**, so none of them may sit inside an element with
    a mask, clip-path, opacity, filter or transform: any of those makes an isolated group, the
@@ -907,12 +908,14 @@ html[data-dragging] * {
   display: none;
 }
 
-/* Etched: frosted metallic grain on everything but the art window, out to the card's edge, the art
-   left flat. Halfway between the 2026-11-15 drawing and a stronger first proposal (the owner, issue
-   #1689), with a softer band and vignette so the frame never flares to white or sinks to black.
-   The art window is a regular frame's: a showcase or borderless etched card has its own, which no
-   shared drawing knows. */
-[data-foil="etched"] > :is(.foil-shine, .foil-pattern, .foil-pattern-2, .foil-glare) {
+/* Etched: frosted metallic grain on the frame, out to the card's edge, the art left flat. Halfway
+   between the 2026-11-15 drawing and a stronger first proposal (the owner, issue #1689), then
+   softer again and **off the text box** (2026-11-18: "still a little too blown out, making it
+   really hard for users to read the text") — the grain and the band leave the rules text alone,
+   and only the faint vignette crosses it. Scryfall's picture of an etched card already shows the
+   etching there. The art window and text box are a regular frame's: a showcase or borderless
+   etched card has its own, which no shared drawing knows. */
+[data-foil="etched"] > .foil-pattern-2 {
   clip-path: polygon(
     evenodd,
     0 0,
@@ -927,20 +930,40 @@ html[data-dragging] * {
     7.5% 11%
   );
 }
+[data-foil="etched"] > :is(.foil-shine, .foil-pattern, .foil-glare) {
+  clip-path: polygon(
+    evenodd,
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    7.5% 11%,
+    92.5% 11%,
+    92.5% 55.8%,
+    7.5% 55.8%,
+    7.5% 11%,
+    7.5% 62%,
+    92.5% 62%,
+    92.5% 91.5%,
+    7.5% 91.5%,
+    7.5% 62%
+  );
+}
 [data-foil="etched"] > .foil-shine {
   background-image: radial-gradient(
     farthest-corner circle at var(--foil-mx) var(--foil-my),
-    hsl(45 22% 82%) 0%,
-    hsl(40 12% 64%) 22%,
-    hsl(220 8% 44%) 55%,
-    hsl(220 6% 30%) 100%
+    hsl(45 16% 70%) 0%,
+    hsl(40 10% 56%) 22%,
+    hsl(220 6% 40%) 55%,
+    hsl(220 5% 28%) 100%
   );
   background-size: 100% 100%;
   mask-image: var(--foil-tex-1);
   mask-size: 128px 128px;
   mask-repeat: repeat;
   mask-position: calc(var(--foil-px) * 9px) calc(var(--foil-py) * 7px);
-  opacity: calc(1.33 * var(--foil-on));
+  opacity: calc(0.85 * var(--foil-on));
 }
 [data-foil="etched"] > .foil-pattern {
   background: hsl(220 6% 50%);
@@ -967,16 +990,16 @@ html[data-dragging] * {
     linear-gradient(
       var(--foil-angle),
       rgba(255, 255, 255, 0) calc(var(--foil-at) - 31%),
-      rgba(255, 255, 255, 0.5) calc(var(--foil-at) - 5%),
-      rgba(255, 255, 255, 0.6) var(--foil-at),
-      rgba(255, 255, 255, 0.5) calc(var(--foil-at) + 5%),
+      rgba(255, 255, 255, 0.22) calc(var(--foil-at) - 5%),
+      rgba(255, 255, 255, 0.28) var(--foil-at),
+      rgba(255, 255, 255, 0.22) calc(var(--foil-at) + 5%),
       rgba(255, 255, 255, 0) calc(var(--foil-at) + 31%)
     ),
     radial-gradient(
       farthest-corner circle at var(--foil-mx) var(--foil-my),
-      rgba(255, 255, 255, 0.45) 0%,
-      rgba(255, 255, 255, 0.15) 25%,
-      rgba(0, 0, 0, 0.18) 90%
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.06) 25%,
+      rgba(0, 0, 0, 0.12) 90%
     );
   background-size: 100% 100%;
   background-position: 0 0;
