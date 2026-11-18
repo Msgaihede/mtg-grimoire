@@ -547,6 +547,16 @@ commands! {
             quantity,
         )
     };
+    // Many card writes as one (issue #1164). `blocking` only to choose the lock's kind from the
+    // request: `owned` when a live removal can move copies, plain `write` otherwise.
+    blocking deck_apply in deck_apply(deck_id: i64, variant: String, ops: Vec<DeckOp>) = |state| {
+        let write = |c: &::rusqlite::Connection| apply(c, deck_id, &variant, &ops);
+        if moves_copies(&variant, &ops) {
+            crate::collection_source::with_write_owned(&state, write)
+        } else {
+            crate::state::with_write(&state, write)
+        }
+    };
     write deck_set_card_quantity in deck(deck_id: i64, card_id: String, category_id: i64, variant: String, finish: Option<String>, quantity: i64) = |conn| {
         set_card_quantity(
             conn,
@@ -2496,6 +2506,16 @@ mod tests {
             // `blocking`. A ticket that is still good and a copy that is really there, so
             // each reaches the write it decides on.
             "bulk_undo" => json!({ "undoId": seeded.undo }),
+            // An add that lands and a live removal, so the `owned` arm and its refresh run.
+            "deck_apply" => json!({
+                "deckId": seeded.deck,
+                "variant": "live",
+                "ops": [
+                    { "op": "add", "cardId": "c-bolt", "categoryName": seeded.pile,
+                      "quantity": 1 },
+                    { "op": "remove", "cardId": "c-bolt", "categoryId": 0 },
+                ],
+            }),
             "collection_to_deck" => json!({
                 "entryId": seeded.entry,
                 "deckId": seeded.deck,

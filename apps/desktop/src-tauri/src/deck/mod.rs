@@ -315,6 +315,34 @@ pub async fn deck_add_card(
     .map_err(unfinished)?
 }
 
+/// Many card writes to one list as **one** write — one transaction, one undo step, one settle
+/// (issue #1164). See [`grimoire_core::deck_apply`].
+///
+/// **`with_write_owned` only when the batch can move copies** — a removal on the live list, which
+/// files the copies the deck's group held into `Recently removed` — and plain `with_write`
+/// otherwise, so the facet index's `owned` refresh runs once when a collection row could have
+/// changed and never when none could.
+#[tauri::command]
+pub async fn deck_apply(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    variant: String,
+    ops: Vec<grimoire_core::deck_apply::DeckOp>,
+) -> Result<grimoire_core::deck_apply::DeckApplyOutcome, String> {
+    use grimoire_core::deck_apply::{apply, moves_copies};
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let write = |c: &rusqlite::Connection| apply(c, deck_id, &variant, &ops);
+        if moves_copies(&variant, &ops) {
+            crate::collection_source::with_write_owned(&state, write)
+        } else {
+            with_write(&state, write)
+        }
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 /// The card menu's `Add to actual` and `Add to theory` (issue #592). **`variant` is the list the
 /// card goes into** and `fromCategoryId` the pile it sits in now — see [`add_card_to_other_list`].
 #[tauri::command]

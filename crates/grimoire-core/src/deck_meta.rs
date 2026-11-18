@@ -2019,6 +2019,41 @@ pub fn set_card_label(
     // and the foil as two rows, and a label belongs to one of them.
     let finish = crate::deck::normalise_finish(finish)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut log = crate::deck_undo::CellLog::default();
+    let audit_id = set_card_label_in(
+        &tx,
+        deck_id,
+        card_id,
+        category_id,
+        variant,
+        finish.as_deref(),
+        label_id,
+        true,
+        &mut log,
+    )?;
+    let (cells, before) = log.into_parts();
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// [`set_card_label`]'s write **inside the caller's transaction**: the label fence, the deck's
+/// `touch_deck` where `touch` asks for it (a batch, `crate::deck_apply`, touches once for the
+/// whole press), the row fence, the cell noted in `log` before the UPDATE, and the `label`
+/// history row, whose id it answers. Files no step — the caller does, one per press.
+// `set_card_label`'s arguments, and the two a transaction-taking write adds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn set_card_label_in(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    category_id: i64,
+    variant: &str,
+    finish: Option<&str>,
+    label_id: Option<i64>,
+    touch: bool,
+    log: &mut crate::deck_undo::CellLog,
+) -> Result<i64, String> {
     // The new label's own name — the history needs the word rather than the id, and the same
     // read is what stands between a stale editor and a `label_id` pointing at nothing.
     let applied: Option<String> = match label_id {
@@ -2035,7 +2070,9 @@ pub fn set_card_label(
         }
         None => None,
     };
-    crate::deck::touch_deck(&tx, deck_id)?;
+    if touch {
+        crate::deck::touch_deck(tx, deck_id)?;
+    }
     // The card's name and the label it is wearing *now*, read before the UPDATE replaces one
     // of them. This is also the "is there a row" fence — `DECK_CARD_GRAIN` exactly, so at most
     // one row can match, and a stale editor is refused here rather than by an UPDATE that
@@ -2055,8 +2092,11 @@ pub fn set_card_label(
     // The whole row, not just its label. The history carries the two label *names* and `previous`
     // is `null` for an unlabelled card — indistinguishable from a card wearing a label called
     // nothing — while the step carries the id the column actually held.
-    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
-    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+    log.note(
+        tx,
+        deck_id,
+        crate::deck_undo::Cell::card(variant, category_id, card_id),
+    )?;
     tx.execute(
         "UPDATE deck_cards SET label_id = ?6, updated_at = unixepoch()
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
@@ -2067,18 +2107,15 @@ pub fn set_card_label(
     // `card_id` set is what marks this the *card's* half of the `label` kind, and `label: null` is
     // how a row says the card wears nothing now — clearing a label is as much a change as
     // applying one, and `previous` is the only place the label it lost is written down.
-    let audit_id = crate::deck_audit::record(
-        &tx,
+    crate::deck_audit::record(
+        tx,
         deck_id,
         variant,
         crate::deck_audit::LABEL,
         Some((card_id, &card_name)),
         &json!({ "label": applied, "previous": previous }),
         0,
-    )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
+    )
 }
 
 // ---------------------------------------------------------------------------------------

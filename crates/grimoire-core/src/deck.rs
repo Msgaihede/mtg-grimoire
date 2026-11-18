@@ -1405,7 +1405,7 @@ fn card_gone(category: &str) -> String {
 ///
 /// Returning the name rather than `()` is what lets [`card_gone`] name the category the reader
 /// is looking at without a second query.
-fn category_of_deck(
+pub(crate) fn category_of_deck(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
@@ -4665,7 +4665,7 @@ pub fn add_card_to_other_list(
 
 /// Which pile an add files into, named one of three ways. Not `Pile`, which
 /// [`crate::collection_alloc`] already spells.
-enum AddPile<'a> {
+pub(crate) enum AddPile<'a> {
     /// A pile of the list being written, by id — a drop onto a column.
     Id(i64),
     /// Found or made among the list's piles by name — [`crate::deck_meta::category_for_name`].
@@ -4686,22 +4686,14 @@ fn add_card_in(
     finish: Option<&str>,
     quantity: i64,
 ) -> Result<EntryChange, String> {
-    let variant = crate::deck_meta::valid_variant(variant)?;
-    let finish = normalise_finish(finish)?;
-    // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
-    // conjure a row out of nothing. The same refusal `collection::add_entry` gives, from the
-    // one constant that owns the sentence.
-    if quantity <= 0 {
-        return Err(ZERO_ADD.to_owned());
-    }
-    let Some(pile) = pile else {
-        return Err(NO_CATEGORY.to_owned());
-    };
-    let (set_code, collector_number, lang, name) = printing_of(conn, card_id)?;
-    // Asked beside the lookup above rather than folded into it: `printing_of` is shared with
-    // `collection_to_deck` and the import, and neither needs the answer — and the question is
-    // `deck_tokens`' to own, since it reads the type line as well as the layout.
-    let is_token = crate::deck_tokens::printing_is_token(conn, card_id)?;
+    let fenced = add_fences(conn, card_id, pile, variant, finish, quantity)?;
+    let AddFenced {
+        variant,
+        finish,
+        pile,
+        printing,
+        is_token,
+    } = fenced;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // **The token reroute** — see this function's doc. Before `touch_deck` and the category
@@ -4731,6 +4723,105 @@ fn add_card_in(
     // the diff against this is how an undo knows to take an invented `Ramp` column away again
     // along with the card that made it.
     let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
+    let mut log = crate::deck_undo::CellLog::default();
+    let added = add_row_in(
+        &tx,
+        deck_id,
+        card_id,
+        pile,
+        variant,
+        finish.as_deref(),
+        quantity,
+        printing,
+        &mut log,
+    )?;
+    let (cells, before) = log.into_parts();
+    crate::deck_undo::record_cells(
+        &tx,
+        added.audit_id,
+        deck_id,
+        cells,
+        before,
+        Some(categories_before),
+    )?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(added.change)
+}
+
+/// What [`add_card_in`] checks before it opens a transaction, in the order a caller hears the
+/// refusals — and what the checks found. Shared with `crate::deck_apply`, whose `Add` op is this
+/// command one card at a time inside one transaction.
+pub(crate) struct AddFenced<'a> {
+    pub variant: &'a str,
+    pub finish: Option<String>,
+    pub pile: AddPile<'a>,
+    pub printing: Printing,
+    /// The printing is a token or an emblem, filed as a token entry and never as a deck card —
+    /// see [`add_card`]'s doc.
+    pub is_token: bool,
+}
+
+/// [`AddFenced`]'s checks: the variant, the finish, the quantity, the pile's presence, then the
+/// printing — reads only, so they run before any transaction is opened.
+pub(crate) fn add_fences<'a>(
+    conn: &Connection,
+    card_id: &str,
+    pile: Option<AddPile<'a>>,
+    variant: &'a str,
+    finish: Option<&str>,
+    quantity: i64,
+) -> Result<AddFenced<'a>, String> {
+    let variant = crate::deck_meta::valid_variant(variant)?;
+    let finish = normalise_finish(finish)?;
+    // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
+    // conjure a row out of nothing. The same refusal `collection::add_entry` gives, from the
+    // one constant that owns the sentence.
+    if quantity <= 0 {
+        return Err(ZERO_ADD.to_owned());
+    }
+    let Some(pile) = pile else {
+        return Err(NO_CATEGORY.to_owned());
+    };
+    let printing = printing_of(conn, card_id)?;
+    // Asked beside the lookup above rather than folded into it: `printing_of` is shared with
+    // `collection_to_deck` and the import, and neither needs the answer — and the question is
+    // `deck_tokens`' to own, since it reads the type line as well as the layout.
+    let is_token = crate::deck_tokens::printing_is_token(conn, card_id)?;
+    Ok(AddFenced {
+        variant,
+        finish,
+        pile,
+        printing,
+        is_token,
+    })
+}
+
+/// What one card add wrote: the answer [`add_card`] gives, the pile the copies landed in, and the
+/// history row an undo step keys on.
+pub(crate) struct Added {
+    pub change: EntryChange,
+    pub category_id: i64,
+    pub audit_id: i64,
+}
+
+/// The deck-card half of [`add_card_in`], **inside the caller's transaction and behind its
+/// `touch_deck`**: resolve the pile, note the cell in `log` before the write, fold the copies in,
+/// write the `add` history row. Files no step — the caller does, one per press: [`add_card_in`]
+/// for itself, `crate::deck_apply` for a whole batch.
+// [`add_card`]'s reason, one function down.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add_row_in(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    pile: AddPile<'_>,
+    variant: &str,
+    finish: Option<&str>,
+    quantity: i64,
+    printing: Printing,
+    log: &mut crate::deck_undo::CellLog,
+) -> Result<Added, String> {
+    let (set_code, collector_number, lang, name) = printing;
     // Inside the transaction because the name and counterpart arms *write*: a category nobody
     // has made yet is made here, and it must not survive a card insert that fails after it.
     //
@@ -4744,21 +4835,24 @@ fn add_card_in(
     // pile is refused, a name is found or made among this list's piles only, and a counterpart
     // is this list's pile standing for the other's.
     let (category_id, category) = match pile {
-        AddPile::Id(id) => (id, category_of_deck(&tx, deck_id, variant, id)?),
+        AddPile::Id(id) => (id, category_of_deck(tx, deck_id, variant, id)?),
         AddPile::Name(name) => (
-            crate::deck_meta::category_for_name(&tx, deck_id, variant, name)?,
+            crate::deck_meta::category_for_name(tx, deck_id, variant, name)?,
             name.trim().to_owned(),
         ),
         AddPile::CounterpartOf(source) => {
-            let id = counterpart_pile(&tx, deck_id, variant, source)?;
-            (id, category_of_deck(&tx, deck_id, variant, id)?)
+            let id = counterpart_pile(tx, deck_id, variant, source)?;
+            (id, category_of_deck(tx, deck_id, variant, id)?)
         }
     };
     // The cell this add is about, read before the INSERT. **The fold is why this is a read
     // rather than "the row was not there"**: an add onto a category that already holds the
     // printing takes it from 2 to 3, so undoing means putting 2 back rather than deleting.
-    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
-    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+    log.note(
+        tx,
+        deck_id,
+        crate::deck_undo::Cell::card(variant, category_id, card_id),
+    )?;
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index
     // was created from. Anything else is a runtime "ON CONFLICT clause does not match any
     // PRIMARY KEY or UNIQUE constraint" at the first quick-add, which is why it is a
@@ -4775,29 +4869,32 @@ fn add_card_in(
          RETURNING id, quantity",
         grain = crate::schema::DECK_CARD_GRAIN
     );
+    // Cached: a batch (`crate::deck_apply`) runs this once per card.
     let (id, landed): (i64, i64) = tx
-        .query_row(
-            &sql,
-            params![
-                deck_id,
-                category_id,
-                variant,
-                card_id,
-                set_code,
-                collector_number,
-                lang,
-                name,
-                finish,
-                quantity
-            ],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .prepare_cached(&sql)
+        .and_then(|mut stmt| {
+            stmt.query_row(
+                params![
+                    deck_id,
+                    category_id,
+                    variant,
+                    card_id,
+                    set_code,
+                    collector_number,
+                    lang,
+                    name,
+                    finish,
+                    quantity
+                ],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+        })
         .map_err(|e| e.to_string())?;
     // The copies **added**, never the total the row landed on: the history is a list of
     // changes, and `delta` is what the day header adds up. A fold that took a row from 2 to 3
     // is one copy of history, not three.
     let audit_id = crate::deck_audit::record(
-        &tx,
+        tx,
         deck_id,
         variant,
         crate::deck_audit::ADD,
@@ -4805,19 +4902,14 @@ fn add_card_in(
         &json!({ "category": category, "quantity": quantity }),
         quantity,
     )?;
-    crate::deck_undo::record_cells(
-        &tx,
+    Ok(Added {
+        change: EntryChange {
+            id,
+            quantity: landed,
+            removed: false,
+        },
+        category_id,
         audit_id,
-        deck_id,
-        cells,
-        before,
-        Some(categories_before),
-    )?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(EntryChange {
-        id,
-        quantity: landed,
-        removed: false,
     })
 }
 
@@ -4898,76 +4990,52 @@ pub fn set_card_quantity(
     touch_deck(&tx, deck_id)?;
     let category = category_of_deck(&tx, deck_id, variant, category_id)?;
 
-    // The row as it is now, read before either branch writes. The history needs all three
-    // columns — the count it is moving *from*, and the name the line will be read by once the
-    // row is gone — and reading them once here is also what lets the `quantity` branch report
-    // both numbers, which `RETURNING` cannot: SQLite's `RETURNING` on an UPDATE answers the
-    // **new** row, so the old value is unrecoverable a statement later.
-    //
-    // **`coalesce(finish, '') = coalesce(?5, '')` rather than `finish IS ?5`**, so that this
-    // WHERE is the same test `DECK_CARD_GRAIN`'s index is built on and the two can never mean
-    // different things. Since v18 a pile can hold the regular copy and the foil as two rows,
-    // and a stepper aimed at one must not find the other.
-    let current: Option<(i64, i64, String)> = tx
-        .query_row(
-            "SELECT id, quantity, name FROM deck_cards
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
-                AND coalesce(finish, '') = coalesce(?5, '')",
-            params![deck_id, card_id, category_id, variant, finish],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-
-    // Read whole rather than rebuilt from `current`: the step has to put the **label** and any
-    // `needs_review` sentence back too, and a delete takes all of it. `current` answers what
-    // the history line needs and is deliberately not widened to answer both questions.
-    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
-    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
-
     if quantity == 0 {
-        if let Some((_, was, name)) = &current {
-            tx.execute(
-                "DELETE FROM deck_cards
-                  WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
-                    AND coalesce(finish, '') = coalesce(?5, '')",
-                params![deck_id, card_id, category_id, variant, finish],
-            )
-            .map_err(|e| e.to_string())?;
-            // The copies the row was holding leave the deck with it (issue #1494) — see this
-            // function's doc on why the stepper's own write gives them back.
-            release_displaced_copies(&tx, deck_id, variant, card_id, finish.as_deref(), *was)?;
-            // `reason` is null and stays null from here: the reconciler is the only writer
-            // that could ever have one to give, and it does not delete — it flags. The key is
-            // in the shape so a later caller that *does* remove a card for a stated reason has
-            // somewhere to put it, rather than a second payload shape for one kind.
-            let audit_id = crate::deck_audit::record(
-                &tx,
-                deck_id,
-                variant,
-                crate::deck_audit::REMOVE,
-                Some((card_id, name)),
-                &json!({ "category": category, "quantity": was, "reason": null }),
-                -was,
-            )?;
-            crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+        let mut log = crate::deck_undo::CellLog::default();
+        let removed = remove_row_in(
+            &tx,
+            deck_id,
+            card_id,
+            category_id,
+            &category,
+            variant,
+            finish.as_deref(),
+            Some(&mut log),
+        )?;
+        // Nothing else in this arm records a step: a stepper that lands on a slot already empty
+        // removed nothing, so it records nothing — this is the one place the "every write records
+        // a row" rule gives way, and it gives way to the truth. A `remove` of zero copies would be
+        // a history of a change that never happened.
+        if let Some(removed) = &removed {
+            let (cells, before) = log.into_parts();
+            crate::deck_undo::record_cells(&tx, removed.audit_id, deck_id, cells, before, None)?;
         }
-        // Nothing else in this arm records a step: a stepper that lands on an already-empty
-        // slot removed nothing and wrote no history row, so there is nothing to reverse.
-        // A stepper that lands on a slot already empty removed nothing, so it records nothing:
-        // this is the one place the "every write records a row" rule gives way, and it gives
-        // way to the truth. A `remove` of zero copies would be a history of a change that
-        // never happened.
         tx.commit().map_err(|e| e.to_string())?;
         // A slot the caller wanted empty and that is empty: like `remove_entry`, a delete
         // that finds nothing already has what it wanted. There is no row left to name, so
         // the id is 0 — the only thing this path reports is that the slot is gone.
         return Ok(EntryChange {
-            id: current.map_or(0, |(id, ..)| id),
+            id: removed.map_or(0, |r| r.id),
             quantity: 0,
             removed: true,
         });
     }
+
+    // The row as it is now, read before the write — [`current_row`], which says why.
+    let current = current_row(
+        &tx,
+        deck_id,
+        card_id,
+        category_id,
+        variant,
+        finish.as_deref(),
+    )?;
+
+    // Read whole rather than rebuilt from `current`: the step has to put the **label** and any
+    // `needs_review` sentence back too. `current` answers what the history line needs and is
+    // deliberately not widened to answer both questions.
+    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
 
     // The [`crate::collection::GONE`] asymmetry: an *adjustment* to a row that is not there
     // could not do what it was asked. Putting a card into a category is [`add_card`].
@@ -5004,6 +5072,114 @@ pub fn set_card_quantity(
         quantity,
         removed: false,
     })
+}
+
+/// One row of a pile at the grain, as `(id, quantity, name)` — read before a write changes it.
+///
+/// The history needs all three columns — the count it is moving *from*, and the name the line
+/// will be read by once the row is gone — and reading them before the write is also what lets
+/// [`set_card_quantity`]'s `quantity` branch report both numbers, which `RETURNING` cannot:
+/// SQLite's `RETURNING` on an UPDATE answers the **new** row, so the old value is unrecoverable a
+/// statement later.
+///
+/// **`coalesce(finish, '') = coalesce(?5, '')` rather than `finish IS ?5`**, so that this WHERE is
+/// the same test `DECK_CARD_GRAIN`'s index is built on and the two can never mean different
+/// things. Since v18 a pile can hold the regular copy and the foil as two rows, and a stepper
+/// aimed at one must not find the other.
+fn current_row(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    category_id: i64,
+    variant: &str,
+    finish: Option<&str>,
+) -> Result<Option<(i64, i64, String)>, String> {
+    tx.prepare_cached(
+        "SELECT id, quantity, name FROM deck_cards
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+            AND coalesce(finish, '') = coalesce(?5, '')",
+    )
+    .and_then(|mut stmt| {
+        stmt.query_row(
+            params![deck_id, card_id, category_id, variant, finish],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// What [`remove_row_in`] took out: the row's id, the `remove` history row, and the copies the
+/// release filed into `Recently removed`.
+pub(crate) struct RemovedRow {
+    pub id: i64,
+    pub audit_id: i64,
+    pub released: Released,
+}
+
+/// Take one row out of a pile — [`set_card_quantity`]'s zero, **inside the caller's transaction
+/// and behind its `touch_deck` and [`category_of_deck`] fence** (`category` is the name that fence
+/// answered). `None` when there was no row: nothing written, no history.
+///
+/// The copies the row was holding leave the deck with it (issue #1494), through
+/// [`release_displaced_copies`] — a theory row and a virtual deck move nothing — and the history
+/// is one `remove` row. **The step is the caller's**: `log` is noted with the cell before the
+/// delete when the caller will file one ([`set_card_quantity`] always; `crate::deck_apply` except
+/// for a live cut, whose argument is [`crate::collection_alloc::deck_to_collection`]'s), and is
+/// `None` when it will not.
+// [`add_card`]'s reason: every argument names the row.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remove_row_in(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    category_id: i64,
+    category: &str,
+    variant: &str,
+    finish: Option<&str>,
+    log: Option<&mut crate::deck_undo::CellLog>,
+) -> Result<Option<RemovedRow>, String> {
+    let Some((id, was, name)) = current_row(tx, deck_id, card_id, category_id, variant, finish)?
+    else {
+        return Ok(None);
+    };
+    if let Some(log) = log {
+        // Read whole: the step has to put the **label** and any `needs_review` sentence back
+        // too, and a delete takes all of it.
+        log.note(
+            tx,
+            deck_id,
+            crate::deck_undo::Cell::card(variant, category_id, card_id),
+        )?;
+    }
+    tx.prepare_cached(
+        "DELETE FROM deck_cards
+          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+            AND coalesce(finish, '') = coalesce(?5, '')",
+    )
+    .and_then(|mut stmt| stmt.execute(params![deck_id, card_id, category_id, variant, finish]))
+    .map_err(|e| e.to_string())?;
+    // The copies the row was holding leave the deck with it (issue #1494) — see
+    // [`set_card_quantity`]'s doc on why the stepper's own write gives them back.
+    let released = release_displaced_copies(tx, deck_id, variant, card_id, finish, was)?;
+    // `reason` is null and stays null from here: the reconciler is the only writer that could
+    // ever have one to give, and it does not delete — it flags. The key is in the shape so a
+    // later caller that *does* remove a card for a stated reason has somewhere to put it, rather
+    // than a second payload shape for one kind.
+    let audit_id = crate::deck_audit::record(
+        tx,
+        deck_id,
+        variant,
+        crate::deck_audit::REMOVE,
+        Some((card_id, &name)),
+        &json!({ "category": category, "quantity": was, "reason": null }),
+        -was,
+    )?;
+    Ok(Some(RemovedRow {
+        id,
+        audit_id,
+        released,
+    }))
 }
 
 /// Empty one category of one variant — the pile's right-click `Clear stack`.
@@ -5295,11 +5471,65 @@ pub fn move_card(
     // — `add_card`'s rule, and this command grew the same second arm. Undoing a move that
     // invented a `Ramp` column has to take the column away with the card that made it.
     let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
+    let mut log = crate::deck_undo::CellLog::default();
+    let moved = move_in(
+        &tx,
+        deck_id,
+        card_id,
+        from_category_id,
+        to_category_id,
+        to_category_name,
+        variant,
+        finish.as_deref(),
+        &mut log,
+    )?;
+    // A card filed where it already is wrote nothing, and returns **without committing** — see
+    // [`move_in`] — so the `touch_deck` above is rolled back with the transaction.
+    let Some(audit_id) = moved.audit_id else {
+        return Ok(moved.to);
+    };
+    let (cells, before) = log.into_parts();
+    crate::deck_undo::record_cells(
+        &tx,
+        audit_id,
+        deck_id,
+        cells,
+        before,
+        Some(categories_before),
+    )?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(moved.to)
+}
+
+/// What [`move_in`] did: the pile the copies are in now, and the `move` history row — `None`
+/// when the card was already there and nothing was written.
+pub(crate) struct Moved {
+    pub to: i64,
+    pub audit_id: Option<i64>,
+}
+
+/// [`move_card`]'s write, **inside the caller's transaction and behind its `touch_deck`**: both
+/// fences, the target's resolution (which can make a pile), the cells noted in `log` before the
+/// write, the fold, the `move` history row. Files no step — [`move_card`] files one for itself,
+/// `crate::deck_apply` one for a whole batch.
+// [`add_card`]'s reason, one command over.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn move_in(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    from_category_id: i64,
+    to_category_id: Option<i64>,
+    to_category_name: Option<&str>,
+    variant: &str,
+    finish: Option<&str>,
+    log: &mut crate::deck_undo::CellLog,
+) -> Result<Moved, String> {
     // **Both ends are this list's piles** (user schema v53): a move is within one list, and a
     // target of the other list is refused rather than carrying a card across the tabs.
-    let from = category_of_deck(&tx, deck_id, variant, from_category_id)?;
+    let from = category_of_deck(tx, deck_id, variant, from_category_id)?;
     let (to_category_id, to) = match to_category_id {
-        Some(id) => (id, category_of_deck(&tx, deck_id, variant, id)?),
+        Some(id) => (id, category_of_deck(tx, deck_id, variant, id)?),
         // Unreachable past the guard above, and written as a second refusal rather than an
         // `expect` for `add_card`'s reason: an edit that ever drops that guard answers the
         // sentence instead of panicking in a reader's face.
@@ -5308,22 +5538,25 @@ pub fn move_card(
                 return Err(NO_CATEGORY.to_owned());
             };
             (
-                crate::deck_meta::category_for_name(&tx, deck_id, variant, name)?,
+                crate::deck_meta::category_for_name(tx, deck_id, variant, name)?,
                 name.trim().to_owned(),
             )
         }
     };
     // **After the resolution, because the name arm cannot answer before it.** A card the rule
     // files where it already is is not an error and is not a move: the caller is told which
-    // pile that was, and this returns **without committing**, so the `touch_deck` above is
-    // rolled back with the transaction. Bumping `updated_at` to leave the list exactly as it
-    // was is the thing the id arm's caller-side guard exists to prevent, and a second entrance
-    // must not reintroduce it.
+    // pile that was, and nothing is written — [`move_card`] returns **without committing**, so
+    // its `touch_deck` is rolled back with the transaction. Bumping `updated_at` to leave the
+    // list exactly as it was is the thing the id arm's caller-side guard exists to prevent, and
+    // a second entrance must not reintroduce it.
     //
     // Nothing can have been created on this path: `category_for_name` answers a **new** id when
     // it makes a pile, and a new id is never a pile the card is already in.
     if from_category_id == to_category_id {
-        return Ok(to_category_id);
+        return Ok(Moved {
+            to: to_category_id,
+            audit_id: None,
+        });
     }
     // The moved row's own denormalized name, read before the move folds it into whatever the
     // target already held — and it is the row's name rather than a fresh `cards` lookup for
@@ -5334,26 +5567,22 @@ pub fn move_card(
     // affected-row count. Same `WHERE`, same answer, one statement earlier — and earlier is
     // where it belongs, because the alternative is running an INSERT … SELECT that is known to
     // select nothing before discovering it.
-    let moved_name: String = tx
-        .query_row(
-            "SELECT name FROM deck_cards
-              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
-                AND coalesce(finish, '') = coalesce(?5, '')",
-            params![deck_id, card_id, from_category_id, variant, finish],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
+    let (_, _, moved_name) = current_row(tx, deck_id, card_id, from_category_id, variant, finish)?
         .ok_or_else(|| card_gone(&from))?;
     // **Both** cells, because a move is two changes to one variant and the target's fold is
     // the half that is not obvious: moving onto a category that already holds the printing
     // takes that row from 2 to 3, so undoing means putting the 2 back rather than deleting a
     // row the reader put there separately.
-    let cells = vec![
+    log.note(
+        tx,
+        deck_id,
         crate::deck_undo::Cell::card(variant, from_category_id, card_id),
+    )?;
+    log.note(
+        tx,
+        deck_id,
         crate::deck_undo::Cell::card(variant, to_category_id, card_id),
-    ];
-    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+    )?;
     // `INSERT … SELECT … ON CONFLICT` over the same table: the `WHERE` is what makes it
     // unambiguous to parse, and it is here anyway. `needs_review` comes across with a row
     // that lands in an empty category and is left alone where the target row already exists —
@@ -5382,29 +5611,30 @@ pub fn move_card(
             updated_at = unixepoch()",
         grain = crate::schema::DECK_CARD_GRAIN
     );
-    tx.execute(
-        &sql,
-        params![
-            deck_id,
-            card_id,
-            to_category_id,
-            from_category_id,
-            variant,
-            finish
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
+    // Both cached: a batch (`crate::deck_apply`) runs them once per card.
+    tx.prepare_cached(&sql)
+        .and_then(|mut stmt| {
+            stmt.execute(params![
+                deck_id,
+                card_id,
+                to_category_id,
+                from_category_id,
+                variant,
+                finish
+            ])
+        })
+        .map_err(|e| e.to_string())?;
+    tx.prepare_cached(
         "DELETE FROM deck_cards
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
             AND coalesce(finish, '') = coalesce(?5, '')",
-        params![deck_id, card_id, from_category_id, variant, finish],
     )
+    .and_then(|mut stmt| stmt.execute(params![deck_id, card_id, from_category_id, variant, finish]))
     .map_err(|e| e.to_string())?;
     // `delta` 0: a move changes no count. The copies are in the deck before and after, and a
     // day roll-up that charged them twice would report a tidy-up as a shopping trip.
     let audit_id = crate::deck_audit::record(
-        &tx,
+        tx,
         deck_id,
         variant,
         crate::deck_audit::MOVE,
@@ -5412,16 +5642,10 @@ pub fn move_card(
         &json!({ "from": from, "to": to }),
         0,
     )?;
-    crate::deck_undo::record_cells(
-        &tx,
-        audit_id,
-        deck_id,
-        cells,
-        before,
-        Some(categories_before),
-    )?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(to_category_id)
+    Ok(Moved {
+        to: to_category_id,
+        audit_id: Some(audit_id),
+    })
 }
 
 /// What a swap answers: where the copies ended up, and whether they had company.
