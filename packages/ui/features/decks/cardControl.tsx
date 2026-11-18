@@ -636,10 +636,14 @@ export interface DeckCardActions {
   /**
    * Whether this card wears the picked mark — issue #214.
    *
-   * A predicate over the **slot** rather than a set on each card, because the four views hand
-   * this bag down through their group components and a set would be a second thing to thread. The
-   * slot is `dnd.ts`'s `deckCardSlot`, which every view already stamps through
-   * {@link deckCardProps}.
+   * A predicate over the **slot**, which is `dnd.ts`'s `deckCardSlot` and which every view already
+   * stamps through {@link deckCardProps}.
+   *
+   * **The deck editor does not put it in the bag any more** (2026-11): a pick is a new set, so a
+   * predicate here made the bag new per Ctrl-click and every memoised pile was drawn again. The
+   * desk hands the views the picked slots beside the bag (`picked`), each pile is handed its own
+   * share, and the pile answers this predicate from that (`views/pickedMarks.ts`) for
+   * {@link deckCardMarked}. A surface may still set it on a view given no `picked`.
    *
    * Absent is a view where nothing is picked, which is what a story or a read-only mount gets.
    */

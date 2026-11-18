@@ -345,7 +345,8 @@ than the same row under six headings.
 Four things about it are decisions rather than plumbing.
 
 **"All" is the list, not what is loaded.** Every wall pages (50 rows a search, 100 a collection
-or a wishlist, 60 in the deck editor's collection tab), so the tiles in hand at the press are a
+or a wishlist, 60 in the deck editor's collection tab — and, for a select-all, up to the backend's
+ceiling, below), so the tiles in hand at the press are a
 scroll position — the argument `features/transfer/export/scope.ts` makes about exporting. A set of
 them would be the first hundred cards of three thousand, ringed as if it were all of them. So the
 press writes an *instruction* rather than a list (`Selection.allOf`, `lib/multiSelect.ts`): the set
@@ -358,8 +359,11 @@ ends any set.
 Two limits on that, both the wall's own:
 
 - **Until the walk ends, the set is what has arrived.** A menu opened or a drag begun in that
-  second or two acts on the tiles fetched so far — its label says how many — and nothing on the
-  wall says the set is still growing.
+  second or two acts on the tiles fetched so far — its label says how many. **Since 2026-11 the
+  app says the set is still growing**: the wall holds the app-wide busy mark (`lib/work.ts`,
+  *Selecting all cards…*) for exactly as long as it is owed rows, and puts it down when the list
+  is whole, when the limit is reached, when a page fails, when a press, `Escape` or a new filter
+  ends the instruction, and when the wall unmounts. Nothing on the wall itself says so.
 - **A folded shelf is not in it, then or later.** The collection's and the wishlist's walls are
   their open shelves (`drawn`, in `CardGrid`); a folded one fetched nothing, so it contributes
   nothing, exactly as it contributes nothing to a Shift range. **The folds are part of the list a
@@ -368,6 +372,18 @@ Two limits on that, both the wall's own:
   shelf after the press swept every card in it into the set, cards the reader never saw being
   picked. Folding or unfolding one now ends the instruction the way a filter does — what was
   picked and is still drawn stays picked, and the walk stops.
+
+**The walk asks for its rows in pages as large as the backend answers** (2026-11). The wall tells
+its caller how many rows it is still owed (`CardGrid`'s `onNeedNextPage(want)`), and the hook asks
+the next page for that many, capped at what the command clamps to: 200 for `search_cards`
+(`useCardSearch`'s `MAX_PAGE_SIZE`), 500 for `collection_list` and `wishlist_list`
+(`COLLECTION_MAX_PAGE_SIZE`). A thousand cards on the search page were twenty 50-row round trips
+and are six (50, then 200 four times, then the 150 that is left) — `useCardSearch.test.ts` counts
+them. A refetch of a list fetched that way asks for the same pages again (`lib/pageLimit.ts`):
+TanStack refetches every held page with a recomputed offset, and at the ordinary size it would have
+brought back a quarter of the rows — the wall shrinking under the reader and a set that is no
+longer "all of" the list losing every card past the new end. Scrolling still fetches the ordinary
+page.
 
 **The fetching ahead stops at 1 000 tiles on a catalogue wall** (`SELECT_ALL_LIMIT`,
 `CardGrid.tsx`). An unfiltered search is the whole database, and what a catalogue wall's menu does
@@ -434,7 +450,7 @@ move a browser makes; the chords themselves were real key events.
 
 | Press | Result |
 | --- | --- |
-| `Ctrl+A`, caret on a filter chip, caption `5,000+ cards` | 50 tiles picked at the press, **1 000** after 1.2 s in twenty writes, and no fetch in the 4 s after — the limit holds. No text selected on the page. |
+| `Ctrl+A`, caret on a filter chip, caption `5,000+ cards` | 50 tiles picked at the press, **1 000** after 1.2 s in twenty writes, and no fetch in the 4 s after — the limit holds. No text selected on the page. *(Before the 2026-11 walk: it is six pages now, not re-measured in Storybook — see above.)* |
 | `Escape` | The set is gone and no tile is ringed. |
 | **All printings** off (caption `687 cards`), `Ctrl+A` | **687** picked in 0.9 s, the caption's own number, then quiet. |
 | `Ctrl+A` in the search box, `Ancient` typed | The seven characters selected; the picked set untouched. |
@@ -447,6 +463,18 @@ move a browser makes; the chords themselves were real key events.
 | A deck card pressed, then `Ctrl+A` | Nothing picked. (Since issue #938: that card's whole stack.) |
 | The column's wall pressed — the caret lands on the editor's root, **outside** the column — then `Ctrl+A` | `deck-collection`, 6 of 6 ringed. |
 | `Escape` | The set is gone and the deck is still open. |
+
+**What a page of the walk costs the page around it** (2026-11, measured by render probes, not by a
+stopwatch). Each page used to land as a render of every selection surface mounted — the store held
+one set and every surface read it whole — and of every tile on the wall, whose menu callback and
+`select` closed over the picked set. Now a surface reads only its own scope's set
+(`useCardSelection`'s selector), the wall and its tiles are memoised with callbacks that read the
+set at the press, and the picked rows a menu or a drag acts on are found through an index built
+once per page rather than by walking every drawn row on every render. **The page still lands as
+two renders of the wall itself** — the second is the store catching up with the set the first drew
+(`useCardSelection`'s effect) — because the store's keys have to be current for the next press
+(`pickCard` applies a chord to them) and for a filter that ends the instruction (which keeps the
+picked cards still on the surface, read off the stored keys). That second render redraws no tile.
 
 **The third row failed on the first build**, and it is why a touch outranks the caret: the press
 was in the column, the caret it left behind was on the editor, and a rule that asked the caret

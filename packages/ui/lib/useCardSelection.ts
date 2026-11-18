@@ -90,7 +90,10 @@ export interface CardSelectionApi {
    * That return is the whole contract with the four deck views and the wall: none of them
    * branches on modifiers itself, so none of them can disagree about which chords mean what.
    */
-  pick: (key: string, event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => boolean;
+  pick: (
+    key: string,
+    event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+  ) => boolean;
   /**
    * Whether a drag started on this key carries the whole set — and, when it does not, the
    * collapse that makes the drag honest.

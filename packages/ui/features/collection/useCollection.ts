@@ -37,12 +37,7 @@ import {
   type ShelfCount,
 } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
-import {
-  buildShelves,
-  shelvesToCount,
-  shelvesToFetch,
-  visibleShelves,
-} from "@/lib/shelves";
+import { buildShelves, shelvesToCount, shelvesToFetch, visibleShelves } from "@/lib/shelves";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";

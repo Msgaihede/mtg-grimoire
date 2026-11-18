@@ -60,10 +60,7 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
  * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
  */
-function columnsFor(
-  marketplace: Marketplace,
-  tip: TooltipBinder,
-): TableColumn<CardSummary>[] {
+function columnsFor(marketplace: Marketplace, tip: TooltipBinder): TableColumn<CardSummary>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return [
@@ -249,8 +246,7 @@ const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
  *
  * Module scope for {@link tileFinish}'s reason.
  */
-const tileTreatment = (card: CardSummary) =>
-  finishTreatments(card.promoTypes, tileFinish(card));
+const tileTreatment = (card: CardSummary) => finishTreatments(card.promoTypes, tileFinish(card));
 
 /**
  * Whether a tile's card is one the Commander bracket counts — the crown, in the same top-right
@@ -538,12 +534,7 @@ export function SearchPage() {
         {/* `min-w-0`, or a long card name in the table pushes the column past its share and
             takes the sidebar's width; `min-h-0 flex-1` is the table's height chain, one level
             in, and exactly what a growing wall must not be given. */}
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 flex-col gap-4",
-            view === "table" && "min-h-0",
-          )}
-        >
+        <div className={cn("flex min-w-0 flex-1 flex-col gap-4", view === "table" && "min-h-0")}>
           {/* The picked tags, over the filter row they refine — drawn only while there are any,
               so a page nobody has used tag search on carries no row for it. Wiring
               `onFloorChange` is what draws the art weight control at all. */}

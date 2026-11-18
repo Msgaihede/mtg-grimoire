@@ -204,7 +204,10 @@ function isId(value: unknown): value is string {
  * has to remember the ordering {@link GROUP_KEY} depends on. Omitted, or empty, and the record is
  * byte for byte what it was before groups existed.
  */
-export function dragData(payload: DragPayload, rest: readonly DragPayload[] = []): Record<string, unknown> {
+export function dragData(
+  payload: DragPayload,
+  rest: readonly DragPayload[] = [],
+): Record<string, unknown> {
   const base = { [MARK_KEY]: MARK, ...payload };
   return rest.length === 0 ? base : { ...base, [GROUP_KEY]: [payload, ...rest] };
 }

@@ -1541,7 +1541,6 @@ describe("the printings mode a caller can open on", () => {
   });
 });
 
-
 /**
  * Scryfall's **tag** syntax, read out of the card search box — the whole of what
  * `useCardSearch` does with `queryLanguage.ts`'s tag tokens.
@@ -1589,10 +1588,12 @@ describe("useCardSearch, reading tag syntax out of the box", () => {
 
     act(() => result.current.setText("bolt atag:dragon"));
 
-    await waitFor(() => expect(lastSearchRequest().artTags).toEqual({
-      include: ["dragon"],
-      exclude: [],
-    }));
+    await waitFor(() =>
+      expect(lastSearchRequest().artTags).toEqual({
+        include: ["dragon"],
+        exclude: [],
+      }),
+    );
     expect(lastSearchRequest().text).toBe("bolt");
     // The counts greying the chips and the wall those chips filter have to describe one corpus.
     expect(lastFacetRequest().text).toBe("bolt");
@@ -1610,10 +1611,12 @@ describe("useCardSearch, reading tag syntax out of the box", () => {
 
     act(() => result.current.setText("otag:ramp -atag:dragon"));
 
-    await waitFor(() => expect(lastSearchRequest().oracleTags).toEqual({
-      include: ["ramp"],
-      exclude: [],
-    }));
+    await waitFor(() =>
+      expect(lastSearchRequest().oracleTags).toEqual({
+        include: ["ramp"],
+        exclude: [],
+      }),
+    );
     expect(lastSearchRequest().artTags).toEqual({ include: [], exclude: ["dragon"] });
   });
 
@@ -1696,10 +1699,12 @@ describe("useCardSearch, reading tag syntax out of the box", () => {
     tagResolve.mockResolvedValue([{ slug: "ramp", label: "Ramp", namespace: "oracle" }]);
     act(() => result.current.retryTagLookup());
 
-    await waitFor(() => expect(lastSearchRequest().oracleTags).toEqual({
-      include: ["ramp"],
-      exclude: [],
-    }));
+    await waitFor(() =>
+      expect(lastSearchRequest().oracleTags).toEqual({
+        include: ["ramp"],
+        exclude: [],
+      }),
+    );
     expect(lastSearchRequest().text).toBe("bolt");
     expect(result.current.tagLookupFailure).toBeNull();
   });
@@ -1865,9 +1870,11 @@ describe("useCardSearch, reading typed predicates out of the box", () => {
 
     act(() => result.current.setText("t:goblin"));
 
-    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
-      { field: "typeLine", op: "colon", value: "goblin", negated: false },
-    ]));
+    await waitFor(() =>
+      expect(lastSearchRequest().predicates).toEqual([
+        { field: "typeLine", op: "colon", value: "goblin", negated: false },
+      ]),
+    );
     // No resolve was asked for, so there is nothing that could have been waited on — and the
     // wall is a result rather than the deliberate emptiness an unknown tag produces.
     expect(tagResolve).not.toHaveBeenCalled();
@@ -1974,9 +1981,11 @@ describe("useCardSearch, reading typed predicates out of the box", () => {
     act(() => result.current.togglePredicateChipMode("cmc|gte|3"));
 
     expect(result.current.text).toBe("-cmc>=3 bolt");
-    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
-      { field: "cmc", op: "gte", value: "3", negated: true },
-    ]));
+    await waitFor(() =>
+      expect(lastSearchRequest().predicates).toEqual([
+        { field: "cmc", op: "gte", value: "3", negated: true },
+      ]),
+    );
   });
 
   /**
@@ -1990,9 +1999,11 @@ describe("useCardSearch, reading typed predicates out of the box", () => {
 
     act(() => result.current.setText('lightning -"lightning bolt"'));
 
-    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
-      { field: "name", op: "colon", value: "lightning bolt", negated: true },
-    ]));
+    await waitFor(() =>
+      expect(lastSearchRequest().predicates).toEqual([
+        { field: "name", op: "colon", value: "lightning bolt", negated: true },
+      ]),
+    );
     expect(lastSearchRequest().text).toBe("lightning");
     expect(result.current.predicateChips).toEqual([
       { key: "name|colon|lightning bolt", label: '"lightning bolt"', mode: "exclude" },

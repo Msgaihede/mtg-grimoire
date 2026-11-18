@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { folderDragData } from "@/lib/folderDrag";
-import { dragData, dropWrite, readCards, readDragData, readDragGroup, type DragPayload } from "./dnd";
+import {
+  dragData,
+  dropWrite,
+  readCards,
+  readDragData,
+  readDragGroup,
+  type DragPayload,
+} from "./dnd";
 
 /**
  * **What is tested here, and what is left to the running app.**
@@ -355,5 +362,4 @@ describe("readDragGroup — once per drag", () => {
     expect(readDragGroup(next)).not.toBe(first);
     expect(readDragGroup(next)).toEqual(first);
   });
-
 });

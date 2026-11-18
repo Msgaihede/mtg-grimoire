@@ -362,8 +362,9 @@ const FIELD_SELECTOR = "input, textarea, select, [contenteditable=''], [contente
  * **1 000, and what sets it is what a set is *for*.** Everything a catalogue wall's menu does with
  * a picked set — add to the collection, to the wishlist, to a deck — is one write per card
  * (`features/card/cardMenu.tsx`), so the limit is also the largest batch of those one keypress can
- * arm. A thousand is past any one set's card list and past any `all the goblins`; it is twenty
- * round trips to fetch. Past the limit nothing is fetched ahead, and the set goes on growing with
+ * arm. A thousand is past any one set's card list and past any `all the goblins`; it was twenty
+ * 50-row round trips to fetch, and is six since the walk says how many rows it is owed and the
+ * search asks for 200 at a time (`onNeedNextPage`'s `want`, `lib/pageLimit.ts`). Past the limit nothing is fetched ahead, and the set goes on growing with
  * whatever the reader scrolls to — every tile drawn is still picked. **A batched write for those
  * menu rows is what would let this rise**, to the 5 000 the search's own caption counts to.
  *
@@ -879,8 +880,9 @@ function CardGridWall<T extends GridCard>({
    * for one before it builds anything — so the quick-add's popup is unaffected.
    *
    * Absent means a tile has no menu of its own, and the reader gets the app's plain
-   * suppression. Unlike the two slots below this one needs no stable identity: it is read on
-   * render rather than registered, so nothing is torn down when it changes.
+   * suppression. Unlike the two slots below this one needs no stable identity: the wall asks it
+   * for a handler **at the press** (since 2026-11; it was asked on every render of every tile),
+   * so nothing is torn down when it changes and no tile is redrawn for it.
    *
    * **`undefined` for one tile is a tile with no menu**, which the wishlist's wall needs and the
    * other two never produce: a wish for *any* printing names no cardboard to copy a name from,
@@ -1739,7 +1741,16 @@ function CardGridWall<T extends GridCard>({
    * the wall to move one ring — and a Ctrl+A walk redrew them all again per page. A press arrives
    * after the commit that drew the tile it lands on, so it always reads what is on screen.
    */
-  const live = useRef({ picked, drawn, onSelect, dragPayload, dragRecord, cardMenu, cardMenuKey, flips });
+  const live = useRef({
+    picked,
+    drawn,
+    onSelect,
+    dragPayload,
+    dragRecord,
+    cardMenu,
+    cardMenuKey,
+    flips,
+  });
   useEffect(() => {
     live.current = {
       picked,

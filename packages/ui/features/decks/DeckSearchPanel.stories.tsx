@@ -596,9 +596,7 @@ export const Empty: Story = {
     const panel = canvas.getByRole("region", { name: "Add cards" });
     await showAllCards(panel);
     await expect(
-      await within(panel).findByText(
-        "No card data yet. Waiting for the first update.",
-      ),
+      await within(panel).findByText("No card data yet. Waiting for the first update."),
     ).toBeInTheDocument();
     await expect(within(panel).queryByRole("group", { name: "Search results" })).toBeNull();
   },

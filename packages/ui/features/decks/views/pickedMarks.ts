@@ -28,7 +28,10 @@ export const NONE_PICKED: readonly string[] = Object.freeze([]);
 
 /** The picked keys as a set, held still while the keys are — one per view render, not per pile. */
 export function usePickedSet(picked: readonly string[] | undefined): ReadonlySet<string> | null {
-  return useMemo(() => (picked === undefined || picked.length === 0 ? null : new Set(picked)), [picked]);
+  return useMemo(
+    () => (picked === undefined || picked.length === 0 ? null : new Set(picked)),
+    [picked],
+  );
 }
 
 /**
