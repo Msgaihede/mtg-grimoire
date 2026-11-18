@@ -447,14 +447,17 @@ describe("deviceSyncActivity", () => {
    * can hold the row for minutes: ranked below it, the one sentence that says the reader's own
    * rows are not up to date yet would never be seen.
    */
-  it("outranks every other job, the card sync included", () => {
+  it("outranks every other background job, the card sync included", () => {
     const device = deviceSyncActivity("connecting")!;
     const sync = syncActivity(null, true)!;
     const update = updateActivity({ done: 1, total: 2 }, "0.3.0")!;
 
     expect(topActivity([sync, device])).toBe(device);
     expect(topActivity([update, device])).toBe(device);
-    expect(Math.min(...Object.values(RANK))).toBe(RANK.deviceSync);
+    // Only the reader's own work is louder (`@/lib/work`): it is the press being watched.
+    const { work, ...background } = RANK;
+    expect(Math.min(...Object.values(background))).toBe(RANK.deviceSync);
+    expect(work).toBeLessThan(RANK.deviceSync);
   });
 });
 

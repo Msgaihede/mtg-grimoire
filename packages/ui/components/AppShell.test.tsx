@@ -188,6 +188,7 @@ import { queryClient } from "@/lib/query";
 // that drifts, which is why the hook exports it.
 import { START_VIEW_KEY } from "@/lib/useStartView";
 import { useAppStore } from "@/lib/store";
+import { beginWork } from "@/lib/work";
 import { boxed, startPointerDrag } from "@/test-drag";
 
 /**
@@ -656,6 +657,40 @@ describe("the status line", () => {
     expect(
       await screen.findByText("116,568 cards · data from 2026-08-03", {}, { timeout: 3000 }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The reader's own work (`@/lib/work`) is a job like the sync, ranked above it: the header's line
+ * says it, the mana line moves, and the summary comes back when it ends. Real timers, the sync
+ * test's reason — the claim is about the 400 ms delay and `findBy*` is already a polling wait.
+ */
+describe("the reader's own work", () => {
+  it("takes the status line while it runs, and gives the summary back after", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    await screen.findByText("116,568 cards · data from 2026-08-03");
+
+    let done!: () => void;
+    act(() => {
+      done = beginWork("Adding 300 cards to “Burn”…");
+    });
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+
+    expect(
+      await screen.findByRole("progressbar", { name: "Adding 300 cards to “Burn”…" }),
+    ).toBeInTheDocument();
+    // Said twice, from one store: the header's line and the busy pill by the toasts.
+    const said = screen.getAllByText("Adding 300 cards to “Burn”…");
+    expect(said).toHaveLength(2);
+    const line = said.find((el) => el.closest("[data-busy-pill]") === null)!;
+    expect(line).toHaveAttribute("role", "status");
+    expect(document.documentElement).toHaveAttribute("data-busy");
+
+    act(() => done());
+    expect(
+      await screen.findByText("116,568 cards · data from 2026-08-03", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveAttribute("data-busy");
   });
 });
 

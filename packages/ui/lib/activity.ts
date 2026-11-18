@@ -21,6 +21,7 @@ import type { ManaLineSync } from "@/lib/mana";
 import { COMBO_PHASE_LABEL } from "@/lib/useComboProgress";
 import { ORACLE_TAG_PHASE_LABEL } from "@/lib/useOracleTagProgress";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
+import { busySentence, type Busy } from "@/lib/work";
 
 /** One long-running job, as the header needs to describe it. */
 export interface Activity extends ManaLineSync {
@@ -52,8 +53,21 @@ export interface Activity extends ManaLineSync {
  */
 export const RANK = {
   /**
+   * Work the reader started and is waiting on — three hundred cards going into a deck, a `Ctrl+A`
+   * reading twenty pages (`@/lib/work`'s `beginWork`/`trackWork`) — **louder than every
+   * background job, the device sync included**.
+   *
+   * Every other rung is a job the app started, or one the reader started and walked away from (a
+   * Refresh, a feed). This one is the press the reader is watching right now, with no other answer
+   * on screen until it lands: if the row went on describing a sync while the reader's own add sat
+   * silent, it would be the header answering a question nobody asked over the one that was. It is
+   * also the shortest job there is — seconds at most — so taking the row costs the sync below it a
+   * moment, which is `deviceSync`'s argument one rung further down.
+   */
+  work: -20,
+  /**
    * A round trip with the reader's other devices while the relay socket is coming up — **the
-   * loudest job there is, and the one rung below zero**.
+   * loudest background job there is**, below only the reader's own `work`.
    *
    * It is the job that answers the question a reader opening this device after a week actually
    * has: *are my latest changes here yet?* Until it ends, the collection, the decks and the
@@ -104,8 +118,9 @@ export const RANK = {
   combos: 20,
 } as const;
 
-/** How long a job must run before the header puts a sentence on screen. See `ChromeStatus`. */
-export const ACTIVITY_DELAY_MS = 400;
+/** How long a job must run before the header puts a sentence on screen. See `ChromeStatus`.
+ *  Kept in `@/lib/work`, which must stay a leaf module — see there. */
+export { ACTIVITY_DELAY_MS } from "@/lib/work";
 
 export interface ActivityState {
   /** Insertion-ordered, which is what makes {@link topActivity}'s tie-break deterministic. */
@@ -405,5 +420,27 @@ export function updateActivity(
     label: version ? `Downloading update ${version}` : "Downloading update",
     detail: progress.total > 0 ? megabytes(progress.done, progress.total) : null,
     value: progress.total > 0 ? Math.min(1, progress.done / progress.total) : null,
+  };
+}
+
+/** The key the reader's busy work is registered under, which `AppShell` reads to skip the delay. */
+export const WORK_ACTIVITY_KEY = "work";
+
+/**
+ * Fold the reader's busy work (`@/lib/work`) into the job the header describes.
+ *
+ * Indeterminate and without a detail, because nothing a caller hands `beginWork` counts anything.
+ * The store says `busy` only once the work has outlasted {@link ACTIVITY_DELAY_MS}, and holds it
+ * for its minimum stay, so this is non-null for exactly as long as the busy pill is up.
+ * {@link RANK}`.work` puts it above every background job.
+ */
+export function workActivity(busy: Busy | null): Activity | null {
+  if (busy === null) return null;
+  return {
+    key: WORK_ACTIVITY_KEY,
+    rank: RANK.work,
+    label: busySentence(busy),
+    detail: null,
+    value: null,
   };
 }

@@ -39,6 +39,43 @@ callback, a `then` handler or a module function alike — no hook and no provide
   arrived; a row can be removed, or the whole list cleared. The entry carries an unread count
   (a pip on the bell when the rail is collapsed); opening the inbox reads everything in it.
 
+## Busy work
+
+The toast is the receipt *after*; this is the "working on it" *during* (2026-11-18). The owner's
+complaint was a long add or a `Ctrl+A` over twenty pages leaving the window looking frozen, with
+nothing to say the press was heard.
+
+```ts
+import { beginWork, trackWork } from "@/lib/work";
+
+const done = beginWork("Adding 300 cards to “Burn”…");
+try { await addAll(); } finally { done(); } // idempotent
+await trackWork("Selecting all cards…", selectAll()); // resolves/rejects as the work does
+```
+
+- **What it is**: one app-wide indicator, raised from anywhere (no hook, like `notify`), for any
+  reader-started work that can outlast ~400 ms. The label is a short present-progressive sentence
+  the caller writes. It is a module store (`useWorkStore`; `useBusy()` is what surfaces draw).
+- **When it shows**: a piece is *shown* only once it has been live for `ACTIVITY_DELAY_MS` (400),
+  and once up the indicator stays at least `WORK_MIN_SHOWN_MS` (700) so it never blinks. Both are
+  derived in one place (`settle` in `lib/work.ts`), so every surface agrees.
+- **Several at once**: one indicator, never a stack — the oldest shown piece's sentence and a
+  count (`Adding 300 cards… and 2 more`).
+- **Where it is drawn**: (1) the desktop header's activity line and mana line, as a job
+  (`workActivity`, `RANK.work` = −20, above every background job including the device sync, and
+  past the header's own delay since it has waited already); (2) a pill drawn by `Toaster` at the
+  foot of the toast stack — where the receipt toast will land — so every face with a `Toaster`
+  (the desktop's `AppShell`, the phone's `PhoneFace`) has it, placed by the same `className`.
+  `role="status"`, polite, `aria-busy`, `LAYER.toast`, not focusable, `pointer-events-none`; the
+  glyph's spin stops under reduced motion; (3) a `progress` cursor (`html[data-busy]`, one rule in
+  `index.css`) — never `wait`, and no press is ever blocked.
+- **What it is not**: not a toast (nothing is filed in the inbox, and the success or failure is
+  still the caller's `notify`), not a receipt, and not a progress bar — it counts nothing. A job
+  that does count (a sync, a download) is an `Activity` of its own in `lib/activity.ts`.
+- Tests: `test-setup.ts` runs `resetWork` after every test. `lib/work.ts` imports nothing of the
+  app's at runtime (it is loaded by the setup file, before any suite's `vi.mock`), which is why
+  `ACTIVITY_DELAY_MS` now lives there and `lib/activity.ts` re-exports it.
+
 ## The rule for collection, wishlist and deck edits
 
 **Every deliberate edit of the reader's cards publishes a toast, and so a notification** (the
