@@ -577,7 +577,9 @@ export function deckCardPress(
   card: DeckCard,
   onSelect: ((card: DeckCard) => void) | undefined,
   actions?: DeckCardActions,
-): { onClick: (event: ReactMouseEvent) => void; onMouseDown?: (event: ReactMouseEvent) => void } | undefined {
+):
+  | { onClick: (event: ReactMouseEvent) => void; onMouseDown?: (event: ReactMouseEvent) => void }
+  | undefined {
   const pick = actions?.pick;
   if (!onSelect && !pick) return undefined;
   return {
@@ -659,7 +661,10 @@ export interface DeckCardActions {
    * A single seam so that no view branches on modifiers itself — four copies of "which chord
    * means what" is four chances for the table and the stack to disagree.
    */
-  pick?: (card: DeckCard, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => boolean;
+  pick?: (
+    card: DeckCard,
+    event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
+  ) => boolean;
   /**
    * What this card offers on a right-click — **the handlers already built**, never a list of
    * rows.
@@ -718,10 +723,7 @@ export interface DeckCardActions {
 
 /** The rename field for this pile, or nothing — `null` is a derived heading, which is not a
  *  category and cannot be renamed. Spelled once so four views do not each guard it. */
-export function deckGroupRename(
-  categoryId: number | null,
-  actions?: DeckCardActions,
-): ReactNode {
+export function deckGroupRename(categoryId: number | null, actions?: DeckCardActions): ReactNode {
   return categoryId === null ? null : actions?.renameCategory?.(categoryId);
 }
 
