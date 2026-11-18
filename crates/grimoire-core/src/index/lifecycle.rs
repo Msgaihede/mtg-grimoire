@@ -215,18 +215,28 @@ pub fn spawn_build(state: &Arc<State>) -> crate::platform::spawn::Background {
 
 /// Re-read the `owned` dimension after a collection write, leaving the rest of the index be.
 ///
-/// 10–23 ms against ~767 ms for a full rebuild, which is why this exists as its own entry
-/// point: the collection changes far more often than the corpus, and a quick-add cannot cost
-/// a full read of `cards`.
+/// A few milliseconds against ~767 ms for a full rebuild, which is why this exists as its own
+/// entry point: the collection changes far more often than the corpus, and a quick-add cannot
+/// cost a full read of `cards`. **It runs inside every collection command**, after the write
+/// and before the answer, so the reader waits for all of it on every press. Measured
+/// (`owned_refresh_timing`, 110 000 printings, 30 000 owned) the cost is almost all the
+/// `owned` query — see [`crate::collection_source::owned_rowids`] for the plan that made it a
+/// scan of `cards` until 2026-11-18 — plus about a millisecond to open the connection.
 ///
 /// **A cold index stays cold.** Building one here would spend that ~767 ms on a button press,
 /// and blanking one is not on the table either — the index is copied, amended and published,
 /// so a reader mid-pass keeps the snapshot it already holds.
 ///
-/// The copy is a real one: `CardIndex` is ~1 MB of bitsets and ordinals over the live corpus,
-/// and every byte of it is memcpy'd. Copy-on-write rather than mutation because the published
-/// index is behind an `Arc` that readers are holding — there is no `&mut` to be had, and
-/// there should not be.
+/// The copy is of `owned` alone: the corpus half of [`CardIndex`] is shared into it by `Arc`
+/// (until 2026-11-18 every press memcpy'd ~1 MB of corpus bitsets to change one). Copy-on-write
+/// rather than mutation because the published index is behind an `Arc` that readers are
+/// holding — there is no `&mut` to be had, and there should not be.
+///
+/// **It publishes even when the owned set did not move** — a second copy of a card already
+/// owned, a move between folders. Skipping that publish would be a few microseconds saved and a
+/// race reopened: the fresh `Arc` is what refuses a *slower* sibling amendment whose read
+/// predates this write ([`publish_amendment`]), so without it an add that restores a card a
+/// sibling's removal had just read as gone could be overwritten by that stale read.
 pub fn invalidate_owned(state: &State) {
     let Some(base) = current(state) else {
         return;
@@ -387,6 +397,119 @@ mod tests {
             0,
             "the published index a reader already holds is never mutated under it"
         );
+    }
+
+    /// **An amendment shares the corpus and copies only `owned`.** The corpus half is the same
+    /// allocation in the base and the amendment — what makes a press cost one bitset rather
+    /// than ~1 MB — and the base a reader holds keeps its own `owned` untouched.
+    #[test]
+    fn an_amendment_shares_the_corpus_and_replaces_only_owned() {
+        let state = state_with_seeded_cards("owned-shared");
+        build_now(&state).unwrap();
+        let before = current(&state).unwrap();
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "1", 1);
+        }
+        invalidate_owned(&state);
+        let after = current(&state).unwrap();
+        assert!(!Arc::ptr_eq(&before, &after), "a new index was published");
+        assert!(
+            Arc::ptr_eq(&before.corpus, &after.corpus),
+            "the corpus is shared into the amendment, not copied"
+        );
+        assert_eq!((before.owned.count(), after.owned.count()), (0, 1));
+
+        // And a rebuild is a new corpus — the one thing an amendment must never be.
+        build_now(&state).unwrap();
+        assert!(!Arc::ptr_eq(
+            &after.corpus,
+            &current(&state).unwrap().corpus
+        ));
+    }
+
+    /// **The last copy leaving takes the card out of `owned`**, and a copy left behind keeps it
+    /// in: `owned` is "an entry anywhere", so it is the *card* that leaves, not a row.
+    #[test]
+    fn the_last_entry_leaving_removes_the_card_from_owned() {
+        let state = state_with_seeded_cards("owned-leaves");
+        build_now(&state).unwrap();
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "1", 1);
+            own(&conn, "2", 1);
+            conn.execute(
+                "UPDATE collection_entries SET finish = 'foil' WHERE card_id = '2'",
+                [],
+            )
+            .unwrap();
+            own(&conn, "2", 1);
+        }
+        invalidate_owned(&state);
+        assert_eq!(current(&state).unwrap().owned.count(), 2);
+
+        // One of card 2's two rows goes: still owned.
+        crate::db::lock_blocking(&state.db)
+            .execute(
+                "DELETE FROM collection_entries WHERE card_id = '2' AND finish = 'foil'",
+                [],
+            )
+            .unwrap();
+        invalidate_owned(&state);
+        let ix = current(&state).unwrap();
+        assert_eq!(
+            ix.owned.count(),
+            2,
+            "a copy is left, so the card is still owned"
+        );
+
+        // Its last row goes: not owned any more.
+        crate::db::lock_blocking(&state.db)
+            .execute("DELETE FROM collection_entries WHERE card_id = '2'", [])
+            .unwrap();
+        invalidate_owned(&state);
+        let ix = current(&state).unwrap();
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
+        assert_eq!(ix.owned.count(), 1);
+        assert!(ix.owned.contains(crate::index::fixtures::doc(&conn, "1")));
+        assert!(!ix.owned.contains(crate::index::fixtures::doc(&conn, "2")));
+    }
+
+    /// **A write that leaves the owned set as it was still publishes**, and this is the race that
+    /// makes it worth the microseconds. A removal's amendment reads `owned` without card 1 and
+    /// is slow to publish; an add puts card 1 back, and its own read matches the live index
+    /// exactly. Had that add skipped its publish as a no-op, the live `Arc` would still be the
+    /// base the removal cloned, and the removal's stale read would land — card 1 owned, the
+    /// Owned facet saying it is not. Publishing a fresh `Arc` is what turns the stale one away.
+    #[test]
+    fn a_write_that_changes_no_owned_card_still_supersedes_a_stale_amendment() {
+        let state = state_with_seeded_cards("owned-unchanged");
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "1", 1);
+        }
+        build_now(&state).unwrap();
+        let base = current(&state).unwrap();
+        assert_eq!(base.owned.count(), 1);
+
+        // The removal's read, taken after its delete and not yet published.
+        let mut stale = (*base).clone();
+        stale.owned = crate::index::bitset::BitSet::new(base.capacity);
+
+        // The add's refresh: the set it reads is the set already live.
+        invalidate_owned(&state);
+        let live = current(&state).unwrap();
+        assert!(
+            !Arc::ptr_eq(&base, &live),
+            "an unchanged set is still a publish"
+        );
+        assert_eq!(live.owned.count(), 1);
+
+        assert!(
+            !publish_amendment(&state, &base, stale),
+            "the removal's stale read must be refused, not land over the add"
+        );
+        assert_eq!(current(&state).unwrap().owned.count(), 1);
     }
 
     /// **A sync trip that wrote here re-reads `owned`; one that only pushed does not** (issue
@@ -694,6 +817,50 @@ mod tests {
             .join()
             .expect("a failed build must not panic the thread it runs on");
         assert!(current(&state).is_none());
+    }
+
+    /// Not a unit test — a stopwatch for what one collection write's `owned` refresh costs, and
+    /// what each part of it costs, at the live corpus's size: 110 000 printings, 30 000 of them
+    /// with an entry. `--ignored --nocapture`, in release and debug both.
+    #[test]
+    #[ignore]
+    fn owned_refresh_timing() {
+        use crate::platform::clock::Tick;
+        let state = crate::index::fixtures::state_with_corpus("owned-timing", 110_000, 30_000);
+        let built = Tick::now();
+        build_now(&state).unwrap();
+        eprintln!("build: {:?}", built.elapsed());
+        let ix = current(&state).unwrap();
+        eprintln!("owned: {} of {} docs", ix.owned.count(), ix.all.count());
+
+        let best = |label: &str, mut f: Box<dyn FnMut() + '_>| {
+            let mut times = Vec::new();
+            for _ in 0..20 {
+                let t = Tick::now();
+                f();
+                times.push(t.elapsed());
+            }
+            times.sort();
+            eprintln!("{label}: median {:?}, best {:?}", times[10], times[0]);
+        };
+        best(
+            "open_read",
+            Box::new(|| drop(crate::db::open_read(&state.data_dir).unwrap())),
+        );
+        best(
+            "clone the index",
+            Box::new(|| drop(std::hint::black_box((*ix).clone()))),
+        );
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
+        best(
+            "rebuild_owned (the query)",
+            Box::new(|| {
+                let mut next = (*ix).clone();
+                next.rebuild_owned(&conn).unwrap();
+                std::hint::black_box(next);
+            }),
+        );
+        best("invalidate_owned", Box::new(|| invalidate_owned(&state)));
     }
 
     /// A failed index build lands in `error_log` as the app's own database failing at its own

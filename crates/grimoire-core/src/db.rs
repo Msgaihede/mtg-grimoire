@@ -479,6 +479,8 @@ pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
 /// Take `mutex`, **waiting as long as it takes — and counted as an ask while it waits**, so a
 /// batch loop stands aside for it exactly as it does for [`lock_for`].
 ///
+/// It polls on [`lock_for`]'s graduated schedule ([`Backoff`]).
+///
 /// [`lock_blocking`] waits too, but invisibly: a thread parked in `Mutex::lock` is nobody
 /// [`lock_background`] knows to defer to, so under the launch's three ingests it gets the
 /// connection whenever it happens to catch it free. That was the right shape for a departure's
@@ -495,13 +497,14 @@ pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
 pub fn lock_waiting(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     // Held until this returns, and withdrawn by its `Drop`.
     let mut waiting: Option<Waiting> = None;
+    let mut backoff = Backoff::new();
     loop {
         match mutex.try_lock() {
             Ok(guard) => return guard,
             Err(TryLockError::Poisoned(e)) => return e.into_inner(),
             Err(TryLockError::WouldBlock) => {
                 waiting.get_or_insert_with(|| Waiting::register(key_of(mutex)));
-                if !crate::platform::pause(LOCK_POLL_INTERVAL) {
+                if !crate::platform::pause(backoff.next()) {
                     return lock_blocking(mutex);
                 }
             }
@@ -532,9 +535,53 @@ pub fn lock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     crate::platform::alone::write(lock)
 }
 
-/// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,
+/// The first pause [`lock_for`] and [`lock_waiting`] take after a contended `try_lock`. Each
+/// pause after it is twice the last, up to [`LOCK_POLL_INTERVAL`] — see [`Backoff`].
+const LOCK_POLL_FIRST: Duration = Duration::from_micros(250);
+
+/// The longest pause [`lock_for`] and [`lock_waiting`] take between attempts, which a wait
+/// reaches about 16 ms in and keeps from then on. Short enough that the wait is invisible,
 /// long enough that a contended lock is not a spin.
+///
+/// **Until 2026-11-18 it was every pause, the first included**, and that cost the commonest
+/// wait the most: the holder is nearly always another user-facing write of a few
+/// milliseconds, so an ask that arrived one millisecond into it slept twenty — and a burst of
+/// parallel writes paid that per hand-off, with the connection standing idle between them.
+/// The cap is what is left of it, for the holder that really is long: an ingest batch, a sync
+/// stretch.
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The pauses of one contended wait: [`LOCK_POLL_FIRST`], doubling to [`LOCK_POLL_INTERVAL`] —
+/// 0.25, 0.5, 1, 2, 4, 8, 16 ms, then 20 ms for as long as the wait lasts.
+///
+/// **Graduated because the holder's length is unknown and its distribution is lopsided.** Most
+/// holders are a single write — a stepper press, a move, an add, each a savepoint and a commit
+/// of a few milliseconds — and the short pauses find the connection within about a millisecond
+/// of its release. A long holder costs seven early wake-ups (32 ms in all) before the wait
+/// settles into the old lazy rate, which against a batch of hundreds of milliseconds is noise.
+///
+/// A sub-millisecond `thread::sleep` is honoured on the native hosts this ships to: Linux's and
+/// Android's `nanosleep` take it as asked, and Rust's std sleeps on Windows through a
+/// high-resolution waitable timer (Windows 10 1803 and later) rather than the 15.6 ms scheduler
+/// tick. Where one is rounded up after all, the schedule is slower to start, never wrong.
+struct Backoff {
+    next: Duration,
+}
+
+impl Backoff {
+    fn new() -> Self {
+        Backoff {
+            next: LOCK_POLL_FIRST,
+        }
+    }
+
+    /// The pause to take now, advancing the schedule.
+    fn next(&mut self) -> Duration {
+        let now = self.next;
+        self.next = (now * 2).min(LOCK_POLL_INTERVAL);
+        now
+    }
+}
 
 /// Take `mutex`, giving up after `timeout` rather than queueing behind whatever holds it.
 ///
@@ -553,6 +600,11 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// Poisoning is recovered exactly as [`lock_blocking`] does: the panicking thread's
 /// `Connection` survives, and refusing the lock forever would brick the app for no gain.
+///
+/// **It polls on a graduated schedule** ([`Backoff`]): sub-millisecond pauses first, doubling
+/// to [`LOCK_POLL_INTERVAL`], so an ask behind another short write gets the connection about
+/// when that write lets go rather than up to 20 ms later. No pause runs past `timeout` — the
+/// last one is cut to what is left of it — so the bound is kept to within one `try_lock`.
 ///
 /// **A caller that has to wait says so, and every background batch loop stands aside for it.**
 /// From its first failed `try_lock` until it returns, the ask is registered against this mutex
@@ -578,6 +630,7 @@ pub fn lock_for(
     let started = Tick::now();
     // Held until this returns, the lock or `None` alike, and withdrawn by its `Drop`.
     let mut waiting: Option<Waiting> = None;
+    let mut backoff = Backoff::new();
     loop {
         match mutex.try_lock() {
             Ok(guard) => return Some(guard),
@@ -585,13 +638,17 @@ pub fn lock_for(
             Err(TryLockError::WouldBlock) => {
                 // A test standing in for a host with one thread: the holder is the caller.
                 crate::platform::alone::refuse_held("a connection, with a bound");
-                if started.elapsed() >= timeout {
+                let elapsed = started.elapsed();
+                if elapsed >= timeout {
                     return None;
                 }
                 waiting.get_or_insert_with(|| Waiting::register(key_of(mutex)));
+                // Never past the bound: the last pause is what is left of it, and the try
+                // after it is the last.
+                let pause = backoff.next().min(timeout - elapsed);
                 // A host with no second thread has nobody to wait for: the lock is held by
                 // this thread's own caller, and it will not be let go while this one polls.
-                if !crate::platform::pause(LOCK_POLL_INTERVAL) {
+                if !crate::platform::pause(pause) {
                     return None;
                 }
             }
@@ -618,7 +675,8 @@ static WAITING: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 const BACKGROUND_DEFERENCE_CAP: Duration = WRITE_LOCK_WAIT;
 
 /// How often [`lock_background`] looks again while it stands aside. Well under
-/// [`LOCK_POLL_INTERVAL`], so a loop resumes promptly once the ask it deferred to is served.
+/// [`LOCK_POLL_INTERVAL`], the rate a long wait settles into, so a loop resumes promptly once
+/// the ask it deferred to is served.
 const BACKGROUND_DEFERENCE_POLL: Duration = Duration::from_millis(5);
 
 fn key_of(mutex: &Mutex<Connection>) -> usize {
@@ -815,8 +873,9 @@ mod tests {
         assert!(taken.is_some());
 
         // Zero is a plain `try_lock`, and not sleeping is the whole point of it: the image
-        // cache asks from an async worker thread, where even one 20 ms poll is a pool
-        // thread parked on a lock, for a row it is perfectly happy to skip.
+        // cache asks from an async worker thread, where even one poll is a pool thread
+        // parked on a lock, for a row it is perfectly happy to skip. Measured against the
+        // first pause rather than the cap, since the first pause is what a sleep would be.
         let started = Tick::now();
         assert!(lock_for(&mutex, Duration::ZERO).is_none());
         assert!(
@@ -824,13 +883,106 @@ mod tests {
             "a zero timeout must not sleep, and took {:?}",
             started.elapsed()
         );
+        assert!(
+            !someone_is_waiting(key_of(&mutex)),
+            "a zero timeout never waits, so it never registers"
+        );
+    }
+
+    /// The schedule itself: sub-millisecond first, doubling, and never past the cap however
+    /// long the wait runs.
+    #[test]
+    fn the_back_off_starts_short_doubles_and_settles_at_the_cap() {
+        let mut backoff = Backoff::new();
+        let pauses: Vec<Duration> = (0..12).map(|_| backoff.next()).collect();
+        assert_eq!(pauses[0], LOCK_POLL_FIRST);
+        assert!(LOCK_POLL_FIRST < Duration::from_millis(1));
+        for pair in pauses.windows(2) {
+            assert!(
+                pair[1] == pair[0] * 2 || pair[1] == LOCK_POLL_INTERVAL,
+                "{pauses:?}"
+            );
+        }
+        assert!(pauses.iter().all(|p| *p <= LOCK_POLL_INTERVAL));
+        assert_eq!(
+            pauses[11], LOCK_POLL_INTERVAL,
+            "a long wait polls at the old rate"
+        );
+    }
+
+    /// **The point of the graduated wait.** A holder that lets go after ~3 ms — a single
+    /// user-facing write — is waited for about that long, not the fixed 20 ms pause the
+    /// first retry used to be. The bound is generous on purpose (a loaded CI box oversleeps);
+    /// what it rules out is the old shape, where the first retry alone was 20 ms.
+    #[test]
+    fn an_ask_behind_a_short_holder_is_served_about_when_it_lets_go() {
+        use std::sync::Barrier;
+        let mutex = Mutex::new(Connection::open_in_memory().unwrap());
+        let held = Barrier::new(2);
+        let mut waits = Vec::new();
+        for _ in 0..5 {
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let guard = lock_blocking(&mutex);
+                    held.wait();
+                    std::thread::sleep(Duration::from_millis(3));
+                    drop(guard);
+                });
+                held.wait();
+                let asked = Tick::now();
+                let got = lock_for(&mutex, WRITE_LOCK_WAIT).is_some();
+                waits.push(asked.elapsed());
+                assert!(got, "a 3 ms holder must not make a 5 s ask busy");
+            });
+        }
+        // The best of five, so one oversleep on a busy machine is not a failure; the old
+        // fixed pause could not have produced any of them under 20 ms.
+        let best = waits.iter().min().copied().unwrap_or_default();
+        assert!(
+            best < Duration::from_millis(12),
+            "an ask behind a 3 ms holder waited {best:?} at best: {waits:?}"
+        );
+        assert!(
+            !someone_is_waiting(key_of(&mutex)),
+            "a served ask is withdrawn"
+        );
+    }
+
+    /// **And the bound is still the bound.** A holder that never lets go is given up on at
+    /// `timeout`, not one full 20 ms pause past it: the last pause is cut to what is left. The
+    /// upper slack is for a loaded box's oversleep, not the schedule's.
+    #[test]
+    fn a_bounded_ask_still_gives_up_at_its_timeout() {
+        let mutex = Mutex::new(Connection::open_in_memory().unwrap());
+        let _held = lock_blocking(&mutex);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for timeout in [Duration::from_millis(5), Duration::from_millis(45)] {
+                    let asked = Tick::now();
+                    assert!(lock_for(&mutex, timeout).is_none());
+                    let waited = asked.elapsed();
+                    assert!(
+                        waited >= timeout,
+                        "gave up early: {waited:?} of {timeout:?}"
+                    );
+                    assert!(
+                        waited < timeout + Duration::from_millis(12),
+                        "gave up {waited:?} into a {timeout:?} bound"
+                    );
+                }
+                assert!(
+                    !someone_is_waiting(key_of(&mutex)),
+                    "an ask that gave up is withdrawn"
+                );
+            });
+        });
     }
 
     /// **Two batch loops at once hand the connection straight to each other, so a bounded asker
     /// needs them to stand aside for it** (issue #551). The loops are the ingests' shape with the parsing taken
     /// out — take the connection, hold it for a batch, let go, stand aside five milliseconds —
     /// and the batch is the ~15 ms the tag ingest's own comment measures. One such loop leaves a
-    /// 5 ms gap a 20 ms poll lands in within a few tries; with two, whichever is not writing is
+    /// 5 ms gap a poll lands in within a few tries; with two, whichever is not writing is
     /// already parked in `lock()` when the other lets go, so there is no gap at all.
     ///
     /// Synthetic on purpose: a real ingest's parse happens with no lock held, so whether two of

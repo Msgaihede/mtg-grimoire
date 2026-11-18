@@ -204,8 +204,22 @@ pub fn copies_by_printing_and_finish(_conn: &Connection, scope: Availability) ->
 /// A whole statement rather than a fragment, because [`crate::index::CardIndex::rebuild_owned`]
 /// prepares it as one. The join reads `cards`' primary-key index for the rowid and never the
 /// row.
+///
+/// **The collection drives, and the order is pinned with `CROSS JOIN`** — SQLite's one way of
+/// saying "this table outermost". Until 2026-11-18 it was `SELECT DISTINCT c.rowid FROM
+/// collection_entries e JOIN cards c …`, and with no `ANALYZE` statistics (this app never runs
+/// one) the planner answered `DISTINCT c.rowid` by **scanning `cards`** — every row of the
+/// corpus, a ~2 KB Scryfall object apiece, probing the collection for each — on every
+/// collection write. Driven from `idx_collection_card` instead it is one covering-index probe
+/// of `cards` per *distinct owned card*, whatever the corpus's size. The `DISTINCT` moved into
+/// the subquery, over the index's own order, so each card is still answered once. Measured on
+/// a 110 000-printing corpus with 30 000 owned, in `index::lifecycle::tests::
+/// owned_refresh_timing`'s figures.
 pub fn owned_rowids(_conn: &Connection) -> String {
-    "SELECT DISTINCT c.rowid FROM collection_entries e JOIN cards c ON c.id = e.card_id".to_owned()
+    "SELECT c.rowid
+       FROM (SELECT DISTINCT card_id FROM collection_entries) e
+      CROSS JOIN cards c ON c.id = e.card_id"
+        .to_owned()
 }
 
 /// [`crate::state::with_write`], plus the facet index's `owned` rebuild on success.
@@ -507,5 +521,78 @@ mod tests {
             .query_row("SELECT rowid FROM cards WHERE id = 'p1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rowids(&conn), vec![p1]);
+    }
+
+    /// **The collection drives the read and `cards` is never scanned.** The plan is the whole of
+    /// the statement's cost: scanning `cards` was a pass over the corpus on every collection
+    /// write, which is what the unpinned `DISTINCT c.rowid` join got from a planner with no
+    /// statistics. Asked of SQLite's own `EXPLAIN QUERY PLAN`, so a rewrite that lets the order
+    /// drift fails here rather than in a stopwatch nobody runs.
+    #[test]
+    fn owned_rowids_never_scans_the_corpus() {
+        let conn = db();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", owned_rowids(&conn)))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.starts_with("SEARCH c ")),
+            "cards is probed by key: {plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step == "SCAN c" || step.starts_with("SCAN c ")),
+            "cards must not be scanned: {plan:?}"
+        );
+    }
+
+    /// Not a unit test — a stopwatch for a **burst of single writes** the way the app makes them
+    /// today: 1 000 `collection::add_entry` calls, each its own
+    /// [`with_write_owned`] (its own write lock, savepoint, commit and `owned` refresh), over a
+    /// file state of 110 000 printings with 30 000 owned. Two runs: adds of printings nobody owns
+    /// yet (each one moves the owned set) and further copies of printings already owned (none
+    /// does). `--ignored --nocapture`, in release and debug both.
+    #[test]
+    #[ignore]
+    fn burst_of_single_adds_timing() {
+        use crate::collection::{add_entry, EntryInput};
+        use crate::platform::clock::Tick;
+        let state = crate::index::fixtures::state_with_corpus("burst-timing", 110_000, 30_000);
+        crate::index::lifecycle::build_now(&state).unwrap();
+        // `state_with_corpus` owns every third printing (110 000 / 30 000), so `3k + 1` is
+        // never owned and `3k` always is.
+        for (label, card) in [
+            (
+                "new printings",
+                (|i: usize| format!("c{}", 3 * i + 1)) as fn(usize) -> String,
+            ),
+            ("already owned", |i: usize| format!("c{}", 3 * (i + 1))),
+        ] {
+            let started = Tick::now();
+            for i in 0..1_000 {
+                let entry = EntryInput {
+                    card_id: card(i),
+                    finish: "nonfoil".to_owned(),
+                    quantity: 1,
+                    ..Default::default()
+                };
+                with_write_owned(&state, |conn| add_entry(conn, &entry)).unwrap();
+            }
+            let total = started.elapsed();
+            eprintln!(
+                "1000 single adds, {label}: {total:?} total, {:?} each",
+                total / 1_000
+            );
+        }
+        let ix = crate::index::lifecycle::current(&state).unwrap();
+        assert_eq!(
+            ix.owned.count(),
+            30_000 + 1_000,
+            "the new printings all landed in owned"
+        );
     }
 }
