@@ -42,6 +42,7 @@ import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { pickedIn, usePickedMarking, usePickedSet } from "./pickedMarks";
 import { sameDrawnProps } from "./sameDrawn";
 import { hasTokenPile, TokenTextPile, type TokenPile } from "./TokenPile";
 import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
@@ -104,6 +105,7 @@ export const TextView = memo(function TextView({
   noted,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   tokenPile,
@@ -153,6 +155,9 @@ export const TextView = memo(function TextView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
+  /** The picked slots — each pile is handed its own share, so a pick redraws the piles it touched
+   *  and no other (`views/pickedMarks.ts`). Absent marks by `actions.isPicked`, as before. */
+  picked?: readonly string[];
   /** The slot the pane is open on ({@link deckCardSlot}). A line has no room for a ring around a
    *  card face, so it says it as `SELECTED_ROW` — the surface it hovers to, with a hairline of
    *  gold on it. By the slot rather than the printing; `CardStack` has why. */
@@ -182,6 +187,7 @@ export const TextView = memo(function TextView({
   tokenPile?: TokenPile;
   className?: string;
 }) {
+  const pickedSet = usePickedSet(picked);
   // The Sideboard, the Maybeboard and every pile the reader has switched off are lifted out before
   // anything is packed, so `packColumns` is handed a shorter list and none of its own rules change.
   // Each is a category like any other to a greedy in-order pack, which drops it wherever it lands —
@@ -279,6 +285,7 @@ export const TextView = memo(function TextView({
                 tracksCollection={tracksCollection}
                 onSelect={onSelect}
                 actions={actions}
+                picked={picked === undefined ? undefined : pickedIn(group.cards, pickedSet)}
                 selectedSlot={selectedSlot}
                 landed={landed}
               />
@@ -334,6 +341,7 @@ export const TextView = memo(function TextView({
                 tracksCollection={tracksCollection}
                 onSelect={onSelect}
                 actions={actions}
+                picked={picked === undefined ? undefined : pickedIn(item.cards, pickedSet)}
                 selectedSlot={selectedSlot}
                 landed={landed}
               />
@@ -357,6 +365,7 @@ const TextGroup = memo(function TextGroup({
   tracksCollection,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
 }: {
@@ -374,11 +383,14 @@ const TextGroup = memo(function TextGroup({
   tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** This pile's picked slots — see `views/pickedMarks.ts`. */
+  picked?: readonly string[];
   /** Handed through to the lines — see {@link TextView}'s own props. */
   selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
+  const marking = usePickedMarking(actions, picked);
 
   return (
     <section
@@ -417,7 +429,7 @@ const TextGroup = memo(function TextGroup({
               tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
-              selected={deckCardMarked(card, selectedSlot, actions)}
+              selected={deckCardMarked(card, selectedSlot, marking)}
               landedKey={landed?.get(card.id)}
             />
           ))}

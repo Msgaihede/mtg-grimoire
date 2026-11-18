@@ -69,6 +69,7 @@ import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { usePickedSet } from "./pickedMarks";
 import { hasTokenPile, TokenTablePile, type TokenPile } from "./TokenPile";
 
 /**
@@ -132,6 +133,7 @@ export const TableView = memo(function TableView({
   noted,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   tokenPile,
@@ -191,6 +193,10 @@ export const TableView = memo(function TableView({
    * compare. The controls themselves are `cardControl.tsx`'s, the same ones.
    */
   actions?: DeckCardActions;
+  /** The picked slots — the other three views hand each pile its share of these
+   *  (`views/pickedMarks.ts`); this one is one virtual list, so it marks from the whole set. Absent
+   *  marks by `actions.isPicked`, as before. */
+  picked?: readonly string[];
   /** Which slot the open pane is about ({@link deckCardSlot}), so its row says so. By the slot
    *  rather than the printing; `CardStack` has why. */
   selectedSlot?: string | null;
@@ -541,6 +547,17 @@ export const TableView = memo(function TableView({
   );
 
   const drop = actions?.drop;
+  // What a row's gold ring is asked of — `actions` with `isPicked` read off the picked keys, which
+  // arrive beside the bag rather than inside it (see `views/pickedMarks.ts`). The table is one
+  // virtual list, so a pick redraws its drawn rows, as it always did.
+  const pickedSet = usePickedSet(picked);
+  const marking = useMemo(
+    () =>
+      picked === undefined
+        ? actions
+        : { ...actions, isPicked: (slot: string) => pickedSet?.has(slot) === true },
+    [actions, picked, pickedSet],
+  );
   const renderRow = useCallback(
     (props: RowRenderProps, row: Row) => (
       <DeckTableRow
@@ -550,11 +567,11 @@ export const TableView = memo(function TableView({
         marketplace={marketplace}
         actions={actions}
         onDrop={drop}
-        selected={row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
+        selected={row.kind === "card" && deckCardMarked(row.card, selectedSlot, marking)}
         landedKey={row.kind === "card" ? landed?.get(row.card.id) : undefined}
       />
     ),
-    [columns.length, marketplace, actions, drop, selectedSlot, landed],
+    [columns.length, marketplace, actions, marking, drop, selectedSlot, landed],
   );
 
   return (
@@ -602,7 +619,7 @@ export const TableView = memo(function TableView({
               }
             : undefined
         }
-        isSelected={(row) => row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
+        isSelected={(row) => row.kind === "card" && deckCardMarked(row.card, selectedSlot, marking)}
         renderRow={renderRow}
       />
       {hasTokenPile(tokenPile) && <TokenTablePile pile={tokenPile} />}

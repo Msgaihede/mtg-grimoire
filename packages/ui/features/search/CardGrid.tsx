@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -60,6 +61,7 @@ import { NO_SELECTION, suppressRangeSelection, useCardSelection } from "@/lib/us
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { beginWork } from "@/lib/work";
 import { nextGridIndex, nextShelfTileIndex } from "./gridNav";
 import { registerSelectAll } from "./selectAllSurface";
 import { needsNextPage } from "./useCardSearch";
@@ -142,6 +144,59 @@ interface DragRest {
 }
 
 const NO_REST: DragRest = { payloads: [], records: [] };
+
+/**
+ * Where each tile key sits in a wall's drawn order — built **once per `drawn` array**, on the first
+ * press that needs it, and kept beside that array for as long as the array lives.
+ *
+ * A drag and a menu both want "the picked tiles, in the order the wall draws them", and they used
+ * to answer it by walking every drawn row: at `beforedragstart`, and on **every render** of the
+ * wall while two or more tiles were picked (the menu's rows were a memo read at render). After a
+ * Ctrl+A that is a thousand rows walked per render, for an answer read only on a right-click. Keyed
+ * by the array in a `WeakMap` rather than held in the component, so a page that lands is a new
+ * array and a new index, and an old one goes with its array.
+ *
+ * **An array of places per key, not one**: a flat wall can draw one printing twice (two pages either
+ * side of a sync, which is why its slots are keyed by position), and a walk over the rows carried
+ * both copies. This carries both too.
+ */
+const TILE_INDEX = new WeakMap<readonly GridCard[], ReadonlyMap<string, readonly number[]>>();
+function tileIndexOf(drawn: readonly GridCard[]): ReadonlyMap<string, readonly number[]> {
+  let index = TILE_INDEX.get(drawn);
+  if (index === undefined) {
+    const built = new Map<string, number[]>();
+    drawn.forEach((card, at) => {
+      const key = tileKey(card);
+      const places = built.get(key);
+      if (places) places.push(at);
+      else built.set(key, [at]);
+    });
+    index = built;
+    TILE_INDEX.set(drawn, index);
+  }
+  return index;
+}
+
+/**
+ * The drawn rows whose tile key is one of `keys`, **in the wall's order** (not pick order — see
+ * `cardMenu`), less any tile keyed `except`. O(picked) once {@link tileIndexOf} exists, rather than
+ * O(drawn) per ask.
+ */
+function rowsOfKeys<T extends GridCard>(
+  drawn: readonly T[],
+  keys: readonly string[],
+  except?: string,
+): T[] {
+  const index = tileIndexOf(drawn);
+  const at: number[] = [];
+  for (const key of keys) {
+    if (key === except) continue;
+    const places = index.get(key);
+    if (places) at.push(...places);
+  }
+  at.sort((a, b) => a - b);
+  return at.map((i) => drawn[i]);
+}
 
 /**
  * Whether a tile turns over — the caller's {@link CardGrid} `flips`, for a tile that has a
@@ -456,7 +511,7 @@ function isShelfArrow(key: string): key is ShelfArrow {
  * inside Scryfall's image policy without a separate credit line: the artist's name is
  * printed on the card. An art crop here would need one.
  */
-export function CardGrid<T extends GridCard>({
+function CardGridWall<T extends GridCard>({
   rows,
   onSelect,
   onNeedNextPage,
@@ -502,7 +557,24 @@ export function CardGrid<T extends GridCard>({
    * pressed. The id stays first because that is what every other wall opens with.
    */
   onSelect: (id: string, card: T) => void;
-  onNeedNextPage: () => void;
+  /**
+   * The wall wants rows it has not got — asked as the reader scrolls near the end, and as each page
+   * lands while a Ctrl+A is "all of this list".
+   *
+   * **`want` is how many more rows the wall is owed, when it knows** — only the Ctrl+A walk says,
+   * with what is left to {@link selectAllLimit} (`Infinity` on an uncapped wall). A caller that can
+   * fetch a bigger page for it should (`useCardSearch`'s `fetchMore`, the collection's and the
+   * wishlist's): the walk used to cost one round trip per 50-row page, twenty for a thousand cards
+   * on the search page, each landing as a render of the wall. A caller that ignores it fetches its
+   * ordinary page and the walk still ends, one page at a time.
+   *
+   * **The answer is whether rows are still to come** — `true` while the list has a next page (in
+   * flight or not), `false` once it is whole or a page has failed. The walk reads it to keep the
+   * app's busy mark up for exactly as long as it is fetching (`lib/work.ts`); `undefined` (a caller
+   * that answers nothing) draws no mark. Hold the callback still on what it reads, so it changes
+   * when the answer can — a failed page is a new callback, which is what puts the mark down.
+   */
+  onNeedNextPage: (want?: number) => boolean | void;
   /** Identity of the current list — a search, or a filtered collection — so a new one
    *  starts at the top. */
   listKey: string;
@@ -1657,6 +1729,30 @@ export function CardGrid<T extends GridCard>({
     enabled: selectionScope !== undefined && (picked.all || picked.count > 1),
   });
 
+  /**
+   * What the wall's presses, menus and drags read **at the press** rather than at render — the live
+   * values of the props and the picked set, refreshed after every commit.
+   *
+   * It is what lets {@link select}, the two menu slots and {@link dragRest} keep one identity for
+   * the life of the wall, and so what lets a memoised {@link Tile} be skipped: each of those is a
+   * prop of every tile, and when they closed over the picked set a Ctrl-click redrew every tile on
+   * the wall to move one ring — and a Ctrl+A walk redrew them all again per page. A press arrives
+   * after the commit that drew the tile it lands on, so it always reads what is on screen.
+   */
+  const live = useRef({ picked, drawn, onSelect, dragPayload, dragRecord, cardMenu, cardMenuKey, flips });
+  useEffect(() => {
+    live.current = {
+      picked,
+      drawn,
+      onSelect,
+      dragPayload,
+      dragRecord,
+      cardMenu,
+      cardMenuKey,
+      flips,
+    };
+  });
+
   const select = useCallback(
     (card: T, event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
       // **The two halves of a press, and they are not the same string.** The set, the caret note
@@ -1674,7 +1770,7 @@ export function CardGrid<T extends GridCard>({
       // A chord means the reader is building a set, not opening a card: the pane holds still and
       // nothing below this line runs. `pick` has already collapsed the set to this one tile when
       // it answers `false`, which is what keeps the ring and the pane agreeing.
-      if (selectionScope !== undefined && event && picked.pick(key, event)) return;
+      if (selectionScope !== undefined && event && live.current.picked.pick(key, event)) return;
       // **The note is stamped with the *card*, and it is the one thing here that is not the tile.**
       // Its reader was `CardDetailPane`'s mount effect, which asked `consumeCaretNote(cardId)`
       // with the card it was opening — so a note filed under `bolt:foil` is a note the surface
@@ -1692,9 +1788,9 @@ export function CardGrid<T extends GridCard>({
       // wall is not reachable by keyboard at all, so its arrow handler never runs. See
       // `caretWalk.ts`, which carries the whole argument.
       if (arrowNav) keepCaretForCard(cardId);
-      onSelect(cardId, card);
+      live.current.onSelect(cardId, card);
     },
-    [arrowNav, onSelect, picked, selectionScope],
+    [arrowNav, selectionScope],
   );
 
   /**
@@ -1704,7 +1800,9 @@ export function CardGrid<T extends GridCard>({
    * **Held still across renders**, because it lands in every tile's drag-registration dependency
    * list: a fresh function per render would tear four hundred registrations down each time the
    * reader Ctrl-clicked, and a source that unregisters mid-gesture is a drop that never arrives.
-   * The two live values it reads — the selection and the rows — come off refs for that reason.
+   * The two live values it reads — the selection and the rows — come off {@link live} for that
+   * reason, and the picked rows are found through {@link tileIndexOf} rather than by walking every
+   * drawn row at `beforedragstart`.
    *
    * `dragsAll` is asked first and has a side effect by design: a tile picked up from *outside* the
    * set throws the set away, so a stray drag can never carry four cards the reader had forgotten
@@ -1713,25 +1811,20 @@ export function CardGrid<T extends GridCard>({
    * `undefined` on a wall that cannot be dragged from or has no scope, so nothing there registers
    * a preview callback and every existing wall behaves exactly as it did.
    */
-  const dragRef = useRef({ picked, rows: drawn, dragPayload, dragRecord });
-  useEffect(() => {
-    dragRef.current = { picked, rows: drawn, dragPayload, dragRecord };
-  }, [picked, drawn, dragPayload, dragRecord]);
   const draggableWall = selectionScope !== undefined && (dragPayload ?? dragRecord) !== undefined;
   const dragRest = useMemo(
     () =>
       draggableWall
         ? (card: T): DragRest => {
-            const { picked: held, rows: drawn, ...seams } = dragRef.current;
-            if (!held.dragsAll(tileKey(card))) return NO_REST;
-            const wanted = new Set(held.keys);
+            const { picked: held, drawn, ...seams } = live.current;
+            const own = tileKey(card);
+            if (!held.dragsAll(own)) return NO_REST;
             const payloads: DragPayload[] = [];
             const records: Record<string, unknown>[] = [];
-            for (const row of drawn) {
-              // The *tile*, on both sides: a wall whose foil and nonfoil of one printing are two
-              // tiles must be able to drag one of them without the other coming along, and `id`
-              // cannot tell them apart. See {@link tileKey}.
-              if (tileKey(row) === tileKey(card) || !wanted.has(tileKey(row))) continue;
+            // The *tile*, on both sides: a wall whose foil and nonfoil of one printing are two
+            // tiles must be able to drag one of them without the other coming along, and `id`
+            // cannot tell them apart. See {@link tileKey}.
+            for (const row of rowsOfKeys(drawn, held.keys, own)) {
               // Whichever seam this wall uses. On a `dragRecord` wall the payload is read back
               // out of the composed record through the same fence a drop target reads it
               // through, so a tile carrying only a non-card mark — an any-printing wish —
@@ -1752,30 +1845,29 @@ export function CardGrid<T extends GridCard>({
   );
 
   /**
-   * The picked rows, in the order the wall draws them — what a menu built on a set acts on.
+   * The picked rows a menu on `card` acts on, in the order the wall draws them — the whole set when
+   * `card` is one of two or more picked tiles, and nothing otherwise.
    *
    * `rows` order rather than pick order, because everything downstream of it is a *list of cards*
    * rather than a history of presses: `Add 4 cards to → Wishlist` writes four wishes, and the one
    * order a reader could check it against is the one on screen.
    *
-   * Identity churn is free here in a way it is not for the drag: these two slots are read on
-   * render rather than registered, so nothing is torn down when they change — `cardMenu`'s own doc
-   * says so.
+   * **Asked at the press, never at render.** It was a memo read on every render of the wall while a
+   * set stood — a walk over every drawn row, a thousand of them after a Ctrl+A, for an answer only
+   * a right-click reads — and the two slots below closed over it, so every tile was handed a new
+   * menu callback per pick. The tile now asks its slot for a handler when the press arrives (see
+   * {@link Tile}'s `onContextMenu`), and the slots read {@link live}, so they never change.
    */
-  const pickedRows = useMemo(
-    () => (picked.count > 1 ? drawn.filter((card) => picked.selected(tileKey(card))) : []),
-    [drawn, picked],
-  );
-  const tileMenu = useCallback(
-    (card: T) =>
-      cardMenu?.(card, picked.selected(tileKey(card)) ? pickedRows : [], turnsOver(card, flips)),
-    [cardMenu, picked, pickedRows, flips],
-  );
-  const tileMenuKey = useCallback(
-    (card: T) =>
-      cardMenuKey?.(card, picked.selected(tileKey(card)) ? pickedRows : [], turnsOver(card, flips)),
-    [cardMenuKey, picked, pickedRows, flips],
-  );
+  const tileMenu = useCallback((card: T) => {
+    const { picked: held, drawn, cardMenu: build, flips: turns } = live.current;
+    const inSet = held.count > 1 && held.selected(tileKey(card));
+    return build?.(card, inSet ? rowsOfKeys(drawn, held.keys) : [], turnsOver(card, turns));
+  }, []);
+  const tileMenuKey = useCallback((card: T) => {
+    const { picked: held, drawn, cardMenuKey: build, flips: turns } = live.current;
+    const inSet = held.count > 1 && held.selected(tileKey(card));
+    return build?.(card, inSet ? rowsOfKeys(drawn, held.keys) : [], turnsOver(card, turns));
+  }, []);
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastRendered = virtualRows.length
@@ -1878,11 +1970,39 @@ export function CardGrid<T extends GridCard>({
    *
    * It stops ahead of the reader at {@link selectAllLimit}; the paging rules above go on working
    * past it, and what they fetch is picked too.
+   *
+   * **It says how many rows it is owed** (`onNeedNextPage`'s `want`), so a caller that can fetch
+   * them in fewer, larger pages does — measured over the fake on the search page's `Large` seed, a
+   * thousand cards was twenty sequential 50-row round trips and 1.2 s. And **while it is owed rows
+   * the app says it is busy** (`lib/work.ts`): a picked set that is still growing used to be
+   * indistinguishable from one that had finished, which is the first of the two limits
+   * `docs/reference/keyboard-shortcuts.md` wrote down. The mark goes down when the list is whole,
+   * when the limit is reached, when a page fails, when anything ends the instruction (a press,
+   * Escape, a new filter) and when the wall unmounts.
    */
+  const walkWork = useRef<(() => void) | null>(null);
   useEffect(() => {
-    if (!picked.all || drawn.length >= selectAllLimit) return;
-    onNeedNextPage();
+    const done = () => {
+      walkWork.current?.();
+      walkWork.current = null;
+    };
+    if (!picked.all || drawn.length >= selectAllLimit) {
+      done();
+      return;
+    }
+    if (onNeedNextPage(selectAllLimit - drawn.length) === true) {
+      walkWork.current ??= beginWork("Selecting all cards…");
+    } else {
+      done();
+    }
   }, [picked.all, drawn, selectAllLimit, onNeedNextPage]);
+  useEffect(
+    () => () => {
+      walkWork.current?.();
+      walkWork.current = null;
+    },
+    [],
+  );
 
   /**
    * **Bring the shelf a page names into view** — `GridSections.revealShelfId`, set when **Add
@@ -2361,8 +2481,10 @@ export function CardGrid<T extends GridCard>({
       flips={flips}
       caption={caption}
       money={money}
-      cardMenu={tileMenu}
-      cardMenuKey={tileMenuKey}
+      // Held still for the life of the wall, and absent exactly when the caller's slot is — see
+      // `tileMenu`.
+      cardMenu={cardMenu ? tileMenu : undefined}
+      cardMenuKey={cardMenuKey ? tileMenuKey : undefined}
       tileRef={tileRef}
       dragPayload={dragPayload}
       dragRecord={dragRecord}
@@ -2559,6 +2681,18 @@ export function CardGrid<T extends GridCard>({
 }
 
 /**
+ * A list of cards as a wall of art — {@link CardGridWall}, **memoised** (2026-11).
+ *
+ * The deck editor renders its docked search column on every render of the editor, and the editor
+ * renders a dozen times as a write's queries land; each of those drew this whole wall and every tile
+ * on it. A wall handed the same props is now skipped. That only holds where the caller holds its
+ * props still — `CardSearchBody` and `DeckSearchPanel` do — and every per-card slot below already
+ * asks to be held still for its drag registrations' sake; a caller that passes fresh arrows draws
+ * as it always did.
+ */
+export const CardGrid = memo(CardGridWall) as typeof CardGridWall;
+
+/**
  * The boxes {@link GridSections.renderContents} is drawn in — one per shelf with a tile row drawn,
  * from its first tile row's top to its last's foot, whether or not those rows are drawn
  * themselves. Every tile row of a shelf is one pitch tall and the run is unbroken, so the run's
@@ -2626,7 +2760,7 @@ function ShelfContentsBoxes({
  * colour in the tile that is not the card's own, and a filled badge there would out-shout what it
  * annotates.
  */
-function Tile<T extends GridCard>({
+function TileFace<T extends GridCard>({
   card,
   gridIndex,
   tabStop,
@@ -2713,6 +2847,7 @@ function Tile<T extends GridCard>({
   flips?: (card: T) => boolean;
   caption?: (card: T) => ReactNode;
   money?: (card: T) => ReactNode;
+  /** Asked for a handler **at the press**, not at render — see `onContextMenu` below. */
   cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
   cardMenuKey?: (card: T) => ((e: ReactKeyboardEvent) => void) | undefined;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
@@ -2904,13 +3039,17 @@ function Tile<T extends GridCard>({
       data-grid-index={gridIndex}
       // The whole tile, rather than the art button inside it: a right-click on the chin, on
       // the printing count or on the owned badge is a right-click on the card. The handler is
-      // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that
-      // was given none attaches nothing at all.
-      onContextMenu={cardMenu?.(card)}
+      // the caller's — see {@link CardGrid}'s `cardMenu` — and **it is built when the press
+      // arrives** rather than on every render of the tile: what it is handed (the picked set, and
+      // the set's rows) is the wall's at the press, so a memoised tile need not be redrawn every
+      // time the set moves to keep its menu current. A wall that was given none attaches nothing
+      // at all, and a tile whose builder answers `undefined` lets the press go by untouched — the
+      // app's plain suppression, exactly as a tile with no handler got.
+      onContextMenu={cardMenu ? (e) => cardMenu(card)?.(e) : undefined}
       // Shift+F10 and the ContextMenu key, on the same box and about the same card. The press
       // arrives here by bubbling from whatever inside the tile holds the caret, which is the
       // art button.
-      onKeyDown={cardMenuKey?.(card)}
+      onKeyDown={cardMenuKey ? (e) => cardMenuKey(card)?.(e) : undefined}
       // **The other half of the menu, and it is not the same thing as a tab stop.**
       //
       // `menu()`/`menuKey()` hand the panel *the element their handler is attached to* as the
@@ -3336,3 +3475,11 @@ function Tile<T extends GridCard>({
     </div>
   );
 }
+
+/**
+ * {@link TileFace}, **memoised** — a tile is drawn again only when something it draws changed: its
+ * card, its ring (a boolean, so a pick elsewhere on the wall is not a change here), its place, its
+ * size, or a slot the caller handed a new identity. The wall's own callbacks it is handed —
+ * `onSelect`, `dragRest`, the two menu slots — keep one identity for the wall's life.
+ */
+const Tile = memo(TileFace) as typeof TileFace;

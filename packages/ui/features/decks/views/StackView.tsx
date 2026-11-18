@@ -37,6 +37,7 @@ import type { TheoryPlan } from "../theoryMatch";
 import type { ValidationIssue } from "../validation/types";
 import { isBeside, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { pickedIn, usePickedSet } from "./pickedMarks";
 import { sameDrawnProps } from "./sameDrawn";
 import { nextStackPosition, type StackPosition } from "./stackNav";
 import { hasTokenPile, TokenStackPile, type TokenPile } from "./TokenPile";
@@ -326,6 +327,7 @@ export const StackView = memo(function StackView({
   noted,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   tokenPile,
@@ -390,6 +392,9 @@ export const StackView = memo(function StackView({
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
   actions?: DeckCardActions;
+  /** The picked slots — each pile is handed its own share, so a pick redraws the piles it touched
+   *  and no other (`views/pickedMarks.ts`). Absent marks by `actions.isPicked`, as before. */
+  picked?: readonly string[];
   /** The slot the pane is open on ({@link deckCardSlot}) — the picked card wears a gold ring, and
    *  in this view it is also what the pile rests open on. See {@link CardStack}. */
   selectedSlot?: string | null;
@@ -420,6 +425,7 @@ export const StackView = memo(function StackView({
   // questions — "how big are the cards I am browsing" and "how big is my deck laid out" — which
   // is the whole of why `cardZoom` stopped being one number.
   const cardZoom = useAppStore((s) => s.cardZoom.deck);
+  const pickedSet = usePickedSet(picked);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ctrl+wheel, on the box the whole view is drawn in: a wheel event bubbles from whichever card
   // the pointer is over up to here — including from the gaps between the piles, which belong to
@@ -833,6 +839,7 @@ export const StackView = memo(function StackView({
             tracksCollection={tracksCollection}
             onSelect={selectCard}
             actions={actions}
+            picked={picked === undefined ? undefined : pickedSet}
             selectedSlot={selectedSlot}
             landed={landed}
             zoom={cardZoom}
@@ -852,6 +859,7 @@ export const StackView = memo(function StackView({
             tracksCollection={tracksCollection}
             onSelect={selectCard}
             actions={actions}
+            picked={picked === undefined ? undefined : pickedIn(group.cards, pickedSet)}
             selectedSlot={selectedSlot}
             landed={landed}
             zoom={cardZoom}
@@ -943,6 +951,7 @@ export const StackView = memo(function StackView({
                 tracksCollection={tracksCollection}
                 onSelect={selectCard}
                 actions={actions}
+                picked={picked === undefined ? undefined : pickedIn(item.group.cards, pickedSet)}
                 selectedSlot={selectedSlot}
                 landed={landed}
                 zoom={cardZoom}
@@ -1020,6 +1029,7 @@ function CommandZone({
   tracksCollection,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   zoom,
@@ -1062,6 +1072,8 @@ function CommandZone({
   tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** The picked slots as a set — this box hands each of its piles that pile's share. */
+  picked?: ReadonlySet<string> | null;
   /** Handed through to the piles — see {@link StackView}'s own props. */
   selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
@@ -1116,6 +1128,7 @@ function CommandZone({
           tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
+          picked={picked === undefined ? undefined : pickedIn(group.cards, picked)}
           selectedSlot={selectedSlot}
           landed={landed}
           zoom={zoom}
@@ -1149,6 +1162,7 @@ const StackGroup = memo(function StackGroup({
   tracksCollection,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   zoom,
@@ -1173,6 +1187,8 @@ const StackGroup = memo(function StackGroup({
   tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** This pile's picked slots, handed through to the stack — see `views/pickedMarks.ts`. */
+  picked?: readonly string[];
   /** Handed through to the stack — see {@link StackView}'s own props. */
   selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
@@ -1425,6 +1441,7 @@ const StackGroup = memo(function StackGroup({
             tracksCollection={tracksCollection}
             onSelect={onSelect}
             actions={actions}
+            picked={picked}
             selectedSlot={selectedSlot}
             landed={landed}
             zoom={zoom}
