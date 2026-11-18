@@ -262,7 +262,31 @@ export interface BulkRemoveOutcome {
   undoId: number | null;
 }
 
-/** What `Move to` over several entries did — one transaction (issue #555). */
+/** One item of a batch add that did not land, and why. */
+export interface BulkRefusal {
+  /** Its position in the list that was sent. */
+  index: number;
+  /** The sentence the single add (`collection_add`, `wishlist_add`) would have refused it with. */
+  reason: string;
+}
+
+/**
+ * What "Add N cards to → Collection / Wishlist" did in one press — {@link ipc.collectionAddMany}
+ * and {@link ipc.wishlistAddMany}. **A refusal is the item's, not the press's**: the rest landed.
+ */
+export interface BulkAddOutcome {
+  /** Items that landed (two items of one grain fold into one row and count twice here). */
+  added: number;
+  /** The copies those items asked for. */
+  copies: number;
+  /** Every item that did not land, in the order sent. */
+  refused: BulkRefusal[];
+  /** See {@link ImportCommitOutcome.undoId}; `null` when nothing landed. */
+  undoId: number | null;
+}
+
+/** What `Move to` over several entries did — one transaction (issue #555). Also the answer of
+ *  {@link ipc.wishlistSetFolderMany}, whose `changes` are wishes. */
 export interface BulkMoveOutcome {
   /** One per id sent, in the order they were sent, a repeated id answered again like its first —
    *  each {@link EntryChange} says where that entry's copies ended up, which after a merge is a
@@ -967,6 +991,14 @@ export const collectionCommands = {
    */
   collectionRemoveMany: (ids: readonly number[]) =>
     invoke<BulkRemoveOutcome>("collection_remove_many", { ids }),
+  /**
+   * N × {@link ipc.collectionAdd} in **one transaction with one activity row and one undo
+   * ticket**, and one refresh of the search index's owned counts. Each item keeps the single
+   * add's rules; an item it would refuse is skipped and named in `refused` (by index, in the
+   * single add's sentence) while the rest land.
+   */
+  collectionAddMany: (items: readonly EntryInput[]) =>
+    invoke<BulkAddOutcome>("collection_add_many", { items }),
   /**
    * `Move to` over several entries — {@link ipc.collectionSetFolder}'s merge rule per entry, in
    * **one transaction with one activity row** (issue #555). Any refusal rolls the whole press

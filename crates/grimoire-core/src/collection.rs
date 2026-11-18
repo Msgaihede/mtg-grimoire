@@ -363,21 +363,65 @@ fn valid_condition(condition: Option<&str>) -> Result<&str, String> {
 /// is unreachable (the column is `NOT NULL`, CHECKed against
 /// `schema::COLLECTION_FOLDER_KINDS`).
 fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Result<(), String> {
+    Ok(folder_fenced(conn, folder_id, kinds)?)
+}
+
+/// [`folder_named`] with its two answers kept apart — the refusal ([`ItemError::Refused`]) and a
+/// database that could not be asked ([`ItemError::Failed`]) — for [`add_entries`], which skips an
+/// item over the first and gives up the whole batch over the second. `prepare_cached` because a
+/// batch asks it once per item.
+fn folder_fenced(
+    conn: &Connection,
+    folder_id: Option<i64>,
+    kinds: &[&str],
+) -> Result<(), ItemError> {
     let Some(folder) = folder_id else {
         return Ok(());
     };
     let kind: Option<String> = conn
-        .query_row(
-            "SELECT kind FROM collection_folders WHERE id = ?1",
-            params![folder],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
+        .prepare_cached("SELECT kind FROM collection_folders WHERE id = ?1")
+        .and_then(|mut stmt| stmt.query_row(params![folder], |r| r.get(0)).optional())
+        .map_err(ItemError::failed)?;
     match kind.as_deref() {
-        None => Err(FOLDER_GONE.to_owned()),
+        None => Err(ItemError::Refused(FOLDER_GONE.to_owned())),
         Some(kind) if kinds.contains(&kind) => Ok(()),
-        Some(_) => Err(FOLDER_NOT_YOURS.to_owned()),
+        Some(_) => Err(ItemError::Refused(FOLDER_NOT_YOURS.to_owned())),
+    }
+}
+
+/// Why one item of a batch did not land: **refused** — the sentence the single command would have
+/// answered, and the batch goes on without it — or **failed**, a database that could not be read
+/// or written, which no later item can be expected to get past, so it fails the whole batch.
+///
+/// The single doors never needed the difference (every error was the reader's answer either way),
+/// so they keep `Result<_, String>` and reach this through `From`, which is the same sentence.
+#[derive(Debug)]
+pub(crate) enum ItemError {
+    Refused(String),
+    Failed(String),
+}
+
+impl ItemError {
+    pub(crate) fn failed(e: impl ToString) -> Self {
+        ItemError::Failed(e.to_string())
+    }
+
+    /// A write's error, sorted: a **constraint** the row broke (a CHECK, a NOT NULL) is about that
+    /// row, so it is refused alone; anything else is the database's and fails the batch.
+    pub(crate) fn of_statement(e: rusqlite::Error) -> Self {
+        if e.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+            ItemError::Refused(e.to_string())
+        } else {
+            ItemError::Failed(e.to_string())
+        }
+    }
+}
+
+impl From<ItemError> for String {
+    fn from(e: ItemError) -> String {
+        match e {
+            ItemError::Refused(s) | ItemError::Failed(s) => s,
+        }
     }
 }
 
@@ -462,14 +506,26 @@ pub(crate) fn refuse_in_a_deck(conn: &Connection, id: i64) -> Result<(), String>
 
 /// The printing, as the entry will remember it.
 fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, String), String> {
-    conn.query_row(
-        "SELECT set_code, collector_number, lang FROM cards WHERE id = ?1",
-        params![card_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )
-    .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| format!("no card with the id `{card_id}` is in the card database"))
+    Ok(printing_checked(conn, card_id)?)
+}
+
+/// [`printing_of`] with the unknown printing ([`ItemError::Refused`]) kept apart from a read that
+/// failed — [`folder_fenced`]'s split, for the same caller.
+fn printing_checked(
+    conn: &Connection,
+    card_id: &str,
+) -> Result<(String, String, String), ItemError> {
+    conn.prepare_cached("SELECT set_code, collector_number, lang FROM cards WHERE id = ?1")
+        .and_then(|mut stmt| {
+            stmt.query_row(params![card_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .optional()
+        })
+        .map_err(ItemError::failed)?
+        .ok_or_else(|| {
+            ItemError::Refused(format!(
+                "no card with the id `{card_id}` is in the card database"
+            ))
+        })
 }
 
 /// What a [`crate::activity`] row says about one entry, read **before** the write changes it.
@@ -608,18 +664,32 @@ pub(crate) fn add_entry_filed(
     input: &EntryInput,
     folders: &[&str],
 ) -> Result<EntryChange, String> {
-    let finish = valid_finish(&input.finish)?;
-    let condition = valid_condition(input.condition.as_deref())?;
+    Ok(add_entry_checked(conn, input, folders)?)
+}
+
+/// [`add_entry_filed`]'s body, answering an [`ItemError`] so [`add_entries`] can tell an item it
+/// should skip from a database it cannot go on writing. **One body for both**, so a batch refuses
+/// exactly what a single add refuses, in its words.
+///
+/// The statements are `prepare_cached`: a batch of a thousand adds parses the upsert once rather
+/// than a thousand times, and a single add pays nothing for it.
+fn add_entry_checked(
+    conn: &Connection,
+    input: &EntryInput,
+    folders: &[&str],
+) -> Result<EntryChange, ItemError> {
+    let finish = valid_finish(&input.finish).map_err(ItemError::Refused)?;
+    let condition = valid_condition(input.condition.as_deref()).map_err(ItemError::Refused)?;
     // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
     // conjure a row out of nothing on a card the user never said they had. Zero is a state
     // a row can be moved to (`set_quantity`), never a state it can be created in.
     if input.quantity <= 0 {
-        return Err(ZERO_ADD.to_owned());
+        return Err(ItemError::Refused(ZERO_ADD.to_owned()));
     }
-    valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
-    let grading = canonical_grading(input.grading.as_deref())?;
-    folder_named(conn, input.folder_id, folders)?;
-    let (set_code, collector_number, lang) = printing_of(conn, &input.card_id)?;
+    valid_quantity(input.tradelist_quantity, "tradelist quantity").map_err(ItemError::Refused)?;
+    let grading = canonical_grading(input.grading.as_deref()).map_err(ItemError::Refused)?;
+    folder_fenced(conn, input.folder_id, folders)?;
+    let (set_code, collector_number, lang) = printing_checked(conn, &input.card_id)?;
 
     // The conflict target is `COLLECTION_GRAIN` verbatim — the same text the unique index
     // was created from. Anything else is a runtime "ON CONFLICT clause does not match any
@@ -664,9 +734,9 @@ pub(crate) fn add_entry_filed(
             updated_at = unixepoch()
          RETURNING id, quantity"
     );
-    let (id, quantity): (i64, i64) = conn
+    let mut stmt = conn.prepare_cached(&sql).map_err(ItemError::failed)?;
+    let (id, quantity): (i64, i64) = stmt
         .query_row(
-            &sql,
             params![
                 input.card_id,
                 set_code,
@@ -693,7 +763,7 @@ pub(crate) fn add_entry_filed(
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(ItemError::of_statement)?;
     Ok(EntryChange {
         id,
         quantity,
@@ -2290,6 +2360,160 @@ pub fn remove_entries(conn: &Connection, ids: &[i64]) -> Result<BulkRemoveOutcom
     Ok(BulkRemoveOutcome {
         removed,
         copies,
+        undo_id: crate::bulk_undo::register(changes, feed),
+    })
+}
+
+/// One item of a batch add that did not land, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkRefusal {
+    /// Its position in the list that was sent, so the page can name the card it was.
+    pub index: usize,
+    /// The sentence the single add (`collection_add`, `wishlist_add`) would have refused it with.
+    pub reason: String,
+}
+
+/// What "Add N cards to → Collection / Wishlist" did in one press — [`add_entries`] and
+/// `wishlist::add_wishes`.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkAddOutcome {
+    /// Items that landed — each a fold onto a row or a new one, so two items of one grain count
+    /// twice here and once in the feed row's `rows`.
+    pub added: i64,
+    /// The copies those items asked for, which is the copies the table gained.
+    pub copies: i64,
+    /// Every item that did not land, in the order sent. The rest landed regardless.
+    pub refused: Vec<BulkRefusal>,
+    /// See [`ImportCommitOutcome::undo_id`]; `None` when nothing landed.
+    pub undo_id: Option<u64>,
+}
+
+/// What [`land_each`] answers: each landed item's answer beside its index, and the refusals.
+pub(crate) type LandedItems<T> = (Vec<(usize, T)>, Vec<BulkRefusal>);
+
+/// The loop under both batch adds: each item in **a savepoint of its own**, inside the caller's
+/// transaction, so an item that is refused is taken back alone — whatever it had written — and
+/// the batch goes on; an [`ItemError::Failed`] (or a savepoint that could not be opened or
+/// released) ends it, answering that error for the caller's transaction to roll back.
+///
+/// Answers what landed, by index, beside what was refused.
+pub(crate) fn land_each<I, T>(
+    conn: &Connection,
+    savepoint: &str,
+    items: &[I],
+    mut one: impl FnMut(&I) -> Result<T, ItemError>,
+) -> Result<LandedItems<T>, String> {
+    let mut landed = Vec::new();
+    let mut refused = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let mut refusal = None;
+        let result = crate::db::in_savepoint(conn, savepoint, || match one(item) {
+            Ok(value) => Ok(value),
+            Err(ItemError::Refused(reason)) => {
+                refusal = Some(reason.clone());
+                Err(reason)
+            }
+            Err(ItemError::Failed(e)) => Err(e),
+        });
+        match (result, refusal) {
+            (Ok(value), _) => landed.push((index, value)),
+            (Err(_), Some(reason)) => refused.push(BulkRefusal { index, reason }),
+            (Err(e), None) => return Err(e),
+        }
+    }
+    Ok((landed, refused))
+}
+
+/// **N × [`add_entry`] in one transaction with one feed row and one undo ticket** — the press
+/// that adds a picked set of hundreds of cards, or a multi-card drop on a folder, which used to be
+/// one `collection_add` per card: N transactions, N feed lines, N rebuilds of the facet index's
+/// `owned` dimension, and enough parallel writes to meet `db::BUSY`.
+///
+/// **Each item goes through [`add_entry`]'s own path** ([`add_entry_checked`] with
+/// [`READER_FOLDERS`]): the same validation, the same folder fence, the same fold on the grain.
+/// Unlike [`remove_entries`] and `set_entries_folder`, **a refusal is not the press's**: an add
+/// of three hundred cards in which one printing has left `cards` should land the other two hundred
+/// and ninety-nine and say which one did not ([`BulkAddOutcome::refused`], by index, in the single
+/// command's sentence). A database that cannot be written fails the whole call ([`land_each`]).
+///
+/// **The feed row keeps [`add_entry`]'s shape when exactly one item landed** — the card,
+/// `{"folder", "finish"}` and its copies — so a batch of one is the same event as the single add.
+/// Several are one line about no one card, the wishlist's run shape
+/// (`wishlist::record_wishes_added`): `{"cards": copies, "rows": distinct rows landed on,
+/// "folder": <name when every landed item shares one, else null>}`, which `activityText.ts` words
+/// as *Added 300 cards to your collection · in Binder* — an `add` and never an `import`, for that
+/// function's reason. Nothing landed is no line and no ticket.
+///
+/// **The undo ticket is captured over every row of every card named**, the import's filter: those
+/// are the only rows an item can fold into or create. No item can file into a deck's group
+/// ([`READER_FOLDERS`] refuses it), so the import's one reason to decline a ticket cannot arise.
+pub fn add_entries(conn: &Connection, items: &[EntryInput]) -> Result<BulkAddOutcome, String> {
+    if items.is_empty() {
+        return Ok(BulkAddOutcome::default());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut cards: Vec<&str> = items.iter().map(|i| i.card_id.as_str()).collect();
+    cards.sort_unstable();
+    cards.dedup();
+    let capture = Capture::begin(
+        &tx,
+        Table::Collection,
+        "card_id IN (SELECT value FROM json_each(?1))",
+        vec![json_list(&cards)],
+    )?;
+    let (landed, refused) = land_each(&tx, "collection_add_item", items, |input| {
+        add_entry_checked(&tx, input, READER_FOLDERS)
+    })?;
+    let copies: i64 = landed.iter().map(|(i, _)| items[*i].quantity).sum();
+    let feed = match landed.as_slice() {
+        // Nothing landed: every savepoint was taken back, so the transaction is dropped (and
+        // rolled back) with nothing in it.
+        [] => {
+            return Ok(BulkAddOutcome {
+                refused,
+                ..BulkAddOutcome::default()
+            })
+        }
+        [(index, _)] => {
+            let input = &items[*index];
+            Feed {
+                kind: crate::activity::ADD,
+                card_id: Some(input.card_id.clone()),
+                card_name: card_name_of(&tx, &input.card_id)?,
+                payload: serde_json::json!({
+                    "folder": folder_name(&tx, input.folder_id)?,
+                    "finish": input.finish,
+                }),
+                delta: input.quantity,
+            }
+        }
+        many => {
+            let rows: std::collections::HashSet<i64> = many.iter().map(|(_, c)| c.id).collect();
+            let first = items[many[0].0].folder_id;
+            let shared = many.iter().all(|(i, _)| items[*i].folder_id == first);
+            Feed {
+                kind: crate::activity::ADD,
+                card_id: None,
+                card_name: None,
+                payload: serde_json::json!({
+                    "cards": copies,
+                    "rows": rows.len(),
+                    "folder": if shared { folder_name(&tx, first)? } else { None },
+                }),
+                delta: copies,
+            }
+        }
+    };
+    feed.record(&tx, Table::Collection)?;
+    let changes = capture.finish(&tx)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(BulkAddOutcome {
+        added: landed.len() as i64,
+        copies,
+        refused,
+        // After the commit, never before it — `bulk_undo::register`'s rule.
         undo_id: crate::bulk_undo::register(changes, feed),
     })
 }
@@ -10031,6 +10255,247 @@ mod tests {
             "a refused write must not republish the index at all"
         );
         assert_eq!(after.owned.count(), 1);
+    }
+
+    /// The rows a batch add is compared on: the grain's card, finish and folder, and the copies.
+    fn added_rows(conn: &Connection) -> Vec<(String, String, Option<i64>, i64)> {
+        conn.prepare(
+            "SELECT card_id, finish, folder_id, quantity FROM collection_entries ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
+    /// **A batch leaves the rows N single adds leave** — the quantities fold on the grain and each
+    /// item lands in the folder it names.
+    #[test]
+    fn a_batch_add_lands_what_the_single_adds_land() {
+        let items = |binder: i64| {
+            vec![
+                input("bolt-lea", "nonfoil", 2),
+                input("bolt-lea", "nonfoil", 3),
+                EntryInput {
+                    folder_id: Some(binder),
+                    ..input("bolt-lea", "nonfoil", 1)
+                },
+                EntryInput {
+                    folder_id: Some(binder),
+                    ..input("bolt-jp", "foil", 4)
+                },
+                input("card-1", "nonfoil", 1),
+            ]
+        };
+        let one_by_one = seeded();
+        let binder = folder(&one_by_one, "user", "Binder");
+        for item in items(binder) {
+            add_entry(&one_by_one, &item).unwrap();
+        }
+        let batched = seeded();
+        let binder = folder(&batched, "user", "Binder");
+
+        let out = add_entries(&batched, &items(binder)).unwrap();
+
+        assert_eq!(added_rows(&batched), added_rows(&one_by_one));
+        assert_eq!((out.added, out.copies), (5, 11));
+        assert!(out.refused.is_empty());
+        assert!(out.undo_id.is_some());
+    }
+
+    /// **A refused item is skipped and reported by its index, in the single add's own sentence**,
+    /// while the items around it land.
+    #[test]
+    fn a_batch_add_skips_and_reports_a_refused_item() {
+        let conn = seeded();
+        let deck_group = folder(&conn, "deck", "Mono red");
+        let items = vec![
+            input("bolt-lea", "nonfoil", 2),
+            input("bolt-unhinged", "nonfoil", 1),
+            input("card-1", "nonfoil", 1),
+            input("card-1", "nonfoil", 0),
+            EntryInput {
+                folder_id: Some(deck_group),
+                ..input("bolt-jp", "nonfoil", 1)
+            },
+            input("bolt-jp", "shiny", 1),
+        ];
+
+        let out = add_entries(&conn, &items).unwrap();
+
+        let expected: Vec<BulkRefusal> = [1usize, 3, 4, 5]
+            .into_iter()
+            .map(|index| BulkRefusal {
+                index,
+                reason: add_entry(&conn, &items[index]).unwrap_err(),
+            })
+            .collect();
+        assert_eq!(out.refused, expected);
+        assert_eq!(out.refused[2].reason, FOLDER_NOT_YOURS);
+        assert_eq!((out.added, out.copies), (2, 3));
+        assert_eq!(
+            added_rows(&conn),
+            vec![
+                ("bolt-lea".to_owned(), "nonfoil".to_owned(), None, 2),
+                ("card-1".to_owned(), "nonfoil".to_owned(), None, 1),
+            ]
+        );
+    }
+
+    /// **Many items are one feed row about no one card**, carrying the copies, the rows they
+    /// landed on and the one folder they share — an `add`, never an `import`.
+    #[test]
+    fn a_batch_add_records_one_run_row() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let filed = |card: &str, n: i64| EntryInput {
+            folder_id: Some(binder),
+            ..input(card, "nonfoil", n)
+        };
+
+        add_entries(
+            &conn,
+            &[
+                filed("bolt-lea", 2),
+                filed("bolt-lea", 1),
+                filed("card-1", 4),
+            ],
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                rows[0].kind.as_str(),
+                rows[0].card_name.as_deref(),
+                rows[0].delta
+            ),
+            (crate::activity::ADD, None, 7)
+        );
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "cards": 7, "rows": 2, "folder": "Binder" })
+        );
+
+        // Items in different drawers name none.
+        add_entries(
+            &conn,
+            &[input("bolt-lea", "nonfoil", 1), filed("card-1", 1)],
+        )
+        .unwrap();
+        assert_eq!(
+            payload(&feed(&conn)[0]),
+            serde_json::json!({ "cards": 2, "rows": 2, "folder": null })
+        );
+    }
+
+    /// **A batch of one is the single add's event** — the same card, payload and delta.
+    #[test]
+    fn a_batch_add_of_one_records_the_single_add_row() {
+        let single = seeded();
+        let batched = seeded();
+        let item = EntryInput {
+            folder_id: Some(folder(&single, "user", "Binder")),
+            ..input("bolt-jp", "foil", 2)
+        };
+        folder(&batched, "user", "Binder");
+        add_entry(&single, &item).unwrap();
+
+        // The refused item around it does not change what the landed one says.
+        add_entries(&batched, &[input("nope", "nonfoil", 1), item]).unwrap();
+
+        let (want, got) = (&feed(&single)[0], &feed(&batched)[0]);
+        assert_eq!(feed(&batched).len(), 1);
+        assert_eq!(
+            (
+                &got.kind,
+                &got.card_id,
+                &got.card_name,
+                got.delta,
+                payload(got)
+            ),
+            (
+                &want.kind,
+                &want.card_id,
+                &want.card_name,
+                want.delta,
+                payload(want)
+            )
+        );
+    }
+
+    /// **The ticket takes the whole batch back** — the folded row to its old quantity and the new
+    /// rows out — and the feed says what was undone.
+    #[test]
+    fn a_batch_add_can_be_undone_whole() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        let before = crate::bulk_undo::table_image(&conn, "collection_entries");
+
+        let out = add_entries(
+            &conn,
+            &[
+                input("bolt-lea", "nonfoil", 2),
+                input("card-1", "foil", 3),
+                input("bolt-jp", "nonfoil", 1),
+            ],
+        )
+        .unwrap();
+        let undone = crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+
+        assert_eq!(undone.restored, 3);
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            before
+        );
+        let line = &feed(&conn)[0];
+        assert_eq!((line.kind.as_str(), line.delta), (crate::activity::ADD, -6));
+        assert_eq!(
+            payload(line),
+            serde_json::json!({ "cards": 6, "rows": 3, "folder": null, "undo": true })
+        );
+    }
+
+    /// Nothing sent, or nothing landed: no change, no line, no ticket.
+    #[test]
+    fn a_batch_add_of_nothing_writes_nothing() {
+        let conn = seeded();
+        let none = add_entries(&conn, &[]).unwrap();
+        assert_eq!((none.added, none.copies, none.undo_id), (0, 0, None));
+        assert!(none.refused.is_empty());
+
+        let refused = add_entries(&conn, &[input("nope", "nonfoil", 1)]).unwrap();
+        assert_eq!((refused.added, refused.undo_id), (0, None));
+        assert_eq!(refused.refused.len(), 1);
+
+        assert!(added_rows(&conn).is_empty());
+        assert!(feed(&conn).is_empty());
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
+    }
+
+    /// **A failure that is not an item's fails the whole call** and leaves nothing behind — here
+    /// the feed row, written after every item has landed.
+    #[test]
+    fn a_batch_add_that_cannot_record_lands_nothing() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        let before = crate::bulk_undo::table_image(&conn, "collection_entries");
+        refuse_activity(&conn);
+
+        let failed = add_entries(
+            &conn,
+            &[input("bolt-lea", "nonfoil", 2), input("card-1", "foil", 1)],
+        );
+
+        allow_activity(&conn);
+        assert!(failed.is_err());
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            before
+        );
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
     }
 }
 

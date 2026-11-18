@@ -22,6 +22,18 @@ pub async fn wishlist_add(
         .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
+/// "Add N cards to → Wishlist" in one press — see [`add_wishes`].
+#[tauri::command]
+pub async fn wishlist_add_many(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<WishInput>,
+) -> Result<crate::collection::BulkAddOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| add_wishes(c, &items)))
+        .await
+        .map_err(|e| format!("the wishlist could not be written: {e}"))?
+}
+
 #[tauri::command]
 pub async fn wishlist_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,

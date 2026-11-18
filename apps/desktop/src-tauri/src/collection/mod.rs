@@ -144,6 +144,22 @@ pub async fn collection_remove_many(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
+/// "Add N cards to → Collection" in one press — see [`add_entries`]. `with_write_owned`, so the
+/// facet index's `owned` dimension is rebuilt **once** for the whole batch rather than once per
+/// card, which is half of why the batch exists.
+#[tauri::command]
+pub async fn collection_add_many(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<EntryInput>,
+) -> Result<BulkAddOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |c| add_entries(c, &items))
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
 /// The collection list. **Read-only** connection, blocking pool — as every read in this
 /// app is, so a list never queues behind a sync.
 #[tauri::command]

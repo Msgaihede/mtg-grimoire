@@ -2979,6 +2979,32 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("collection_remove_many", { ids: [4, 9] });
     expect(collectionRs).toMatch(/fn collection_remove_many\([^)]*\bids\s*:\s*Vec<i64>/s);
 
+    invoke.mockResolvedValue({ added: 2, copies: 3, refused: [], undoId: 5 });
+    const entries = [
+      { cardId: "c1", finish: "nonfoil" as const, quantity: 2 },
+      { cardId: "c2", finish: "foil" as const, quantity: 1, folderId: 7 },
+    ];
+    await ipc.collectionAddMany(entries);
+    expect(invoke).toHaveBeenCalledWith("collection_add_many", { items: entries });
+    expect(collectionRs).toMatch(/fn collection_add_many\([^)]*\bitems\s*:\s*Vec<EntryInput>/s);
+
+    const wishes = [
+      { cardId: "c1", quantity: 1 },
+      { oracleId: "o2", quantity: 2, folderId: 3 },
+    ];
+    await ipc.wishlistAddMany(wishes);
+    expect(invoke).toHaveBeenCalledWith("wishlist_add_many", { items: wishes });
+    expect(wishlistRs).toMatch(/fn wishlist_add_many\([^)]*\bitems\s*:\s*Vec<WishInput>/s);
+
+    invoke.mockResolvedValue({ changes: [], undoId: 6 });
+    await ipc.wishlistSetFolderMany([4, 9], 7);
+    expect(invoke).toHaveBeenCalledWith("wishlist_set_folder_many", { ids: [4, 9], folderId: 7 });
+    await ipc.wishlistSetFolderMany([4], null);
+    expect(invoke).toHaveBeenCalledWith("wishlist_set_folder_many", { ids: [4], folderId: null });
+    expect(wishlistFoldersRs).toMatch(
+      /fn wishlist_set_folder_many\([^)]*\bids\s*:\s*Vec<i64>\s*,\s*folder_id\s*:\s*Option<i64>/s,
+    );
+
     invoke.mockResolvedValue({ changes: [], undoId: 4 });
     await ipc.collectionSetFolderMany([4, 9], 7);
     expect(invoke).toHaveBeenCalledWith("collection_set_folder_many", { ids: [4, 9], folderId: 7 });
@@ -7183,6 +7209,10 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ImportCommitOutcome", collectionRs, "ImportCommitOutcome"],
     ["BulkRemoveOutcome", collectionRs, "BulkRemoveOutcome"],
     ["BulkMoveOutcome", collectionFoldersRs, "BulkMoveOutcome"],
+    // The batch adds' answer: `refused` renamed arrives `undefined`, and a press that skipped
+    // half its cards would toast as if every one had landed.
+    ["BulkAddOutcome", collectionRs, "BulkAddOutcome"],
+    ["BulkRefusal", collectionRs, "BulkRefusal"],
     ["BulkUndoOutcome", bulkUndoRs, "BulkUndoOutcome"],
     ["ImportFile", importRs, "ImportFile"],
     ["ImportResolveLine", importRs, "ResolveLine"],
