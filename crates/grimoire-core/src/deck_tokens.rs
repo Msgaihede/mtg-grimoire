@@ -1353,13 +1353,13 @@ fn is_game_helper(
 /// `false` for a printing that is not in the corpus: that is not a token anybody can file, and the
 /// caller's own lookup is what refuses it in words.
 pub fn printing_is_token(conn: &Connection, card_id: &str) -> Result<bool, String> {
+    // Cached: a batch (`crate::deck_apply`) asks it once per card.
     let row: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT layout, type_line FROM cards WHERE id = ?1",
-            params![card_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
+        .prepare_cached("SELECT layout, type_line FROM cards WHERE id = ?1")
+        .and_then(|mut stmt| {
+            stmt.query_row(params![card_id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()
+        })
         .map_err(|e| e.to_string())?;
     Ok(row.is_some_and(|(layout, type_line)| {
         layout
@@ -1817,6 +1817,11 @@ pub(crate) enum Stepping<'a> {
 #[derive(Debug, Default)]
 pub struct TokenLog {
     touched: Vec<Touched>,
+    /// What the batch's list derives — each token's implicit printing, by `oracle_id` — read at
+    /// the first token add and kept until a card write could change it
+    /// ([`TokenLog::list_changed`]). A derivation walks every maker in the list, so K token adds
+    /// asking afresh were K walks of the whole list. Keyed on the list it was read for.
+    derived: Option<(String, HashMap<String, Printing>)>,
 }
 
 /// One token of a [`TokenLog`]: its entries in the list written, and its state, before.
@@ -1851,6 +1856,50 @@ impl TokenLog {
             entries: entries.to_vec(),
             state: state.clone(),
         });
+    }
+
+    /// Whether no token write has been noted yet — what `crate::deck_apply` asks before a live
+    /// cut, which may land only while the step it would otherwise leak into is still empty.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.touched.is_empty()
+    }
+
+    /// [`derived_printing`] over the derivation this log keeps, derived once per list.
+    ///
+    /// **Sound because a derivation reads `deck_cards` and `cards` alone**, and a token write
+    /// writes neither: until [`TokenLog::list_changed`] says a card write ran, the list derives
+    /// what it derived at the first ask.
+    fn derived_printing(
+        &mut self,
+        tx: &Connection,
+        deck_id: i64,
+        variant: &str,
+        oracle_id: &str,
+    ) -> Result<Option<Printing>, String> {
+        if self
+            .derived
+            .as_ref()
+            .is_none_or(|(list, _)| list != variant)
+        {
+            let best = derive(tx, deck_id, variant)?
+                .tokens
+                .into_iter()
+                .map(|(oracle_id, d)| (oracle_id, d.best))
+                .collect();
+            self.derived = Some((variant.to_owned(), best));
+        }
+        Ok(self
+            .derived
+            .as_ref()
+            .and_then(|(_, best)| best.get(oracle_id).cloned()))
+    }
+
+    /// A card write is about to run in the batch — the kept derivation may no longer be the
+    /// list's, so the next token add derives afresh. Called **before** the write, landed or
+    /// refused: a refused one is rolled back to what the derivation was read from, and deriving
+    /// again then is merely a walk too many.
+    pub(crate) fn list_changed(&mut self) {
+        self.derived = None;
     }
 
     /// How far the log has got — taken before one write of a batch, so a write the batch rolls
@@ -2192,6 +2241,7 @@ pub fn add_printing_in(
         Stepping::Own,
     )
     .map(|(landed, _)| landed)
+    .map_err(String::from)
 }
 
 /// [`add_printing_in`] inside a batch of deck writes (`crate::deck_apply`): the same write and the
@@ -2205,12 +2255,14 @@ pub(crate) fn add_printing_logged(
     finish: Option<&str>,
     quantity: i64,
     log: &mut TokenLog,
-) -> Result<(i64, Option<i64>), String> {
+) -> Result<(i64, Option<i64>), crate::collection::ItemError> {
     let stepping = Stepping::Into(log);
     add_printing_stepped(tx, deck_id, variant, card_id, finish, quantity, stepping)
 }
 
-/// [`add_printing_in`] and [`add_printing_logged`], once.
+/// [`add_printing_in`] and [`add_printing_logged`], once — answering an
+/// [`crate::collection::ItemError`], so a batch can tell this write's refusals from a database
+/// that failed under it.
 fn add_printing_stepped(
     tx: &Connection,
     deck_id: i64,
@@ -2218,21 +2270,35 @@ fn add_printing_stepped(
     card_id: &str,
     finish: Option<&str>,
     quantity: i64,
-    stepping: Stepping<'_>,
-) -> Result<(i64, Option<i64>), String> {
-    let variant = crate::deck_meta::valid_variant(variant)?;
+    mut stepping: Stepping<'_>,
+) -> Result<(i64, Option<i64>), crate::collection::ItemError> {
+    use crate::collection::ItemError;
+    let variant = crate::deck_meta::valid_variant(variant).map_err(ItemError::Refused)?;
     if quantity <= 0 {
-        return Err(crate::collection::ZERO_ADD.to_owned());
+        return Err(ItemError::Refused(crate::collection::ZERO_ADD.to_owned()));
     }
-    let printing = printing_by_id(tx, card_id)?;
+    let printing =
+        printing_by_id(tx, card_id).map_err(|e| ItemError::sorted(e, &[NO_SUCH_PRINTING]))?;
     if !is_token_printing(&printing.layout, printing.type_line.as_deref()) {
-        return Err(NOT_A_TOKEN.to_owned());
+        return Err(ItemError::Refused(NOT_A_TOKEN.to_owned()));
     }
-    let finish = entry_finish(&printing, finish)?;
+    // Pure: an unknown word or a finish the printing is not sold in, and nothing else.
+    let finish = entry_finish(&printing, finish).map_err(ItemError::Refused)?;
     let oracle_id = printing.oracle_id.clone();
+    // Whether the list makes this token, and its implicit printing: a read of `deck_cards` and
+    // `cards` only, which the write below does not touch — so it is asked before `journal_in`
+    // rather than inside it, where a batch's log could not lend its derivation (the log is the
+    // journal's by then). A batch derives its list once for all its token adds
+    // ([`TokenLog::derived_printing`]), where a press derives it for itself.
+    let best = match &mut stepping {
+        Stepping::Into(log) => log.derived_printing(tx, deck_id, variant, &oracle_id),
+        Stepping::Own => derived_printing(tx, deck_id, variant, &oracle_id),
+    }
+    .map_err(ItemError::Failed)?;
     let mut landed = 0;
+    // `journal_in`'s one refusal is `deck::GONE`, and the write below refuses nothing — every
+    // read and write in it is the database's — so any other sentence is a failure.
     let audit_id = journal_in(tx, deck_id, variant, &oracle_id, stepping, |tx| {
-        let best = derived_printing(tx, deck_id, variant, &oracle_id)?;
         let derived = best.is_some();
         // **A stale `hidden` comes back at zero, and before the implicit entry is written** (the
         // final review's deferred 1): its legacy count is what the implicit entry would be
@@ -2284,7 +2350,8 @@ fn add_printing_stepped(
         Ok(Change::new("add", json!(held), json!(landed))
             .about(&printing.id, &finish)
             .with("quantity", json!(quantity)))
-    })?;
+    })
+    .map_err(|e| ItemError::sorted(e, &[crate::deck::GONE]))?;
     Ok((landed, audit_id))
 }
 

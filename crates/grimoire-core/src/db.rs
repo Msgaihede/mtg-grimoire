@@ -912,15 +912,18 @@ mod tests {
 
     /// **The point of the graduated wait.** A holder that lets go after ~3 ms — a single
     /// user-facing write — is waited for about that long, not the fixed 20 ms pause the
-    /// first retry used to be. The bound is generous on purpose (a loaded CI box oversleeps);
-    /// what it rules out is the old shape, where the first retry alone was 20 ms.
+    /// first retry used to be. Asked ten times and judged on the best, so any number of
+    /// oversleeps on a loaded CI box short of all ten is not a failure; what it rules out is
+    /// the old shape, where the first retry alone was 20 ms and **no** try could come in under
+    /// it. (The schedule itself is pinned without a clock, by
+    /// `the_back_off_starts_short_doubles_and_settles_at_the_cap`.)
     #[test]
     fn an_ask_behind_a_short_holder_is_served_about_when_it_lets_go() {
         use std::sync::Barrier;
         let mutex = Mutex::new(Connection::open_in_memory().unwrap());
         let held = Barrier::new(2);
         let mut waits = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..10 {
             std::thread::scope(|scope| {
                 scope.spawn(|| {
                     let guard = lock_blocking(&mutex);
@@ -935,11 +938,11 @@ mod tests {
                 assert!(got, "a 3 ms holder must not make a 5 s ask busy");
             });
         }
-        // The best of five, so one oversleep on a busy machine is not a failure; the old
-        // fixed pause could not have produced any of them under 20 ms.
+        // The best of ten: the old fixed pause could not have produced any of them under
+        // 20 ms, and 15 is well under it with room for the holder's own 3 ms to oversleep.
         let best = waits.iter().min().copied().unwrap_or_default();
         assert!(
-            best < Duration::from_millis(12),
+            best < Duration::from_millis(15),
             "an ask behind a 3 ms holder waited {best:?} at best: {waits:?}"
         );
         assert!(
@@ -949,8 +952,11 @@ mod tests {
     }
 
     /// **And the bound is still the bound.** A holder that never lets go is given up on at
-    /// `timeout`, not one full 20 ms pause past it: the last pause is cut to what is left. The
-    /// upper slack is for a loaded box's oversleep, not the schedule's.
+    /// `timeout`, never before it — asserted of every try, because no oversleep can make an ask
+    /// return early — and not long after: the last pause is cut to what is left. The upper bound
+    /// is the best of three and a generous 100 ms past the timeout, because a loaded box
+    /// oversleeps any one sleep by whatever it likes; the schedule's own cut is pinned without a
+    /// clock by `the_back_off_starts_short_doubles_and_settles_at_the_cap`.
     #[test]
     fn a_bounded_ask_still_gives_up_at_its_timeout() {
         let mutex = Mutex::new(Connection::open_in_memory().unwrap());
@@ -958,16 +964,21 @@ mod tests {
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 for timeout in [Duration::from_millis(5), Duration::from_millis(45)] {
-                    let asked = Tick::now();
-                    assert!(lock_for(&mutex, timeout).is_none());
-                    let waited = asked.elapsed();
+                    let mut waits = Vec::new();
+                    for _ in 0..3 {
+                        let asked = Tick::now();
+                        assert!(lock_for(&mutex, timeout).is_none());
+                        let waited = asked.elapsed();
+                        assert!(
+                            waited >= timeout,
+                            "gave up early: {waited:?} of {timeout:?}"
+                        );
+                        waits.push(waited);
+                    }
+                    let best = waits.iter().min().copied().unwrap_or_default();
                     assert!(
-                        waited >= timeout,
-                        "gave up early: {waited:?} of {timeout:?}"
-                    );
-                    assert!(
-                        waited < timeout + Duration::from_millis(12),
-                        "gave up {waited:?} into a {timeout:?} bound"
+                        best < timeout + Duration::from_millis(100),
+                        "gave up {best:?} at best into a {timeout:?} bound: {waits:?}"
                     );
                 }
                 assert!(

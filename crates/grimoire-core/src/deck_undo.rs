@@ -654,11 +654,26 @@ pub enum Op {
 pub struct Step {
     pub undo: Vec<Op>,
     pub redo: Vec<Op>,
+    /// The copies the whole press added (negative: removed) — the `delta` its reversal's history
+    /// row carries, negated on an undo and straight on a redo ([`apply_reversal`]).
+    ///
+    /// **`None` for every step but a batch's, and then the history row it is keyed on says it**:
+    /// a press that writes one row keys its step on that row and the row's own `delta` is the
+    /// press's. A batch (`crate::deck_apply`) writes a row per op and keys on the last, so
+    /// three hundred one-copy adds would be undone as `−1` — the day header, which sums `delta`,
+    /// would read `+300 / −1` for a deck back where it started. Absent from the JSON when `None`
+    /// and defaulted when missing, so every step already in a journal reads as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<i64>,
 }
 
 impl Step {
     pub fn new(undo: Vec<Op>, redo: Vec<Op>) -> Self {
-        Self { undo, redo }
+        Self {
+            undo,
+            redo,
+            delta: None,
+        }
     }
 }
 
@@ -808,7 +823,13 @@ pub fn record_cells(
 /// batch's rerouted adds filed, which each file a step of their own when pressed one at a time.
 ///
 /// `audit_id` is the batch's last journalled history row — [`record_step`]'s rule for a press
-/// that writes several rows: one press is one Ctrl+Z, keyed on the last of them.
+/// that writes several rows: one press is one Ctrl+Z, keyed on the last of them — and `delta` the
+/// sum of every journalled row's, which the step carries ([`Step::delta`]).
+///
+/// **A batch that changed nothing files nothing** — an add and a removal of the same card on a
+/// list that files its removals (theory, a virtual deck), say: every cell as it found it, no pile
+/// made, no token moved. Such a step would be a Ctrl+Z that changes nothing and still writes an
+/// "Undid" row. Answers whether a step was filed.
 pub(crate) fn record_logged(
     tx: &Connection,
     audit_id: i64,
@@ -816,9 +837,23 @@ pub(crate) fn record_logged(
     log: CellLog,
     made: Option<Vec<i64>>,
     tokens: &crate::deck_tokens::TokenLog,
-) -> Result<(), String> {
-    let step = cells_step(tx, deck_id, log.cells, log.before, made, Some(tokens))?;
-    record_step(tx, audit_id, deck_id, &step)
+    delta: i64,
+) -> Result<bool, String> {
+    let mut step = cells_step(tx, deck_id, log.cells, log.before, made, Some(tokens))?;
+    // Any other op — a pile made, a token moved, the reconcile's share — is a change by being there.
+    let unchanged = match (step.undo.as_slice(), step.redo.as_slice()) {
+        ([], []) => true,
+        ([Op::Cards { rows: before, .. }], [Op::Cards { rows: after, .. }]) => {
+            same_rows(after.clone(), before)
+        }
+        _ => false,
+    };
+    if unchanged {
+        return Ok(false);
+    }
+    step.delta = Some(delta);
+    record_step(tx, audit_id, deck_id, &step)?;
+    Ok(true)
 }
 
 /// The step [`record_cells`] and [`record_logged`] file.
@@ -912,23 +947,10 @@ impl CellLog {
         self.before.truncate(before);
     }
 
-    /// Take one narrow cell out of the step altogether — what a write the journal deliberately
-    /// does not record (a live cut, `crate::collection_alloc::deck_to_collection`'s argument)
-    /// does to a cell an earlier write of the batch named. A later write that names it again
-    /// reads it afresh, as the cell the cut left.
-    pub fn forget(&mut self, variant: &str, category_id: i64, card_id: &str) {
-        let key = (variant.to_owned(), category_id, Some(card_id.to_owned()));
-        if !self.seen.remove(&key) {
-            return;
-        }
-        self.cells.retain(|c| {
-            !(c.variant == variant
-                && c.category_id == category_id
-                && c.card_id.as_deref() == Some(card_id))
-        });
-        self.before.retain(|r| {
-            !(r.variant == variant && r.category_id == category_id && r.card_id == card_id)
-        });
+    /// Whether no write has named a cell yet — what `crate::deck_apply` asks before a live cut,
+    /// which may land only while the step it would otherwise leak into is still empty.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
     }
 
     /// The scope and its "before", for a write that records its own step through
@@ -2867,12 +2889,15 @@ pub fn apply_reversal(
     }
     .map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
+    // The press's own net where the step carries one (a batch, [`Step::delta`]); otherwise the
+    // row the step is keyed on is the whole press, and its `delta` is the press's.
+    let delta = step.delta.unwrap_or(entry.delta);
     record_reversal(
         &tx,
         deck_id,
         if undoing { "undo" } else { "redo" },
         audit_id,
-        if undoing { -entry.delta } else { entry.delta },
+        if undoing { -delta } else { delta },
     )?;
     tx.commit().map_err(|e| e.to_string())
 }

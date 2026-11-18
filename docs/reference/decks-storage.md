@@ -2160,16 +2160,26 @@ write lock (told `database is busy` past a few hundred), N undo steps against a 
 - **Per-op refusals.** Each op runs in a savepoint of its own; one its command would refuse is rolled
   back alone and answered in `results[i].refusal` with that command's sentence, while the rest land.
   What would refuse every op — a deck that is gone, a variant that is not one, busy — fails the call.
+  **A refusal is a sentence, never a database error**: the ops' writes answer `ItemError`
+  (`Refused` / `Failed`, `collection.rs`), and anything SQLite says under an op — a constraint, a
+  malformed row, an I/O error — fails the whole call with every op rolled back.
 - **One undo step**, keyed on the batch's last history row (`record_step`'s rule for a press that
   writes several), scoped to the cells the ops touched — so one Ctrl+Z takes the whole gesture back.
-  The history keeps a row per op, so the drawer reads as if the cards had gone one at a time, and the
-  undo button names the last of them (`Undo — Moved Bear` for a 50-card move).
+  The step carries the batch's net `delta` (`Step::delta`, the sum of its journalled rows'), which
+  the undo and redo rows carry negated and straight, so the day header reads `+300 / −300` for 300
+  adds undone rather than `+300 / −1`. A batch whose writes left every cell, pile and token as they
+  were files no step. The history keeps a row per op, so the drawer reads as if the cards had gone
+  one at a time, and the undo button names the last of them (`Undo — Moved Bear` for a 50-card move).
 - **The live cut files no step**, here as in `deck_to_collection`: a `remove` on the live list of a
   deck that keeps cardboard is the cut — the row's copies go back to `Recently removed` — and a step
-  could put the list back and not the custody. Its cell is taken back out of the batch's step, and a
-  batch whose every landed op is a cut files none. Any other removal (a theory row, a virtual deck)
-  is the stepper's zero and is journalled like any write. `collectionMoved` tells the page to
-  re-read the collection.
+  could put the list back and not the custody. **So a cut lands only ahead of every write the step
+  records**: once an earlier op of the batch has noted a cell or a token, a cut is refused
+  (`CUT_AFTER_A_WRITE`) — mixed in, it would leave half a step (`[move X A→B, cut X]` undoing to X
+  back in A with its copies in `Recently removed`), an empty one, or a cut's token reconcile inside
+  another card's step. After the cuts, before the first other op, the list's tokens are reconciled
+  (the backstop a single cut gets from `with_write`). A batch whose every landed op is a cut files no
+  step. Any other removal (a theory row, a virtual deck) is the stepper's zero and is journalled like
+  any write. `collectionMoved` tells the page to re-read the collection.
 - **`variant` is the list written.** For `addToOtherList` that is the list the copies go *into*, so
   those ops never share a batch with this list's writes.
 

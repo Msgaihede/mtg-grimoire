@@ -415,6 +415,18 @@ impl ItemError {
             ItemError::Failed(e.to_string())
         }
     }
+
+    /// The answer of a `Result<_, String>` helper whose **every** refusal is one of `refusals` —
+    /// constants, compared whole — sorted: one of those sentences is that refusal, and any other
+    /// text can only be the database's. Exact only over such a helper; one that can refuse in a
+    /// sentence built at the time (`format!`) has to answer an `ItemError` itself.
+    pub(crate) fn sorted(e: String, refusals: &[&str]) -> Self {
+        if refusals.contains(&e.as_str()) {
+            ItemError::Refused(e)
+        } else {
+            ItemError::Failed(e)
+        }
+    }
 }
 
 impl From<ItemError> for String {

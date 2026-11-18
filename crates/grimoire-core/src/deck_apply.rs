@@ -22,8 +22,13 @@
 //! * **Each op in a savepoint of its own.** An op its command would refuse (a printing not in the
 //!   card database, a stale pile, a row that is not there) is rolled back alone and answered in its
 //!   [`DeckOpResult::refusal`] with that command's own sentence; the rest of the batch stands. What
-//!   would refuse every op — a deck that is gone, a variant that is not one — fails the whole call,
-//!   and so does a database error that ended the transaction.
+//!   would refuse every op — a deck that is gone, a variant that is not one — fails the whole call.
+//! * **A refusal is a sentence, never a database error.** The ops' writes answer
+//!   [`crate::collection::ItemError`] — `Refused` for the sentences their commands deliberately
+//!   answer, `Failed` for anything SQLite said (a constraint, a malformed row, an I/O error, a full
+//!   disk) — and a failure fails the whole call with everything rolled back, whether or not it
+//!   ended the transaction: a batch must not commit around a write the database would not take.
+//!   The single commands answer the same text either way.
 //! * **One `touch_deck`, one read of the deck's piles before, one undo step** — see below.
 //! * **The history keeps a row per op**, the very row each single command writes (`add`, `move`,
 //!   `remove`, `label`, and the token entry's `deck` row): N cheap inserts in the one transaction,
@@ -45,9 +50,15 @@
 //! the press touched, which is what N single steps would have done.
 //!
 //! **A live cut files no step, here as in [`crate::collection_alloc::deck_to_collection`]** — see
-//! [`DeckOp::Remove`]. A batch whose every landed op is a cut files none at all.
+//! [`DeckOp::Remove`] — and so a live cut lands only **ahead of** every write the step records. A
+//! batch whose every landed op is a cut files none at all, and nor does one whose writes left
+//! every cell, pile and token as they were.
+//!
+//! **The step's `delta` is the batch's**, the sum of its journalled rows'
+//! ([`crate::deck_undo::Step::delta`]), so the reversal's history row undoes three hundred adds as
+//! `−300` rather than as the last add's `−1`.
 
-use crate::collection::EntryChange;
+use crate::collection::{EntryChange, ItemError};
 use crate::deck::{AddPile, NO_CATEGORY};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -84,11 +95,20 @@ pub enum DeckOp {
     /// one difference is the undo step: the cut files **none**, by
     /// [`crate::collection_alloc::deck_to_collection`]'s argued decision (a step can put the list
     /// back and not the custody, and a half-step is worse than none), and the stepper files one.
-    /// So a live cut here is [`crate::deck::remove_row_in`] with no cell noted — and a cell an
-    /// earlier op of the batch noted is taken back out of the step
-    /// ([`crate::deck_undo::CellLog::forget`]) — and any other removal is noted like any write.
-    /// A row that is not there is `deck_set_card_quantity`'s zero: nothing written, answered
-    /// `removed: true` with id `0`.
+    /// So a live cut here is [`crate::deck::remove_row_in`] with no cell noted, and any other
+    /// removal is noted like any write. A row that is not there is `deck_set_card_quantity`'s
+    /// zero: nothing written, answered `removed: true` with id `0`.
+    ///
+    /// **A live cut is refused ([`CUT_AFTER_A_WRITE`]) once an earlier op of the batch has noted
+    /// anything for the step** — a cell or a token — and lands freely before. Kept out of a step
+    /// that has already begun, a cut would leave half a step behind: `[move X A→B, cut X from B]`
+    /// would undo to X back in A with its copies in `Recently removed` (the half-step
+    /// `deck_to_collection` refuses to file); `[add X, cut X]` a step that changes nothing; and the
+    /// token reconcile of `[add Z, cut Y]`, Y a token maker, would put Y's token into Z's step. So
+    /// the cuts of a press come first, and — the backstop a single cut gets from its host's
+    /// `with_write` — the list's tokens are reconciled after them, before the first other op, so
+    /// that what the cuts stopped making is settled outside the step as a cut's always is. No
+    /// gesture mixes the two today: Delete over a picked set sends cuts alone.
     Remove {
         card_id: String,
         category_id: i64,
@@ -151,6 +171,12 @@ pub fn moves_copies(variant: &str, ops: &[DeckOp]) -> bool {
         && ops.iter().any(|op| matches!(op, DeckOp::Remove { .. }))
 }
 
+/// What a live cut that comes after a write of the same batch is answered — see [`DeckOp::Remove`].
+pub const CUT_AFTER_A_WRITE: &str =
+    "That card was not taken out of the deck: in one change, cards \
+     come out of a deck that keeps its cardboard before anything else is changed. Remove it on \
+     its own.";
+
 /// The savepoint each op runs in. One name, reused: an op releases or rolls back to it before
 /// the next one opens it again, so the nesting is never more than one deep.
 const OP_SAVEPOINT: &str = "deck_apply_op";
@@ -191,8 +217,18 @@ pub fn apply(
     let mut landed = 0;
     let mut wrote = false;
     let mut collection_moved = false;
-    let mut last_journalled: Option<i64> = None;
+    let mut journalled: Vec<i64> = Vec::new();
+    // A cut landed since the list's tokens were last reconciled — see [`DeckOp::Remove`].
+    let mut cut_unsettled = false;
     for op in ops {
+        let is_cut = batch.cuts && matches!(op, DeckOp::Remove { .. });
+        if cut_unsettled && !is_cut {
+            // What the cuts stopped making, settled before anything is noted for the step — its
+            // own transaction's backstop, as `with_write` runs one after a single cut. A
+            // variant and the database are its only answers, and the variant is settled.
+            crate::deck_tokens::reconcile_in(&tx, deck_id, &[variant])?;
+            cut_unsettled = false;
+        }
         let marks = (batch.cells.mark(), batch.tokens.mark());
         tx.execute_batch(&format!("SAVEPOINT {OP_SAVEPOINT}"))
             .map_err(|e| e.to_string())?;
@@ -200,12 +236,10 @@ pub fn apply(
             Ok(done) => {
                 tx.execute_batch(&format!("RELEASE {OP_SAVEPOINT}"))
                     .map_err(|e| e.to_string())?;
-                if let Some((category_id, card_id)) = done.cut {
-                    batch.cells.forget(variant, category_id, card_id);
-                }
                 wrote |= done.wrote;
                 collection_moved |= done.copies_moved;
-                last_journalled = done.journalled.or(last_journalled);
+                cut_unsettled |= is_cut && done.wrote;
+                journalled.extend(done.journalled);
                 landed += 1;
                 results.push(DeckOpResult {
                     change: done.change,
@@ -213,10 +247,12 @@ pub fn apply(
                     refusal: None,
                 });
             }
-            Err(refusal) => {
-                // An error that ended the transaction (a full disk, an I/O failure) is not this
-                // op's refusal: there is nothing left to roll back to, and nothing after it
-                // could land.
+            // A database that failed under an op is not that op's refusal: nothing after it can
+            // be expected to land, and nothing before it may commit around it. Dropped, the
+            // transaction takes every op back.
+            Err(ItemError::Failed(e)) => return Err(e),
+            Err(ItemError::Refused(refusal)) => {
+                // A refusal that somehow ended the transaction has nothing left to roll back to.
                 if tx.is_autocommit() {
                     return Err(refusal);
                 }
@@ -245,7 +281,7 @@ pub fn apply(
             collection_moved: false,
         });
     }
-    if let Some(audit_id) = last_journalled {
+    if let Some(&audit_id) = journalled.last() {
         crate::deck_undo::record_logged(
             &tx,
             audit_id,
@@ -253,6 +289,7 @@ pub fn apply(
             batch.cells,
             Some(categories_before),
             &batch.tokens,
+            net_delta(&tx, &journalled)?,
         )?;
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -261,6 +298,23 @@ pub fn apply(
         landed,
         collection_moved,
     })
+}
+
+/// The copies the batch's journalled history rows add up to — the `delta` its step's reversal
+/// negates. Read back rather than added up as the ops go, so it is exactly what the History
+/// drawer's day header sums for those rows.
+fn net_delta(tx: &Connection, journalled: &[i64]) -> Result<i64, String> {
+    let mut stmt = tx
+        .prepare_cached("SELECT delta FROM deck_audit WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    let mut net = 0;
+    for id in journalled {
+        let delta: i64 = stmt
+            .query_row([id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        net += delta;
+    }
+    Ok(net)
 }
 
 /// The batch's standing facts and the two logs its one step is built from.
@@ -275,7 +329,7 @@ struct Batch<'v> {
 
 /// What one op did, for the batch's answer and its step.
 #[derive(Default)]
-struct Done<'o> {
+struct Done {
     change: Option<EntryChange>,
     category_id: Option<i64>,
     /// The history row a step may key on — `None` for an op that wrote none, and for a cut.
@@ -283,13 +337,11 @@ struct Done<'o> {
     /// Whether the op wrote anything at all.
     wrote: bool,
     copies_moved: bool,
-    /// A live cut's cell, to be taken out of the step once its savepoint is released.
-    cut: Option<(i64, &'o str)>,
 }
 
 impl Batch<'_> {
-    /// One op, inside its savepoint. `Err` is its command's refusal.
-    fn one<'o>(&mut self, tx: &Connection, op: &'o DeckOp) -> Result<Done<'o>, String> {
+    /// One op, inside its savepoint: its command's refusal, or a failure that fails the batch.
+    fn one(&mut self, tx: &Connection, op: &DeckOp) -> Result<Done, ItemError> {
         let (deck_id, variant) = (self.deck_id, self.variant);
         match op {
             DeckOp::Add {
@@ -323,10 +375,13 @@ impl Batch<'_> {
                 to_category_name,
                 finish,
             } => {
-                let finish = crate::deck::normalise_finish(finish.as_deref())?;
+                let finish =
+                    crate::deck::normalise_finish(finish.as_deref()).map_err(ItemError::Refused)?;
                 if to_category_id.is_none() && to_category_name.is_none() {
-                    return Err(NO_CATEGORY.to_owned());
+                    return Err(ItemError::Refused(NO_CATEGORY.to_owned()));
                 }
+                // A move into a switched-off pile changes what the list makes.
+                self.tokens.list_changed();
                 let moved = crate::deck::move_in(
                     tx,
                     deck_id,
@@ -350,8 +405,15 @@ impl Batch<'_> {
                 category_id,
                 finish,
             } => {
-                let finish = crate::deck::normalise_finish(finish.as_deref())?;
-                let category = crate::deck::category_of_deck(tx, deck_id, variant, *category_id)?;
+                let finish =
+                    crate::deck::normalise_finish(finish.as_deref()).map_err(ItemError::Refused)?;
+                let category =
+                    crate::deck::category_of_deck_in(tx, deck_id, variant, *category_id)?;
+                // After the command's own fences, so a stale pile still hears its own sentence.
+                if self.cuts && !(self.cells.is_empty() && self.tokens.is_empty()) {
+                    return Err(ItemError::Refused(CUT_AFTER_A_WRITE.to_owned()));
+                }
+                self.tokens.list_changed();
                 let log = (!self.cuts).then_some(&mut self.cells);
                 let removed = crate::deck::remove_row_in(
                     tx,
@@ -372,7 +434,6 @@ impl Batch<'_> {
                     journalled: removed.as_ref().filter(|_| !self.cuts).map(|r| r.audit_id),
                     wrote: removed.is_some(),
                     copies_moved: removed.as_ref().is_some_and(|r| r.released.moved > 0),
-                    cut: (self.cuts && removed.is_some()).then_some((*category_id, card_id)),
                     ..Done::default()
                 })
             }
@@ -382,7 +443,9 @@ impl Batch<'_> {
                 finish,
                 label_id,
             } => {
-                let finish = crate::deck::normalise_finish(finish.as_deref())?;
+                // No `list_changed`: a label is not something a derivation reads.
+                let finish =
+                    crate::deck::normalise_finish(finish.as_deref()).map_err(ItemError::Refused)?;
                 let audit_id = crate::deck_meta::set_card_label_in(
                     tx,
                     deck_id,
@@ -406,14 +469,14 @@ impl Batch<'_> {
 
     /// `deck_add_card` and `deck_add_card_to_other_list`: [`crate::deck::add_fences`], then the
     /// token reroute or the deck-card write — `add_card_in`'s two halves.
-    fn add<'o>(
+    fn add(
         &mut self,
         tx: &Connection,
         card_id: &str,
         pile: Option<AddPile<'_>>,
         finish: Option<&str>,
         quantity: i64,
-    ) -> Result<Done<'o>, String> {
+    ) -> Result<Done, ItemError> {
         let fenced = crate::deck::add_fences(tx, card_id, pile, self.variant, finish, quantity)?;
         if fenced.is_token {
             let (landed, audit_id) = crate::deck_tokens::add_printing_logged(
@@ -437,6 +500,7 @@ impl Batch<'_> {
                 ..Done::default()
             });
         }
+        self.tokens.list_changed();
         let added = crate::deck::add_row_in(
             tx,
             self.deck_id,
@@ -1097,27 +1161,17 @@ mod tests {
                     &conn,
                     d,
                     LIVE,
-                    &[
-                        DeckOp::SetLabel {
-                            card_id: "bolt-m10".into(),
-                            category_id: main,
-                            finish: None,
-                            label_id: None,
-                        },
-                        DeckOp::Remove {
-                            card_id: "bolt-m10".into(),
-                            category_id: main,
-                            finish: None,
-                        },
-                    ],
+                    &[DeckOp::Remove {
+                        card_id: "bolt-m10".into(),
+                        category_id: main,
+                        finish: None,
+                    }],
                 )
                 .unwrap();
                 ok(&outcome);
-                assert_eq!(outcome.results[1].change.as_ref().unwrap().id, row.id);
+                assert_eq!(outcome.results[0].change.as_ref().unwrap().id, row.id);
                 outcome.collection_moved
             } else {
-                crate::deck_meta::set_card_label(&conn, d, "bolt-m10", main, LIVE, None, None)
-                    .unwrap();
                 crate::collection_alloc::deck_to_collection(&conn, row.id, 3)
                     .unwrap()
                     .quantity
@@ -1154,16 +1208,16 @@ mod tests {
             .iter()
             .any(|(kind, _, q)| kind == "removed" && *q == 2));
         assert!(batch.2, "collection_moved");
-        assert_eq!(single.3, 1, "the label press's step; the cut files none");
-        assert_eq!(batch.3, 1, "the batch's step, for its label op alone");
+        assert_eq!(single.3, 0, "the cut files no step");
+        assert_eq!(batch.3, 0, "nor does a batch of one");
         assert_eq!(
             batch.4.iter().map(|a| &a.0).collect::<Vec<_>>(),
             single.4.iter().map(|a| &a.0).collect::<Vec<_>>()
         );
     }
 
-    /// (d) A live cut of a row nothing else in the batch touched files no step at all, and its
-    /// cell is out of a mixed batch's step: Ctrl+Z takes back the add and leaves the cut.
+    /// (d) A live cut files no step at all, and one ahead of an add stays out of the add's step:
+    /// Ctrl+Z takes back the add and leaves the cut. Behind the add it is refused.
     #[test]
     fn a_live_cut_stays_out_of_the_step() {
         let conn = db();
@@ -1187,7 +1241,7 @@ mod tests {
             &conn,
             d,
             LIVE,
-            &[add_op("serra-lea", Some(main), None, 1), cut],
+            &[cut.clone(), add_op("serra-lea", Some(main), None, 1)],
         )
         .unwrap();
         ok(&outcome);
@@ -1197,6 +1251,512 @@ mod tests {
             list(&conn, d).is_empty(),
             "the add undone, the cut left standing"
         );
+
+        // Behind a write the step records, the cut is refused and the write stands.
+        add_card(&conn, d, "bolt-m10", Some(main), None, LIVE, None, 1).unwrap();
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[add_op("serra-lea", Some(main), None, 1), cut],
+        )
+        .unwrap();
+        assert_eq!(outcome.landed, 1);
+        assert_eq!(
+            outcome.results[1].refusal.as_deref(),
+            Some(CUT_AFTER_A_WRITE)
+        );
+        assert_eq!(list(&conn, d).len(), 2, "both cards still in the deck");
+    }
+
+    /// `qty` copies of `card` filed in deck `d`'s collection group — cardboard the deck keeps.
+    fn hold(conn: &Connection, d: i64, card: &str, qty: i64) {
+        let group: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE deck_id = ?1",
+                params![d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let entry = crate::collection::add_entry(
+            conn,
+            &crate::collection::EntryInput {
+                card_id: card.into(),
+                finish: "nonfoil".into(),
+                quantity: qty,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        crate::collection_folders::refile_entry(conn, entry, Some(group)).unwrap();
+    }
+
+    /// Every copy in the collection, by folder kind.
+    fn copies(conn: &Connection) -> Vec<(Option<String>, String, i64)> {
+        conn.prepare(
+            "SELECT f.kind, e.card_id, e.quantity FROM collection_entries e
+               LEFT JOIN collection_folders f ON f.id = e.folder_id
+              ORDER BY f.kind, e.card_id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// The newest history row of a deck: its `field` (`undo`/`redo` for a reversal) and `delta`.
+    fn newest_row(conn: &Connection, deck_id: i64) -> (Option<String>, i64) {
+        conn.query_row(
+            "SELECT json_extract(payload, '$.field'), delta FROM deck_audit
+              WHERE deck_id = ?1 ORDER BY id DESC LIMIT 1",
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    fn redo(conn: &Connection, deck_id: i64) {
+        let id = crate::deck_undo::next_redo(conn, deck_id)
+            .unwrap()
+            .expect("a step to redo");
+        crate::deck_undo::apply_reversal(conn, deck_id, id, false).unwrap();
+    }
+
+    /// Finding 1 of the review: the reversal of a batch carries the batch's net `delta`, not its
+    /// last row's — so the day header, which sums `delta`, reads `+300 / −300` for 300 adds undone
+    /// — the right sign each way through undo, redo and undo again. A single press's step carries
+    /// none and its reversal reads its one row, as it always did.
+    #[test]
+    fn undoing_a_batch_reverses_its_net_delta() {
+        let conn = db();
+        seed_many(&conn, 300);
+        let d = deck(&conn, "Net");
+        let main = main_of(&conn, d);
+        let ops: Vec<DeckOp> = (0..300)
+            .map(|i| add_op(&format!("p{i}"), Some(main), None, 1))
+            .collect();
+        ok(&apply(&conn, d, LIVE, &ops).unwrap());
+        undo(&conn, d);
+        assert_eq!(newest_row(&conn, d), (Some("undo".into()), -300));
+        redo(&conn, d);
+        assert_eq!(newest_row(&conn, d), (Some("redo".into()), 300));
+        undo(&conn, d);
+        assert_eq!(newest_row(&conn, d), (Some("undo".into()), -300));
+
+        // A batch of moves and an add: the moves are 0 apiece, the add its copies.
+        let side = kind_of(&conn, d, "side");
+        add_card(&conn, d, "p0", Some(main), None, LIVE, None, 2).unwrap();
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                add_op("p1", Some(main), None, 3),
+                DeckOp::Move {
+                    card_id: "p0".into(),
+                    from_category_id: main,
+                    to_category_id: Some(side),
+                    to_category_name: None,
+                    finish: None,
+                },
+            ],
+        )
+        .unwrap();
+        ok(&outcome);
+        undo(&conn, d);
+        assert_eq!(
+            newest_row(&conn, d),
+            (Some("undo".into()), -3),
+            "keyed on the move, undone as the press"
+        );
+
+        // A single press: no `delta` on its step, and its reversal reads its own row.
+        let single = add_card(&conn, d, "p2", Some(main), None, LIVE, None, 2).unwrap();
+        assert!(single.id > 0);
+        let stored: String = conn
+            .query_row(
+                "SELECT step FROM deck_undo WHERE deck_id = ?1 ORDER BY audit_id DESC LIMIT 1",
+                params![d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !stored.contains("\"delta\""),
+            "a single step's JSON is as it was"
+        );
+        undo(&conn, d);
+        assert_eq!(newest_row(&conn, d), (Some("undo".into()), -2));
+        redo(&conn, d);
+        assert_eq!(newest_row(&conn, d), (Some("redo".into()), 2));
+    }
+
+    /// Finding 2: a database error under an op fails the whole call with nothing written — the
+    /// pile a name arm made, the ops before it, `updated_at` — where an ordinary refusal still
+    /// lands the rest. The single command answers the same text it always did.
+    #[test]
+    fn a_database_failure_under_an_op_fails_the_batch_and_writes_nothing() {
+        let conn = db();
+        let d = deck(&conn, "Failing");
+        let main = main_of(&conn, d);
+        add_card(&conn, d, "serra-8ed", Some(main), None, LIVE, None, 1).unwrap();
+        conn.execute("UPDATE decks SET updated_at = 1 WHERE id = ?1", params![d])
+            .unwrap();
+        let (before, audits_before, steps_before) =
+            (whole(&conn, d), audits(&conn, d), steps(&conn, d));
+        // A history insert that fails for one card — a constraint by SQLite's code, as a trigger's
+        // RAISE is, and nothing any command answers on purpose.
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_serra BEFORE INSERT ON main.deck_audit
+              WHEN NEW.card_id = 'serra-lea'
+             BEGIN SELECT RAISE(ABORT, 'the disk caught fire'); END;",
+        )
+        .unwrap();
+        let ops = [
+            add_op("bolt-m10", None, Some("Burn"), 1),
+            add_op("serra-lea", Some(main), None, 1),
+            add_op("serra-8ed", Some(main), None, 1),
+        ];
+        let err = apply(&conn, d, LIVE, &ops).unwrap_err();
+        assert!(err.contains("the disk caught fire"), "{err}");
+        assert_eq!(whole(&conn, d), before, "no card, no pile");
+        assert_eq!(audits(&conn, d), audits_before);
+        assert_eq!(steps(&conn, d), steps_before);
+        let touched: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(touched, 1, "the touch rolled back with the rest");
+        // A label write and a move fail the same way.
+        let label = crate::deck_meta::create_label(&conn, None, "Hot", "red")
+            .unwrap()
+            .id;
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_label BEFORE UPDATE OF label_id ON main.deck_cards
+             BEGIN SELECT RAISE(ABORT, 'the label broke'); END;",
+        )
+        .unwrap();
+        let err = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                add_op("bolt-m10", Some(main), None, 1),
+                DeckOp::SetLabel {
+                    card_id: "serra-8ed".into(),
+                    category_id: main,
+                    finish: None,
+                    label_id: Some(label),
+                },
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("the label broke"), "{err}");
+        assert_eq!(whole(&conn, d), before);
+
+        // The single press: the same sentence it answered before the split.
+        let single = add_card(&conn, d, "serra-lea", Some(main), None, LIVE, None, 1).unwrap_err();
+        assert!(single.contains("the disk caught fire"), "{single}");
+
+        // An ordinary refusal is still one op's.
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                add_op("nope", Some(main), None, 1),
+                add_op("bolt-m10", Some(main), None, 1),
+            ],
+        )
+        .unwrap();
+        assert_eq!(outcome.landed, 1);
+        assert!(outcome.results[0].refusal.is_some());
+    }
+
+    /// Finding 3, (a): `[move X A→B, cut X from B]` on a live deck that keeps cardboard. The cut
+    /// is refused — kept out of a step the move began, it would undo to X back in A with its
+    /// copies in `Recently removed` — so the move lands alone, the copies stay with the deck, and
+    /// one Ctrl+Z puts the deck back exactly.
+    #[test]
+    fn a_cut_behind_a_move_of_the_same_card_is_refused() {
+        let conn = db();
+        let d = deck(&conn, "Move then cut");
+        let main = main_of(&conn, d);
+        let side = kind_of(&conn, d, "side");
+        add_card(&conn, d, "bolt-m10", Some(main), None, LIVE, None, 2).unwrap();
+        hold(&conn, d, "bolt-m10", 2);
+        let (before, copies_before) = (whole(&conn, d), copies(&conn));
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                DeckOp::Move {
+                    card_id: "bolt-m10".into(),
+                    from_category_id: main,
+                    to_category_id: Some(side),
+                    to_category_name: None,
+                    finish: None,
+                },
+                DeckOp::Remove {
+                    card_id: "bolt-m10".into(),
+                    category_id: side,
+                    finish: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(outcome.landed, 1);
+        assert_eq!(
+            outcome.results[1].refusal.as_deref(),
+            Some(CUT_AFTER_A_WRITE)
+        );
+        assert!(!outcome.collection_moved);
+        assert_eq!(copies(&conn), copies_before, "no copy left the deck");
+        undo(&conn, d);
+        assert_eq!(whole(&conn, d), before);
+        assert_eq!(copies(&conn), copies_before);
+    }
+
+    /// Finding 3, (b): `[add X, cut X]` — the cut is refused, so the step is the add's and Ctrl+Z
+    /// takes it back, rather than an empty step whose undo changes nothing.
+    #[test]
+    fn a_cut_behind_an_add_of_the_same_card_is_refused() {
+        let conn = db();
+        let d = deck(&conn, "Add then cut");
+        let main = main_of(&conn, d);
+        let before = whole(&conn, d);
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                add_op("bolt-m10", Some(main), None, 1),
+                DeckOp::Remove {
+                    card_id: "bolt-m10".into(),
+                    category_id: main,
+                    finish: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.results[1].refusal.as_deref(),
+            Some(CUT_AFTER_A_WRITE)
+        );
+        assert_eq!(steps(&conn, d), 1);
+        assert_eq!(list(&conn, d).len(), 1);
+        undo(&conn, d);
+        assert_eq!(whole(&conn, d), before);
+    }
+
+    /// Finding 3, (c): a cut of a token maker. Behind an add of another card it is refused (its
+    /// token reconcile would ride the add's step); ahead of it, it lands, its token entry is
+    /// settled before the add is noted, and Ctrl+Z takes the add back without bringing back the
+    /// entry of a token nothing makes — what a single cut and a single add leave.
+    #[test]
+    fn a_token_makers_cut_keeps_its_reconcile_out_of_the_step() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, type_line, layout, set_code,
+                                collector_number, lang, rarity, finishes, prices, raw)
+             VALUES ('maker', 'o-maker', 'Treasure Maker', 'Artifact', 'normal', 'tst', '900',
+                     'en', 'common', '[\"nonfoil\"]', '{}', ?1)",
+            params![crate::card_row::gzip_raw(
+                &json!({
+                    "id": "maker",
+                    "name": "Treasure Maker",
+                    "all_parts": [{ "id": TREASURE, "component": "token", "name": "Treasure" }]
+                })
+                .to_string()
+            )],
+        )
+        .unwrap();
+        let d = deck(&conn, "Maker");
+        let main = main_of(&conn, d);
+        add_card(&conn, d, "maker", Some(main), None, LIVE, None, 1).unwrap();
+        // The token's one entry, stepped to zero — what the reconcile deletes once nothing makes it.
+        conn.execute(
+            "INSERT INTO deck_token_printings
+                 (deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at)
+             VALUES (?1, 'live', 'o-treasure', ?2, 'nonfoil', 0, 0, 0)",
+            params![d, TREASURE],
+        )
+        .unwrap();
+        let cut = DeckOp::Remove {
+            card_id: "maker".into(),
+            category_id: main,
+            finish: None,
+        };
+
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[add_op("serra-lea", Some(main), None, 1), cut.clone()],
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.results[1].refusal.as_deref(),
+            Some(CUT_AFTER_A_WRITE)
+        );
+        assert_eq!(
+            tokens(&conn, d).len(),
+            1,
+            "the maker stands, so does its token"
+        );
+        undo(&conn, d);
+
+        let steps_before = steps(&conn, d);
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[cut, add_op("serra-lea", Some(main), None, 1)],
+        )
+        .unwrap();
+        ok(&outcome);
+        assert!(tokens(&conn, d).is_empty(), "settled after the cut");
+        assert_eq!(steps(&conn, d) - steps_before, 1);
+        let stored: String = conn
+            .query_row(
+                "SELECT step FROM deck_undo WHERE deck_id = ?1 ORDER BY audit_id DESC LIMIT 1",
+                params![d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !stored.contains("tokens"),
+            "no token half on the add's step: {stored}"
+        );
+        undo(&conn, d);
+        assert!(
+            list(&conn, d).is_empty(),
+            "the add undone, the cut standing"
+        );
+        assert!(
+            tokens(&conn, d).is_empty(),
+            "and no entry of a token nothing makes"
+        );
+    }
+
+    /// A batch whose writes leave every cell as they found it files no step: an add and a
+    /// removal of one card on a virtual deck, where the removal is journalled.
+    #[test]
+    fn a_batch_that_changes_nothing_files_no_step() {
+        let conn = db();
+        let d = deck(&conn, "Round trip");
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1 WHERE id = ?1",
+            params![d],
+        )
+        .unwrap();
+        let main = main_of(&conn, d);
+        let audits_before = audits(&conn, d).len();
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                add_op("bolt-m10", Some(main), None, 1),
+                DeckOp::Remove {
+                    card_id: "bolt-m10".into(),
+                    category_id: main,
+                    finish: None,
+                },
+            ],
+        )
+        .unwrap();
+        ok(&outcome);
+        assert_eq!(steps(&conn, d), 0);
+        assert_eq!(
+            audits(&conn, d).len() - audits_before,
+            2,
+            "the history keeps both rows"
+        );
+    }
+
+    /// A rolled-back op's cells leave the log, and a later op naming the same cell reads it
+    /// afresh — `CellLog::rewind` after a `note`.
+    #[test]
+    fn a_rewound_note_leaves_the_log_and_is_read_again() {
+        let conn = db();
+        let d = deck(&conn, "Rewind");
+        let main = main_of(&conn, d);
+        add_card(&conn, d, "bolt-m10", Some(main), None, LIVE, None, 1).unwrap();
+        let cell = |card: &str| crate::deck_undo::Cell::card(LIVE, main, card);
+        let mut log = crate::deck_undo::CellLog::default();
+        log.note(&conn, d, cell("bolt-m10")).unwrap();
+        let mark = log.mark();
+        log.note(&conn, d, cell("serra-lea")).unwrap();
+        log.rewind(mark);
+        add_card(&conn, d, "serra-lea", Some(main), None, LIVE, None, 2).unwrap();
+        log.note(&conn, d, cell("serra-lea")).unwrap();
+        let (cells, before) = log.into_parts();
+        assert_eq!(cells, vec![cell("bolt-m10"), cell("serra-lea")]);
+        let quantities: Vec<_> = before
+            .iter()
+            .map(|r| (r.card_id.as_str(), r.quantity))
+            .collect();
+        assert_eq!(
+            quantities,
+            vec![("bolt-m10", 1), ("serra-lea", 2)],
+            "read afresh"
+        );
+    }
+
+    /// Redo of a batch on a live deck that keeps cardboard, with copies held: one Ctrl+Z and one
+    /// Ctrl+Y move the list both ways, and the copies stay with the deck throughout.
+    #[test]
+    fn redoing_a_batch_on_a_deck_with_copies_held_keeps_the_copies() {
+        let conn = db();
+        let d = deck(&conn, "Held");
+        let main = main_of(&conn, d);
+        let side = kind_of(&conn, d, "side");
+        add_card(&conn, d, "bolt-m10", Some(main), None, LIVE, None, 3).unwrap();
+        add_card(&conn, d, "serra-lea", Some(main), None, LIVE, None, 1).unwrap();
+        hold(&conn, d, "bolt-m10", 2);
+        let label = crate::deck_meta::create_label(&conn, None, "Flex", "amber")
+            .unwrap()
+            .id;
+        let (before, held) = (whole(&conn, d), copies(&conn));
+        let outcome = apply(
+            &conn,
+            d,
+            LIVE,
+            &[
+                DeckOp::Move {
+                    card_id: "bolt-m10".into(),
+                    from_category_id: main,
+                    to_category_id: Some(side),
+                    to_category_name: None,
+                    finish: None,
+                },
+                add_op("serra-8ed", Some(main), None, 2),
+                add_op("bolt-m10", Some(main), None, 1),
+                DeckOp::SetLabel {
+                    card_id: "serra-lea".into(),
+                    category_id: main,
+                    finish: None,
+                    label_id: Some(label),
+                },
+            ],
+        )
+        .unwrap();
+        ok(&outcome);
+        let after = whole(&conn, d);
+        undo(&conn, d);
+        assert_eq!(whole(&conn, d), before);
+        assert_eq!(copies(&conn), held);
+        redo(&conn, d);
+        assert_eq!(whole(&conn, d), after);
+        assert_eq!(copies(&conn), held);
+        undo(&conn, d);
+        assert_eq!(whole(&conn, d), before);
     }
 
     /// (e) An empty batch answers at once and writes nothing — not even `updated_at`.
