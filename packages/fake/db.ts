@@ -139,7 +139,9 @@ import type {
   ActivityEntry,
   BracketCardRow,
   BreakdownRow,
+  BulkAddOutcome,
   BulkMoveOutcome,
+  BulkRefusal,
   BulkRemoveOutcome,
   BulkUndoOutcome,
   CardCombo,
@@ -18882,6 +18884,46 @@ function distinctIds(ids: readonly number[]): number[] {
 }
 
 /**
+ * `collection::land_each` — a batch add's items one at a time, **a refusal the item's and not the
+ * press's**: the sentence the single add would have thrown is kept against the item's index and
+ * the rest go on. Every single-add helper here ({@link addEntry}, {@link addWish}) refuses before
+ * it writes, so a refused item has left nothing behind — the crate's per-item savepoint. A throw
+ * that is not an `Error` is the fake's own bug and ends the batch.
+ */
+function landEach<I>(
+  items: readonly I[],
+  one: (item: I) => EntryChange,
+): { landed: { index: number; change: EntryChange }[]; refused: BulkRefusal[] } {
+  const landed: { index: number; change: EntryChange }[] = [];
+  const refused: BulkRefusal[] = [];
+  items.forEach((item, index) => {
+    try {
+      landed.push({ index, change: one(item) });
+    } catch (e) {
+      if (!(e instanceof Error)) throw e;
+      refused.push({ index, reason: e.message });
+    }
+  });
+  return { landed, refused };
+}
+
+/** `wishlist_folders::set_wish_folder` for one wish — {@link writeHandlers}' `wishlist_set_folder`
+ *  and `wishlist_set_folder_many` both, so the fences and the merge are written once. */
+function setWishFolder(db: FakeDb, id: number, folderId: number | null): EntryChange {
+  if (folderId !== null && !wishFolderById(db, folderId)) throw refuse(FOLDER_GONE);
+  const wish = db.wishlistEntries.find((w) => w.id === id);
+  if (!wish) throw refuse(WISH_GONE);
+  // Both ends: into a deck's managed wishlist, and out of one.
+  refuseIfManagedFolder(db, folderId);
+  refuseIfManagedFolder(db, wish.folderId);
+  const merged = mergeWishOnto(db, wish, { ...wish, folderId });
+  if (merged) return merged;
+  wish.folderId = folderId;
+  wish.updatedAt = stamp(db);
+  return { id: wish.id, quantity: wish.quantity, removed: false };
+}
+
+/**
  * `collection::remove_entry`'s one statement, as a function — the row it deleted, or `null` for
  * an id that named nothing, which both of its callers treat as a success.
  * {@link writeHandlers}' `collection_remove` answers for one id and `collection_remove_many` for
@@ -19437,6 +19479,25 @@ export function writeHandlers(db: FakeDb) {
         copies += row.quantity;
       }
       return { removed, copies, undoId: collectionUndo(db, before) };
+    },
+
+    /**
+     * `collection::add_entries` — "Add N cards to → Collection" in **one write**: {@link addEntry}
+     * per item through {@link landEach}, so a refused item is skipped and named by index in the
+     * single add's sentence while the rest land. One ticket for the press, `null` when nothing
+     * landed; no feed row, as no write in this fake records one.
+     */
+    collection_add_many: (args: { items: readonly EntryInput[] }): BulkAddOutcome => {
+      refuseIfBusy(db);
+      const before = db.collectionEntries.map((e) => ({ ...e }));
+      const { landed, refused } = landEach(args.items, (input) => addEntry(db, input));
+      const copies = landed.reduce((n, { index }) => n + args.items[index].quantity, 0);
+      return {
+        added: landed.length,
+        copies,
+        refused,
+        undoId: landed.length > 0 ? collectionUndo(db, before) : null,
+      };
     },
 
     /**
@@ -20521,6 +20582,24 @@ export function writeHandlers(db: FakeDb) {
       return addWish(db, args.wish);
     },
 
+    /** `wishlist::add_wishes` — {@link collection_add_many}'s contract over {@link addWish}: each
+     *  item in its own folder, a quantity below one read as one, a refusal the item's. */
+    wishlist_add_many: (args: { items: readonly WishInput[] }): BulkAddOutcome => {
+      refuseIfBusy(db);
+      const before = db.wishlistEntries.map((w) => ({ ...w }));
+      const { landed, refused } = landEach(args.items, (input) => addWish(db, input));
+      const copies = landed.reduce(
+        (n, { index }) => n + Math.max(1, args.items[index].quantity),
+        0,
+      );
+      return {
+        added: landed.length,
+        copies,
+        refused,
+        undoId: landed.length > 0 ? wishlistUndo(db, before) : null,
+      };
+    },
+
     /** `wishlist::set_wish_quantity`. **Zero removes the row**, because `wishlist_entries`
      *  carries `CHECK (quantity > 0)` and a wish holds nothing worth keeping once it is emptied.
      *
@@ -20831,17 +20910,39 @@ export function writeHandlers(db: FakeDb) {
      */
     wishlist_set_folder: (args: { id: number; folderId: number | null }): EntryChange => {
       refuseIfBusy(db);
-      if (args.folderId !== null && !wishFolderById(db, args.folderId)) throw refuse(FOLDER_GONE);
-      const wish = db.wishlistEntries.find((w) => w.id === args.id);
-      if (!wish) throw refuse(WISH_GONE);
-      // Both ends: into a deck's managed wishlist, and out of one.
-      refuseIfManagedFolder(db, args.folderId);
-      refuseIfManagedFolder(db, wish.folderId);
-      const merged = mergeWishOnto(db, wish, { ...wish, folderId: args.folderId });
-      if (merged) return merged;
-      wish.folderId = args.folderId;
-      wish.updatedAt = stamp(db);
-      return { id: wish.id, quantity: wish.quantity, removed: false };
+      return setWishFolder(db, args.id, args.folderId);
+    },
+
+    /**
+     * `wishlist_folders::set_wishes_folder` — {@link collection_set_folder_many} one table over:
+     * {@link setWishFolder} per distinct id, **any refusal leaves nothing moved** and rejects with
+     * its own sentence, one {@link EntryChange} per id sent with quantities read back once the
+     * whole press is in, and one ticket.
+     */
+    wishlist_set_folder_many: (args: {
+      ids: readonly number[];
+      folderId: number | null;
+    }): BulkMoveOutcome => {
+      refuseIfBusy(db);
+      const before = db.wishlistEntries.map((w) => ({ ...w }));
+      const landed = new Map<number, EntryChange>();
+      try {
+        for (const id of distinctIds(args.ids)) {
+          landed.set(id, setWishFolder(db, id, args.folderId));
+        }
+      } catch (e) {
+        db.wishlistEntries = before.map((row) => ({ ...row }));
+        throw e;
+      }
+      for (const change of landed.values()) {
+        const now = db.wishlistEntries.find((w) => w.id === change.id);
+        if (now) change.quantity = now.quantity;
+      }
+      const changes = args.ids.flatMap((id) => {
+        const change = landed.get(id);
+        return change ? [{ ...change }] : [];
+      });
+      return { changes, undoId: wishlistUndo(db, before) };
     },
 
     /**

@@ -411,6 +411,7 @@ commands! {
         commit_import(conn, &items, &mode, folder_id)
     };
     owned collection_remove_many in collection(ids: Vec<i64>) = |conn| remove_entries(conn, &ids);
+    owned collection_add_many in collection(items: Vec<EntryInput>) = |conn| add_entries(conn, &items);
 
     // collection_alloc
     // An owned write, and `blocking` only because the pile is read before the lock is taken, as
@@ -1317,6 +1318,7 @@ commands! {
         summarise_wishlist(conn, marketplace)
     };
     write wishlist_add in wishlist(wish: WishInput) = |conn| add_wish(conn, &wish);
+    write wishlist_add_many in wishlist(items: Vec<WishInput>) = |conn| add_wishes(conn, &items);
     write wishlist_set_quantity in wishlist(id: i64, quantity: i64) = |conn| {
         set_wish_quantity(conn, id, quantity)
     };
@@ -1360,6 +1362,9 @@ commands! {
     };
     write wishlist_set_folder in wishlist_folders(id: i64, folder_id: Option<i64>) = |conn| {
         set_wish_folder(conn, id, folder_id)
+    };
+    write wishlist_set_folder_many in wishlist_folders(ids: Vec<i64>, folder_id: Option<i64>) = |conn| {
+        set_wishes_folder(conn, &ids, folder_id)
     };
 
     // wishlist_optimize
@@ -2461,6 +2466,10 @@ mod tests {
             "collection_add" => {
                 json!({ "entry": { "cardId": "c-bolt", "finish": "nonfoil", "quantity": 3 } })
             }
+            "collection_add_many" => {
+                json!({ "items": [{ "cardId": "c-bolt", "finish": "nonfoil", "quantity": 1 }] })
+            }
+            "wishlist_add_many" => json!({ "items": [{ "cardId": "c-bolt", "quantity": 1 }] }),
             "collection_list" | "collection_summary" | "collection_shelf_counts" => {
                 json!({ "query": {} })
             }

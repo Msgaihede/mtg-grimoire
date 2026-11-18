@@ -39,7 +39,8 @@
 //! folder is the fourth term of [`crate::schema::WISHLIST_GRAIN`] — [`folder_summary`], which is
 //! what a folder tile is drawn from, and the two deleting writes above.
 
-use crate::collection::EntryChange;
+use crate::collection::{EntryChange, ItemError};
+use crate::collection_folders::BulkMoveOutcome;
 // The two sentences this module refuses with, taken from the module it is a port of rather
 // than re-spelled. A reader who has met "That folder is not there any more." in the deck
 // gallery must meet the same sentence here: it is the same fact about the same kind of thing,
@@ -365,14 +366,21 @@ pub fn rule_conflicts(
 /// touch a row — so the helper takes an id, answers about that id, and decides nothing about
 /// the write around it.
 pub(crate) fn require_folder(conn: &Connection, id: i64) -> Result<(), String> {
+    Ok(require_folder_checked(conn, id)?)
+}
+
+/// [`require_folder`] with the refusal kept apart from a read that failed, for
+/// `wishlist::add_wishes`, which skips an item over the first and fails the batch over the
+/// second. The same query and the same sentence — it is the body, and [`require_folder`] is this
+/// with the two answers folded back into one string.
+pub(crate) fn require_folder_checked(conn: &Connection, id: i64) -> Result<(), ItemError> {
     let exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
-            params![id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    exists.then_some(()).ok_or_else(|| FOLDER_GONE.to_owned())
+        .prepare_cached("SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)")
+        .and_then(|mut stmt| stmt.query_row(params![id], |r| r.get(0)))
+        .map_err(ItemError::failed)?;
+    exists
+        .then_some(())
+        .ok_or_else(|| ItemError::Refused(FOLDER_GONE.to_owned()))
 }
 
 /// The cycle walk itself, in one place for [`require_folder`]'s reason: a refusal written twice
@@ -838,6 +846,138 @@ pub fn set_wish_folder(
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(change)
+    })
+}
+
+/// File several wishes into one folder — or the root — in **one transaction with one feed row and
+/// one undo ticket**: the wishlist's twin of `collection_folders::set_entries_folder` (issue
+/// #555), answering the same [`BulkMoveOutcome`] — its `changes` are [`EntryChange`]s on both
+/// tables.
+///
+/// **[`set_wish_folder`]'s rules per wish, and all-or-nothing across them**: the destination
+/// fence once ([`require_folder`]), then each wish through [`refile_wish`] — [`WISH_GONE`] for an
+/// id that is not there, and the merge onto a wish that already holds the grain in the
+/// destination. **Any refusal rolls the whole press back and answers that refusal's sentence**,
+/// so a move never lands half-filed.
+///
+/// **One wish records exactly [`set_wish_folder`]'s line** — the card, `{from, to}`. Several are
+/// one line about no one card, `{"entries": n, "to": <destination or null for the root>}` — the
+/// collection's bulk move row, which `activityText.ts` words for either cabinet. `delta` is 0.
+///
+/// The undo ticket is captured over the ids **and every other wish of their cards and oracle
+/// cards**, read before the first move: a merge target is a wish the selection did not name, and
+/// the undo has to put its quantity back too.
+pub fn set_wishes_folder(
+    conn: &Connection,
+    ids: &[i64],
+    folder_id: Option<i64>,
+) -> Result<BulkMoveOutcome, String> {
+    let distinct = crate::collection::distinct_ids(ids);
+    if distinct.is_empty() {
+        return Ok(BulkMoveOutcome {
+            changes: Vec::new(),
+            undo_id: None,
+        });
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut destination: Option<String> = None;
+    if let Some(folder) = folder_id {
+        require_folder(&tx, folder)?;
+        destination = read_folder(&tx, folder)?.map(|f| f.name);
+    }
+    let listed = crate::bulk_undo::json_list(&distinct);
+    // The cards as literal lists read now, never a subquery the capture re-runs — once a wish has
+    // folded away, a subquery over the ids would no longer find its card, and the wish it folded
+    // into would drop out of the after-image. `set_entries_folder`'s note, one table over.
+    let (printings, oracles): (Vec<String>, Vec<String>) = tx
+        .prepare(
+            "SELECT DISTINCT card_id, oracle_id FROM wishlist_entries
+              WHERE id IN (SELECT value FROM json_each(?1))",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![listed], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .fold(
+            (Vec::new(), Vec::new()),
+            |(mut p, mut o), (card, oracle)| {
+                p.extend(card);
+                o.extend(oracle);
+                (p, o)
+            },
+        );
+    let capture = crate::bulk_undo::Capture::begin(
+        &tx,
+        crate::bulk_undo::Table::Wishlist,
+        "id IN (SELECT value FROM json_each(?1))
+            OR card_id IN (SELECT value FROM json_each(?2))
+            OR oracle_id IN (SELECT value FROM json_each(?3))",
+        vec![
+            listed,
+            crate::bulk_undo::json_list(&printings),
+            crate::bulk_undo::json_list(&oracles),
+        ],
+    )?;
+
+    let mut landed: std::collections::HashMap<i64, EntryChange> = Default::default();
+    let mut first = None;
+    for &id in &distinct {
+        // Read before the move, which may fold the wish away — [`set_wish_folder`]'s order.
+        let facts = crate::wishlist::wish_facts(&tx, id)?;
+        let change = refile_wish(&tx, id, folder_id)?;
+        if first.is_none() {
+            first = facts;
+        }
+        landed.insert(id, change);
+    }
+    // A later wish can fold into the row an earlier one landed on, so each change is read back
+    // once the whole press is in.
+    for change in landed.values_mut() {
+        if let Some(now) = tx
+            .query_row(
+                "SELECT quantity FROM wishlist_entries WHERE id = ?1",
+                params![change.id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            change.quantity = now;
+        }
+    }
+
+    let feed = match (distinct.len(), first) {
+        (1, Some(facts)) => crate::bulk_undo::Feed {
+            kind: crate::activity::MOVE,
+            card_id: facts.card_id,
+            card_name: Some(facts.name),
+            payload: serde_json::json!({ "from": facts.folder, "to": destination }),
+            delta: 0,
+        },
+        (entries, _) => crate::bulk_undo::Feed {
+            kind: crate::activity::MOVE,
+            card_id: None,
+            card_name: None,
+            payload: serde_json::json!({ "entries": entries, "to": destination }),
+            delta: 0,
+        },
+    };
+    feed.record(&tx, crate::bulk_undo::Table::Wishlist)?;
+    let changes = capture.finish(&tx)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(BulkMoveOutcome {
+        changes: ids
+            .iter()
+            .filter_map(|id| landed.get(id).cloned())
+            .collect(),
+        undo_id: crate::bulk_undo::register(changes, feed),
     })
 }
 
@@ -2247,5 +2387,95 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, None);
+    }
+
+    /// The feed newest first, without the `folder` lines the fixtures' own folders wrote.
+    fn wish_feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind != crate::activity::FOLDER)
+            .collect()
+    }
+
+    /// **Several wishes move in one press with one feed row and one ticket** — the merge onto a
+    /// wish the destination already holds included, and the ticket puts every row back, the
+    /// merge target's quantity with them.
+    #[test]
+    fn set_wishes_folder_moves_merges_and_undoes_as_one_press() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap().id;
+        let a = wish(&conn, "o1", 2, None);
+        let b = wish(&conn, "o2", 1, None);
+        let held = wish(&conn, "o1", 5, Some(ordered));
+        let before = crate::bulk_undo::table_image(&conn, "wishlist_entries");
+
+        let out = set_wishes_folder(&conn, &[a, b, a], Some(ordered)).unwrap();
+
+        // One answer per id sent, the repeat answered again; `a` folded into `held`.
+        let answered: Vec<(i64, i64)> = out.changes.iter().map(|c| (c.id, c.quantity)).collect();
+        assert_eq!(answered, vec![(held, 7), (b, 1), (held, 7)]);
+        assert_eq!(folder_of(&conn, b), Some(ordered));
+        let feed = wish_feed(&conn);
+        assert_eq!(feed.len(), 1);
+        assert_eq!(
+            (feed[0].kind.as_str(), feed[0].delta),
+            (crate::activity::MOVE, 0)
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&feed[0].payload).unwrap(),
+            serde_json::json!({ "entries": 2, "to": "Ordered" })
+        );
+
+        crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "wishlist_entries"),
+            before
+        );
+    }
+
+    /// **All or nothing**: one id that is not there refuses the whole press in
+    /// [`set_wish_folder`]'s sentence, and nothing moved, no line and no ticket.
+    #[test]
+    fn set_wishes_folder_is_all_or_nothing() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap().id;
+        let a = wish(&conn, "o1", 2, None);
+        let before = crate::bulk_undo::table_image(&conn, "wishlist_entries");
+
+        assert_eq!(
+            set_wishes_folder(&conn, &[a, 4_242], Some(ordered)).unwrap_err(),
+            WISH_GONE
+        );
+        assert_eq!(
+            set_wishes_folder(&conn, &[a], Some(404)).unwrap_err(),
+            FOLDER_GONE
+        );
+
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "wishlist_entries"),
+            before
+        );
+        assert!(wish_feed(&conn).is_empty());
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
+        let none = set_wishes_folder(&conn, &[], None).unwrap();
+        assert!(none.changes.is_empty() && none.undo_id.is_none());
+    }
+
+    /// One wish is [`set_wish_folder`]'s own line: the card and both ends.
+    #[test]
+    fn set_wishes_folder_of_one_records_the_single_move() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap().id;
+        let a = wish(&conn, "o1", 2, None);
+
+        set_wishes_folder(&conn, &[a], Some(ordered)).unwrap();
+
+        let feed = wish_feed(&conn);
+        assert_eq!(feed[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&feed[0].payload).unwrap(),
+            serde_json::json!({ "from": null, "to": "Ordered" })
+        );
     }
 }

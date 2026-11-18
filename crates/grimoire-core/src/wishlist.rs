@@ -11,7 +11,7 @@
 //! state to preserve. A wish for none of something is not a wish, and [`set_wish_quantity`]
 //! takes a zero as the removal it can only be.
 
-use crate::collection::{valid_quantity, EntryChange, ShelfCount};
+use crate::collection::{valid_quantity, BulkAddOutcome, EntryChange, ItemError, ShelfCount};
 // The refusal a folder id nothing answers to gets — **and since 2026-09-09 only the tests below
 // name it here**. [`add_wish`] spelled both the lookup and the refusal out until then and calls
 // `wishlist_folders::require_folder` for both now, so the sentence arrives from the module that
@@ -580,18 +580,129 @@ pub fn record_wishes_added(
     .map_err(|e| e.to_string())
 }
 
+/// **N × [`add_wish`] in one transaction with one feed row and one undo ticket** —
+/// `collection::add_entries` one table over, for the same press ("Add N cards to → Wishlist", a
+/// multi-card drop on a wishlist folder) and every one of its rules:
+///
+/// * each item through [`add_wish`]'s own path ([`insert_wish_checked`]: a quantity of 0 or less
+///   is one, the folder must be there, a printing must be in `cards`), in a savepoint of its own
+///   (`collection::land_each`) — **a refused item is skipped and reported by index** in the single
+///   command's sentence while the rest land, and a database that cannot be written fails the call;
+/// * **one feed row**: [`add_wish`]'s own row when exactly one item landed, otherwise the run row
+///   [`record_wishes_added`] writes — `{"cards", "rows", "folder"}`, `folder` named only when every
+///   landed item shares one — built here as a `bulk_undo::Feed` because the ticket replays it;
+/// * **one undo ticket**, captured over every wish of every card and oracle card named, in every
+///   folder an item names (the root as `0`): the only rows an item can fold into or create.
+///
+/// It takes a folder per item, which is why [`commit_import`] — root-only — is not this.
+pub fn add_wishes(conn: &Connection, items: &[WishInput]) -> Result<BulkAddOutcome, String> {
+    if items.is_empty() {
+        return Ok(BulkAddOutcome::default());
+    }
+    let printings: Vec<&str> = items
+        .iter()
+        .filter_map(|i| crate::filters::nonblank(&i.card_id))
+        .collect();
+    let oracles: Vec<&str> = items
+        .iter()
+        .filter_map(|i| crate::filters::nonblank(&i.oracle_id))
+        .collect();
+    let mut folders: Vec<i64> = items.iter().map(|i| i.folder_id.unwrap_or(0)).collect();
+    folders.sort_unstable();
+    folders.dedup();
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let capture = crate::bulk_undo::Capture::begin(
+        &tx,
+        crate::bulk_undo::Table::Wishlist,
+        "coalesce(folder_id, 0) IN (SELECT value FROM json_each(?3))
+            AND (card_id IN (SELECT value FROM json_each(?1))
+                 OR oracle_id IN (SELECT value FROM json_each(?2)))",
+        vec![
+            crate::bulk_undo::json_list(&printings),
+            crate::bulk_undo::json_list(&oracles),
+            crate::bulk_undo::json_list(&folders),
+        ],
+    )?;
+    let (landed, refused) = crate::collection::land_each(&tx, "wish_add_item", items, |input| {
+        insert_wish_checked(&tx, input)
+    })?;
+    // The copies each press asked for, with [`insert_wish`]'s `<= 0` is one — [`add_wish`]'s delta.
+    let asked = |input: &WishInput| input.quantity.max(1);
+    let copies: i64 = landed.iter().map(|(i, _)| asked(&items[*i])).sum();
+    let feed = match landed.as_slice() {
+        [] => {
+            return Ok(BulkAddOutcome {
+                refused,
+                ..BulkAddOutcome::default()
+            })
+        }
+        [(index, (_, card_id, name))] => {
+            let input = &items[*index];
+            crate::bulk_undo::Feed {
+                kind: crate::activity::ADD,
+                card_id: card_id.clone(),
+                card_name: Some(name.clone()),
+                payload: serde_json::json!({
+                    "folder": wish_folder_name(&tx, input.folder_id)?,
+                    "finish": input.preferred_finish,
+                }),
+                delta: asked(input),
+            }
+        }
+        many => {
+            let rows: std::collections::HashSet<i64> =
+                many.iter().map(|(_, (c, _, _))| c.id).collect();
+            let first = items[many[0].0].folder_id;
+            let shared = many.iter().all(|(i, _)| items[*i].folder_id == first);
+            crate::bulk_undo::Feed {
+                kind: crate::activity::ADD,
+                card_id: None,
+                card_name: None,
+                payload: serde_json::json!({
+                    "cards": copies,
+                    "rows": rows.len(),
+                    "folder": if shared { wish_folder_name(&tx, first)? } else { None },
+                }),
+                delta: copies,
+            }
+        }
+    };
+    feed.record(&tx, crate::bulk_undo::Table::Wishlist)?;
+    let changes = capture.finish(&tx)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(BulkAddOutcome {
+        added: landed.len() as i64,
+        copies,
+        refused,
+        // After the commit, never before it — `bulk_undo::register`'s rule.
+        undo_id: crate::bulk_undo::register(changes, feed),
+    })
+}
+
 /// [`add_wish`] with no feed row, answering the two facts its recording door needs: the printing
 /// the wish names (`None` for an any-printing wish) and the card's name as this write stored it.
 fn insert_wish(
     conn: &Connection,
     input: &WishInput,
 ) -> Result<(EntryChange, Option<String>, String), String> {
+    Ok(insert_wish_checked(conn, input)?)
+}
+
+/// [`insert_wish`]'s body, answering an [`ItemError`] so [`add_wishes`] can skip an item the
+/// single add would refuse and give up over a database it cannot write —
+/// `collection::add_entry_checked`'s split, one table over, and one body for both doors so a
+/// batch refuses exactly what a single add refuses.
+fn insert_wish_checked(
+    conn: &Connection,
+    input: &WishInput,
+) -> Result<(EntryChange, Option<String>, String), ItemError> {
     if let Some(f) = input.preferred_finish.as_deref() {
         if !FINISHES.contains(&f) {
-            return Err(format!(
+            return Err(ItemError::Refused(format!(
                 "`{f}` is not a finish. Use one of: {}.",
                 FINISHES.join(", ")
-            ));
+            )));
         }
     }
     let quantity = if input.quantity <= 0 {
@@ -615,7 +726,9 @@ fn insert_wish(
     // a wish for nothing, and would collide with every other such row on the grain (the
     // table's own CHECK says the same thing, in the database's voice rather than the app's).
     if card_id.is_none() && sent_oracle_id.is_none() {
-        return Err("a wish needs either a card or an oracle id".into());
+        return Err(ItemError::Refused(
+            "a wish needs either a card or an oracle id".into(),
+        ));
     }
     // The folder, before anything is looked up, for [`WishInput::folder_id`]'s reason: the
     // foreign key would refuse this write anyway, in a sentence about a constraint rather than
@@ -638,23 +751,28 @@ fn insert_wish(
     // reach. `add_wish_asks_about_the_folder_after_the_card_and_before_the_printing` is what
     // holds both halves.
     if let Some(folder) = input.folder_id {
-        crate::wishlist_folders::require_folder(conn, folder)?;
+        crate::wishlist_folders::require_folder_checked(conn, folder)?;
     }
 
     // Whatever the caller did not send, taken from the printing it named.
     let printing: Option<(Option<String>, String, String, String, String)> = match &card_id {
         Some(id) => conn
-            .query_row(
+            .prepare_cached(
                 "SELECT oracle_id, name, set_code, collector_number, lang FROM cards WHERE id = ?1",
-                params![id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
-            .optional()
-            .map_err(|e| e.to_string())?,
+            .and_then(|mut stmt| {
+                stmt.query_row(params![id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })
+                .optional()
+            })
+            .map_err(ItemError::failed)?,
         None => None,
     };
     if card_id.is_some() && printing.is_none() {
-        return Err("no card with that id is in the card database".into());
+        return Err(ItemError::Refused(
+            "no card with that id is in the card database".into(),
+        ));
     }
     // The printing's own oracle id can be blank too — `cards.oracle_id` is nullable and an
     // ingest is not a form, but a row carrying `''` would fold on the grain just the same.
@@ -694,9 +812,10 @@ fn insert_wish(
             updated_at = unixepoch()
          RETURNING id, quantity"
     );
-    let (id, quantity): (i64, i64) = conn
+    // `prepare_cached`, `collection::add_entry_checked`'s reason: a batch parses it once.
+    let mut stmt = conn.prepare_cached(&sql).map_err(ItemError::failed)?;
+    let (id, quantity): (i64, i64) = stmt
         .query_row(
-            &sql,
             params![
                 oracle_id,
                 card_id,
@@ -711,7 +830,7 @@ fn insert_wish(
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(ItemError::of_statement)?;
     Ok((
         EntryChange {
             id,
@@ -735,9 +854,12 @@ fn insert_wish(
 /// row, and a wish whose picture disagreed with its figure would be one card said two ways. A name
 /// needs none of that, and matching it would mean threading a marketplace into a write to reach a
 /// string that is identical either way.
-fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, String> {
+///
+/// Its one caller is [`insert_wish_checked`], so it answers that function's [`ItemError`]: no name
+/// is the item's refusal, a read that failed is the database's.
+fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, ItemError> {
     let Some(oracle_id) = oracle_id else {
-        return Err("a wish needs a card name".into());
+        return Err(ItemError::Refused("a wish needs a card name".into()));
     };
     conn.query_row(
         "SELECT name FROM cards WHERE oracle_id = ?1
@@ -746,8 +868,8 @@ fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, Str
         |r| r.get(0),
     )
     .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "a wish needs a card name".to_owned())
+    .map_err(ItemError::failed)?
+    .ok_or_else(|| ItemError::Refused("a wish needs a card name".to_owned()))
 }
 
 /// One line of a bulk import, after TypeScript has decided everything a *wishlist* decision is.
@@ -6097,5 +6219,224 @@ mod tests {
         allow_activity(&conn);
         remove_wish(&conn, added.id).unwrap();
         assert_eq!(bolt_wished(&conn), None);
+    }
+
+    /// The rows a batch add is compared on: the grain and the copies.
+    #[allow(clippy::type_complexity)]
+    fn wished_rows(
+        conn: &Connection,
+    ) -> Vec<(
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+    )> {
+        conn.prepare(
+            "SELECT oracle_id, card_id, preferred_finish, folder_id, quantity
+               FROM wishlist_entries ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
+    fn pinned(card_id: &str, quantity: i64, folder_id: Option<i64>) -> WishInput {
+        WishInput {
+            card_id: Some(card_id.to_owned()),
+            quantity,
+            folder_id,
+            ..Default::default()
+        }
+    }
+
+    /// **A batch leaves the rows N single adds leave** — folded on the grain, a quantity of 0 read
+    /// as one, each wish in the folder it names.
+    #[test]
+    fn a_batch_of_wishes_lands_what_the_single_adds_land() {
+        let items = |ordered: i64| {
+            vec![
+                pinned("bolt-lea", 2, None),
+                pinned("bolt-lea", 0, None),
+                pinned("bolt-lea", 1, Some(ordered)),
+                WishInput {
+                    oracle_id: Some("oracle-1".into()),
+                    quantity: 3,
+                    folder_id: Some(ordered),
+                    ..Default::default()
+                },
+            ]
+        };
+        let one_by_one = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&one_by_one, None, "Ordered")
+            .unwrap()
+            .id;
+        for item in items(ordered) {
+            add_wish(&one_by_one, &item).unwrap();
+        }
+        let batched = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&batched, None, "Ordered")
+            .unwrap()
+            .id;
+
+        let out = add_wishes(&batched, &items(ordered)).unwrap();
+
+        assert_eq!(wished_rows(&batched), wished_rows(&one_by_one));
+        assert_eq!((out.added, out.copies), (4, 7));
+        assert!(out.refused.is_empty());
+    }
+
+    /// **A refused wish is skipped and reported by index, in `add_wish`'s own sentence.**
+    #[test]
+    fn a_batch_of_wishes_skips_and_reports_a_refused_item() {
+        let conn = seeded();
+        let items = vec![
+            pinned("bolt-lea", 1, None),
+            pinned("nope", 1, None),
+            pinned("bolt-2ed", 1, Some(4_242)),
+            WishInput::default(),
+            WishInput {
+                preferred_finish: Some("shiny".into()),
+                ..pinned("card-1", 1, None)
+            },
+            pinned("card-1", 2, None),
+        ];
+
+        let out = add_wishes(&conn, &items).unwrap();
+
+        let expected: Vec<crate::collection::BulkRefusal> = [1usize, 2, 3, 4]
+            .into_iter()
+            .map(|index| crate::collection::BulkRefusal {
+                index,
+                reason: add_wish(&conn, &items[index]).unwrap_err(),
+            })
+            .collect();
+        assert_eq!(out.refused, expected);
+        assert_eq!(out.refused[1].reason, FOLDER_GONE);
+        assert_eq!((out.added, out.copies), (2, 3));
+        assert_eq!(wished_rows(&conn).len(), 2);
+    }
+
+    /// **Many wishes are one run row, one wish is `add_wish`'s own row.**
+    #[test]
+    fn a_batch_of_wishes_records_one_row() {
+        let conn = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&conn, None, "Ordered")
+            .unwrap()
+            .id;
+
+        add_wishes(
+            &conn,
+            &[
+                pinned("bolt-lea", 2, Some(ordered)),
+                pinned("bolt-lea", 1, Some(ordered)),
+                pinned("card-1", 0, Some(ordered)),
+            ],
+        )
+        .unwrap();
+
+        // Newest first, and the folder's own `create` line is the one below it.
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (
+                rows[0].kind.as_str(),
+                rows[0].card_name.as_deref(),
+                rows[0].delta
+            ),
+            (crate::activity::ADD, None, 4)
+        );
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "cards": 4, "rows": 2, "folder": "Ordered" })
+        );
+
+        // One landed among refusals: the single add's line, word for word.
+        add_wishes(
+            &conn,
+            &[
+                pinned("nope", 1, None),
+                pinned("bolt-2ed", 3, Some(ordered)),
+            ],
+        )
+        .unwrap();
+        let single = seeded();
+        crate::wishlist_folders::create_folder(&single, None, "Ordered").unwrap();
+        add_wish(&single, &pinned("bolt-2ed", 3, Some(ordered))).unwrap();
+        let (got, want) = (&feed(&conn)[0], &feed(&single)[0]);
+        assert_eq!(feed(&conn).len(), 3);
+        assert_eq!(
+            (
+                &got.kind,
+                &got.card_id,
+                &got.card_name,
+                got.delta,
+                payload(got)
+            ),
+            (
+                &want.kind,
+                &want.card_id,
+                &want.card_name,
+                want.delta,
+                payload(want)
+            )
+        );
+    }
+
+    /// **The ticket takes the whole batch back**, across the root and a folder.
+    #[test]
+    fn a_batch_of_wishes_can_be_undone_whole() {
+        let conn = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&conn, None, "Ordered")
+            .unwrap()
+            .id;
+        add_wish(&conn, &pinned("bolt-lea", 1, Some(ordered))).unwrap();
+        let before = crate::bulk_undo::table_image(&conn, "wishlist_entries");
+
+        let out = add_wishes(
+            &conn,
+            &[
+                pinned("bolt-lea", 2, Some(ordered)),
+                pinned("bolt-lea", 1, None),
+                WishInput {
+                    oracle_id: Some("oracle-1".into()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            ],
+        )
+        .unwrap();
+        let undone = crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+
+        assert_eq!(undone.restored, 3);
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "wishlist_entries"),
+            before
+        );
+        assert_eq!(
+            payload(&feed(&conn)[0]),
+            serde_json::json!({ "cards": 4, "rows": 3, "folder": null, "undo": true })
+        );
+    }
+
+    /// Nothing sent, or nothing landed: no change, no line, no ticket.
+    #[test]
+    fn a_batch_of_no_wishes_writes_nothing() {
+        let conn = seeded();
+        let none = add_wishes(&conn, &[]).unwrap();
+        assert_eq!((none.added, none.copies, none.undo_id), (0, 0, None));
+
+        let refused = add_wishes(&conn, &[pinned("nope", 1, None)]).unwrap();
+        assert_eq!(
+            (refused.added, refused.undo_id, refused.refused.len()),
+            (0, None, 1)
+        );
+        assert!(wished_rows(&conn).is_empty());
+        assert!(feed(&conn).is_empty());
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
     }
 }

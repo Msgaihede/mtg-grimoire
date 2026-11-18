@@ -499,6 +499,37 @@ describe("activityLine — bulk writes and their undo", () => {
     ).toEqual({ text: "Undid moving 5 cards to Binder", detail: null });
   });
 
+  /** "Add N cards to → Collection" writes the wishlist's run row — an `add`, never an import. */
+  it("says a batch add to the collection in one line, and its undo", () => {
+    expect(
+      entryLine("collection", "add", { cards: 300, rows: 250, folder: "Binder" }, 300, bulk),
+    ).toEqual({
+      text: "Added 300 cards to your collection",
+      detail: "across 250 rows · in Binder",
+    });
+    expect(entryLine("collection", "add", { cards: 3, rows: 3, folder: null }, 3, bulk)).toEqual({
+      text: "Added 3 cards to your collection",
+      detail: "across 3 rows",
+    });
+    const undone = { cards: 300, rows: 250, folder: null, undo: true };
+    expect(entryLine("collection", "add", undone, -300, bulk).text).toBe("Undid adding 300 cards");
+    // A one-card add whose printing lost its name carries no `cards` key and keeps its sentence.
+    expect(entryLine("collection", "add", { folder: null }, 1, bulk).text).toBe("Added a card");
+  });
+
+  it("says a bulk move on the wishlist, and its undo", () => {
+    expect(entryLine("wishlist", "move", { entries: 4, to: "Ordered" }, 0, bulk)).toEqual({
+      text: "Moved 4 cards on your wishlist",
+      detail: "to Ordered",
+    });
+    expect(entryLine("wishlist", "move", { entries: 4, to: null }, 0, bulk).detail).toBe(
+      "to Wishlist",
+    );
+    expect(
+      entryLine("wishlist", "move", { entries: 4, to: "Ordered", undo: true }, 0, bulk).text,
+    ).toBe("Undid moving 4 cards to Ordered on your wishlist");
+  });
+
   it("words the undo of an import on both cabinets, in copies and in lines", () => {
     expect(entryLine("collection", "import", { cards: 40, rows: 37, undo: true }, -40)).toEqual({
       text: "Undid an import of 40 cards into your collection",

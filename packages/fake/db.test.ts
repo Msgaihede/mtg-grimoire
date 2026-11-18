@@ -9192,6 +9192,104 @@ describe("collection_remove_many", () => {
   });
 });
 
+describe("the batch adds and the wishlist's bulk move", () => {
+  /** N single adds in one write: a refused item is named by index in the single add's sentence,
+   *  the rest land and fold on the grain, and one ticket takes the whole press back. */
+  it("collection_add_many lands what it can, reports the rest and undoes as one", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })] });
+    const w = writeHandlers(db);
+    const items = [
+      { cardId: BOLT.id, finish: "nonfoil" as const, quantity: 2 },
+      { cardId: "gone", finish: "nonfoil" as const, quantity: 1 },
+      { cardId: BOLT_JA.id, finish: "nonfoil" as const, quantity: 0 },
+      { cardId: BOLT_2X2.id, finish: "nonfoil" as const, quantity: 3 },
+    ];
+    const reasons = [1, 2].map((i) => {
+      try {
+        writeHandlers(makeDb()).collection_add({ entry: items[i] });
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error("the single add should have refused it");
+    });
+
+    const out = w.collection_add_many({ items });
+
+    expect(out).toEqual({
+      added: 2,
+      copies: 5,
+      refused: [
+        { index: 1, reason: reasons[0] },
+        { index: 2, reason: reasons[1] },
+      ],
+      undoId: 1,
+    });
+    expect(db.collectionEntries.map((e) => [e.cardId, e.quantity])).toEqual([
+      [BOLT.id, 3],
+      [BOLT_2X2.id, 3],
+    ]);
+    w.bulk_undo({ undoId: out.undoId! });
+    expect(db.collectionEntries.map((e) => [e.cardId, e.quantity])).toEqual([[BOLT.id, 1]]);
+    expect(w.collection_add_many({ items: [] })).toEqual({
+      added: 0,
+      copies: 0,
+      refused: [],
+      undoId: null,
+    });
+  });
+
+  it("wishlist_add_many files each wish in its own folder and skips a gone one", () => {
+    const db = makeDb({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }],
+    });
+    const out = writeHandlers(db).wishlist_add_many({
+      items: [
+        { cardId: BOLT.id, quantity: 0, folderId: 1 },
+        { cardId: BOLT.id, quantity: 2 },
+        { cardId: BOLT.id, quantity: 1, folderId: 404 },
+      ],
+    });
+
+    expect(out).toMatchObject({ added: 2, copies: 3, undoId: 1 });
+    expect(out.refused.map((r) => r.index)).toEqual([2]);
+    expect(db.wishlistEntries.map((w) => [w.folderId, w.quantity])).toEqual([
+      [1, 1],
+      [null, 2],
+    ]);
+  });
+
+  it("wishlist_set_folder_many moves and merges as one press, or moves nothing", () => {
+    const db = makeDb({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }],
+      wishlistEntries: [
+        wish({ id: 1, quantity: 2 }),
+        wish({ id: 2, cardId: BOLT_JA.id, quantity: 1 }),
+        wish({ id: 3, quantity: 5, folderId: 1 }),
+      ],
+    });
+    const w = writeHandlers(db);
+
+    expect(() => w.wishlist_set_folder_many({ ids: [2, 404], folderId: 1 })).toThrow(
+      /not there any more/,
+    );
+    expect(db.wishlistEntries.find((x) => x.id === 2)?.folderId).toBeNull();
+
+    const out = w.wishlist_set_folder_many({ ids: [1, 2, 1], folderId: 1 });
+    expect(out.changes.map((c) => [c.id, c.quantity])).toEqual([
+      [3, 7],
+      [2, 1],
+      [3, 7],
+    ]);
+    w.bulk_undo({ undoId: out.undoId! });
+    const byId = [...db.wishlistEntries].sort((a, b) => a.id - b.id);
+    expect(byId.map((x) => [x.id, x.folderId, x.quantity])).toEqual([
+      [1, null, 2],
+      [2, null, 1],
+      [3, 1, 5],
+    ]);
+  });
+});
+
 describe("collection_set_folder_many", () => {
   /** `Binder` for the reader, and a deck's group for the fence. */
   const FOLDERS: FakeCollectionFolder[] = [
@@ -13824,7 +13922,10 @@ describe("the busy fault", () => {
     // read, `custom_widgets`, sits in `readHandlers`. Count again after a merge.
     // 153 → 154 on 2026-11-01 with `set_collection_value`, the reduced price's two figures
     // (issues #1449, #1450), through `with_write`.
-    expect(names).toHaveLength(154);
+    // 154 → 157 on 2026-11-18 with the batch adds and the wishlist's bulk move —
+    // `collection_add_many`, `wishlist_add_many` and `wishlist_set_folder_many`, each reaching
+    // `refuseIfBusy` first. Read from this tree; count again after a merge, never add to it.
+    expect(names).toHaveLength(157);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
