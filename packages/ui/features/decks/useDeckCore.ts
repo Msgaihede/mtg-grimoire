@@ -16,7 +16,12 @@
  * desktop caller imports from where it always did.
  */
 import { useMemo, useRef } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type MutationFunctionContext,
+} from "@tanstack/react-query";
 import {
   ipc,
   type DeckApplyOutcome,
@@ -609,6 +614,12 @@ export function useDeckCore(
     return { ops, sentAt, filedAs, target: toOther > 0 ? other : variant };
   };
 
+  /** Each `applyEdits` call's plan, made in its `onMutate` and spent by its `mutationFn` — keyed
+   *  by the call's context object, which TanStack hands both and mints per call. */
+  const plannedEdits = useRef(
+    new WeakMap<MutationFunctionContext, Awaited<ReturnType<typeof planEdits>>>(),
+  ).current;
+
   const query = useQuery(detailRead);
 
   /**
@@ -1033,9 +1044,13 @@ export function useDeckCore(
    * modal up, so this is parity rather than a path a reader takes.
    */
   const applyEdits = useMutation({
-    mutationFn: async ({ edits }: { edits: readonly DeckEdit[] }): Promise<DeckEditsOutcome> => {
+    mutationFn: async (
+      { edits }: { edits: readonly DeckEdit[] },
+      call: MutationFunctionContext,
+    ): Promise<DeckEditsOutcome> => {
       const deckId = opened(id);
-      const { ops, sentAt, filedAs, target } = await planEdits(deckId, edits);
+      const { ops, sentAt, filedAs, target } =
+        plannedEdits.get(call) ?? (await planEdits(deckId, edits));
       const outcome = ops.length === 0 ? emptyOutcome() : await ipc.deckApply(deckId, target, ops);
       const results = edits.map((_, i): DeckEditResult => {
         const at = sentAt[i];
@@ -1056,24 +1071,46 @@ export function useDeckCore(
         collectionMoved: outcome.collectionMoved,
       };
     },
-    onMutate: async ({ edits }) => {
+    onMutate: async ({ edits }, call) => {
+      // **The plan first, then the patch** — and the order is the point. Planning reads the deck's
+      // default pile through `fetchQuery` on this very key ({@link defaultPileOf}), so a plan made
+      // after the patch could re-read the detail mid-flight and draw the removed rows back; and a
+      // plan started beside the patch would have its read cancelled by the `cancelQueries` below.
+      // Handed to `mutationFn` by the call's own context object, which TanStack passes to both.
+      const plan = await planEdits(opened(id), edits);
+      plannedEdits.set(call, plan);
       const removals = edits.flatMap((e) => (e.edit === "remove" ? [e] : []));
-      if (removals.length === 0) return { saved: undefined, departures: [] };
+      if (removals.length === 0) return { removed: [], departures: [] };
       await queryClient.cancelQueries({ queryKey: detailKey });
-      const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
       const departures = removals.map((r) =>
         anchor.planRemoval({ deckId: id, variant, ...slotOf(r) }),
       );
       const gone = new Set(removals.map((r) => slotKey(r)));
+      let removed: DeckCard[] = [];
       queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
         if (!data) return data;
-        const cards = data.cards.filter((c) => c.variant !== variant || !gone.has(slotKey(c)));
-        return cards.length === data.cards.length ? data : { ...data, cards };
+        const at = (c: DeckCard) => c.variant === variant && gone.has(slotKey(c));
+        removed = data.cards.filter(at);
+        return removed.length === 0 ? data : { ...data, cards: data.cards.filter((c) => !at(c)) };
       });
-      return { saved, departures };
+      return { removed, departures };
     },
     onError: (_error, _vars, context) => {
-      if (context?.saved !== undefined) queryClient.setQueryData(detailKey, context.saved);
+      // **Only what this batch took out goes back** — the rows its patch removed, where they are
+      // still absent — never a snapshot of the whole deck: a stepper press made while the batch
+      // was out (or a second batch's patch) is in the cache now, and restoring the press-time
+      // detail would wipe it. `setQuantity` guards its own rollback the same way (latest press).
+      const removed = context?.removed ?? [];
+      if (removed.length > 0) {
+        queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
+          if (!data) return data;
+          const present = new Set(
+            data.cards.filter((c) => c.variant === variant).map((c) => slotKey(c)),
+          );
+          const back = removed.filter((c) => !present.has(slotKey(c)));
+          return back.length === 0 ? data : { ...data, cards: [...data.cards, ...back] };
+        });
+      }
       invalidate();
     },
     onSuccess: (outcome, { edits }, context) => {

@@ -23,8 +23,9 @@
  * mouse nothing moves.
  *
  * **It also draws the busy pill** (`@/lib/work`): while reader-started work has outlasted its
- * delay, one line — a turning glyph and the work's sentence — at the foot of the stack, which is
- * exactly where the receipt toast that ends the work will land. Drawn here rather than mounted
+ * delay, one line — a turning glyph and the work's sentence — at the foot of the stack, where the
+ * receipt toast that ends the work lands (above the pill while the pill sees out its minimum stay,
+ * then in its place). Drawn here rather than mounted
  * beside the stack so every face that has a `Toaster` has it, placed by the same `className`.
  */
 import { useEffect, useRef, useState } from "react";
@@ -91,9 +92,10 @@ export function Toaster({
           return <Toast key={toast.id} toast={toast} notice={notice} />;
         })}
       </AnimatePresence>
-      {/* After the toasts, so it stands at the foot where the newest one lands — the receipt
-          that ends the work takes its place rather than pushing in above it. Its own presence,
-          so its arrival never re-keys the stack's. */}
+      {/* After the toasts, so it stands at the foot where the newest one lands. The receipt that
+          ends the work usually lands just above it while the pill sees out its minimum stay
+          (`WORK_MIN_SHOWN_MS`), then the pill leaves and the receipt settles into the foot. Its
+          own presence, so its arrival never re-keys the stack's. */}
       <AnimatePresence initial={false}>{busy && <BusyPill busy={busy} />}</AnimatePresence>
     </section>
   );
@@ -106,6 +108,11 @@ export function Toaster({
  * announced (the stack's own arrangement above), and an always-mounted empty one would be a
  * second `status` in this region for every toast test and every reader to step over. The text
  * changing in place (a second piece of work joining) is a live region's ordinary update.
+ *
+ * **`role="status"` alone, as each toast has it** — the role is a polite live region already.
+ * **Never `aria-busy`**: the pill *is* the message, and a reader that honours `aria-busy` holds a
+ * region's announcements until it goes `false` — which this one never does, since it unmounts
+ * still busy. The work's state is the sentence, not an attribute.
  *
  * **Not a control, and never in the way**: no tab stop, `pointer-events-none` on itself as well
  * as on the column, and no ✕ — it goes when the work does, and nothing a reader could press here
@@ -122,8 +129,6 @@ function BusyPill({ busy }: { busy: Busy }) {
     <motion.div
       {...landed}
       role="status"
-      aria-live="polite"
-      aria-busy="true"
       data-busy-pill=""
       className={cn(
         "pointer-events-none flex items-center gap-2 self-end rounded-full border border-border",

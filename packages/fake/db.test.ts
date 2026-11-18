@@ -26229,6 +26229,172 @@ describe("deck_apply", () => {
     expect(db.collectionEntries.every((e) => e.folderId !== groupId(1))).toBe(true);
   });
 
+  /** A removal from a regular deck's live list, as Delete over a set sends it. */
+  const cut = (cardId: string, categoryId: number) =>
+    ({ op: "remove", cardId, categoryId, finish: null }) as const;
+
+  /**
+   * **A live cut files no undo step** (`deck_apply.rs`, `DeckOp::Remove`): the copies went back
+   * to `Recently removed`, and a step could put the list back and not the custody. The fake filed
+   * one for Delete over a set, which no Rust build does.
+   */
+  it("files no undo step for a batch of only live cuts", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const steps = db.deckUndo.length;
+    const history = db.deckAudit.length;
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [cut(BOLT.id, main), cut(BOLT_2X2.id, main)],
+    });
+
+    expect(outcome.landed).toBe(2);
+    expect(db.deckCards).toEqual([]);
+    // The history keeps a row per removal; the journal keeps no step.
+    expect(db.deckAudit.length).toBe(history + 2);
+    expect(db.deckUndo.length).toBe(steps);
+  });
+
+  /** …and a mixed batch's one step takes back the other ops and never puts a cut row back. */
+  it("keeps the cut rows out of a mixed batch's step", () => {
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const h = allHandlers(db);
+    h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT_2X2.id, side), cut(BOLT.id, main)],
+    });
+    expect(db.deckCards.map((c) => c.cardId)).toEqual([BOLT_2X2.id]);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    // Keyed on the add's row — the last one the step stands for — not on the cut's.
+    expect(undo.kind).toBe("add");
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards).toEqual([]);
+  });
+
+  /** The other removals are the stepper's zero, and file a step like it: a virtual deck's. */
+  it("files a step for a removal from a virtual deck", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck({ virtualOnly: true })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const h = allHandlers(db);
+    const steps = db.deckUndo.length;
+    h.deck_apply({ deckId: 1, variant: "live", ops: [cut(BOLT.id, main)] });
+
+    expect(db.deckUndo.length).toBe(steps + 1);
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards.map((c) => [c.cardId, c.quantity])).toEqual([[BOLT.id, 2]]);
+  });
+
+  /** A label answers the pile it went on — the crate's `Done.category_id` — never `null`. */
+  it("answers a label's own pile", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [{ op: "setLabel", cardId: BOLT.id, categoryId: main, finish: null, labelId: null }],
+    });
+
+    expect(outcome.results[0]).toEqual({ change: null, categoryId: main, refusal: null });
+  });
+
+  /**
+   * **A batch that wrote nothing leaves the deck as it found it, `updatedAt` included** — the
+   * crate drops the transaction and its touch with it. A removal of a row already gone and an op
+   * refused are the two ways to write nothing.
+   */
+  it("leaves updatedAt alone for a batch that wrote nothing", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({ decks: [deck({ updatedAt: 5 })] });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [
+        cut(BOLT.id, main),
+        {
+          op: "move",
+          cardId: BOLT.id,
+          fromCategoryId: main,
+          toCategoryId: categoryId(1, "side"),
+          toCategoryName: null,
+          finish: null,
+        },
+      ],
+    });
+
+    expect(outcome.results[0].refusal).toBeNull();
+    expect(outcome.results[1].refusal).toEqual(expect.any(String));
+    expect(db.decks[0].updatedAt).toBe(5);
+  });
+
+  /**
+   * **The direction of `addToOtherList`**, which the fake once had backwards: the batch's
+   * `variant` is the list the copies go **into**, and `fromCategoryId` is a pile of the other list
+   * — so `Add 2 to theory` on two actual rows is a `theory` batch naming live piles.
+   */
+  it("adds to the batch's own list from a pile of the other one", () => {
+    const liveMain = categoryId(1, "main");
+    const theoryMain = categoryId(1, "main", "theory");
+    const db = makeDeckDb({
+      decks: [deck({ theoryEnabled: true })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 3 })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "theory",
+      ops: [
+        {
+          op: "addToOtherList",
+          cardId: BOLT.id,
+          fromCategoryId: liveMain,
+          finish: null,
+          quantity: 1,
+        },
+      ],
+    });
+
+    expect(outcome.results[0]).toMatchObject({ categoryId: theoryMain, refusal: null });
+    expect(db.deckCards.map((c) => [c.variant, c.categoryId, c.quantity])).toEqual([
+      ["live", liveMain, 3],
+      ["theory", theoryMain, 1],
+    ]);
+    // And the other way round is refused: a theory batch naming a theory pile is the same list.
+    const back = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "theory",
+      ops: [
+        {
+          op: "addToOtherList",
+          cardId: BOLT.id,
+          fromCategoryId: theoryMain,
+          finish: null,
+          quantity: 1,
+        },
+      ],
+    });
+    expect(back.results[0].refusal).toEqual(expect.any(String));
+  });
+
   it("answers an empty batch empty, and refuses the whole call for a busy or missing deck", () => {
     const db = makeDeckDb({ decks: [deck()] });
     expect(allHandlers(db).deck_apply({ deckId: 1, variant: "live", ops: [] })).toEqual({

@@ -7,6 +7,7 @@ import type { Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import {
+  anyDropWrites,
   dropWrites,
   readCards,
   readDragData,
@@ -181,7 +182,8 @@ export function PriceStrip({
   const { over: overTray } = useDndDropTarget({
     ref: trayRef,
     read: readCards,
-    canDrop: (payloads) => writesFor(payloads).length > 0,
+    // Stops at the first member that writes — asked per pointer move, so nothing is built for it.
+    canDrop: (payloads) => anyDropWrites(payloads, { kind: "remove" }),
     onDrop: (payloads) => {
       // Every deck row the drag was carrying. A group holding a card from another wall drops
       // the four this tray *can* take and passes over the rest — `dropWrites`' rule, and the

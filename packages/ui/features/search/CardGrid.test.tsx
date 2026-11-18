@@ -22,6 +22,23 @@ const wishlistAdd = vi.hoisted(() => vi.fn());
 // green while three requests fail on every render, which is the shape of a mock that has quietly
 // stopped describing the component. They answer the shape and nothing useful: this file is about
 // tiles, columns and gutters, and a real price here would be a fixture nobody is asserting on.
+/**
+ * **One render of the wall itself, counted.** `useCardZoomGesture` is a hook the wall — and only
+ * the wall, never a tile — calls on every render, so wrapping it is a render counter for
+ * `CardGridWall` that a tile's memo cannot mask. Pass-through otherwise.
+ */
+const wallRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/lib/useCardZoomGesture", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/useCardZoomGesture")>();
+  return {
+    ...real,
+    useCardZoomGesture: (...args: Parameters<typeof real.useCardZoomGesture>) => {
+      wallRenders.count++;
+      real.useCardZoomGesture(...args);
+    },
+  };
+});
+
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -2203,7 +2220,11 @@ describe("CardGrid multi-select", () => {
     expect(new Set(drawn)).toEqual(new Set(["aaa"]));
   });
 
-  /** The wall is memoised too: a parent render that hands it the same props draws nothing. */
+  /**
+   * The wall is memoised too: a parent render that hands it the same props draws nothing — not
+   * the wall itself (counted by {@link wallRenders}, which a tile's memo cannot hide; a count of
+   * tile draws alone would pass with the wall's `memo` removed), and so no tile either.
+   */
   it("is not drawn again by a parent render that changed none of its props", () => {
     const drawn: string[] = [];
     const badge = (card: CardSummary) => {
@@ -2220,9 +2241,43 @@ describe("CardGrid multi-select", () => {
       badge,
     };
     const { rerender } = render(<CardGrid {...props} />);
+    expect(wallRenders.count).toBeGreaterThan(0); // The counter does count the wall.
+    wallRenders.count = 0;
     drawn.length = 0;
     rerender(<CardGrid {...props} />);
+    expect(wallRenders.count).toBe(0);
     expect(drawn).toEqual([]);
+
+    // And a prop that did change does draw it — the counter is not simply dead.
+    rerender(<CardGrid {...props} listKey="k2" />);
+    expect(wallRenders.count).toBeGreaterThan(0);
+  });
+
+  /**
+   * **The keyboard menu is built only for the keys that open it** (2026-11). For a tile in the
+   * picked set the builder is handed every picked row — a sort and a map over the set — so an
+   * arrow key held down on a 5,000-card wall must not run it per auto-repeat.
+   */
+  it("asks the keyboard menu builder only for Shift+F10 and the ContextMenu key", async () => {
+    const build = vi.fn((...args: [CardSummary, readonly CardSummary[]]) => {
+      void args;
+      return () => {};
+    });
+    wall({ cardMenuKey: build });
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+    const art = screen.getByRole("button", { name: "Ponder" });
+
+    fireEvent.keyDown(art, { key: "ArrowRight" });
+    fireEvent.keyDown(art, { key: "F10" });
+    fireEvent.keyDown(art, { key: "ArrowDown" });
+    expect(build).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(art, { key: "F10", shiftKey: true });
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build.mock.calls[0][1].map((p) => p.id)).toEqual(["aaa", "ccc"]);
+    fireEvent.keyDown(art, { key: "ContextMenu" });
+    expect(build).toHaveBeenCalledTimes(2);
   });
 
   /**

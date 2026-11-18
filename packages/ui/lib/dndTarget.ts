@@ -127,8 +127,21 @@ export function useDndDropTarget<T>({
   pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
-  /** This feature's payload out of the library's untyped store, or `null` for everything else. */
+  /**
+   * This feature's payload out of the library's untyped store, or `null` for everything else.
+   *
+   * **Must be pure in the drag record and the render**: the collision passes' answer is cached
+   * per drag record and per render of this target (`accept` below), so a `read` that also looked
+   * at something else — a clock, a store read at the call, a ref written between renders — would
+   * be answered from the cache until the target re-renders. Anything it depends on must arrive
+   * as a prop or state, so a change is a render.
+   */
   read: (data: Record<string, unknown>) => T | null;
+  /**
+   * Whether this target takes `drop`. **Pure in its argument and the render, as {@link read} is**,
+   * for the same cache. (The drop itself asks again uncached, so a stale answer can light a
+   * target but never write through one.)
+   */
   canDrop: (drop: T) => boolean;
   onDrop: (drop: T) => void;
   /**
@@ -210,8 +223,6 @@ export function useDndDropTarget<T>({
     const element = ref.current;
     if (!element) return;
 
-    /** The payload this target would act on, or `null` — both questions at once, because every
-     *  caller below asks them together and asking them apart is how they drift. */
     /** The last `accept` answer, and the drag record and render it was given for. */
     let accepted: {
       data: Record<string, unknown>;
@@ -219,6 +230,8 @@ export function useDndDropTarget<T>({
       answer: boolean;
     } | null = null;
 
+    /** The payload this target would act on, or `null` — both questions at once, because every
+     *  caller below asks them together and asking them apart is how they drift. */
     const taken = (source: { data: Record<string, unknown> } | null | undefined): T | null => {
       if (!source) return null;
       const drop = latest.current.read(source.data);

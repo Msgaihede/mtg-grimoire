@@ -58,15 +58,21 @@ await trackWork("Selecting all cards…", selectAll()); // resolves/rejects as t
   the caller writes. It is a module store (`useWorkStore`; `useBusy()` is what surfaces draw).
 - **When it shows**: a piece is *shown* only once it has been live for `ACTIVITY_DELAY_MS` (400),
   and once up the indicator stays at least `WORK_MIN_SHOWN_MS` (700) so it never blinks. Both are
-  derived in one place (`settle` in `lib/work.ts`), so every surface agrees.
+  derived in one place (`settle` in `lib/work.ts`), so every surface agrees. A piece's ripe timer
+  firing makes it ripe even if `Date.now()` lags the timer; each sentence gets its own stay (a
+  second piece ripening late in the first's stay is not shown for a blink); and once up, the
+  indicator stays up while any work is live — a piece begun during the stay takes it over when
+  the stay runs out rather than the pill dropping and returning.
 - **Several at once**: one indicator, never a stack — the oldest shown piece's sentence and a
   count (`Adding 300 cards… and 2 more`).
 - **Where it is drawn**: (1) the desktop header's activity line and mana line, as a job
   (`workActivity`, `RANK.work` = −20, above every background job including the device sync, and
   past the header's own delay since it has waited already); (2) a pill drawn by `Toaster` at the
-  foot of the toast stack — where the receipt toast will land — so every face with a `Toaster`
+  foot of the toast stack — the receipt toast lands just above it while it sees out its minimum
+  stay, then the pill goes — so every face with a `Toaster`
   (the desktop's `AppShell`, the phone's `PhoneFace`) has it, placed by the same `className`.
-  `role="status"`, polite, `aria-busy`, `LAYER.toast`, not focusable, `pointer-events-none`; the
+  `role="status"` (polite by the role; never `aria-busy`, which would hold the announcement the
+  pill itself is — it unmounts still busy), `LAYER.toast`, not focusable, `pointer-events-none`; the
   glyph's spin stops under reduced motion; (3) a `progress` cursor (`html[data-busy]`, one rule in
   `index.css`) — never `wait`, and no press is ever blocked.
 - **What it is not**: not a toast (nothing is filed in the inbox, and the success or failure is
@@ -203,7 +209,8 @@ write that serves both a toasted press and an exempt one needs a way to say whic
   filing write as the drags' `setFolder` for the presses that toast.
 - **By a record stamped after the press settles** — the deck editor's `reportToasted`, for
   `setQuantity`, `moveCard` and `update`, whose menu presses and steppers send the same shape.
-  It shares `lastBatch` with the drags' `reportBatch`, marked `toasted`, and is newer than the
+  It shares `lastBatch` with `editBatch` (the multi-card drop, Delete and the plural menu rows,
+  one `deck_apply`, filed `toasted` or not by its caller), marked `toasted`, and is newer than the
   observer's own call, so the banner reads it and says nothing.
 
 **The token writes keep the editor's banner** while the Tokens & Emblems wall is shut: their

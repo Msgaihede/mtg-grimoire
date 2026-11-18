@@ -17,7 +17,7 @@
  */
 import { useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { offerUndo } from "@/lib/bulkUndo";
+import { offerBulkUndo } from "@/features/card/useCardAdds";
 import { plural } from "@/lib/counts";
 import { ipc, type WishRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
@@ -270,11 +270,14 @@ export function useWishEntryWrites() {
       folderId: number | null;
       /** What the destination is called, for `Moved 3 wishes to Ordered.` */
       destination: string;
+      /** `false` for half of a mixed press — `AddManyInput.undoable`'s rule: no offer. */
+      undoable?: boolean;
     }) => ipc.wishlistSetFolderMany(ids, to),
     onSettled: settleWhole,
-    onSuccess: (outcome, { ids, destination }) => {
-      offerUndo(
+    onSuccess: (outcome, { ids, destination, undoable }) => {
+      offerBulkUndo(
         "wishlist",
+        undoable,
         outcome.undoId,
         `Moved ${plural(outcome.changes.length || ids.length, "wish", "wishes")} to ${destination}.`,
       );

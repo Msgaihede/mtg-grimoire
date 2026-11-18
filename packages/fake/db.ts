@@ -22530,15 +22530,26 @@ export function writeHandlers(db: FakeDb) {
      * rows are filed as **one** step keyed on the last of them, and one Ctrl+Z puts the lot back.
      *
      * **A refused op is rolled back alone and answered in its own result**; the rest land. The
-     * crate does it with a savepoint per op, and this stands one in by copying out every table an
-     * op can write before it runs and putting them back when it throws — a refusal after the name
-     * arm invented a pile must not leave that pile standing. The deck-level refusals (busy, an
-     * unknown variant, a deck that is gone) are asked first and reject the whole call.
+     * crate does it with a savepoint per op, and this stands one in with {@link opSavepoint}: the
+     * tables an op can write, as shallow copies of their arrays and of this deck's rows (the
+     * collection's only for a removal, the one op that releases copies), put back when it throws —
+     * a refusal after the name arm invented a pile must not leave that pile standing. Not a deep
+     * clone of every table per op: a 300-op story paid nine `structuredClone`s of the world per
+     * card. The deck-level refusals (busy, an unknown variant, a deck that is gone) are asked first
+     * and reject the whole call.
      *
      * `remove` is the whole row out, `deck_set_card_quantity`'s zero: on a live list that already
      * releases the copies the group held (issue #1494), which is what the app's cut does, and a
      * virtual deck has no group to release from. `collectionMoved` is read off the collection
      * itself, before and after, rather than added up from the ops.
+     *
+     * **The undo step is the crate's** (`deck_apply.rs`, `DeckOp::Remove`): a removal from the live
+     * list of a deck that keeps cardboard is a **cut**, which files no step — so a batch of only
+     * cuts files none, and a mixed batch's step is keyed on its last other history row and leaves
+     * the cut rows out of both its images ({@link takeApplyStep}, read by {@link journalled}), so
+     * a Ctrl+Z never puts a cut row back. A batch that wrote nothing — every op refused, or a no-op
+     * (a removal of a row already gone) — leaves the deck's `updatedAt` as it found it, as the
+     * crate's dropped transaction rolls its touch back.
      */
     deck_apply: (args: {
       deckId: number;
@@ -22547,54 +22558,68 @@ export function writeHandlers(db: FakeDb) {
     }): DeckApplyOutcome => {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
-      requireDeck(db, args.deckId);
+      const deck = requireDeck(db, args.deckId);
       if (args.ops.length === 0) return { results: [], landed: 0, collectionMoved: false };
       const single = writeHandlers(db);
       const { deckId } = args;
       const collection = () =>
         JSON.stringify(db.collectionEntries.map((e) => [e.id, e.folderId, e.quantity]));
       const collectionBefore = collection();
+      const touchedAt = deck.updatedAt;
+      // `deck_apply.rs`' `cuts`: a removal here is a cut — the live list of a deck that keeps
+      // cardboard — and files no undo step.
+      const cuts = variant === LIVE && !deck.virtualOnly;
+      const cutSlots = new Set<string>();
+      let stepAudit: number | null = null;
+      let wrote = false;
       /** The pile a deck row now sits in, or `null` for a token's `id: 0`. */
       const pileOf = (change: EntryChange): number | null =>
         db.deckCards.find((dc) => dc.id === change.id)?.categoryId ?? null;
-      const results = args.ops.map((op): DeckOpResult => {
-        const saved = structuredClone({
-          collectionEntries: db.collectionEntries,
-          collectionFolders: db.collectionFolders,
-          decks: db.decks,
-          deckCategories: db.deckCategories,
-          deckCards: db.deckCards,
-          deckTokens: db.deckTokens,
-          deckTokenPrintings: db.deckTokenPrintings,
-          deckAudit: db.deckAudit,
-          activity: db.activity,
-        });
-        try {
-          switch (op.op) {
-            case "add": {
-              const change = single.deck_add_card({ deckId, variant, ...op });
-              return { change, categoryId: pileOf(change), refusal: null };
-            }
-            case "move": {
-              const categoryId = single.deck_move_card({ deckId, variant, ...op });
-              return { change: null, categoryId, refusal: null };
-            }
-            case "remove": {
-              const change = single.deck_set_card_quantity({ deckId, variant, ...op, quantity: 0 });
-              return { change, categoryId: null, refusal: null };
-            }
-            case "setLabel":
-              single.deck_card_set_label({ deckId, variant, ...op });
-              return { change: null, categoryId: null, refusal: null };
-            case "addToOtherList": {
-              // The batch's `variant` is the list the copies go **into**, and the op's pile is in
-              // the other one — Rust's reading (`deck_apply.rs`), and the single command's.
-              const change = single.deck_add_card_to_other_list({ deckId, ...op, variant });
-              return { change, categoryId: pileOf(change), refusal: null };
-            }
+      const one = (op: DeckOp): DeckOpResult => {
+        switch (op.op) {
+          case "add": {
+            const change = single.deck_add_card({ deckId, variant, ...op });
+            return { change, categoryId: pileOf(change), refusal: null };
           }
+          case "move": {
+            const categoryId = single.deck_move_card({ deckId, variant, ...op });
+            return { change: null, categoryId, refusal: null };
+          }
+          case "remove": {
+            const change = single.deck_set_card_quantity({ deckId, variant, ...op, quantity: 0 });
+            return { change, categoryId: null, refusal: null };
+          }
+          case "setLabel":
+            single.deck_card_set_label({ deckId, variant, ...op });
+            // The crate answers the pile the label went on (`Done.category_id`).
+            return { change: null, categoryId: op.categoryId, refusal: null };
+          case "addToOtherList": {
+            // The batch's `variant` is the list the copies go **into**, and the op's pile is in
+            // the other one — Rust's reading (`deck_apply.rs`), and the single command's.
+            const change = single.deck_add_card_to_other_list({ deckId, ...op, variant });
+            return { change, categoryId: pileOf(change), refusal: null };
+          }
+        }
+      };
+      const results = args.ops.map((op): DeckOpResult => {
+        const restore = opSavepoint(db, deckId, op.op === "remove");
+        const written = db.deckAudit.length;
+        try {
+          const result = one(op);
+          const rows = db.deckAudit.slice(written);
+          const cut =
+            op.op === "remove" && cuts && result.change !== null && result.change.id !== 0;
+          if (cut) {
+            // `CellLog::forget`: the cut's cell, by list, pile and card, out of the step.
+            cutSlots.add(`${variant}|${op.categoryId}|${op.cardId}`);
+          } else if (rows.length > 0) {
+            stepAudit = rows[rows.length - 1].id;
+          }
+          // `Done.wrote`: a history row, or a label (which writes its cell even unchanged).
+          wrote ||= rows.length > 0 || op.op === "setLabel";
+          return result;
         } catch (error) {
-          Object.assign(db, saved);
+          restore();
           return {
             change: null,
             categoryId: null,
@@ -22602,11 +22627,14 @@ export function writeHandlers(db: FakeDb) {
           };
         }
       });
-      return {
-        results,
-        landed: results.filter((r) => r.refusal === null).length,
-        collectionMoved: collection() !== collectionBefore,
-      };
+      const landed = results.filter((r) => r.refusal === null).length;
+      if (!wrote) {
+        deck.updatedAt = touchedAt;
+        applySteps.set(db, { cutSlots, auditId: null });
+        return { results, landed, collectionMoved: false };
+      }
+      applySteps.set(db, { cutSlots, auditId: stepAudit });
+      return { results, landed, collectionMoved: collection() !== collectionBefore };
     },
 
     /**
@@ -29388,15 +29416,25 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
       const { result, dirty } = step(args);
       const omitted = takeStepOmissions(db);
       const rows = db.deckAudit.slice(written);
-      if (before !== null && rows.length > 0) {
+      // `deck_apply` says its own key and its cut cells (`deck_apply.rs`: a live cut files no
+      // step); every other write is keyed on the last history row it wrote.
+      const applied = name === "deck_apply" ? takeApplyStep(db) : undefined;
+      const auditId = applied ? applied.auditId : (rows[rows.length - 1]?.id ?? null);
+      const uncut = (cards: FakeDeckCard[]) =>
+        applied && applied.cutSlots.size > 0
+          ? cards.filter((c) => !applied.cutSlots.has(`${c.variant}|${c.categoryId}|${c.cardId}`))
+          : cards;
+      if (before !== null && auditId !== null) {
+        const after = deckState(db, deckId) as FakeDeckState;
         db.deckUndo.push({
-          auditId: rows[rows.length - 1].id,
+          auditId,
           deckId,
           before: {
             ...before,
+            cards: uncut(before.cards),
             tokenPrintings: before.tokenPrintings.filter((e) => !omitted.has(e.id)),
           },
-          after: deckState(db, deckId) as FakeDeckState,
+          after: { ...after, cards: uncut(after.cards) },
           undoneAt: null,
         });
       }
@@ -29405,6 +29443,65 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
     }) as (args: never) => unknown;
   }
   return wrapped as T;
+}
+
+/**
+ * What a `deck_apply` call owes its undo step, keyed by the database — read once by
+ * {@link journalled} as it files the step. `auditId` is the history row the step is keyed on (the
+ * last one an op other than a live cut wrote), `null` for no step; `cutSlots` are the cut cells,
+ * `variant|categoryId|cardId` (`CellLog::forget`'s address), left out of both images.
+ */
+const applySteps = new WeakMap<FakeDb, { cutSlots: Set<string>; auditId: number | null }>();
+
+/** The running `deck_apply`'s step, cleared as it is read. */
+function takeApplyStep(db: FakeDb) {
+  const step = applySteps.get(db);
+  applySteps.delete(db);
+  return step;
+}
+
+/** The tables a `deck_apply` op can write, and whether a row of one is this deck's. */
+const OP_TABLES = [
+  ["decks", (r: { id: number }, deckId: number) => r.id === deckId],
+  ["deckCategories", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+  ["deckCards", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+  ["deckTokens", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+  ["deckTokenPrintings", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+] as const;
+/** Written only by a removal (it releases the copies the row held), and by no op in place of
+ *  another deck's row — so every row is kept. */
+const OP_COLLECTION_TABLES = ["collectionEntries", "collectionFolders"] as const;
+/** Appended to, never edited. */
+const OP_APPEND_TABLES = ["deckAudit", "activity"] as const;
+
+/**
+ * `deck_apply`'s savepoint stand-in for one op: answers the restore that puts back what the op
+ * wrote. Each table's array is copied shallowly (so a push or a filter is undone by putting the
+ * old array back) and each row an op can edit **in place** — this deck's rows, and the
+ * collection's for a removal — as a shallow copy written back over it. Cheap next to a deep clone
+ * of every table, and enough: no op edits another deck's row or a nested value in place.
+ */
+function opSavepoint(db: FakeDb, deckId: number, collection: boolean): () => void {
+  const tables = db as unknown as Record<string, Record<string, unknown>[]>;
+  const arrays = new Map<string, Record<string, unknown>[]>();
+  const rows = new Map<Record<string, unknown>, Record<string, unknown>>();
+  for (const [name, ofDeck] of OP_TABLES) {
+    arrays.set(name, tables[name].slice());
+    for (const row of tables[name]) {
+      if ((ofDeck as (r: unknown, d: number) => boolean)(row, deckId)) rows.set(row, { ...row });
+    }
+  }
+  if (collection) {
+    for (const name of OP_COLLECTION_TABLES) {
+      arrays.set(name, tables[name].slice());
+      for (const row of tables[name]) rows.set(row, { ...row });
+    }
+  }
+  for (const name of OP_APPEND_TABLES) arrays.set(name, tables[name].slice());
+  return () => {
+    for (const [name, array] of arrays) tables[name] = array;
+    for (const [row, copy] of rows) Object.assign(row, copy);
+  };
 }
 
 /**

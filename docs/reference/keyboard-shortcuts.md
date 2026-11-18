@@ -388,10 +388,13 @@ page.
 **The fetching ahead stops at 1 000 tiles on a catalogue wall** (`SELECT_ALL_LIMIT`,
 `CardGrid.tsx`). An unfiltered search is the whole database, and what a catalogue wall's menu does
 with a picked set — add to the collection, the wishlist, a deck — is a write the reader waits on
-(`features/card/cardMenu.tsx`; a deck's is one `deck_apply` for the whole set since issue #1164), so
-the limit is also the largest batch of those one keypress can arm. A thousand is past any one set's card list. Past it the set still grows with whatever the
-reader scrolls to. A batched write for every one of those rows is what would let it rise to the 5 000 the
-search's caption counts to. **A wall over the reader's own list passes `Infinity`** — the
+(`features/card/cardMenu.tsx`), so the limit is also the largest batch of those one keypress can
+arm. Each of those rows is **one** write for the whole set since issue #1164
+(`collection_add_many`, `wishlist_add_many`, `deck_apply`), so the write is no longer what holds the
+limit down; it stands for the catalogue because a thousand is past any one set's card list, and a
+keypress that fetched ahead to the 5 000 the search's caption counts to would be twenty-five pages
+of rows fetched for a set nobody asked to be that large. Past it the set still grows with whatever
+the reader scrolls to. **A wall over the reader's own list passes `Infinity`** — the
 collection, the wishlist, the deck editor's collection tab — because those lists end, half of one
 is the worse failure, and the collection's own bulk writes (a move, a removal) are one command for
 the whole set.

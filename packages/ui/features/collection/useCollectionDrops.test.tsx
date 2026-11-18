@@ -11,15 +11,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const collectionAdd = vi.hoisted(() => vi.fn());
 const collectionAddMany = vi.hoisted(() => vi.fn());
+const collectionSetFolderMany = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionAdd, collectionAddMany },
+  ipc: { collectionAdd, collectionAddMany, collectionSetFolderMany },
 }));
 
 import { useBulkUndo } from "@/lib/bulkUndo";
 import { useNotifications } from "@/lib/notifications";
+import type { CollectionFolder } from "@/lib/ipc";
 import type { CollectionSingleDrop } from "./collectionDrag";
 import { useCollectionDrops } from "./useCollectionDrops";
+import { useSetCollectionFolderMany } from "./useCollectionFolders";
 
 const BINDER = 3;
 
@@ -143,5 +146,65 @@ describe("useCollectionDrops — a picked set off the search column", () => {
     expect(collectionAdd).toHaveBeenCalledTimes(1);
     expect(collectionAddMany).not.toHaveBeenCalled();
     expect(notices()[0]).toMatchObject({ title: "Added “Card a” to “Binder”" });
+  });
+});
+
+/**
+ * **A set mixing new cards with rows already in the collection is one press and two writes**
+ * (issue #1164 review). Each bulk half's hook offered its own ticket on the collection's one scope
+ * and whichever answered last won — so Undo took back half the press. With the real hooks: a mixed
+ * press offers nothing, and takes down an older press's offer.
+ */
+describe("useCollectionDrops — a picked set mixing new cards and entries", () => {
+  it("offers no undo for either half", async () => {
+    let moved: (outcome: unknown) => void = () => {};
+    collectionSetFolderMany
+      .mockReset()
+      .mockImplementation(() => new Promise((resolve) => (moved = resolve)));
+    useBulkUndo.getState().offer({ id: 7, scope: "collection", label: "Imported 40 cards." });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children);
+    const binder = { id: BINDER, name: "Binder", kind: "user" } as CollectionFolder;
+    const { result } = renderHook(
+      () => {
+        const moveMany = useSetCollectionFolderMany().mutateAsync;
+        return useCollectionDrops({
+          census: [binder],
+          userFolders: [binder],
+          deckGroups: [],
+          lockedIds: new Set(),
+          nodes: [],
+          treeParent: new Map(),
+          folderNameOf: (id) => (id === BINDER ? "Binder" : null),
+          setFolder: vi.fn(),
+          moveCopy: vi.fn(),
+          moveMany,
+          reorder: vi.fn(),
+          setPicking: vi.fn(),
+        });
+      },
+      { wrapper },
+    );
+    const entry = (entryId: number): CollectionSingleDrop => ({
+      kind: "entry",
+      entry: { entryId, name: `Entry ${entryId}`, folderId: null },
+    });
+
+    act(() =>
+      result.current.commitFile(
+        { kind: "group", members: [card("a"), entry(20), card("b"), entry(21)] },
+        BINDER,
+      ),
+    );
+    await waitFor(() => expect(collectionAddMany).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(collectionSetFolderMany).toHaveBeenCalledTimes(1));
+    // The move answers after the add, which is the order that left the move's half on offer.
+    await act(async () => moved({ changes: [], undoId: 60 }));
+
+    await waitFor(() => expect(notices()).toHaveLength(2));
+    expect(useBulkUndo.getState().offers.collection).toBeNull();
   });
 });

@@ -11,7 +11,7 @@
  * passed.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { offerUndo } from "@/lib/bulkUndo";
+import { offerUndo, useBulkUndo, type UndoScope } from "@/lib/bulkUndo";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import type { Finish } from "@/lib/finish";
@@ -109,12 +109,47 @@ export interface AddManyInput<T> {
    * `useSetCollectionFolderMany`'s `destination` is.
    */
   destination: string;
+  /**
+   * The undo offer's noun — `card` (the default) or `wish`, the word the surface's own receipt
+   * counts in, so `Added 3 wishes to Ordered` is not offered back as `Added 3 cards to Ordered.`
+   */
+  noun?: "card" | "wish";
+  /**
+   * `false` when this write is **one half of a press** whose other half is another write (a dropped
+   * set mixing new cards with rows already on the list): its ticket would take back half the press,
+   * so nothing is offered and the scope's older offer is taken down — a newer write has made it
+   * stale either way. Defaults to `true`.
+   */
+  undoable?: boolean;
 }
 
 /** `Added 300 cards to Binder.` — the undo offer's sentence for a batch add, counted in the items
- *  that landed. */
-export function addedLabel(items: number, destination: string): string {
-  return `Added ${plural(items, "card")} to ${destination}.`;
+ *  that landed, in the surface's own noun. */
+export function addedLabel(
+  items: number,
+  destination: string,
+  noun: "card" | "wish" = "card",
+): string {
+  const counted = noun === "wish" ? plural(items, "wish", "wishes") : plural(items, "card");
+  return `Added ${counted} to ${destination}.`;
+}
+
+/**
+ * The offer a bulk write makes, or — for a write that is only half its press — none, with the
+ * scope's older offer taken down ({@link AddManyInput.undoable}). Shared by the four bulk writes a
+ * dropped set can mix: the two adds here, `useSetCollectionFolderMany` and `moveWishes`.
+ */
+export function offerBulkUndo(
+  scope: UndoScope,
+  undoable: boolean | undefined,
+  id: number | null,
+  label: string,
+): void {
+  if (undoable === false) {
+    useBulkUndo.getState().drop(scope);
+    return;
+  }
+  offerUndo(scope, id, label);
 }
 
 /**
@@ -139,9 +174,14 @@ export function useCollectionAddMany() {
   return useMutation({
     mutationFn: ({ items }: AddManyInput<CollectionAddInput>) =>
       ipc.collectionAddMany(items.map(entryInput)),
-    onSuccess: (outcome, { destination }) => {
+    onSuccess: (outcome, { destination, noun, undoable }) => {
       invalidateOwnedWrite(queryClient);
-      offerUndo("collection", outcome.undoId, addedLabel(outcome.added, destination));
+      offerBulkUndo(
+        "collection",
+        undoable,
+        outcome.undoId,
+        addedLabel(outcome.added, destination, noun),
+      );
     },
   });
 }
@@ -156,10 +196,15 @@ export function useWishlistAddMany() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ items }: AddManyInput<WishInput>) => ipc.wishlistAddMany(items),
-    onSuccess: (outcome, { destination }) => {
+    onSuccess: (outcome, { destination, noun, undoable }) => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void refreshCardSearches(queryClient);
-      offerUndo("wishlist", outcome.undoId, addedLabel(outcome.added, destination));
+      offerBulkUndo(
+        "wishlist",
+        undoable,
+        outcome.undoId,
+        addedLabel(outcome.added, destination, noun),
+      );
     },
   });
 }

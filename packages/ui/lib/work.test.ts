@@ -91,6 +91,58 @@ describe("beginWork", () => {
     a();
     expect(busy()).toEqual({ label: "Selecting all cards…", more: 0 });
   });
+
+  it("shows a piece whose ripe timer fires a moment before the clock agrees", () => {
+    const done = beginWork("Importing 4,000 cards…");
+    // From here `Date.now()` lags the timers by 2 ms — Firefox's clamping, a wall-clock slew — so
+    // the ripe timer fires when the clock says only 398 ms have passed.
+    const realNow = Date.now.bind(Date);
+    const lag = vi.spyOn(Date, "now").mockImplementation(() => realNow() - 2);
+    vi.advanceTimersByTime(ACTIVITY_DELAY_MS);
+    expect(busy()).toEqual({ label: "Importing 4,000 cards…", more: 0 });
+    lag.mockRestore();
+    done();
+  });
+
+  it("gives a second piece that ripens late in the first one's stay a stay of its own", () => {
+    const a = beginWork("First");
+    vi.advanceTimersByTime(ACTIVITY_DELAY_MS);
+    a(); // Shown, then over at once: held for its stay.
+    vi.advanceTimersByTime(WORK_MIN_SHOWN_MS - ACTIVITY_DELAY_MS - 100);
+    const b = beginWork("Second");
+    vi.advanceTimersByTime(ACTIVITY_DELAY_MS); // Ripe 100 ms before the first's stay ends.
+    expect(busy()).toEqual({ label: "Second", more: 0 });
+    b();
+
+    // Not 100 ms of "Second" and gone: the sentence stays its own minimum.
+    vi.advanceTimersByTime(WORK_MIN_SHOWN_MS - 1);
+    expect(busy()).toEqual({ label: "Second", more: 0 });
+    vi.advanceTimersByTime(1);
+    expect(busy()).toBeNull();
+  });
+
+  it("stays up without a gap when new work began during the stay", () => {
+    const a = beginWork("First");
+    vi.advanceTimersByTime(ACTIVITY_DELAY_MS);
+    a();
+    vi.advanceTimersByTime(WORK_MIN_SHOWN_MS - 100);
+    const b = beginWork("Second"); // Live, but 300 ms short of ripe when the stay runs out.
+
+    const seen: (string | null)[] = [];
+    const unsubscribe = useWorkStore.subscribe((s) => seen.push(s.busy?.label ?? null));
+    vi.advanceTimersByTime(100);
+    // The stay is out and "Second" is not ripe — the indicator hands over rather than dropping.
+    expect(busy()).toEqual({ label: "Second", more: 0 });
+    vi.advanceTimersByTime(ACTIVITY_DELAY_MS);
+    expect(busy()).toEqual({ label: "Second", more: 0 });
+    expect(seen).not.toContain(null);
+    expect(document.documentElement).toHaveAttribute("data-busy");
+
+    b();
+    vi.advanceTimersByTime(WORK_MIN_SHOWN_MS);
+    expect(busy()).toBeNull();
+    unsubscribe();
+  });
 });
 
 describe("trackWork", () => {

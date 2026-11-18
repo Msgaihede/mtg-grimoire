@@ -413,6 +413,77 @@ describe("useDeckCore's applyEdits", () => {
     );
   });
 
+  /**
+   * **A refused batch puts back only what it took out.** It restored the whole detail it saw at the
+   * press, so a stepper press made while the batch was out lost its number when the batch was
+   * refused — the stepper's own rollback is guarded to its newest press, and this one was not.
+   */
+  it("leaves a stepper press made while it was out alone when it is refused", async () => {
+    const { world, hook } = await openEdits();
+    const [a, b] = hook.result.current.cards;
+    let refuse: (reason: string) => void = () => {};
+    vi.spyOn(world.scope.commands, "deck_apply").mockImplementation(
+      () => new Promise((_, reject) => (refuse = reject)) as never,
+    );
+    // Neither the step's answer nor the refusal's re-read lands inside this case: what is on the
+    // desk after the refusal is the rollback's alone.
+    vi.spyOn(world.scope.commands, "deck_set_card_quantity").mockImplementation(
+      () => new Promise(() => {}) as never,
+    );
+
+    const press = hook.result.current.applyEdits.mutateAsync({
+      edits: [{ edit: "remove", ...rowOf(a) }],
+    });
+    press.catch(() => {});
+    await waitFor(() => expect(hook.result.current.cards.some((c) => c.id === a.id)).toBe(false));
+    void hook.result.current.setQuantity
+      .mutateAsync({ ...rowOf(b), quantity: b.quantity + 3 })
+      .catch(() => {});
+    await waitFor(() =>
+      expect(hook.result.current.cards.find((c) => c.id === b.id)?.quantity).toBe(b.quantity + 3),
+    );
+    vi.spyOn(world.scope.commands, "deck_get").mockImplementation(
+      () => new Promise(() => {}) as never,
+    );
+
+    refuse("The database is busy.");
+    await expect(press).rejects.toBe("The database is busy.");
+    await waitFor(() => expect(hook.result.current.cards.some((c) => c.id === a.id)).toBe(true));
+    expect(hook.result.current.cards.find((c) => c.id === b.id)?.quantity).toBe(b.quantity + 3);
+  });
+
+  /**
+   * **The plan is made before the patch.** A batch that adds to the deck's default pile reads the
+   * detail through `fetchQuery` while planning, and planned after the patch a read that went to
+   * the backend drew the batch's own removals back onto the desk while the batch was still out.
+   */
+  it("keeps a removal off the desk while a deck-default add in the same batch is planned", async () => {
+    const { world, hook } = await openEdits();
+    const [a] = hook.result.current.cards;
+    const outside = world.db.cards.find(
+      (c) => !hook.result.current.cards.some((d) => d.cardId === c.id) && c.typeLine !== null,
+    )!;
+    const apply = vi
+      .spyOn(world.scope.commands, "deck_apply")
+      .mockImplementation(() => new Promise(() => {}) as never);
+    // No `staleTime`, so that read re-fetches rather than answering from the cache — the app's
+    // 30 s is what hid this, since the patch itself stamps the answer fresh, and a plan must not
+    // depend on it.
+    world.client.setQueryDefaults(["decks"], { staleTime: 0 });
+
+    void hook.result.current.applyEdits
+      .mutateAsync({
+        edits: [
+          { edit: "remove", ...rowOf(a) },
+          { edit: "add", card: { cardId: outside.id, deckDefault: true, quantity: 1 } },
+        ],
+      })
+      .catch(() => {});
+
+    await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    expect(hook.result.current.cards.some((c) => c.id === a.id)).toBe(false);
+  });
+
   it("refuses to mix an add to the other list with this list's writes", async () => {
     const { world, hook, side } = await openEdits();
     const [a, b] = hook.result.current.cards;

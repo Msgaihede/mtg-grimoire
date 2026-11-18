@@ -77,7 +77,19 @@ export const useWorkStore = create<WorkState>(() => ({ live: [], busy: null }));
 let nextId = 1;
 /** Each live piece's timer to the moment it becomes old enough to show. */
 const ripeTimers = new Map<number, number>();
-/** When the indicator last went up — what its minimum stay is counted from. */
+/**
+ * Pieces whose ripe timer has fired. **The timer firing is ripeness**, whatever the clock says:
+ * a timer can fire a millisecond before `Date.now()` agrees the delay has passed (Firefox's
+ * clamping, the web build, a wall-clock slew), and re-deriving ripeness from the clock alone
+ * would leave such a piece unripe with nothing left to wake {@link settle} — a three-second write
+ * that never showed.
+ */
+const ripeIds = new Set<number>();
+/**
+ * When the indicator's current sentence went up — what its minimum stay is counted from. Reset
+ * whenever the named piece changes, so every sentence the indicator says stays long enough to be
+ * read, not only the first.
+ */
 let shownAt: number | null = null;
 let holdTimer: number | null = null;
 
@@ -88,36 +100,44 @@ function sameBusy(a: Busy | null, b: Busy | null): boolean {
 /**
  * Work out what the indicator says now, and arrange to ask again when that can next change.
  *
- * A piece is *ripe* once it has been live for {@link ACTIVITY_DELAY_MS}; the indicator is up
- * while any piece is ripe, and for {@link WORK_MIN_SHOWN_MS} after it went up whatever happens.
- * During that hold, with nothing ripe left, it keeps the last sentence it said — the work is
- * over, but swapping the words for the last 200 ms would be noise.
+ * A piece is *ripe* once it has been live for {@link ACTIVITY_DELAY_MS} (or its ripe timer has
+ * fired — {@link ripeIds}); the indicator is up while any piece is ripe, and each sentence it says
+ * stays for {@link WORK_MIN_SHOWN_MS} whatever happens — a second piece ripening late in the
+ * first one's stay gets a stay of its own rather than the first one's last few milliseconds.
+ * During a stay, with nothing ripe left, it keeps the sentence it said — the work is over, but
+ * swapping the words for the last 200 ms would be noise. **Once up, it stays up while work is
+ * live**: a piece that began during the stay and has not ripened yet takes the indicator over
+ * when the stay runs out, rather than the indicator dropping and coming back a moment later.
  */
 function settle(): void {
   const now = Date.now();
   const { live, busy } = useWorkStore.getState();
-  const ripe = live.filter((w) => now - w.since >= ACTIVITY_DELAY_MS);
+  const ripe = live.filter((w) => ripeIds.has(w.id) || now - w.since >= ACTIVITY_DELAY_MS);
+  const held = shownAt !== null && now - shownAt < WORK_MIN_SHOWN_MS;
 
   let next: Busy | null;
-  if (ripe.length > 0) {
-    next = { label: ripe[0].label, more: ripe.length - 1 };
-    shownAt ??= now;
-    if (holdTimer !== null) {
-      window.clearTimeout(holdTimer);
-      holdTimer = null;
-    }
-  } else if (shownAt !== null && now - shownAt < WORK_MIN_SHOWN_MS) {
-    next = busy && { label: busy.label, more: 0 };
-    holdTimer ??= window.setTimeout(
-      () => {
+  if (ripe.length > 0) next = { label: ripe[0].label, more: ripe.length - 1 };
+  else if (busy !== null && held) next = { label: busy.label, more: 0 };
+  else if (busy !== null && live.length > 0) next = { label: live[0].label, more: 0 };
+  else next = null;
+
+  if (next === null) shownAt = null;
+  else if (busy === null || busy.label !== next.label) shownAt = now;
+
+  if (holdTimer !== null) {
+    window.clearTimeout(holdTimer);
+    holdTimer = null;
+  }
+  // Nothing ripe holds it up but the stay: ask again when the stay runs out. (Ripe work needs no
+  // timer — its end calls `settle`; neither does a live unripe piece, whose ripe timer will.)
+  if (next !== null && ripe.length === 0 && shownAt !== null) {
+    const left = WORK_MIN_SHOWN_MS - (now - shownAt);
+    if (left > 0) {
+      holdTimer = window.setTimeout(() => {
         holdTimer = null;
         settle();
-      },
-      WORK_MIN_SHOWN_MS - (now - shownAt),
-    );
-  } else {
-    next = null;
-    shownAt = null;
+      }, left);
+    }
   }
 
   if (!sameBusy(busy, next)) useWorkStore.setState({ busy: next });
@@ -140,6 +160,7 @@ export function beginWork(label: string): () => void {
     id,
     window.setTimeout(() => {
       ripeTimers.delete(id);
+      ripeIds.add(id);
       settle();
     }, ACTIVITY_DELAY_MS),
   );
@@ -150,6 +171,7 @@ export function beginWork(label: string): () => void {
     const timer = ripeTimers.get(id);
     if (timer !== undefined) window.clearTimeout(timer);
     ripeTimers.delete(id);
+    ripeIds.delete(id);
     useWorkStore.setState((s) => ({ live: s.live.filter((w) => w.id !== id) }));
     settle();
   };
@@ -181,6 +203,7 @@ export function busySentence(busy: Busy): string {
 export function resetWork(): void {
   for (const timer of ripeTimers.values()) window.clearTimeout(timer);
   ripeTimers.clear();
+  ripeIds.clear();
   if (holdTimer !== null) window.clearTimeout(holdTimer);
   holdTimer = null;
   shownAt = null;

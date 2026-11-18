@@ -163,6 +163,43 @@ describe("useDeckDrops' multi-card drop", () => {
   });
 });
 
+describe("useDeckDrops' applyWrites", () => {
+  /**
+   * The busy sentence counts **what is sent** and names the pile the caller hands it (issue #1164
+   * review): a refile whose row has gone is dropped from the batch and was still counted, and the
+   * quick category's new pile was not yet among the deck's piles, so its line named none.
+   */
+  it("counts what it sends and names a pile the caller just made", async () => {
+    const { world, hook } = await openDrops();
+    const [a, b] = hook.result.current.deck.cards;
+    vi.spyOn(world.scope.commands, "deck_apply").mockImplementation(
+      () => new Promise(() => {}) as never,
+    );
+    const fresh = { id: 999_999, name: "Fresh pile" };
+
+    act(() => {
+      void hook.result.current.drops.applyWrites(
+        [
+          ...[a, b].map((r): DeckWrite => ({
+            write: "move",
+            cardId: r.cardId,
+            from: r.categoryId,
+            to: fresh.id,
+            finish: r.finish,
+          })),
+          { write: "auto-refile", cardId: "gone", from: a.categoryId, finish: null },
+        ],
+        true,
+        fresh,
+      );
+    });
+
+    expect(useWorkStore.getState().live.map((w) => w.label)).toContain(
+      "Moving 2 cards to “Fresh pile”…",
+    );
+  });
+});
+
 describe("dropWork", () => {
   const piles = [{ id: 7, name: "Sideboard" }] as unknown as Parameters<typeof dropWork>[1];
   it("names the one pile every card goes to, or counts", () => {

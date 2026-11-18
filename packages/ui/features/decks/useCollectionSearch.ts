@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -11,7 +11,7 @@ import {
   COLLECTION_MAX_PAGE_SIZE,
   nextOffset,
 } from "@/features/collection/useCollection";
-import { pageLimit } from "@/lib/pageLimit";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import {
   activeFilterCount,
@@ -587,12 +587,15 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     marketplace.id,
   ];
 
-  /** How many rows the page {@link fetchMore} is asking for is owed — read at the fetch, which
-   *  TanStack runs synchronously inside `fetchNextPage`; unset for every other fetch. */
-  const wantRef = useRef<number | undefined>(undefined);
+  /**
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
+   */
+  const { pin: pinWant, at: wantAt } = useWantedPage(listKey, nextOffset);
   const query = useInfiniteQuery({
     queryKey: listKey,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, queryKey: key }) =>
       ipc.collectionList({
         ...filters,
         // The tab's page unless a Ctrl+A walk asked for more — `lib/pageLimit.ts`. This wall is
@@ -602,7 +605,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
           queryClient.getQueryData<InfiniteData<{ items: unknown[] }>>(listKey)?.pages,
           DECK_COLLECTION_PAGE_SIZE,
           COLLECTION_MAX_PAGE_SIZE,
-          wantRef.current,
+          wantAt(key, pageParam),
         ),
         offset: pageParam,
       }),
@@ -620,14 +623,10 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   const { fetchNextPage } = query;
   const fetchMore = useCallback(
     (want?: number) => {
-      wantRef.current = want;
-      try {
-        void fetchNextPage();
-      } finally {
-        wantRef.current = undefined;
-      }
+      pinWant(want);
+      void fetchNextPage();
     },
-    [fetchNextPage],
+    [fetchNextPage, pinWant],
   );
 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -16,7 +16,7 @@ import {
   type TagNamespace,
 } from "@/lib/ipc";
 import { BORDERS, type Border } from "@/lib/border";
-import { pageLimit } from "@/lib/pageLimit";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import type { Universe } from "@/lib/universe";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
@@ -1275,17 +1275,16 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   ];
 
   /**
-   * How many rows the page being asked for is owed, while {@link fetchMore} is asking — read by the
-   * query function at the fetch, which TanStack runs synchronously inside `fetchNextPage`. Unset
-   * for every other fetch (the first page, a refetch, a caller's plain `fetchNextPage`), which ask
-   * for what `pageLimit` says they always did.
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
    */
-  const wantRef = useRef<number | undefined>(undefined);
+  const { pin: pinWant, at: wantAt } = useWantedPage(queryKey, nextOffset);
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     queryKey,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, queryKey: key }) =>
       ipc.searchCards({
         // **The free text, not the box** — the tag terms have been lifted out of it, so
         // `bolt atag:dragon` searches FTS for `bolt` alone. Sending the raw string would have FTS
@@ -1371,7 +1370,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
           queryClient.getQueryData<InfiniteData<SearchResponse>>(queryKey)?.pages,
           PAGE_SIZE,
           MAX_PAGE_SIZE,
-          wantRef.current,
+          wantAt(key, pageParam),
         ),
         offset: pageParam,
       }),
@@ -1419,14 +1418,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const { fetchNextPage } = query;
   const fetchMore = useCallback(
     (want?: number) => {
-      wantRef.current = want;
-      try {
-        void fetchNextPage();
-      } finally {
-        wantRef.current = undefined;
-      }
+      pinWant(want);
+      void fetchNextPage();
     },
-    [fetchNextPage],
+    [fetchNextPage, pinWant],
   );
 
   /**

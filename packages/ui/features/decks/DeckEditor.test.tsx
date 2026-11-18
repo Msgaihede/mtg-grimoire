@@ -9239,6 +9239,74 @@ describe("DeckEditor multi-select", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  /**
+   * **A label over a set takes an older refusal down, as one label did** (issue #1164 review).
+   * The dialog's set is one `deck_apply` that files no `lastBatch`, and `applyEdits` was in neither
+   * banner list — so a refused stepper press stayed on the line after a successful twelve-card
+   * label, where the single `setLabel` it replaced was the newest write and cleared it.
+   */
+  it("clears a stale stepper refusal when More labels… over a set lands", async () => {
+    deckSetCardQuantity.mockRejectedValueOnce("The database is busy with a sync.");
+    deckLabelAll.mockResolvedValue([
+      { id: 8, name: "Budget swap", color: "moss", cardCount: 3, deckCount: 2 },
+    ]);
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: `Increase ${COPIES}` }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't change this deck — The database is busy with a sync.",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Bear", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^Label 2 cards/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add label" });
+    await userEvent.click(await within(dialog).findByRole("button", { name: /Budget swap/ }));
+
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(opsSent().map((op) => op.op)).toEqual(["setLabel", "setLabel"]);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({ tone: "success" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  /**
+   * **A batch refused in part still throws the redo stack away** (issue #1164 review). Its record
+   * is a refusal stamped when it settled — newer than its own `applyEdits` call — so the newest
+   * write read as no success and the stack survived, while the card that landed had edited past
+   * the branch exactly as a single write would have.
+   */
+  it("throws the redo stack away after a Delete that landed in part", async () => {
+    deckUndoState.mockImplementation((_deckId: number, redoId: number | null) =>
+      Promise.resolve(
+        redoId === null ? { undo: UNDOABLE, redo: null } : { undo: null, redo: UNDOABLE },
+      ),
+    );
+    deckApply.mockImplementationOnce(refuseFirst("The database is busy with a sync."));
+    await open();
+    await screen.findByRole("button", { name: /^Undo —/ });
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(deckUndoApply).toHaveBeenCalledWith(4, 77));
+    await screen.findByRole("button", { name: /^Redo —/ });
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 1 of 2 cards from the deck",
+      }),
+    );
+    const redo = await screen.findByRole("button", { name: "Redo" });
+    expect(redo).toHaveAttribute("aria-disabled", "true");
+  });
+
   /** A right-click on a card **outside** the set is about that card — the press rule that
    *  matches the drag's. */
   it("keeps the card menu singular on a card outside the set", async () => {

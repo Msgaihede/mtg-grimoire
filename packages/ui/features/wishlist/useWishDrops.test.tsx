@@ -11,15 +11,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const wishlistAdd = vi.hoisted(() => vi.fn());
 const wishlistAddMany = vi.hoisted(() => vi.fn());
+const wishlistSetFolderMany = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { wishlistAdd, wishlistAddMany },
+  ipc: { wishlistAdd, wishlistAddMany, wishlistSetFolderMany },
 }));
 
 import { useBulkUndo } from "@/lib/bulkUndo";
 import type { WishlistFolder } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 import { useWishDrops } from "./useWishDrops";
+import { useWishEntryWrites } from "./useWishEntryWrites";
 import type { WishSingleDrop } from "./wishDrag";
 
 const ORDERED: WishlistFolder = {
@@ -99,19 +101,82 @@ describe("useWishDrops — a picked set dropped on a shelf", () => {
       { cardId: "a", quantity: 1, preferredFinish: "nonfoil", folderId: ORDERED.id },
       { cardId: "b", quantity: 1, preferredFinish: "nonfoil", folderId: ORDERED.id },
     ]);
+    // A mixed set: neither half offers an undo of its own (see the real-hooks case below).
     expect(moveWishes).toHaveBeenCalledExactlyOnceWith({
       ids: [10, 11],
       folderId: ORDERED.id,
       destination: "Ordered",
+      undoable: false,
     });
     expect(wishlistAdd).not.toHaveBeenCalled();
     expect(moveWish).not.toHaveBeenCalled();
     expect(notices()[0]).toMatchObject({ title: "Moved 4 wishes to “Ordered”", tone: "success" });
-    // The add's ticket is offered on the wishlist page (the move's is its hook's, mocked here).
+    expect(useBulkUndo.getState().offers.wishlist).toBeNull();
+  });
+
+  /**
+   * **A set of new cards alone keeps its write's offer, in the receipt's noun** — the toast says
+   * `Added 2 wishes`, so the offer says wishes too rather than `Added 2 cards`.
+   */
+  it("offers a set of new cards back, counted in wishes", async () => {
+    const { result } = mounted();
+    act(() => result.current.fileWish({ kind: "group", members: [card("a"), card("b")] }, 4));
+
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(notices()[0]).toMatchObject({ title: "Added 2 wishes to “Ordered”" });
     expect(useBulkUndo.getState().offers.wishlist).toMatchObject({
       id: 30,
-      label: "Added 2 cards to Ordered.",
+      label: "Added 2 wishes to Ordered.",
     });
+  });
+
+  /**
+   * **Two bulk halves, one scope, the real hooks** (issue #1164 review). Each half's hook offered
+   * its own ticket on the wishlist's one scope and whichever answered last won, so Undo took back
+   * half the press — here the move, answering after the add. A mixed press offers nothing, and
+   * takes down the offer an older press left.
+   */
+  it("offers no undo for a set mixing new cards and wishes", async () => {
+    let moved: (outcome: unknown) => void = () => {};
+    wishlistSetFolderMany
+      .mockReset()
+      .mockImplementation(() => new Promise((resolve) => (moved = resolve)));
+    useBulkUndo.getState().offer({ id: 7, scope: "wishlist", label: "Imported 40 cards." });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children);
+    const { result } = renderHook(
+      () => {
+        const writes = useWishEntryWrites();
+        return useWishDrops({
+          census: [ORDERED],
+          userNodes: [],
+          treeParent: new Map(),
+          managed: new Set(),
+          setFolder: vi.fn(),
+          moveWish: writes.moveWish.mutateAsync,
+          moveWishes: writes.moveWishes.mutateAsync,
+          reorder: vi.fn(),
+          settleWhole: writes.settleWhole,
+        });
+      },
+      { wrapper },
+    );
+
+    act(() =>
+      result.current.fileWish(
+        { kind: "group", members: [card("a"), wish(10), card("b"), wish(11)] },
+        ORDERED.id,
+      ),
+    );
+    await waitFor(() => expect(wishlistAddMany).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(wishlistSetFolderMany).toHaveBeenCalledTimes(1));
+    await act(async () => moved({ changes: [], undoId: 31 }));
+
+    await waitFor(() => expect(notices()).toHaveLength(1));
+    expect(useBulkUndo.getState().offers.wishlist).toBeNull();
   });
 
   it("keeps the single commands for a half of exactly one", async () => {

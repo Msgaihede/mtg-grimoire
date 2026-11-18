@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -6,7 +6,7 @@ import {
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { pageLimit } from "@/lib/pageLimit";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import {
   bordersParam,
   colorParam,
@@ -623,14 +623,17 @@ export function useCollection({
   const fetchKey = viewAll ? "all" : toFetch.join(",");
   const listKey = ["collection", "list", filterKey, sortKey, fetchKey];
 
-  /** How many rows the page {@link fetchMore} is asking for is owed — read at the fetch, which
-   *  TanStack runs synchronously inside `fetchNextPage`; unset for every other fetch. */
-  const wantRef = useRef<number | undefined>(undefined);
+  /**
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
+   */
+  const { pin: pinWant, at: wantAt } = useWantedPage(listKey, nextOffset);
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     queryKey: listKey,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, queryKey: key }) =>
       ipc.collectionList({
         ...filters,
         // **The open shelves, in wall order** — the backend orders by position in this list and
@@ -650,7 +653,7 @@ export function useCollection({
           queryClient.getQueryData<InfiniteData<CollectionPage>>(listKey)?.pages,
           COLLECTION_PAGE_SIZE,
           COLLECTION_MAX_PAGE_SIZE,
-          wantRef.current,
+          wantAt(key, pageParam),
         ),
         offset: pageParam,
       }),
@@ -669,14 +672,10 @@ export function useCollection({
   const { fetchNextPage } = query;
   const fetchMore = useCallback(
     (want?: number) => {
-      wantRef.current = want;
-      try {
-        void fetchNextPage();
-      } finally {
-        wantRef.current = undefined;
-      }
+      pinWant(want);
+      void fetchNextPage();
     },
-    [fetchNextPage],
+    [fetchNextPage, pinWant],
   );
 
   const summary = useQuery({
@@ -829,7 +828,9 @@ export function useCollection({
           firstDir: COLLECTION_FIRST_DIR[key as CollectionSortKey] ?? "asc",
         }),
       ),
-    [],
+    // `setSort` is a state setter and never changes; named because the React Compiler's check
+    // infers it as a dependency of this hook and skips the whole hook over an empty list.
+    [setSort],
   );
 
   return {

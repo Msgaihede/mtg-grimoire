@@ -2268,6 +2268,31 @@ describe("fetchMore — a select-all's pages", () => {
     expect(result.current.rows).toHaveLength(1000);
   });
 
+  /**
+   * The want is pinned to the page it was asked for, not to the synchronous run of the query
+   * function inside `fetchNextPage`: the app's client retries once, a second later, and that
+   * retry used to find the want gone and ask for the ordinary 50.
+   */
+  it("asks for the same big page again when the first try is refused and retried", async () => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toHaveLength(50));
+
+    searchCards.mockClear();
+    searchCards.mockImplementationOnce(() => Promise.reject("database is locked"));
+    act(() => result.current.fetchMore(950));
+    await waitFor(() => expect(result.current.rows).toHaveLength(250));
+
+    const limits = searchCards.mock.calls.map(([req]) => (req as SearchRequest).limit);
+    expect(limits).toEqual([200, 200]);
+
+    // The next ordinary page is the ordinary size: the pin was for the page at offset 50 only.
+    searchCards.mockClear();
+    act(() => result.current.fetchMore());
+    await waitFor(() => expect(result.current.rows).toHaveLength(300));
+    expect(lastSearchRequest().limit).toBe(50);
+  });
+
   it("asks for the ordinary page when no wall says it is owed more", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(result.current.rows).toHaveLength(50));

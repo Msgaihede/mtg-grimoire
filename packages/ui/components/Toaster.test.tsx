@@ -112,8 +112,8 @@ describe("the busy pill", () => {
     act(() => vi.advanceTimersByTime(1));
     const pill = screen.getByRole("status");
     expect(pill).toHaveTextContent("Adding 300 cards to “Burn”…");
-    expect(pill).toHaveAttribute("aria-live", "polite");
-    expect(pill).toHaveAttribute("aria-busy", "true");
+    // `status` is polite already; `aria-busy` would hold the announcement it is there to make.
+    expect(pill).not.toHaveAttribute("aria-busy");
     expect(pill).not.toHaveAttribute("tabindex");
     expect(pill).toHaveClass("pointer-events-none");
     expect(screen.getByRole("region", { name: "Notifications" })).toContainElement(pill);

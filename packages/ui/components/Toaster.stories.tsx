@@ -141,7 +141,7 @@ export const Inbox: Story = {
  * 400 ms, drawn at the foot of the stack where its receipt toast will land, with the oldest piece
  * named and the rest counted. A spinning glyph (still under reduced motion), never focusable,
  * never in a press's way. **Run slow work** shows the whole life: nothing for 400 ms, the pill,
- * then the receipt in its place.
+ * then the receipt above it until the pill's minimum stay is out.
  */
 export const Busy: Story = {
   args: {
@@ -151,6 +151,7 @@ export const Busy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement.ownerDocument.body);
     const pill = await canvas.findByText("Adding 300 cards to “Burn”… and 1 more");
-    await expect(pill.closest("[role=status]")).toHaveAttribute("aria-busy", "true");
+    // The pill is its own announcement — `aria-busy` would hold it until busy cleared, never.
+    await expect(pill.closest("[role=status]")).not.toHaveAttribute("aria-busy");
   },
 };

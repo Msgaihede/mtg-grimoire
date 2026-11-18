@@ -131,6 +131,8 @@ export function useCollectionDrops({
     entryIds: readonly number[];
     folderId: number | null;
     destination: string;
+    /** `false` for half of a mixed set — the hook then offers no undo. */
+    undoable?: boolean;
   }) => Promise<{ changes: readonly unknown[] }>;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
@@ -418,11 +420,36 @@ export function useCollectionDrops({
    */
   const commitGroup = useCallback(
     (members: readonly CollectionSingleDrop[], to: number | null, destination: string) => {
+      // **The refiles** — every row and tile in the set, as the rows behind them.
+      const refiles = members.flatMap((member) =>
+        member.kind === "entry"
+          ? [
+              {
+                name: member.entry.name,
+                copies: [{ entryId: member.entry.entryId, folderId: member.entry.folderId }],
+              },
+            ]
+          : member.kind === "tile"
+            ? [{ name: member.tile.name, copies: member.tile.copies }]
+            : [],
+      );
+      // A tile standing for several rows sends the refiles to the copy picker (below); otherwise
+      // every row the destination takes is one write.
+      const asks = refiles.some((refile) => refile.copies.length > 1);
+      const movable = asks
+        ? []
+        : refiles.filter((refile) => canMoveCopy(refile.copies[0].folderId, to));
+      const added = members.flatMap((member) => (member.kind === "new" ? [member.card] : []));
+      // **A set that mixes both is one press and two writes, and no ticket takes back both**: each
+      // bulk half offers its own undo on the collection's one scope, and whichever answered last
+      // won — so Undo took back half the press. A mixed press offers none (and takes the older
+      // offer down); a press of one kind keeps its write's offer.
+      const undoable = added.length === 0 || movable.length === 0;
+
       // **The adds** — a picked set off the search column, as **one** write (`addDroppedMany`):
       // one transaction and one refresh for the set, where a write per card was N of each and froze
       // the page over a few hundred. One card is still the single add. **One toast** for the lot
       // with any refusals folded in (the owner's rule: one action, one toast).
-      const added = members.flatMap((member) => (member.kind === "new" ? [member.card] : []));
       if (added.length > 0) {
         const items = added.map((card) => ({
           cardId: card.cardId,
@@ -438,7 +465,7 @@ export function useCollectionDrops({
               )
             : trackWork(
                 `Adding ${plural(items.length, "card")} to “${destination}”…`,
-                addDroppedManyAsync({ items, destination }),
+                addDroppedManyAsync({ items, destination, undoable }),
               ).then(
                 (outcome) => outcome.refused.map((refusal) => refusal.reason),
                 (error: unknown) => items.map(() => error),
@@ -460,25 +487,12 @@ export function useCollectionDrops({
         });
       }
 
-      // **The refiles** — every row and tile in the set, as the rows behind them.
-      const refiles = members.flatMap((member) =>
-        member.kind === "entry"
-          ? [
-              {
-                name: member.entry.name,
-                copies: [{ entryId: member.entry.entryId, folderId: member.entry.folderId }],
-              },
-            ]
-          : member.kind === "tile"
-            ? [{ name: member.tile.name, copies: member.tile.copies }]
-            : [],
-      );
       if (refiles.length === 0) return;
       // **A tile standing for several rows is still the one case the app cannot decide**
       // ({@link commitFile}'s rule, unchanged by there being more than one tile in the air), so a
       // set holding one goes to the copy picker — over every row in the set, each ticked unless
       // the destination refuses it, which is the menu's `Move N cards to` exactly.
-      if (refiles.some((refile) => refile.copies.length > 1)) {
+      if (asks) {
         setPicking({
           entryIds: refiles.flatMap((refile) => refile.copies.map((copy) => copy.entryId)),
           folderId: to,
@@ -487,10 +501,9 @@ export function useCollectionDrops({
       }
       // Otherwise every row the destination takes, in **one** write — a refusal rolls the whole
       // press back rather than filing half the set — and one receipt counted off its answer.
-      const movable = refiles.filter((refile) => canMoveCopy(refile.copies[0].folderId, to));
       if (movable.length === 0) return;
       const entryIds = movable.map((refile) => refile.copies[0].entryId);
-      report(moveMany({ entryIds, folderId: to, destination }), {
+      report(moveMany({ entryIds, folderId: to, destination, undoable }), {
         done: (outcome) =>
           movedReceipt(
             outcome.changes.length || entryIds.length,

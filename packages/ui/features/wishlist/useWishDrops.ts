@@ -80,6 +80,8 @@ export function useWishDrops({
     ids: readonly number[];
     folderId: number | null;
     destination: string;
+    /** `false` for half of a mixed set — the hook then offers no undo. */
+    undoable?: boolean;
   }) => Promise<unknown>;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
@@ -199,6 +201,11 @@ export function useWishDrops({
         member.kind === "wish" ? [member.wish.wishId] : [],
       );
       const wishes = (n: number) => plural(n, "wish", "wishes");
+      // **A set that mixes both is one press and two writes, and no ticket takes back both.** Each
+      // bulk half offers its own undo on the wishlist's one scope, and whichever answered last
+      // won — so Undo took back half the press. A mixed press offers none (and takes the older
+      // offer down); a press of one kind keeps its write's offer.
+      const undoable = cards.length === 0 || wishIds.length === 0;
       // Each half answers one slot per member, in the order dropped: `undefined` where it landed,
       // its refusal where it did not — the add's by index, a rejected call's for every member.
       const LANDED = undefined;
@@ -220,6 +227,9 @@ export function useWishDrops({
                     folderId: to,
                   })),
                   destination: into,
+                  // The receipt below counts wishes; so does the offer.
+                  noun: "wish",
+                  undoable,
                 }),
               ).then(
                 (outcome) => {
@@ -236,7 +246,7 @@ export function useWishDrops({
               ? moveWish({ id: wishIds[0], folderId: to })
               : trackWork(
                   `Moving ${wishes(wishIds.length)} to “${into}”…`,
-                  moveWishes({ ids: wishIds, folderId: to, destination: into }),
+                  moveWishes({ ids: wishIds, folderId: to, destination: into, undoable }),
                 )
             ).then(
               () => wishIds.map(() => LANDED),

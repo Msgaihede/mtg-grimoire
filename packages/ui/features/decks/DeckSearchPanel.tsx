@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -961,10 +962,11 @@ function OpenPanel({
 
   /**
    * `onAdded` read at the press, so a host that hands a fresh one per render (a story) does not
-   * redraw every tile's Add button for it. The editor's is already stable.
+   * redraw every tile's Add button for it. The editor's is already stable. Refreshed in a layout
+   * effect, so a press never lands in the gap before a passive one would have run.
    */
   const onAddedRef = useRef(onAdded);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onAddedRef.current = onAdded;
   }, [onAdded]);
 

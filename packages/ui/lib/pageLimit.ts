@@ -1,3 +1,6 @@
+import { useLayoutEffect, useMemo, useRef } from "react";
+import { hashKey, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+
 /**
  * **How many rows the page at `offset` asks for** — the ordinary page, or more of them at once
  * when a wall has said it is owed more (a Ctrl+A walk, issue #910) — for the paged lists behind
@@ -50,4 +53,63 @@ export function pageLimit(
 
 function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, Math.ceil(value)));
+}
+
+/** A wall's `want`, pinned to the one page it was asked for — see {@link useWantedPage}. */
+interface PinnedWant {
+  /** The list's query key, hashed. */
+  key: string;
+  /** Where the page it was asked for starts. */
+  offset: number;
+  want: number;
+}
+
+/**
+ * **Carries a `fetchMore(want)` to the page it was asked for**, however late that page's fetch
+ * runs — for the four paged hooks' `fetchMore` (`useCardSearch`, `useCollection`, `useWishlist`,
+ * the deck builder's `useCollectionSearch`).
+ *
+ * A ref set around `fetchNextPage` and cleared after it relied on TanStack running the query
+ * function synchronously inside the call. Its retry (`retry: 1` in the app's client) runs it again
+ * a second later, and a fetch started while the query is paused runs it when it resumes — both
+ * after the ref was cleared, so the page silently fell back to the ordinary size. So `pin` records
+ * the want **with the offset the next page will start at** (and the list's key), read off the cache
+ * at the press, and `at` answers it for the page at that offset of that list whenever its fetch
+ * runs — the first try, a retry, a resumed start. Any other page gets `undefined`, and a
+ * `fetchMore()` with no `want` unpins it.
+ *
+ * `next` is the hook's own `getNextPageParam` arithmetic over the held pages (a module function).
+ */
+export function useWantedPage<P>(
+  queryKey: readonly unknown[],
+  next: (pages: P[]) => number | undefined,
+): {
+  pin: (want: number | undefined) => void;
+  at: (key: readonly unknown[], offset: number) => number | undefined;
+} {
+  const queryClient = useQueryClient();
+  /** The list's key at the press: refreshed before paint, so a press never reads an older one. */
+  const keyRef = useRef(queryKey);
+  useLayoutEffect(() => {
+    keyRef.current = queryKey;
+  });
+  const pinned = useRef<PinnedWant | null>(null);
+  return useMemo(
+    () => ({
+      pin: (want) => {
+        const key = keyRef.current;
+        const pages = queryClient.getQueryData<InfiniteData<P>>(key)?.pages;
+        const offset = pages === undefined ? undefined : next(pages);
+        pinned.current =
+          want === undefined || offset === undefined ? null : { key: hashKey(key), offset, want };
+      },
+      at: (key, offset) => {
+        const held = pinned.current;
+        return held !== null && held.offset === offset && held.key === hashKey(key)
+          ? held.want
+          : undefined;
+      },
+    }),
+    [queryClient, next],
+  );
 }

@@ -50,6 +50,7 @@ import {
   cardDraggable,
   deckCardSlot,
   DECK_CARD_ATTR,
+  anyDropWrites,
   dropWrites,
   readCards,
   type DeckWrite,
@@ -957,7 +958,10 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (writes: Dec
   const { armed, over } = useDndDropTarget({
     ref,
     read: readCards,
-    canDrop: (payloads) => writesFor(payloads).length > 0,
+    // `anyDropWrites` stops at the first member that writes rather than building the group's
+    // writes per ask — this is asked on every pointer move over the pile.
+    canDrop: (payloads) =>
+      categoryId !== null && anyDropWrites(payloads, { kind: "category", categoryId }),
     onDrop: (payloads) => onDrop?.(writesFor(payloads)),
   });
 

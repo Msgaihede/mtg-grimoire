@@ -1006,6 +1006,14 @@ export function DeckEditor({
     toasted(deck.quickAddToCollection),
     toasted(deck.addMissingToCollection),
     toasted(deck.addToOtherList),
+    // **The batched card writes** (issue #1164), for the one press that files no `lastBatch`: the
+    // label dialog's set ({@link labelSlots}, which cannot reach `editBatch`). Its toast is its
+    // report, so it is seated `toasted` — kept for its timing, so a set labelled after a refused
+    // stepper press takes the stale sentence down as the single `setLabel` it replaced did. The
+    // presses that do file a `lastBatch` lose nothing by it: a refused batch is stamped when it
+    // settled, after this observer's own call, and still owns the line; a clean one says nothing
+    // either way.
+    toasted(deck.applyEdits),
     // **Not seated `toasted`, though the swap, the add and the remove do toast**: their writes
     // answer only whether they landed (`useDeckTokens`' never-rejecting promises), so the toast
     // can say "Couldn't add the token" and not why. With the wall shut this line is the only
@@ -1518,7 +1526,8 @@ export function DeckEditor({
     // **The batched card writes** (issue #1164) — a drop of a set, Delete over one, a plural menu
     // row. Their refusals are `lastBatch`'s below (one per card, which this observer cannot
     // carry); what this one adds is the label dialog's set, which files no `lastBatch`, so that its
-    // success throws the redo stack away like any other write.
+    // success throws the redo stack away like any other write. A batch refused in part clears it
+    // too, through `lastBatch.landed` below.
     deck.applyEdits,
     deck.missingToWishlist,
     deck.swapPrinting,
@@ -1549,6 +1558,16 @@ export function DeckEditor({
   useEffect(() => {
     if (succeededAt) clearRedo();
   }, [succeededAt, clearRedo]);
+  /**
+   * **…and so does a batch that landed anything**, refused in part or not. A batch with one card
+   * of fifty refused is a refusal stamped when it settled ({@link lastBatch}), newer than its own
+   * `applyEdits` call, so the newest write above reads as no success at all — while the 49 cards
+   * that landed have edited past the branch exactly as 49 single writes did, each of which
+   * cleared the stack on its own success.
+   */
+  useEffect(() => {
+    if (lastBatch.landed > 0) clearRedo();
+  }, [lastBatch, clearRedo]);
 
   // Focus first, then close: the trigger is still mounted at this point. This is the
   // **keyboard** way out; the click-away way out is `close` and hands nothing back, because the
@@ -2025,9 +2044,13 @@ export function DeckEditor({
    * Both are handlers registered once and asked later: a `keydown` listener that had the set in
    * its dependency list would be torn down and re-added on every Ctrl-click, and a drag
    * registration doing the same would unregister the source under the reader's pointer.
+   *
+   * **A layout effect**, `useDeckDrops`' `cardsRef` rule: a passive effect runs after paint, so a
+   * render that was not a click's own (a scroll, a timer's `setState`) left a few milliseconds in
+   * which a press read the previous render's set.
    */
   const pickedRef = useRef(pickedCards);
-  useEffect(() => {
+  useLayoutEffect(() => {
     pickedRef.current = pickedCards;
   }, [pickedCards]);
 
@@ -2103,9 +2126,12 @@ export function DeckEditor({
             const names = filed.map((f) => f.name);
             if (filed.length > 1) {
               reportSettled(
+                // The pile is named from the create's answer: it is not among the deck's
+                // categories until the next render, and the busy line should say where.
                 applyWrites(
                   filed.map((f) => f.write),
                   true,
+                  category,
                 ),
                 names,
                 say,

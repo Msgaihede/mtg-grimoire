@@ -62,6 +62,7 @@ import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { beginWork } from "@/lib/work";
+import { isMenuKey } from "@/components/menu/useContextMenu";
 import { nextGridIndex, nextShelfTileIndex } from "./gridNav";
 import { registerSelectAll } from "./selectAllSurface";
 import { needsNextPage } from "./useCardSearch";
@@ -1742,6 +1743,12 @@ function CardGridWall<T extends GridCard>({
    * prop of every tile, and when they closed over the picked set a Ctrl-click redrew every tile on
    * the wall to move one ring — and a Ctrl+A walk redrew them all again per page. A press arrives
    * after the commit that drew the tile it lands on, so it always reads what is on screen.
+   *
+   * **Refreshed in a layout effect, not a passive one**: a passive effect can run a few
+   * milliseconds after the commit is on screen (a non-synchronous render), and a press in that gap
+   * would read the previous render's rows and set. A layout effect runs before the browser paints,
+   * so nothing drawn is ever older than this ref. (Writing it during render is what the
+   * `react-hooks` lint forbids.)
    */
   const live = useRef({
     picked,
@@ -1753,7 +1760,7 @@ function CardGridWall<T extends GridCard>({
     cardMenuKey,
     flips,
   });
-  useEffect(() => {
+  useLayoutEffect(() => {
     live.current = {
       picked,
       drawn,
@@ -3061,8 +3068,10 @@ function TileFace<T extends GridCard>({
       onContextMenu={cardMenu ? (e) => cardMenu(card)?.(e) : undefined}
       // Shift+F10 and the ContextMenu key, on the same box and about the same card. The press
       // arrives here by bubbling from whatever inside the tile holds the caret, which is the
-      // art button.
-      onKeyDown={cardMenuKey ? (e) => cardMenuKey(card)?.(e) : undefined}
+      // art button. **The key is tested before the builder runs** (`isMenuKey`, the very test
+      // `menuKey` makes): for a tile in the picked set the builder sorts and maps every picked
+      // key, and an arrow key held down across a 5,000-card wall must not pay for that per press.
+      onKeyDown={cardMenuKey ? (e) => isMenuKey(e) && cardMenuKey(card)?.(e) : undefined}
       // **The other half of the menu, and it is not the same thing as a tab stop.**
       //
       // `menu()`/`menuKey()` hand the panel *the element their handler is attached to* as the

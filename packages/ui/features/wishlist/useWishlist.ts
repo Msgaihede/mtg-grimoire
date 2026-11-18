@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -7,7 +7,7 @@ import {
   type InfiniteData,
 } from "@tanstack/react-query";
 import { COLLECTION_MAX_PAGE_SIZE, nextOffset } from "@/features/collection/useCollection";
-import { pageLimit } from "@/lib/pageLimit";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import {
   bordersParam,
   colorParam,
@@ -469,14 +469,17 @@ export function useWishlist({
   // `["wishlist", …]`, so every write to *this* list refreshes it.
   const listKey = [...listIdentity, viewAll ? "all" : fetchIds.join(",")];
 
-  /** How many rows the page {@link fetchMore} is asking for is owed — read at the fetch, which
-   *  TanStack runs synchronously inside `fetchNextPage`; unset for every other fetch. */
-  const wantRef = useRef<number | undefined>(undefined);
+  /**
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
+   */
+  const { pin: pinWant, at: wantAt } = useWantedPage(listKey, nextOffset);
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     queryKey: listKey,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, queryKey: key }) =>
       ipc.wishlistList({
         ...scope,
         // The open shelves in wall order — or, on the `View all` wall, every wish wherever it is
@@ -492,7 +495,7 @@ export function useWishlist({
           queryClient.getQueryData<InfiniteData<{ items: unknown[] }>>(listKey)?.pages,
           WISHLIST_PAGE_SIZE,
           COLLECTION_MAX_PAGE_SIZE,
-          wantRef.current,
+          wantAt(key, pageParam),
         ),
         offset: pageParam,
       }),
@@ -511,14 +514,10 @@ export function useWishlist({
   const { fetchNextPage } = query;
   const fetchMore = useCallback(
     (want?: number) => {
-      wantRef.current = want;
-      try {
-        void fetchNextPage();
-      } finally {
-        wantRef.current = undefined;
-      }
+      pinWant(want);
+      void fetchNextPage();
     },
-    [fetchNextPage],
+    [fetchNextPage, pinWant],
   );
 
   /**

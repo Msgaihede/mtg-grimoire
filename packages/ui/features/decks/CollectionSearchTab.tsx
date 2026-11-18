@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -440,10 +440,11 @@ export function CollectionSearchTab({
   /**
    * {@link commitNow}, held still — it closes over `move`, a mutation object that is new on every
    * render, and it is handed to every tile's Add button through the wall's memoised `action` slot.
-   * Read at the press, which comes after the commit that drew the button.
+   * Read at the press, which comes after the commit that drew the button — refreshed in a layout
+   * effect, before that commit is painted, so no press can land in a passive effect's gap.
    */
   const commitRef = useRef(commitNow);
-  useEffect(() => {
+  useLayoutEffect(() => {
     commitRef.current = commitNow;
   });
   const commit = useCallback(

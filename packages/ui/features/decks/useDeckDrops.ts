@@ -48,10 +48,20 @@ export interface DeckDropsInput {
 export interface LastBatch {
   write: Write;
   toasted: boolean;
+  /**
+   * How many of its writes landed. A batch refused anywhere is a refusal stamped when it settled
+   * ({@link batchWrite}), so the editor's newest-write reading sees no success in it — but 49 of
+   * 50 cards that landed have edited past the redo branch, and this is what says so.
+   */
+  landed: number;
 }
 
 /** {@link LastBatch} before any batch has run. */
-export const NO_LAST_BATCH: LastBatch = { write: NO_BATCH, toasted: false };
+export const NO_LAST_BATCH: LastBatch = { write: NO_BATCH, toasted: false, landed: 0 };
+
+/** How many of a batch's settled results went through. */
+const landedOf = (results: readonly PromiseSettledResult<unknown>[]) =>
+  results.filter((r) => r.status === "fulfilled").length;
 
 export function useDeckDrops({
   deck,
@@ -350,7 +360,11 @@ export function useDeckDrops({
       if (presses.length === 0) return;
       const firedAt = Date.now();
       void Promise.allSettled(presses).then((results) =>
-        setLastBatch({ write: batchWrite(results, firedAt, Date.now()), toasted: true }),
+        setLastBatch({
+          write: batchWrite(results, firedAt, Date.now()),
+          toasted: true,
+          landed: landedOf(results),
+        }),
       );
     },
     [setLastBatch],
@@ -419,7 +433,11 @@ export function useDeckDrops({
       );
       const settled = settledEdits(outcome, edits.length);
       void settled.then((results) =>
-        setLastBatch({ write: batchWrite(results, firedAt, Date.now()), toasted: toastedBatch }),
+        setLastBatch({
+          write: batchWrite(results, firedAt, Date.now()),
+          toasted: toastedBatch,
+          landed: landedOf(results),
+        }),
       );
       return settled;
     },
@@ -509,11 +527,24 @@ export function useDeckDrops({
    * Several drop writes as **one** batch ({@link editBatch}) — `applyDrops`' set and the quick
    * category's filing. `toastedBatch` is the caller's: a drag inside the editor is exempt from
    * toasts, so its refusals are the banner's; the quick category toasts its own.
+   *
+   * The busy sentence counts **what is sent** — {@link dropEdits} drops a refile whose row has
+   * gone — and names the pile from `pile` when the caller already knows it: the quick category's
+   * pile was made a moment ago and is not in {@link categoriesRef} until the next render.
    */
   const applyWrites = useCallback(
-    (writes: readonly DeckWrite[], toastedBatch: boolean) => {
-      const edits = dropEdits(writes);
-      return editBatch(edits, dropWork(writes, categoriesRef.current), toastedBatch);
+    (writes: readonly DeckWrite[], toastedBatch: boolean, pile?: { id: number; name: string }) => {
+      const rows = cardsRef.current;
+      const sent = writes.filter(
+        (w) =>
+          w.write !== "auto-refile" ||
+          rows.some(
+            (c) => c.cardId === w.cardId && c.categoryId === w.from && c.finish === w.finish,
+          ),
+      );
+      const edits = dropEdits(sent);
+      const piles = pile ? [...categoriesRef.current, pile] : categoriesRef.current;
+      return editBatch(edits, dropWork(sent, piles), toastedBatch);
     },
     [dropEdits, editBatch],
   );
@@ -564,7 +595,10 @@ export function useDeckDrops({
  * card goes to one pile, `Removing 300 cards…` for the remove tray, `Adding 120 cards…` for an
  * Auto drop of search cards. A drop that mixes them is `Filing N cards…`.
  */
-export function dropWork(writes: readonly DeckWrite[], categories: Deck["categories"]): string {
+export function dropWork(
+  writes: readonly DeckWrite[],
+  categories: readonly { id: number; name: string }[],
+): string {
   const n = writes.length;
   const kinds = new Set(writes.map((w) => w.write));
   const only = (kind: DeckWrite["write"]) => kinds.size === 1 && kinds.has(kind);
