@@ -30,6 +30,18 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.71.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.71.0...v0.71.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **cards:** keep etched off the rules text and light only the hovered foil ([#1698](https://github.com/Msgaihede/mtg-grimoire/issues/1698)) ([a162439](https://github.com/Msgaihede/mtg-grimoire/commit/a1624399301e56a98f11984c0241b7d60eaf4f03))
+
+
+### Performance Improvements
+
+* one write per multi-card action, a faster collection write, and a busy indicator ([#1699](https://github.com/Msgaihede/mtg-grimoire/issues/1699)) ([a03c446](https://github.com/Msgaihede/mtg-grimoire/commit/a03c4467453d40c97f123ef42623b811332cf7d0))
+
 ## [0.71.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.70.0...v0.71.0) (2026-11-16)
 
 
