@@ -20,7 +20,14 @@ const wishlistAdd = vi.hoisted(() => vi.fn());
 const wishlistAddMany = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { shareOpen, collectionList, wishlistList, wishlistFolderList, wishlistAdd, wishlistAddMany },
+  ipc: {
+    shareOpen,
+    collectionList,
+    wishlistList,
+    wishlistFolderList,
+    wishlistAdd,
+    wishlistAddMany,
+  },
 }));
 
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";

@@ -2028,7 +2028,8 @@ const NOT_PLAYED_REASON = "not in this deck";
  *
  * ## Every target, never any
  *
- * `rows.length > 1` is a picked set, and a press writes **one add per target**. A deck that plays
+ * `rows.length > 1` is a picked set, and a press adds **one copy of every target** (one write for
+ * the set, `useCardToDeck`'s `addCards`, which answers each card on its own). A deck that plays
  * three of four cards would take the three and refuse the fourth — or, worse, take all four and
  * claim custody the fourth deck card does not back — and the reader would see one press, one menu
  * closing and no complaint anywhere. That is the failure this whole fence exists to prevent, made

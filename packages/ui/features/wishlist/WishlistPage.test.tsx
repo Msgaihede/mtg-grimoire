@@ -72,6 +72,8 @@ const wishlistFolderDelete = vi.hoisted(() => vi.fn());
 const wishlistFolderClear = vi.hoisted(() => vi.fn());
 const wishlistFolderDeleteWithWishes = vi.hoisted(() => vi.fn());
 const wishlistSetFolder = vi.hoisted(() => vi.fn());
+/** A picked set of wishes dropped on a shelf — one write for the set (2026-11-18). */
+const wishlistSetFolderMany = vi.hoisted(() => vi.fn());
 // The price sweep (issue #352). Two commands and one dialog — the plan writes nothing, and only
 // the ticked rows reach the apply.
 const wishlistOptimizePlan = vi.hoisted(() => vi.fn());
@@ -118,6 +120,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderClear,
     wishlistFolderDeleteWithWishes,
     wishlistSetFolder,
+    wishlistSetFolderMany,
     wishlistOptimizePlan,
     wishlistOptimizeApply,
     searchCards,
@@ -707,6 +710,12 @@ beforeEach(() => {
   wishlistFolderClear.mockReset().mockResolvedValue(1);
   wishlistFolderDeleteWithWishes.mockReset().mockResolvedValue(3);
   wishlistSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 4, removed: false });
+  wishlistSetFolderMany.mockReset().mockImplementation((ids: readonly number[]) =>
+    Promise.resolve({
+      changes: ids.map((id) => ({ id, quantity: 1, removed: false })),
+      undoId: 12,
+    }),
+  );
   // A wishlist already on its cheapest printings, which is what every block but the price sweep's
   // is about — so the dialog is drawable everywhere and reaches nothing unless a case presses it.
   wishlistOptimizePlan
@@ -4348,14 +4357,19 @@ describe("the folders", () => {
     if (!source) throw new Error("Ancestral Recall's tile is not a drag source");
     await wishOnto(source, heading(ORDERED.id));
 
-    await waitFor(() => expect(wishlistSetFolder).toHaveBeenCalledTimes(2));
-    expect(wishlistSetFolder).toHaveBeenCalledWith(ANY.id, ORDERED.id);
-    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
+    // One write for the set — and the order is the picked set's, so it is compared as a set.
+    await waitFor(() => expect(wishlistSetFolderMany).toHaveBeenCalledTimes(1));
+    expect(wishlistSetFolder).not.toHaveBeenCalled();
+    const [ids, to] = wishlistSetFolderMany.mock.calls[0] as [number[], number];
+    expect([...ids].sort()).toEqual([ANY.id, BOLT.id].sort());
+    expect(to).toBe(ORDERED.id);
     await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
     expect(useNotifications.getState().notices[0]).toMatchObject({
       title: "Moved 2 wishes to “Ordered”",
       tone: "success",
     });
+    // And the move can be taken back from the page's undo bar.
+    expect(await screen.findByText("Moved 2 wishes to Ordered.")).toBeInTheDocument();
   });
 
   /**
@@ -4417,12 +4431,9 @@ describe("the folders", () => {
 
       await wishOnto(tileOf(container, recall(container)), heading(ORDERED.id));
 
-      await waitFor(() => expect(wishlistSetFolder).toHaveBeenCalledTimes(2));
-      expect(wishlistSetFolder).toHaveBeenCalledWith(ANY.id, ORDERED.id);
-      expect(wishlistSetFolder).toHaveBeenCalledWith(
-        Number(picked.slice("wish:".length)),
-        ORDERED.id,
-      );
+      await waitFor(() => expect(wishlistSetFolderMany).toHaveBeenCalledTimes(1));
+      const [ids] = wishlistSetFolderMany.mock.calls[0] as [number[], number];
+      expect([...ids].sort()).toEqual([ANY.id, Number(picked.slice("wish:".length))].sort());
       await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
       expect(useNotifications.getState().notices[0]).toMatchObject({
         title: "Moved 2 wishes to “Ordered”",

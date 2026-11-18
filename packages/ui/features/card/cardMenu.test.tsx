@@ -2527,10 +2527,7 @@ describe("buildCardMenu with a picked set", () => {
   it("keeps the single dep for a set of one", () => {
     const addToWishlist = vi.fn();
     const addManyToWishlist = vi.fn();
-    const items = buildCardMenu(
-      BOLT,
-      deps({ picked: [BOLT], addToWishlist, addManyToWishlist }),
-    );
+    const items = buildCardMenu(BOLT, deps({ picked: [BOLT], addToWishlist, addManyToWishlist }));
     (find(rowsOf(find(items, "Add to")), "Wishlist") as MenuAction).onSelect();
     expect(addToWishlist).toHaveBeenCalledExactlyOnceWith(BOLT, null);
     expect(addManyToWishlist).not.toHaveBeenCalled();
