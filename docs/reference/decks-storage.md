@@ -2169,7 +2169,13 @@ write lock (told `database is busy` past a few hundred), N undo steps against a 
   the undo and redo rows carry negated and straight, so the day header reads `+300 / −300` for 300
   adds undone rather than `+300 / −1`. A batch whose writes left every cell, pile and token as they
   were files no step. The history keeps a row per op, so the drawer reads as if the cards had gone
-  one at a time, and the undo button names the last of them (`Undo — Moved Bear` for a 50-card move).
+  one at a time. **The step counts the journalled rows it covers** (`Step::covers`, absent from a
+  single command's step and from a batch's filed before it), and `deck_undo_state` answers it beside
+  each entry (`undoCovers` / `redoCovers`, `null` for one), so the buttons read `Undo — Moved 50
+  cards` in the keyed row's verb (`auditText.ts`' `stepSentence`) rather than naming the last card;
+  the reversal's history row carries it too (`{"field":"undo","of":…,"covers":50}`), and the drawer
+  reads `Undid: Moved 50 cards`. A mixed batch — a drop of desk and search cards — is worded by its
+  last op's verb, which is all the keyed row can tell.
 - **The live cut files no step**, here as in `deck_to_collection`: a `remove` on the live list of a
   deck that keeps cardboard is the cut — the row's copies go back to `Recently removed` — and a step
   could put the list back and not the custody. **So a cut lands only ahead of every write the step

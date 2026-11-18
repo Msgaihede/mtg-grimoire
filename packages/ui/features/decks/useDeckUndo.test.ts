@@ -31,7 +31,7 @@ function entry(over: Partial<DeckAuditEntry> = {}): DeckAuditEntry {
 
 /** What the backend answers when there is one change to undo and nothing to redo. */
 function state(over: Partial<DeckUndoState> = {}): DeckUndoState {
-  return { undo: entry(), redo: null, ...over };
+  return { undo: entry(), redo: null, undoCovers: null, redoCovers: null, ...over };
 }
 
 let client: QueryClient;
@@ -113,6 +113,29 @@ describe("useDeckUndo", () => {
     const { result } = renderHook(() => useDeckUndo(4), { wrapper });
 
     await waitFor(() => expect(result.current.undoLabel).toBe("Undo — Removed 2 × Lightning Bolt"));
+  });
+
+  /** A batch's step is keyed on its last row and takes back every one, so the buttons count —
+   *  `Undo — Moved 50 cards`, not the last card's name. */
+  it("labels a batch's step by the count it covers, both ways", async () => {
+    const moved = entry({ kind: "move", payload: '{"from":"Main","to":"Side"}', delta: 0 });
+    deckUndoState.mockResolvedValue(
+      state({ undo: moved, undoCovers: 50, redo: entry({ id: 8 }), redoCovers: 300 }),
+    );
+    const { result } = renderHook(() => useDeckUndo(4), { wrapper });
+
+    await waitFor(() => expect(result.current.undoLabel).toBe("Undo — Moved 50 cards"));
+    expect(result.current.undoCovers).toBe(50);
+    expect(result.current.redoLabel).toBe("Redo — Removed 300 cards");
+  });
+
+  /** A backend built before the field answers none, and the label reads as it always did. */
+  it("reads a state without the count as a single step", async () => {
+    deckUndoState.mockResolvedValue({ undo: entry(), redo: null });
+    const { result } = renderHook(() => useDeckUndo(4), { wrapper });
+
+    await waitFor(() => expect(result.current.undoLabel).toBe("Undo — Removed 2 × Lightning Bolt"));
+    expect(result.current.undoCovers).toBeNull();
   });
 
   /** An undo pushes the id it undid, and the next state read asks about that id — which is how

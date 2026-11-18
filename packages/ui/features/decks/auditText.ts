@@ -283,6 +283,48 @@ export function auditSentence(
 }
 
 /**
+ * What one undo step takes back, in words — the toolbar's `Undo — …`, the keyboard's and the
+ * phone receipt's line.
+ *
+ * `covers` is the step's count of history rows (`DeckUndoState.undoCovers`/`redoCovers`, or an
+ * undo row's `covers`): a `deck_apply` batch is keyed on its **last** row and takes back every
+ * one, so the keyed row's own sentence would name one card of fifty — `Undo — Moved Bear` for a
+ * press that moves fifty back. Past one it is worded as a count in the verb of the row the step is
+ * keyed on (`Moved 50 cards`, `Added 300 cards`, `Removed 12 cards`), which is the batch's verb
+ * for every gesture that sends one kind of op. **A mixed batch cannot be told from that one row**
+ * — a drop of desk and search cards together keys on whichever op came last — and reads by its
+ * last op's verb; a row with no card verb of its own reads `Changed N cards`. `null`, `undefined`
+ * (a backend older than the field) or one is the keyed row's own sentence, exactly as before.
+ */
+export function stepSentence(entry: DeckAuditEntry, covers?: number | null): string {
+  if (typeof covers !== "number" || !Number.isFinite(covers) || covers <= 1) {
+    return auditSentence(entry).text;
+  }
+  return `${batchVerb(entry)} ${plural(covers, "card")}`;
+}
+
+/** The verb a batch keyed on `entry` is worded with — {@link stepSentence}'s. */
+function batchVerb(entry: DeckAuditEntry): string {
+  const p = facts(entry.payload);
+  switch (entry.kind) {
+    case "add":
+      return "Added";
+    case "move":
+      return "Moved";
+    case "remove":
+      return "Removed";
+    // A card's label, which is the only `label` row a batch writes; `null` takes one off.
+    case "label":
+      return text(p.label) === null ? "Unlabeled" : "Labeled";
+    // A rerouted token add files a `token` row, not an `add`.
+    case "deck":
+      return text(p.field) === "token" && text(p.action) === "add" ? "Added" : "Changed";
+    default:
+      return "Changed";
+  }
+}
+
+/**
  * An undo or a redo, worded around the change it reversed.
  *
  * **These are `deck` rows and not a tenth audit kind**, which is the backend's decision and
@@ -310,6 +352,12 @@ function reversalLine(
   const of = typeof p.of === "number" ? p.of : null;
   const target = of === null ? undefined : others.find((row) => row.id === of);
   if (target === undefined) return { text: `${verb} a change`, detail: null };
+  // A batch's reversal says how many rows its step took back (`covers`), and is worded as the
+  // count — `Undid: Moved 50 cards` — with no detail, which would be the last card's alone.
+  const covers = typeof p.covers === "number" ? p.covers : null;
+  if (covers !== null && covers > 1) {
+    return { text: `${verb}: ${stepSentence(target, covers)}`, detail: null };
+  }
   const line = auditSentence(target);
   return { text: `${verb}: ${line.text}`, detail: line.detail };
 }

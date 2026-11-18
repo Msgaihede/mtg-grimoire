@@ -56,7 +56,9 @@
 //!
 //! **The step's `delta` is the batch's**, the sum of its journalled rows'
 //! ([`crate::deck_undo::Step::delta`]), so the reversal's history row undoes three hundred adds as
-//! `−300` rather than as the last add's `−1`.
+//! `−300` rather than as the last add's `−1`. **And it counts its journalled rows**
+//! ([`crate::deck_undo::Step::covers`]), so the Undo button reads `Undo — Moved 50 cards` for the
+//! press it takes back rather than naming the last card of it.
 
 use crate::collection::{EntryChange, ItemError};
 use crate::deck::{AddPile, NO_CATEGORY};
@@ -281,17 +283,16 @@ pub fn apply(
             collection_moved: false,
         });
     }
-    if let Some(&audit_id) = journalled.last() {
-        crate::deck_undo::record_logged(
-            &tx,
-            audit_id,
-            deck_id,
-            batch.cells,
-            Some(categories_before),
-            &batch.tokens,
-            net_delta(&tx, &journalled)?,
-        )?;
-    }
+    // No journalled row — every landed op a cut — files no step (`record_logged`'s first answer).
+    crate::deck_undo::record_logged(
+        &tx,
+        &journalled,
+        deck_id,
+        batch.cells,
+        Some(categories_before),
+        &batch.tokens,
+        net_delta(&tx, &journalled)?,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(DeckApplyOutcome {
         results,
@@ -1390,6 +1391,93 @@ mod tests {
         assert_eq!(newest_row(&conn, d), (Some("undo".into()), -2));
         redo(&conn, d);
         assert_eq!(newest_row(&conn, d), (Some("redo".into()), 2));
+    }
+
+    /// The buttons name a batch by its count: `undo_state` answers the step's `covers` beside the
+    /// row it is keyed on — on the undo side after the batch, on the redo side once it is undone —
+    /// and the reversal's history row carries it for "Undid: Moved 50 cards". A single command, and
+    /// a batch of one op, answer `None` and write the reversal row they always did.
+    #[test]
+    fn the_undo_state_counts_what_a_batch_covers() {
+        let conn = db();
+        seed_many(&conn, 50);
+        let d = deck(&conn, "Covers");
+        let (main, side) = (main_of(&conn, d), kind_of(&conn, d, "side"));
+        for i in 0..50 {
+            add_card(&conn, d, &format!("p{i}"), Some(main), None, LIVE, None, 1).unwrap();
+        }
+        let state = crate::deck_undo::undo_state(&conn, d, None).unwrap();
+        assert_eq!(
+            state.undo_covers, None,
+            "a single command's step covers its own row"
+        );
+
+        let moves: Vec<DeckOp> = (0..50)
+            .map(|i| DeckOp::Move {
+                card_id: format!("p{i}"),
+                from_category_id: main,
+                to_category_id: Some(side),
+                to_category_name: None,
+                finish: None,
+            })
+            .collect();
+        ok(&apply(&conn, d, LIVE, &moves).unwrap());
+        let state = crate::deck_undo::undo_state(&conn, d, None).unwrap();
+        assert_eq!(state.undo_covers, Some(50));
+        assert_eq!(state.redo_covers, None);
+        assert_eq!(
+            serde_json::to_value(&state).unwrap()["undoCovers"],
+            json!(50),
+            "camelCase on the wire"
+        );
+
+        let undone = undo(&conn, d);
+        let payload: String = conn
+            .query_row(
+                "SELECT payload FROM deck_audit WHERE deck_id = ?1 ORDER BY id DESC LIMIT 1",
+                params![d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap(),
+            json!({ "field": "undo", "of": undone, "covers": 50 })
+        );
+        let state = crate::deck_undo::undo_state(&conn, d, Some(undone)).unwrap();
+        assert_eq!(state.redo.as_ref().map(|e| e.id), Some(undone));
+        assert_eq!(state.redo_covers, Some(50));
+        assert_eq!(
+            state.undo_covers, None,
+            "the cursor is down on a single add"
+        );
+
+        // A batch of one op reads as its command does.
+        redo(&conn, d);
+        ok(&apply(&conn, d, LIVE, &[add_op("p0", Some(main), None, 1)]).unwrap());
+        let state = crate::deck_undo::undo_state(&conn, d, None).unwrap();
+        assert_eq!(state.undo_covers, None);
+        let one = undo(&conn, d);
+        let payload: String = conn
+            .query_row(
+                "SELECT payload FROM deck_audit WHERE deck_id = ?1 ORDER BY id DESC LIMIT 1",
+                params![d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap(),
+            json!({ "field": "undo", "of": one })
+        );
+
+        // A batch's step filed before the field still reads, and counts nothing.
+        let old = r#"{"undo":[],"redo":[],"delta":3}"#;
+        let step: crate::deck_undo::Step = serde_json::from_str(old).unwrap();
+        assert_eq!(step.covers, None);
+        assert!(
+            !serde_json::to_string(&crate::deck_undo::Step::new(vec![], vec![]))
+                .unwrap()
+                .contains("covers")
+        );
     }
 
     /// Finding 2: a database error under an op fails the whole call with nothing written — the

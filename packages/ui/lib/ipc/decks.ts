@@ -853,6 +853,15 @@ export type DeckAuditKind =
 export interface DeckUndoState {
   undo: DeckAuditEntry | null;
   redo: DeckAuditEntry | null;
+  /**
+   * How many history rows the step behind {@link undo} takes back, when that is more than the
+   * one it is keyed on — a `deck_apply` batch, keyed on its last row (`Step::covers`). `null` for
+   * a single command's step. `auditText`'s `stepSentence` words it as a count, so a 50-card move
+   * reads `Undo — Moved 50 cards` rather than naming the last card.
+   */
+  undoCovers: number | null;
+  /** {@link undoCovers} for {@link redo}. */
+  redoCovers: number | null;
 }
 
 export interface DeckAuditEntry {

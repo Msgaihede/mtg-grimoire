@@ -26262,8 +26262,12 @@ describe("deck_apply", () => {
     expect(db.deckUndo.length).toBe(steps);
   });
 
-  /** …and a mixed batch's one step takes back the other ops and never puts a cut row back. */
-  it("keeps the cut rows out of a mixed batch's step", () => {
+  /**
+   * **A live cut lands only ahead of every other write** (`deck_apply.rs`, `CUT_AFTER_A_WRITE`):
+   * behind one, it would leave half a step — `[add, cut]`'s Ctrl+Z would take the add back and
+   * leave the cut's copies in `Recently removed`. Refused in the crate's words; the add lands.
+   */
+  it("refuses a live cut behind a write of the same batch, in the crate's sentence", () => {
     const main = categoryId(1, "main");
     const side = categoryId(1, "side");
     const db = makeDeckDb({
@@ -26271,18 +26275,143 @@ describe("deck_apply", () => {
       deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
     });
     const h = allHandlers(db);
-    h.deck_apply({
+    const outcome = h.deck_apply({
       deckId: 1,
       variant: "live",
       ops: [add(BOLT_2X2.id, side), cut(BOLT.id, main)],
     });
-    expect(db.deckCards.map((c) => c.cardId)).toEqual([BOLT_2X2.id]);
 
+    expect(outcome.landed).toBe(1);
+    expect(outcome.results[1]).toEqual({
+      change: null,
+      categoryId: null,
+      refusal:
+        "That card was not taken out of the deck: in one change, cards come out of a deck that " +
+        "keeps its cardboard before anything else is changed. Remove it on its own.",
+    });
+    expect(db.deckCards.map((c) => c.cardId).sort()).toEqual([BOLT.id, BOLT_2X2.id].sort());
     const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
-    // Keyed on the add's row — the last one the step stands for — not on the cut's.
     expect(undo.kind).toBe("add");
     h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards.map((c) => [c.cardId, c.quantity])).toEqual([[BOLT.id, 2]]);
+  });
+
+  /** …and a stale pile still hears its own sentence, not the cut rule's. */
+  it("answers a cut on a pile that is gone with the command's own refusal", () => {
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT_2X2.id, categoryId(1, "side")), cut(BOLT.id, 999)],
+    });
+    expect(outcome.results[1].refusal).toEqual(expect.any(String));
+    expect(outcome.results[1].refusal).not.toMatch(/before anything else is changed/);
+  });
+
+  /**
+   * **Leading cuts land**, and the batch's one step stands behind them: a Ctrl+Z takes the move
+   * back and never puts the cut row back — its copies are in `Recently removed`.
+   */
+  it("lands the cuts ahead of the other ops and keeps them out of the step", () => {
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const h = allHandlers(db);
+    const outcome = h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [
+        cut(BOLT.id, main),
+        {
+          op: "move",
+          cardId: BOLT_2X2.id,
+          fromCategoryId: main,
+          toCategoryId: side,
+          toCategoryName: null,
+          finish: null,
+        },
+      ],
+    });
+    expect(outcome.landed).toBe(2);
+    expect(db.deckCards.map((c) => [c.cardId, c.categoryId])).toEqual([[BOLT_2X2.id, side]]);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    expect(undo.kind).toBe("move");
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards.map((c) => [c.cardId, c.categoryId])).toEqual([[BOLT_2X2.id, main]]);
+  });
+
+  /**
+   * **A batch whose net effect is nothing files no step** (`record_logged`): an add and a removal
+   * of the same card on a list that journals its removals — a virtual deck's.
+   */
+  it("files no step for a batch that changed nothing", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({ decks: [deck({ virtualOnly: true })] });
+    const steps = db.deckUndo.length;
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT.id, main), cut(BOLT.id, main)],
+    });
+    expect(outcome.landed).toBe(2);
     expect(db.deckCards).toEqual([]);
+    expect(db.deckUndo.length).toBe(steps);
+  });
+
+  /**
+   * **The step counts what it covers and reverses the batch's net**: the state answers
+   * `undoCovers`/`redoCovers` for the buttons' `Moved 3 cards`, the reversal row carries the
+   * batch's `delta` negated (undo) and straight (redo) and names its `covers`. A single command's
+   * step answers `null` and writes the payload it always did.
+   */
+  it("answers a batch's count and reverses its net delta", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT.id, main), add(BOLT_2X2.id, main), add(BOLT_JA.id, main)],
+    });
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state).toMatchObject({ undoCovers: 3, redoCovers: null });
+
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+    const undone = db.deckAudit[db.deckAudit.length - 1];
+    expect(undone.delta).toBe(-3);
+    expect(JSON.parse(undone.payload)).toEqual({ field: "undo", of: state.undo!.id, covers: 3 });
+    expect(h.deck_undo_state({ deckId: 1, redoId: state.undo!.id })).toMatchObject({
+      redoCovers: 3,
+    });
+
+    h.deck_redo_apply({ deckId: 1, auditId: state.undo!.id });
+    expect(db.deckAudit[db.deckAudit.length - 1].delta).toBe(3);
+
+    h.deck_add_card({
+      deckId: 1,
+      variant: "live",
+      cardId: BOLT.id,
+      categoryId: main,
+      categoryName: null,
+      finish: null,
+      quantity: 2,
+    });
+    const single = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(single.undoCovers).toBeNull();
+    h.deck_undo_apply({ deckId: 1, auditId: single.undo!.id });
+    const reversal = db.deckAudit[db.deckAudit.length - 1];
+    expect(JSON.parse(reversal.payload)).toEqual({ field: "undo", of: single.undo!.id });
+    expect(reversal.delta).toBe(-2);
   });
 
   /** The other removals are the stepper's zero, and file a step like it: a virtual deck's. */

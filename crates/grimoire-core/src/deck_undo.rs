@@ -63,7 +63,8 @@
 //! SQLite has no `ALTER … CHECK` — so a tenth word means rebuilding every reader's whole deck
 //! history for a spelling. [`crate::import::commit_import`] met this first and reused
 //! `add`/`remove` with a keyed payload; this reuses `deck` with
-//! `{"field":"undo"|"redo","of":<audit_id>}`. `auditText.ts`'s `deckLine` already answers an
+//! `{"field":"undo"|"redo","of":<audit_id>}` — plus `"covers":<n>` for a batch's step that took
+//! back more than its one keyed row ([`Step::covers`]). `auditText.ts`'s `deckLine` already answers an
 //! unrecognised field with "Changed the deck", so an older build degrades to a true sentence
 //! rather than to a hole.
 
@@ -665,6 +666,15 @@ pub struct Step {
     /// and defaulted when missing, so every step already in a journal reads as it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta: Option<i64>,
+    /// How many journalled history rows — one per op that wrote one — the step takes back: a
+    /// batch's count (`crate::deck_apply`), so the buttons can say `Undo — Moved 50 cards` for a
+    /// press that undoes fifty cards rather than naming the last of them ([`DeckUndoState`]).
+    ///
+    /// **`None` for every single command's step**, whose one keyed row is the whole press — and,
+    /// like [`Step::delta`], absent from the JSON when `None` and defaulted when missing, so every
+    /// step already in a journal (a batch's filed before this field included) reads as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covers: Option<i64>,
 }
 
 impl Step {
@@ -673,7 +683,14 @@ impl Step {
             undo,
             redo,
             delta: None,
+            covers: None,
         }
+    }
+
+    /// [`Step::covers`] when it is a count worth saying — more than the one row a step is keyed
+    /// on. A batch of one op reads exactly as its single command does.
+    fn covers_several(&self) -> Option<i64> {
+        self.covers.filter(|&n| n > 1)
     }
 }
 
@@ -822,9 +839,10 @@ pub fn record_cells(
 /// the batch's writes noted in `log`, plus the token half from `tokens` — the token entries the
 /// batch's rerouted adds filed, which each file a step of their own when pressed one at a time.
 ///
-/// `audit_id` is the batch's last journalled history row — [`record_step`]'s rule for a press
-/// that writes several rows: one press is one Ctrl+Z, keyed on the last of them — and `delta` the
-/// sum of every journalled row's, which the step carries ([`Step::delta`]).
+/// `journalled` is the batch's journalled history rows, in order: the step is keyed on the last
+/// — [`record_step`]'s rule for a press that writes several rows: one press is one Ctrl+Z, keyed
+/// on the last of them — and counts them all ([`Step::covers`]). `delta` is the sum of their
+/// `delta`s, which the step carries ([`Step::delta`]). No row, no step.
 ///
 /// **A batch that changed nothing files nothing** — an add and a removal of the same card on a
 /// list that files its removals (theory, a virtual deck), say: every cell as it found it, no pile
@@ -832,13 +850,16 @@ pub fn record_cells(
 /// "Undid" row. Answers whether a step was filed.
 pub(crate) fn record_logged(
     tx: &Connection,
-    audit_id: i64,
+    journalled: &[i64],
     deck_id: i64,
     log: CellLog,
     made: Option<Vec<i64>>,
     tokens: &crate::deck_tokens::TokenLog,
     delta: i64,
 ) -> Result<bool, String> {
+    let Some(&audit_id) = journalled.last() else {
+        return Ok(false);
+    };
     let mut step = cells_step(tx, deck_id, log.cells, log.before, made, Some(tokens))?;
     // Any other op — a pile made, a token moved, the reconcile's share — is a change by being there.
     let unchanged = match (step.undo.as_slice(), step.redo.as_slice()) {
@@ -852,6 +873,7 @@ pub(crate) fn record_logged(
         return Ok(false);
     }
     step.delta = Some(delta);
+    step.covers = Some(journalled.len() as i64);
     record_step(tx, audit_id, deck_id, &step)?;
     Ok(true)
 }
@@ -2736,19 +2758,33 @@ pub fn read_step(conn: &Connection, audit_id: i64) -> Result<Option<(Step, bool)
 /// The whole `DeckAuditEntry` rather than a sentence, because a sentence is domain logic —
 /// `auditText.ts` words it, and the button reads "Undo — Removed 2 × Lightning Bolt" by asking
 /// that module. The same split every row of the history drawer already goes through.
+///
+/// **A batch's step is keyed on one row and takes back many** (`crate::deck_apply`), so the
+/// entry alone would label a 50-card move `Undo — Moved Bear`. `undo_covers` / `redo_covers` are
+/// that step's [`Step::covers`] — how many journalled rows it takes back — for `auditText.ts` to
+/// word as a count; `None` for a step that covers one (every single command's, and a batch's
+/// filed before the field).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckUndoState {
     pub undo: Option<crate::deck_audit::DeckAuditEntry>,
     pub redo: Option<crate::deck_audit::DeckAuditEntry>,
+    pub undo_covers: Option<i64>,
+    pub redo_covers: Option<i64>,
 }
 
 /// The `deck` payload an undo or a redo records, and the whole of what makes the pair legible.
 ///
 /// `of` is the history row being reversed, which is what lets `auditText.ts` render the undone
-/// change's own sentence inside the verb rather than "Changed the deck".
-fn reversal_payload(field: &str, of: i64) -> Value {
-    json!({ "field": field, "of": of })
+/// change's own sentence inside the verb rather than "Changed the deck". `covers` is the step's
+/// count where it took back more than that one row ([`Step::covers`]) — `Undid: Moved 50 cards`
+/// rather than the last card's name — and absent otherwise, so a single command's reversal row
+/// is written exactly as it always was.
+fn reversal_payload(field: &str, of: i64, covers: Option<i64>) -> Value {
+    match covers {
+        Some(covers) => json!({ "field": field, "of": of, "covers": covers }),
+        None => json!({ "field": field, "of": of }),
+    }
 }
 
 /// One history row for the reversal itself.
@@ -2762,6 +2798,7 @@ fn record_reversal(
     field: &str,
     of: i64,
     delta: i64,
+    covers: Option<i64>,
 ) -> Result<(), String> {
     crate::deck_audit::record(
         tx,
@@ -2769,7 +2806,7 @@ fn record_reversal(
         crate::deck_audit::DECK_LEVEL,
         crate::deck_audit::DECK,
         None,
-        &reversal_payload(field, of),
+        &reversal_payload(field, of, covers),
         delta,
     )?;
     Ok(())
@@ -2898,6 +2935,7 @@ pub fn apply_reversal(
         if undoing { "undo" } else { "redo" },
         audit_id,
         if undoing { -delta } else { delta },
+        step.covers_several(),
     )?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -2926,7 +2964,17 @@ pub fn undo_state(
         }
         _ => None,
     };
-    Ok(DeckUndoState { undo, redo })
+    // The step of the same row, read only where there is an entry to label.
+    let covers = |entry: &Option<crate::deck_audit::DeckAuditEntry>| match entry {
+        Some(e) => Ok(read_step(conn, e.id)?.and_then(|(step, _)| step.covers_several())),
+        None => Ok::<_, String>(None),
+    };
+    Ok(DeckUndoState {
+        undo_covers: covers(&undo)?,
+        redo_covers: covers(&redo)?,
+        undo,
+        redo,
+    })
 }
 
 #[cfg(test)]

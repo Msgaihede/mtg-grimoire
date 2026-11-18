@@ -317,8 +317,11 @@ describe("useDeckCore's applyEdits", () => {
     );
     const read = decksRead();
 
+    // The removal first: on a live list it is a cut, which the crate (and the fake) lands only
+    // ahead of every other write of the batch (`deck_apply.rs`' `CUT_AFTER_A_WRITE`).
     const outcome = await hook.result.current.applyEdits.mutateAsync({
       edits: [
+        { edit: "remove", ...rowOf(second) },
         { edit: "add", card: { cardId: outside.id, categoryId: side, quantity: 1 } },
         {
           edit: "move",
@@ -327,19 +330,18 @@ describe("useDeckCore's applyEdits", () => {
           to: side,
           finish: first.finish,
         },
-        { edit: "remove", ...rowOf(second) },
       ],
     });
 
     expect(apply).toHaveBeenCalledTimes(1);
     for (const spy of single) expect(spy).not.toHaveBeenCalled();
     const sent = (apply.mock.calls[0][0] as { ops: { op: string }[] }).ops.map((o) => o.op);
-    expect(sent).toEqual(["add", "move", "remove"]);
+    expect(sent).toEqual(["remove", "add", "move"]);
     expect(read()).toBe(1);
     expect(outcome.landed).toBe(3);
     expect(outcome.results.map((r) => r.sent)).toEqual([true, true, true]);
-    expect(outcome.results[0].change?.id).toEqual(expect.any(Number));
-    expect(outcome.results[1].categoryId).toBe(side);
+    expect(outcome.results[1].change?.id).toEqual(expect.any(Number));
+    expect(outcome.results[2].categoryId).toBe(side);
   });
 
   it("files an Auto set with one tag read, and sends no op for a refile already home", async () => {
