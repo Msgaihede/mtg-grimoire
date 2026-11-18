@@ -60,10 +60,7 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * of that marketplace's currency. Rebuilt only when the marketplace changes — see the
  * `useMemo` in {@link Results}, which is what keeps this off the per-render path.
  */
-function columnsFor(
-  marketplace: Marketplace,
-  tip: TooltipBinder,
-): TableColumn<CardSummary>[] {
+function columnsFor(marketplace: Marketplace, tip: TooltipBinder): TableColumn<CardSummary>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return [
@@ -249,8 +246,7 @@ const tileFinish = (card: CardSummary) => soleFinish(card.finishes);
  *
  * Module scope for {@link tileFinish}'s reason.
  */
-const tileTreatment = (card: CardSummary) =>
-  finishTreatments(card.promoTypes, tileFinish(card));
+const tileTreatment = (card: CardSummary) => finishTreatments(card.promoTypes, tileFinish(card));
 
 /**
  * Whether a tile's card is one the Commander bracket counts — the crown, in the same top-right
@@ -538,12 +534,7 @@ export function SearchPage() {
         {/* `min-w-0`, or a long card name in the table pushes the column past its share and
             takes the sidebar's width; `min-h-0 flex-1` is the table's height chain, one level
             in, and exactly what a growing wall must not be given. */}
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 flex-col gap-4",
-            view === "table" && "min-h-0",
-          )}
-        >
+        <div className={cn("flex min-w-0 flex-1 flex-col gap-4", view === "table" && "min-h-0")}>
           {/* The picked tags, over the filter row they refine — drawn only while there are any,
               so a page nobody has used tag search on carries no row for it. Wiring
               `onFloorChange` is what draws the art weight control at all. */}
@@ -644,6 +635,34 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
   return count;
 }
 
+/**
+ * The wall's owned/wishlisted badge — read off the row alone, so held still at module scope: an
+ * arrow in the JSX was a changed prop on the memoised wall and every memoised tile on each render
+ * of {@link Results} (a page landing, a card opened, the caret walking), so every mounted tile
+ * was redrawn for nothing (2026-11).
+ */
+const tileOwnedBadge = (card: CardSummary) => (
+  <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />
+);
+
+/** The tile's one control, built from the row alone — module scope for {@link tileOwnedBadge}'s reason. */
+const tileAddAction = (card: CardSummary) => (
+  <AddToCollectionButton
+    align="start"
+    className={cn(REVEAL_ON_HOVER, "static")}
+    // Over the art, so backed — the table row above is on a panel and is not.
+    tone="art"
+    target={{
+      cardId: card.id,
+      name: card.name,
+      setCode: card.setCode,
+      collectorNumber: card.collectorNumber,
+      oracleId: card.oracleId,
+      finishes: parseFinishes(card.finishes),
+    }}
+  />
+);
+
 function Results({ search }: { search: CardSearch }) {
   const { query, rows, total, totalIsCapped, searchKey, marketplace } = search;
   const tip = useTooltip();
@@ -726,6 +745,44 @@ function Results({ search }: { search: CardSearch }) {
   // failed on results the reader was part way through.
   const failure = failureOf(search);
   const empty = rows.length === 0;
+
+  // **The wall's slots, held still** (2026-11) — `CardSearchBody`'s arrangement. `CardGrid` and
+  // every tile on it are memoised, and this component renders on every page that lands, every
+  // `isFetchingNextPage` flip and every card opened; an arrow here was a changed prop on every
+  // tile each time. Each is held on exactly what it reads (the two that read only the row are
+  // module functions above).
+  const tilePrintings = useCallback(
+    (card: CardSummary) =>
+      card.printings > 1 ? (
+        <span
+          {...tip(`${card.printings} printings match these filters`)}
+          className={cn(
+            "block whitespace-nowrap tabular-nums text-text",
+            "text-[calc(10px*var(--mark-scale,1))] leading-none",
+          )}
+        >
+          {card.printings} printings
+        </span>
+      ) : null,
+    [tip],
+  );
+  const money = useCallback(
+    (card: CardSummary) => priceRange(card.priceLow, card.priceHigh, currency),
+    [currency],
+  );
+  // On the four fields rather than `query`, which is a new object per render. A failed page or one
+  // landing is a new callback, which is what re-runs the wall's paging effects at the moments the
+  // answer moves — see `CardGrid`'s `onNeedNextPage`.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchMore } = search;
+  const onNeedNextPage = useCallback(
+    (want?: number) => {
+      const more = hasNextPage && !isFetchNextPageError;
+      if (more && !isFetchingNextPage) fetchMore(want);
+      return more;
+    },
+    [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchMore],
+  );
 
   return (
     <div
@@ -825,7 +882,7 @@ function Results({ search }: { search: CardSearch }) {
             // Spec §7: "'owned' badges appear in search once a wish is fulfilled." Drawn
             // unconditionally because the badge is its own guard — on a browse of the whole
             // database almost every tile has nothing to say, and says nothing.
-            badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
+            badge={tileOwnedBadge}
             // How many printings this tile stands for, opposite the owned badge. Past one
             // only: on a wall where every tile said "1" the mark would be chrome.
             //
@@ -858,19 +915,7 @@ function Results({ search }: { search: CardSearch }) {
             // strip above it and the words in it were a fifth the height of the name they sat on.
             // It reads `--mark-scale` — the tile's own factor, `lib/cardZoom.ts` — so 10px on a
             // doubled card is 20px on a doubled nameplate, which is the same reading.
-            topLeft={(card) =>
-              card.printings > 1 ? (
-                <span
-                  {...tip(`${card.printings} printings match these filters`)}
-                  className={cn(
-                    "block whitespace-nowrap tabular-nums text-text",
-                    "text-[calc(10px*var(--mark-scale,1))] leading-none",
-                  )}
-                >
-                  {card.printings} printings
-                </span>
-              ) : null
-            }
+            topLeft={tilePrintings}
             // The 12 366 foil-only and 892 etched-only printings, which Scryfall's art has
             // no way to show — see `soleFinish`.
             finish={tileFinish}
@@ -890,7 +935,7 @@ function Results({ search }: { search: CardSearch }) {
             // Spec §5 — a price is never shown without saying how old it is — is answered once
             // under this wall rather than on forty tooltips, which is why this slot is a bare
             // figure.
-            money={(card) => priceRange(card.priceLow, card.priceHigh, currency)}
+            money={money}
             // The whole tile is the target: the art, its two corner marks and the caption.
             // A two-sided card turns over from its tile — the flip button under the column and
             // the menu's "Flip card" (issue #844). The table layout passes neither, so it offers
@@ -904,27 +949,11 @@ function Results({ search }: { search: CardSearch }) {
             // cardboard. `static` hands the anchoring to the tile's caption, so a 256px
             // popup on a 170px tile opens from the tile's left edge instead of off the
             // scroller's.
-            action={(card) => (
-              <AddToCollectionButton
-                align="start"
-                className={cn(REVEAL_ON_HOVER, "static")}
-                // Over the art, so backed — the table row above is on a panel and is not.
-                tone="art"
-                target={{
-                  cardId: card.id,
-                  name: card.name,
-                  setCode: card.setCode,
-                  collectorNumber: card.collectorNumber,
-                  oracleId: card.oracleId,
-                  finishes: parseFinishes(card.finishes),
-                }}
-              />
-            )}
-            onNeedNextPage={() => {
-              if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
-                void query.fetchNextPage();
-              }
-            }}
+            action={tileAddAction}
+            // `want` is a Ctrl+A walk's — the rows it is still owed, fetched in pages as large as
+            // the backend answers (`useCardSearch`'s `fetchMore`) — and the answer is whether
+            // rows are still to come, which keeps the app's busy mark up while the walk fetches.
+            onNeedNextPage={onNeedNextPage}
           />
         ) : (
           <VirtualTable

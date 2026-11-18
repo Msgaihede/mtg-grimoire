@@ -60,7 +60,7 @@ pub const VARIABLE_COST_LIKE: &str = "%{X}%";
 /// (98 878). So black, white, gold, silver and yellow are all `regular` — the colour of a
 /// border is not what this row asks about, whether there is one is.
 ///
-/// [`picked_borders`] validates against this list and [`crate::index::CardIndex::borders`] is
+/// [`picked_borders`] validates against this list and [`crate::index::Corpus::borders`] is
 /// indexed by it, so the SQL and the bitsets run out of vocabulary together.
 pub const BORDER_KEYS: [&str; 3] = ["regular", "borderless", "fullart"];
 

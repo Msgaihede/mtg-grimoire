@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { offerUndo } from "@/lib/bulkUndo";
+import { offerBulkUndo } from "@/features/card/useCardAdds";
 import { plural } from "@/lib/counts";
 import { ipc, type CollectionFolder, type FolderConflicts, type FolderRule } from "@/lib/ipc";
 import { useCollectionValue } from "@/lib/useCollectionValue";
@@ -537,6 +537,9 @@ export interface FileManyInput {
    * (the page's `ROOT_LABEL`, the breadcrumb's first segment).
    */
   destination: string;
+  /** `false` for half of a mixed press — `AddManyInput.undoable`'s rule (`useCardAdds.ts`): no
+   *  offer, and the scope's older one taken down. */
+  undoable?: boolean;
 }
 
 /** `Moved 5 cards to Trade binder.` — counted in **entries**, the unit the menu row counts in. */
@@ -573,9 +576,10 @@ export function useSetCollectionFolderMany({
       onMutate?.();
     },
     onError: (error) => onError?.(error),
-    onSuccess: (outcome, { entryIds, destination }) => {
-      offerUndo(
+    onSuccess: (outcome, { entryIds, destination, undoable }) => {
+      offerBulkUndo(
         "collection",
+        undoable,
         outcome.undoId,
         movedLabel(outcome.changes.length || entryIds.length, destination),
       );

@@ -1356,3 +1356,13 @@ html[data-dragging] * {
     transform: translateZ(0);
   }
 }
+
+/* **The pointer while the reader's own work is shown** (`lib/work.ts` sets `data-busy` on
+   `<html>` for exactly as long as the busy pill is up). `progress`, never `wait`: it is the
+   cursor that says "working, but you can still press things", and every press does still work.
+   On the root alone, so it is what the page inherits and any control that names its own cursor
+   keeps it — a button under the pointer still says it is a button. A drag's `grabbing` wins, as
+   it is `!important` on every element. */
+html[data-busy] {
+  cursor: progress;
+}

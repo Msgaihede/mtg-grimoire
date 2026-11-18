@@ -4,8 +4,14 @@ import {
   useInfiniteQuery,
   useMutation,
   useQueryClient,
+  type InfiniteData,
 } from "@tanstack/react-query";
-import { COLLECTION_FIRST_DIR, nextOffset } from "@/features/collection/useCollection";
+import {
+  COLLECTION_FIRST_DIR,
+  COLLECTION_MAX_PAGE_SIZE,
+  nextOffset,
+} from "@/features/collection/useCollection";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import {
   activeFilterCount,
@@ -581,14 +587,47 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     marketplace.id,
   ];
 
+  /**
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
+   */
+  const { pin: pinWant, at: wantAt } = useWantedPage(listKey, nextOffset);
   const query = useInfiniteQuery({
     queryKey: listKey,
-    queryFn: ({ pageParam }) =>
-      ipc.collectionList({ ...filters, limit: DECK_COLLECTION_PAGE_SIZE, offset: pageParam }),
+    queryFn: ({ pageParam, queryKey: key }) =>
+      ipc.collectionList({
+        ...filters,
+        // The tab's page unless a Ctrl+A walk asked for more — `lib/pageLimit.ts`. This wall is
+        // uncapped (`selectAllLimit={Infinity}`), so a walk was one round trip per 60 rows.
+        limit: pageLimit(
+          pageParam,
+          queryClient.getQueryData<InfiniteData<{ items: unknown[] }>>(listKey)?.pages,
+          DECK_COLLECTION_PAGE_SIZE,
+          COLLECTION_MAX_PAGE_SIZE,
+          wantAt(key, pageParam),
+        ),
+        offset: pageParam,
+      }),
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextOffset(pages),
     placeholderData: keepPreviousData,
   });
+
+  /**
+   * The next page, **as many rows as `want` says the wall is owed** (up to the backend's ceiling) —
+   * what a wall's `onNeedNextPage` hands over during a Ctrl+A walk (`CardGrid`, `lib/pageLimit.ts`).
+   * No `want` is the ordinary page. The caller keeps its own guard around it, as around
+   * `query.fetchNextPage`, which this calls.
+   */
+  const { fetchNextPage } = query;
+  const fetchMore = useCallback(
+    (want?: number) => {
+      pinWant(want);
+      void fetchNextPage();
+    },
+    [fetchNextPage, pinWant],
+  );
 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
 
@@ -674,6 +713,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   });
 
   return {
+    fetchMore,
     text,
     setText,
     format,

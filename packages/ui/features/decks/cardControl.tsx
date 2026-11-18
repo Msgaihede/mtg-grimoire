@@ -50,6 +50,7 @@ import {
   cardDraggable,
   deckCardSlot,
   DECK_CARD_ATTR,
+  anyDropWrites,
   dropWrites,
   readCards,
   type DeckWrite,
@@ -577,7 +578,9 @@ export function deckCardPress(
   card: DeckCard,
   onSelect: ((card: DeckCard) => void) | undefined,
   actions?: DeckCardActions,
-): { onClick: (event: ReactMouseEvent) => void; onMouseDown?: (event: ReactMouseEvent) => void } | undefined {
+):
+  | { onClick: (event: ReactMouseEvent) => void; onMouseDown?: (event: ReactMouseEvent) => void }
+  | undefined {
   const pick = actions?.pick;
   if (!onSelect && !pick) return undefined;
   return {
@@ -636,10 +639,14 @@ export interface DeckCardActions {
   /**
    * Whether this card wears the picked mark — issue #214.
    *
-   * A predicate over the **slot** rather than a set on each card, because the four views hand
-   * this bag down through their group components and a set would be a second thing to thread. The
-   * slot is `dnd.ts`'s `deckCardSlot`, which every view already stamps through
-   * {@link deckCardProps}.
+   * A predicate over the **slot**, which is `dnd.ts`'s `deckCardSlot` and which every view already
+   * stamps through {@link deckCardProps}.
+   *
+   * **The deck editor does not put it in the bag any more** (2026-11): a pick is a new set, so a
+   * predicate here made the bag new per Ctrl-click and every memoised pile was drawn again. The
+   * desk hands the views the picked slots beside the bag (`picked`), each pile is handed its own
+   * share, and the pile answers this predicate from that (`views/pickedMarks.ts`) for
+   * {@link deckCardMarked}. A surface may still set it on a view given no `picked`.
    *
    * Absent is a view where nothing is picked, which is what a story or a read-only mount gets.
    */
@@ -655,7 +662,10 @@ export interface DeckCardActions {
    * A single seam so that no view branches on modifiers itself — four copies of "which chord
    * means what" is four chances for the table and the stack to disagree.
    */
-  pick?: (card: DeckCard, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => boolean;
+  pick?: (
+    card: DeckCard,
+    event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
+  ) => boolean;
   /**
    * What this card offers on a right-click — **the handlers already built**, never a list of
    * rows.
@@ -714,10 +724,7 @@ export interface DeckCardActions {
 
 /** The rename field for this pile, or nothing — `null` is a derived heading, which is not a
  *  category and cannot be renamed. Spelled once so four views do not each guard it. */
-export function deckGroupRename(
-  categoryId: number | null,
-  actions?: DeckCardActions,
-): ReactNode {
+export function deckGroupRename(categoryId: number | null, actions?: DeckCardActions): ReactNode {
   return categoryId === null ? null : actions?.renameCategory?.(categoryId);
 }
 
@@ -951,7 +958,10 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (writes: Dec
   const { armed, over } = useDndDropTarget({
     ref,
     read: readCards,
-    canDrop: (payloads) => writesFor(payloads).length > 0,
+    // `anyDropWrites` stops at the first member that writes rather than building the group's
+    // writes per ask — this is asked on every pointer move over the pile.
+    canDrop: (payloads) =>
+      categoryId !== null && anyDropWrites(payloads, { kind: "category", categoryId }),
     onDrop: (payloads) => onDrop?.(writesFor(payloads)),
   });
 

@@ -1,8 +1,9 @@
 import { useEffect, type RefObject } from "react";
 import { isTextField } from "@/components/menu/useContextMenu";
-import type { DeckCard, DeckFinish } from "@/lib/ipc";
+import type { DeckCard } from "@/lib/ipc";
 import { matchesShortcut, shortcut } from "@/lib/shortcuts";
-import { reportPresses } from "./receipts";
+import { reportSettled, workLabel } from "./receipts";
+import type { DeckEdit } from "./useDeck";
 
 /*
  * The deck editor's two bindings on `window` — undo/redo, and the picked set's Delete — moved out
@@ -12,8 +13,8 @@ import { reportPresses } from "./receipts";
  * every such key in one file rather than four thousand lines apart.
  *
  * Every argument is something the editor already holds still: the undo hook's two runners, the
- * write a removal goes through (`useDeckDrops`' `setQuantityAt`), the batch record, and the picked
- * set **as a ref** — the Delete handler's own doc below says why a set in a dependency list would
+ * batched write a set's removal goes through (`useDeckDrops`' `editBatch`, which files the banner's
+ * record itself), and the picked set **as a ref** — the Delete handler's own doc below says why a set in a dependency list would
  * tear the listener down on every Ctrl-click.
  */
 
@@ -39,13 +40,11 @@ export interface DeckKeyboard {
   layerOpen: boolean;
   /** The picked set, read at the press — see `DeckEditor`'s `pickedRef`. */
   pickedRef: RefObject<readonly DeckCard[]>;
-  setQuantityAt: (
-    cardId: string,
-    categoryId: number,
-    finish: DeckFinish,
-    quantity: number,
-  ) => Promise<unknown>;
-  reportToasted: (presses: readonly Promise<unknown>[]) => void;
+  /** `useDeckDrops`' `editBatch` — many edits as one `deck_apply`, one settled result each. */
+  editBatch: (
+    edits: readonly DeckEdit[],
+    work: string,
+  ) => Promise<readonly PromiseSettledResult<unknown>[]>;
   setCardSelection: (selection: null) => void;
 }
 
@@ -54,8 +53,7 @@ export function useDeckKeyboard({
   runRedo,
   layerOpen,
   pickedRef,
-  setQuantityAt,
-  reportToasted,
+  editBatch,
   setCardSelection,
 }: DeckKeyboard): void {
   /**
@@ -131,16 +129,18 @@ export function useDeckKeyboard({
    * a bare Delete that silently removed whatever was last clicked is a keystroke away from a deck
    * the reader did not mean to edit.
    *
-   * It goes through `setQuantityAt(…, 0)` like every other removal in this editor — the stepper's
-   * zero, the menu's `Remove card`, the tray's drop — so it inherits the optimistic patch, the
-   * rollback, and the collection write that files the copies into `Recently removed`. There is no
-   * remove mutation and this is not the place to add one.
+   * **One write for the whole set** (issue #1164): a `remove` op per card in one `deck_apply`,
+   * which is the stepper's zero for each — on the live list of a deck that keeps cardboard it is
+   * the cut that files the copies into `Recently removed`, as `setQuantity` routes it; anywhere
+   * else the row is deleted. The rows leave the desk at the press (`applyEdits`' patch) and a
+   * whole refusal puts them back.
    *
-   * **What it costs is one press of Ctrl+Z per card**, because `deck_audit` has a row per write.
-   * Named rather than hidden: batching is a Rust change to `deck_undo`'s grain. What it no longer
-   * costs is a refusal: every card's outcome goes to the toast below, so a cut the backend
-   * refused for the second card of four is said even when the fourth went through — and to
-   * {@link reportToasted}, which keeps the editor's banner from saying it a second time.
+   * **What it costs in undo is what one cut costs**: nothing to undo on the live list — a cut
+   * files no `deck_undo` step (`deck_to_collection`'s argued decision, which `deck_apply` keeps) —
+   * and **one** Ctrl+Z for the whole set anywhere else, where it was one per card until 2026-11.
+   * A refusal is said per card, not lost: every card's outcome goes to the toast below — so a cut
+   * the backend refused for the second card of four is said even when the fourth went through —
+   * and to the banner's record, seated toasted so it does not say it a second time.
    */
   useEffect(() => {
     if (layerOpen) return;
@@ -151,15 +151,20 @@ export function useDeckKeyboard({
       const held = pickedRef.current;
       if (held.length < 2) return;
       event.preventDefault();
-      const presses = held.map((card) =>
-        setQuantityAt(card.cardId, card.categoryId, card.finish, 0),
+      const settled = editBatch(
+        held.map((card): DeckEdit => ({
+          edit: "remove",
+          cardId: card.cardId,
+          categoryId: card.categoryId,
+          finish: card.finish,
+        })),
+        workLabel("Removing", held.length),
       );
-      reportToasted(presses);
       // **One toast for the whole cut**, with the count that landed (`./receipts`): a bulk removal
       // always gets a receipt — the owner's rule — and the cards it took are gone from the desk,
       // so nothing on screen names them any more.
-      reportPresses(
-        presses,
+      reportSettled(
+        settled,
         held.map((card) => card.name),
         {
           done: (what) => `Removed ${what} from the deck`,
@@ -170,5 +175,5 @@ export function useDeckKeyboard({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [layerOpen, pickedRef, setQuantityAt, reportToasted, setCardSelection]);
+  }, [layerOpen, pickedRef, editBatch, setCardSelection]);
 }

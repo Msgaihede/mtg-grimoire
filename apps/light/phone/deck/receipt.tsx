@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { auditSentence } from "@grimoire/ui/features/decks/auditText";
+import { stepSentence } from "@grimoire/ui/features/decks/auditText";
 import { useDeckUndo } from "@grimoire/ui/features/decks/useDeckUndo";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { ipcError, type DeckAuditEntry } from "@grimoire/ui/lib/ipc";
@@ -22,8 +22,8 @@ export const RECEIPT_MS = 8000;
  * the desktop's toolbar Undo is `useDeckUndo`: the newest step. So the receipt is that hook read at
  * the right moment. A write is *tracked* at its press — which step was newest then — and once the
  * deck's undo state answers with a **different** newest step, that step is the one this write
- * filed, and `Undo` is offered beside the line, named by the step's own sentence (`auditSentence`,
- * the history drawer's words).
+ * filed, and `Undo` is offered beside the line, named by the step's own sentence (`stepSentence`,
+ * the history drawer's words — a count for a batch's step).
  *
  * **What the line says is the press's own sentence where the caller gave one** — "Moved Lightning
  * Bolt to Sideboard" — and the step's where it did not. The press's is the better one to read:
@@ -95,7 +95,7 @@ export function useReceipt(deckId: number): Receipt {
   const undo = useDeckUndo(deckId);
   const [tracked, setTracked] = useState<Tracked | null>(null);
   const newest = undo.undo;
-  const { clearRedo, runUndoAsync } = undo;
+  const { clearRedo, runUndoAsync, undoCovers } = undo;
 
   const track = useCallback(
     <T,>(write: Promise<T>, said?: (result: T) => string | null) => {
@@ -126,7 +126,7 @@ export function useReceipt(deckId: number): Receipt {
       : null;
   const refused = tracked?.error != null;
   const text =
-    tracked?.error ?? tracked?.said ?? (entry !== null ? auditSentence(entry).text : null);
+    tracked?.error ?? tracked?.said ?? (entry !== null ? stepSentence(entry, undoCovers) : null);
 
   const undoing = tracked?.undoing === true;
 
@@ -144,7 +144,7 @@ export function useReceipt(deckId: number): Receipt {
     text,
     refused,
     entry,
-    undoName: entry !== null ? auditSentence(entry).text : null,
+    undoName: entry !== null ? stepSentence(entry, undoCovers) : null,
     busy: undo.busy || undoing,
     undo: () => {
       const now = tracked;

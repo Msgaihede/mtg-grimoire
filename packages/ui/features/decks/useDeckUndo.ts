@@ -17,7 +17,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckAuditEntry } from "@/lib/ipc";
-import { auditSentence } from "./auditText";
+import { stepSentence } from "./auditText";
 
 /** What the editor draws and presses. */
 export interface DeckUndo {
@@ -25,7 +25,17 @@ export interface DeckUndo {
   undo: DeckAuditEntry | null;
   /** The change Ctrl+Y would put back, or `null`. */
   redo: DeckAuditEntry | null;
-  /** `Undo — Removed 2 × Lightning Bolt`, or the bare verb when there is nothing to do. */
+  /**
+   * How many history rows the step behind {@link undo} takes back, past one — a batch's
+   * (`DeckUndoState.undoCovers`) — or `null`. For a surface that words the step itself
+   * (`stepSentence`), as the phone's receipt does.
+   */
+  undoCovers: number | null;
+  redoCovers: number | null;
+  /**
+   * `Undo — Removed 2 × Lightning Bolt`, or the bare verb when there is nothing to do. A batch's
+   * step is a count — `Undo — Moved 50 cards` — since one press takes all fifty back.
+   */
   undoLabel: string;
   redoLabel: string;
   /** Press them. Both are no-ops when there is nothing at that end. */
@@ -130,6 +140,9 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
 
   const undo = state.data?.undo ?? null;
   const redo = state.data?.redo ?? null;
+  // `?? null` rather than trusting the field: a host built before it answers none.
+  const undoCovers = state.data?.undoCovers ?? null;
+  const redoCovers = state.data?.redoCovers ?? null;
   const busy = undoWrite.isPending || redoWrite.isPending;
 
   const runUndo = useCallback(() => {
@@ -151,12 +164,14 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
     setUndoneIds((ids) => (ids.length === 0 ? ids : []));
   }, []);
 
-  const undoLabel = useMemo(() => label(VERBS.undo, undo), [undo]);
-  const redoLabel = useMemo(() => label(VERBS.redo, redo), [redo]);
+  const undoLabel = useMemo(() => label(VERBS.undo, undo, undoCovers), [undo, undoCovers]);
+  const redoLabel = useMemo(() => label(VERBS.redo, redo, redoCovers), [redo, redoCovers]);
 
   return {
     undo,
     redo,
+    undoCovers,
+    redoCovers,
     undoLabel,
     redoLabel,
     runUndo,
@@ -169,14 +184,14 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
 }
 
 /**
- * `Undo — Removed 2 × Lightning Bolt`, or the bare verb.
+ * `Undo — Removed 2 × Lightning Bolt`, `Undo — Moved 50 cards` for a batch, or the bare verb.
  *
  * The sentence comes from `auditText` rather than being written here, because it is the same
  * sentence the history drawer draws and two spellings of one line is exactly what that module
  * exists to prevent. No `others` list is passed: a button never labels an undo *of* an undo,
  * since those rows record no step and can never be at the cursor.
  */
-function label(verb: string, entry: DeckAuditEntry | null): string {
+function label(verb: string, entry: DeckAuditEntry | null, covers: number | null): string {
   if (entry === null) return verb;
-  return `${verb} — ${auditSentence(entry).text}`;
+  return `${verb} — ${stepSentence(entry, covers)}`;
 }

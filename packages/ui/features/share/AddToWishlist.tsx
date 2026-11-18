@@ -4,8 +4,8 @@
  *
  * ## What it writes, and what it deliberately does not
  *
- * It writes `wishlist_entries`, through `ipc.wishlistAdd`, into a folder the reader **already
- * has**. There is no new table, no new synced column and no schema rung: a want list is the
+ * It writes `wishlist_entries`, through `ipc.wishlistAddMany` (`ipc.wishlistAdd` for a press
+ * over one card), into a folder the reader **already has**. There is no new table, no new synced column and no schema rung: a want list is the
  * wishlist this app has always had, reached from a new place. In particular there is no binding
  * between a wishlist folder and a share — the issue asked for one and spec §8 defers it, with
  * the cost of adding it later written down there. So this dialog offers the cabinet as it
@@ -52,13 +52,15 @@ import { userWishFolders } from "@/features/wishlist/managed";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import { BUTTON } from "@/features/settings/controls";
 import { buildFolderTree, flattenFolders } from "@/lib/folderTree";
+import { offerUndo } from "@/lib/bulkUndo";
 import { isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError } from "@/lib/ipc";
+import { ipc, ipcError, type WishInput } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { cn } from "@/lib/utils";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { trackWork } from "@/lib/work";
 import { crossReference, wishGrainKey, type OwnedIndex } from "./useOwnedIndex";
 
 /**
@@ -256,44 +258,44 @@ export function AddToWishlist({
     /** Wants landed by this press — kept in the ledger if it stops part way. */
     const now = new Set<string>();
     let added = 0;
+    /** The first want this press could not add, in the backend's words — or `null`. */
+    let refused: string | null = null;
+    const wish = (want: Want): WishInput => ({
+      cardId: want.card.id,
+      quantity: 1,
+      folderId,
+      // Spread rather than passed, so a nonfoil copy sends a payload with no such key rather than
+      // one carrying an explicit `undefined` — `AddToCollection`'s rule for the same field.
+      ...(want.finish !== null && { preferredFinish: want.finish }),
+    });
     try {
-      // **One at a time, and the count is kept as it goes.** `wishlist_add` takes the write
-      // connection, so a wall of parallel calls would queue on it anyway — and a refusal part
-      // way through is a real state (a busy database, a folder another surface deleted) that
-      // the reader has to be told the shape of. A `Promise.all` would report the first failure
-      // and know nothing about how many of the others had landed.
-      for (const want of pending) {
-        await ipc.wishlistAdd({
-          cardId: want.card.id,
-          quantity: 1,
-          folderId,
-          // Spread rather than passed, so a nonfoil copy sends a payload with no such key
-          // rather than one carrying an explicit `undefined` — `AddToCollection`'s rule for
-          // the same field.
-          ...(want.finish !== null && { preferredFinish: want.finish }),
+      // **One write for the press** — `wishlist_add_many`, one transaction and one undo ticket,
+      // which answers each want that did not land by its index while the rest land, so the count
+      // and the ledger are exact without walking the list one call at a time (it was one
+      // `wishlist_add` per want, awaited in turn, until 2026-11-18). A press over one want keeps
+      // the single add. A rejected call — a busy database, a folder another surface deleted —
+      // landed nothing.
+      if (pending.length === 1) {
+        await ipc.wishlistAdd(wish(pending[0]));
+        now.add(wantKey(pending[0]));
+        added = 1;
+      } else {
+        const outcome = await trackWork(
+          `Adding ${cards(pending.length)} to ${where}…`,
+          ipc.wishlistAddMany(pending.map(wish)),
+        );
+        const skipped = new Set(outcome.refused.map((refusal) => refusal.index));
+        pending.forEach((want, i) => {
+          if (!skipped.has(i)) now.add(wantKey(want));
         });
-        now.add(wantKey(want));
-        added += 1;
+        added = now.size;
+        refused = outcome.refused[0]?.reason ?? null;
+        // The ticket for what landed, offered back where the wishlist draws its undo bar — the
+        // import's offer, from a new place. `null` when nothing landed, which offers nothing.
+        offerUndo("wishlist", outcome.undoId, `Added ${cards(added)} to ${named}.`);
       }
     } catch (e) {
-      // Names what got through, because the reader's list really did move that far — every
-      // press of this selection together, which is how much of it is on the list now. The next
-      // press adds only the rest (see `landed`).
-      const total = landed.size + added;
-      if (added > 0) setLedger({ selection, keys: new Set([...landed, ...now]) });
-      setRefusal(`Added ${total} of ${cards(wants.length)}. ${ipcError(e)}`);
-      // **And a notice, even though the dialog stays open with that line in it** — the owner's
-      // rule (2026-10-12) is that every add of cards to a wishlist answers in the inbox as well as
-      // where it was pressed, and a partial add is cards written. One notice for the press: a
-      // warning with the count where some landed, an error where none did.
-      if (total > 0) {
-        notify.warning(`Added ${total} of ${cards(wants.length)} to ${where}`, {
-          body: ipcError(e),
-        });
-      } else {
-        notify.error(`Couldn't add ${cards(wants.length)} to ${where}`, { body: ipcError(e) });
-      }
-      return;
+      refused = ipcError(e);
     } finally {
       setAdding(false);
       // On the refusal as well as on the success, and for the reason the count above exists: a
@@ -304,6 +306,24 @@ export function AddToWishlist({
         void client.invalidateQueries({ queryKey: ["wishlist"] });
         void refreshCardSearches(client);
       }
+    }
+    if (refused !== null) {
+      // Names what got through, because the reader's list really did move that far — every
+      // press of this selection together, which is how much of it is on the list now. The next
+      // press adds only the rest (see `landed`).
+      const total = landed.size + added;
+      if (added > 0) setLedger({ selection, keys: new Set([...landed, ...now]) });
+      setRefusal(`Added ${total} of ${cards(wants.length)}. ${refused}`);
+      // **And a notice, even though the dialog stays open with that line in it** — the owner's
+      // rule (2026-10-12) is that every add of cards to a wishlist answers in the inbox as well as
+      // where it was pressed, and a partial add is cards written. One notice for the press: a
+      // warning with the count where some landed, an error where none did.
+      if (total > 0) {
+        notify.warning(`Added ${total} of ${cards(wants.length)} to ${where}`, { body: refused });
+      } else {
+        notify.error(`Couldn't add ${cards(wants.length)} to ${where}`, { body: refused });
+      }
+      return;
     }
     // **The receipt is a toast**, because the dialog closes on it and the wall behind draws no
     // wishlist — until 2026-10-12 it was a status line the shared page kept under its bar, a

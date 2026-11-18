@@ -67,8 +67,13 @@ export function suppressRangeSelection(event: { shiftKey: boolean; preventDefaul
   if (event.shiftKey) event.preventDefault();
 }
 
-/** What a surface gets back. Everything is stable across renders except {@link CardSelectionApi.keys}
- *  and the counts derived from it, which change exactly when the set does. */
+/**
+ * What a surface gets back — **one object, held still until the set or the order moves**, so a
+ * surface may hand it (or any member of it) to a memoised child without that child redrawing on
+ * every render of its parent. {@link CardSelectionApi.keys}, the counts derived from it and
+ * {@link CardSelectionApi.selected} change exactly when the set does; {@link CardSelectionApi.pick}
+ * when the order does.
+ */
 export interface CardSelectionApi {
   /** Whether this key wears the mark. */
   selected: (key: string) => boolean;
@@ -85,7 +90,10 @@ export interface CardSelectionApi {
    * That return is the whole contract with the four deck views and the wall: none of them
    * branches on modifiers itself, so none of them can disagree about which chords mean what.
    */
-  pick: (key: string, event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => boolean;
+  pick: (
+    key: string,
+    event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+  ) => boolean;
   /**
    * Whether a drag started on this key carries the whole set — and, when it does not, the
    * collapse that makes the drag honest.
@@ -138,7 +146,12 @@ export function useCardSelection(
   order: readonly string[],
   list = "",
 ): CardSelectionApi {
-  const held = useAppStore((s) => s.cardSelection);
+  // **Only this scope's set, at the selector** — `DeckEditor`'s `cardSelection` read, for the
+  // same reason. The store holds one set for the whole app, and a Ctrl+A walk in the docked search
+  // column writes it once per page it fetches; read whole, each of those writes was a render of
+  // the deck desk beside it (and of every other wall mounted), for a set none of them draws. A
+  // set in another scope is `null` here, and stays the same `null` through every write to it.
+  const held = useAppStore((s) => (s.cardSelection?.scope === scope ? s.cardSelection : null));
   const pickCard = useAppStore((s) => s.pickCard);
   const setCardSelection = useAppStore((s) => s.setCardSelection);
 
@@ -147,15 +160,15 @@ export function useCardSelection(
    * for a set that is all of this list, grown to the order as it stands.
    */
   const mine: Selection = useMemo(() => {
-    if (held === null || held.scope !== scope) return EMPTY_SELECTION;
+    if (held === null) return EMPTY_SELECTION;
     return settleSelection(held, order, list);
-  }, [held, scope, order, list]);
+  }, [held, order, list]);
 
   // The correction, one commit behind what the caller already sees. `held === mine` is the
   // identity `settleSelection` promises when nothing moved, so the ordinary render writes
   // nothing at all and this effect is a no-op with no dependency on what it would write.
   useEffect(() => {
-    if (held === null || held.scope !== scope) return;
+    if (held === null) return;
     if (held === mine) return;
     setCardSelection({ scope, ...mine });
   }, [held, mine, scope, setCardSelection]);
@@ -205,15 +218,22 @@ export function useCardSelection(
     [mine, scope, setCardSelection],
   );
 
-  return {
-    selected,
-    keys,
-    count: keys.length,
-    pick,
-    dragsAll,
-    clear,
-    selectAll,
-    selectStacks,
-    all: mine.allOf !== undefined,
-  };
+  const all = mine.allOf !== undefined;
+  // Held still on what it is made of: a fresh object per render made every consumer that named
+  // it (the wall's `select`, its menu slots) a new callback per render, and a memoised tile handed
+  // one is a tile redrawn for nothing.
+  return useMemo(
+    () => ({
+      selected,
+      keys,
+      count: keys.length,
+      pick,
+      dragsAll,
+      clear,
+      selectAll,
+      selectStacks,
+      all,
+    }),
+    [selected, keys, pick, dragsAll, clear, selectAll, selectStacks, all],
+  );
 }

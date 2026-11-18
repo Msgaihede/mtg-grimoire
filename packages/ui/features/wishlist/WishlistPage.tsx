@@ -625,7 +625,7 @@ export function WishlistPage() {
    * light app's phone face presses the same four mutations with the same patches and the same
    * `settleWhole`; the doc for each is at its new home.
    */
-  const { settleWhole, setQuantity, remove, setFolder, moveWish, anyPrinting } =
+  const { settleWhole, setQuantity, remove, setFolder, moveWish, moveWishes, anyPrinting } =
     useWishEntryWrites();
   // The four writes' `mutate`, held still where the result objects around them are not (issue
   // #557) — the handlers below are what the memoised wall and table are handed.
@@ -641,6 +641,8 @@ export function WishlistPage() {
   // drags' `mutate` (silent, `useWishDrops`) and the panel's promise (said, {@link onSetFolder}).
   const { mutate: setFolderMutate } = setFolder;
   const { mutateAsync: moveWishAsync } = moveWish;
+  // And a picked set's refiles, as one write (`useWishDrops`, said there).
+  const { mutateAsync: moveWishesAsync } = moveWishes;
   const { mutate: anyPrintingMutate } = anyPrinting;
 
   const onSetQuantity = useCallback(
@@ -720,13 +722,21 @@ export function WishlistPage() {
   // The four fields rather than `query`, which is a new object on every render (issue #557): the
   // memoised wall and table are both handed this, and keyed on `query` it was new on every
   // keystroke. `fetchNextPage` is the observer's own bound method and holds still.
-  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
-  const onNeedNextPage = useCallback(() => {
-    if (levelHeld) return;
-    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
-      void fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, levelHeld]);
+  //
+  // `want` is a Ctrl+A walk's — fetched in pages as large as the backend answers (`useWishlist`'s
+  // `fetchMore`) — and the answer is whether rows are still to come, which keeps the app's busy
+  // mark up while the walk fetches (`CardGrid`'s `onNeedNextPage`).
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchMore } = wishlist;
+  const onNeedNextPage = useCallback(
+    (want?: number) => {
+      if (levelHeld) return false;
+      const more = hasNextPage && !isFetchNextPageError;
+      if (more && !isFetchingNextPage) fetchMore(want);
+      return more;
+    },
+    [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchMore, levelHeld],
+  );
 
   const currency = marketplace.currency;
 
@@ -1019,6 +1029,7 @@ export function WishlistPage() {
    */
   const {
     addWish,
+    addWishes,
     canFile,
     fileWish,
     folderPlacement,
@@ -1033,6 +1044,7 @@ export function WishlistPage() {
     managed,
     setFolder: setFolderMutate,
     moveWish: moveWishAsync,
+    moveWishes: moveWishesAsync,
     reorder: reorderMutate,
     settleWhole,
   });
@@ -2023,7 +2035,9 @@ export function WishlistPage() {
     toasted(remove),
     setFolder,
     toasted(moveWish),
+    toasted(moveWishes),
     toasted(addWish),
+    toasted(addWishes),
     anyPrinting,
     folders.create,
     folders.rename,

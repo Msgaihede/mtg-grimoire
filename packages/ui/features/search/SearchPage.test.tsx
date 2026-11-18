@@ -81,6 +81,23 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
+/**
+ * **A tile-draw probe** for the wall's memo (2026-11): `OwnedBadge` is drawn by the page's `badge`
+ * slot inside every tile, once per draw of that tile, so wrapping it counts tile draws — keyed by
+ * `owned`, which the probe test gives each card a figure of its own. Pass-through otherwise.
+ */
+const badgeDraws = vi.hoisted(() => [] as number[]);
+vi.mock("@/components/OwnedBadge", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/components/OwnedBadge")>();
+  return {
+    ...real,
+    OwnedBadge: (props: Parameters<typeof real.OwnedBadge>[0]) => {
+      badgeDraws.push(props.owned);
+      return <real.OwnedBadge {...props} />;
+    },
+  };
+});
+
 import { SearchPage } from "./SearchPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
@@ -1670,6 +1687,68 @@ describe("the card menu", () => {
  * `userEvent.keyboard` on a caret placed by hand, never `type`, which focuses what it is handed
  * and would make the focus assertion pass for the wrong reason.
  */
+/**
+ * **The Search page's wall holds still** (2026-11). `CardGrid` and every tile are memoised, but a
+ * memo only holds on stable props: while `Results` handed the wall fresh arrows for `badge`,
+ * `topLeft`, `money`, `action` and `onNeedNextPage`, every render of it — a page landing, a
+ * refetch's `isFetching` flip, a card opened — redrew every mounted tile.
+ */
+describe("the wall's re-renders", () => {
+  /** Three cards, each owning a count of its own, so a draw names its tile. */
+  const OWNED = [1, 2, 3].map((n, i) => ({
+    ...BOLT,
+    id: `c${i}`,
+    name: `Card ${i}`,
+    ownedQuantity: n,
+  }));
+
+  function mount() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TooltipProvider>
+          <ContextMenuProvider>
+            <SearchPage />
+          </ContextMenuProvider>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    return qc;
+  }
+
+  beforeEach(() => {
+    searchCards.mockResolvedValue(page(OWNED));
+    useAppStore.setState({ searchView: "grid", selectedCardId: null });
+  });
+
+  it("does not redraw a tile for a refetch that changed none of its rows", async () => {
+    const qc = mount();
+    await screen.findByRole("button", { name: "Card 2" });
+    await waitFor(() => expect(badgeDraws).toContain(3));
+
+    badgeDraws.length = 0;
+    // The same rows again: `isFetching` goes up and down, and query-core hands back the same row
+    // objects (structural sharing), so `Results` renders twice and no tile has anything new.
+    await act(() => qc.invalidateQueries());
+    await waitFor(() => expect(screen.getByRole("status")).not.toHaveTextContent(/searching/));
+    expect(badgeDraws).toEqual([]);
+  });
+
+  it("redraws only the tiles a card opened on changes", async () => {
+    mount();
+    await screen.findByRole("button", { name: "Card 2" });
+    await waitFor(() => expect(badgeDraws).toContain(3));
+
+    badgeDraws.length = 0;
+    await userEvent.click(screen.getByRole("button", { name: "Card 1" }));
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+    // Card 1 (owned 2) is the tile now open, and Card 0 (owned 1) gives it the wall's one Tab
+    // stop (`arrowNav`'s roving stop moves with the caret). Card 2 has nothing new.
+    expect(badgeDraws).toContain(2);
+    expect(badgeDraws).not.toContain(3);
+  });
+});
+
 describe("the arrow-key walk", () => {
   it("selects the next card along, which is the card the pane is showing", async () => {
     searchCards.mockResolvedValue(page(cards(3)));

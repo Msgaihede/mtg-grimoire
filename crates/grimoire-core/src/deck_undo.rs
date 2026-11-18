@@ -63,14 +63,15 @@
 //! SQLite has no `ALTER … CHECK` — so a tenth word means rebuilding every reader's whole deck
 //! history for a spelling. [`crate::import::commit_import`] met this first and reused
 //! `add`/`remove` with a keyed payload; this reuses `deck` with
-//! `{"field":"undo"|"redo","of":<audit_id>}`. `auditText.ts`'s `deckLine` already answers an
+//! `{"field":"undo"|"redo","of":<audit_id>}` — plus `"covers":<n>` for a batch's step that took
+//! back more than its one keyed row ([`Step::covers`]). `auditText.ts`'s `deckLine` already answers an
 //! unrecognised field with "Changed the deck", so an older build degrades to a true sentence
 //! rather than to a hole.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// What an apply says when the id it was handed is not the deck's cursor (or, for a redo, not
 /// [`next_redo`]), or when a redo finds the deck no longer the way the undo left it.
@@ -654,11 +655,42 @@ pub enum Op {
 pub struct Step {
     pub undo: Vec<Op>,
     pub redo: Vec<Op>,
+    /// The copies the whole press added (negative: removed) — the `delta` its reversal's history
+    /// row carries, negated on an undo and straight on a redo ([`apply_reversal`]).
+    ///
+    /// **`None` for every step but a batch's, and then the history row it is keyed on says it**:
+    /// a press that writes one row keys its step on that row and the row's own `delta` is the
+    /// press's. A batch (`crate::deck_apply`) writes a row per op and keys on the last, so
+    /// three hundred one-copy adds would be undone as `−1` — the day header, which sums `delta`,
+    /// would read `+300 / −1` for a deck back where it started. Absent from the JSON when `None`
+    /// and defaulted when missing, so every step already in a journal reads as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<i64>,
+    /// How many journalled history rows — one per op that wrote one — the step takes back: a
+    /// batch's count (`crate::deck_apply`), so the buttons can say `Undo — Moved 50 cards` for a
+    /// press that undoes fifty cards rather than naming the last of them ([`DeckUndoState`]).
+    ///
+    /// **`None` for every single command's step**, whose one keyed row is the whole press — and,
+    /// like [`Step::delta`], absent from the JSON when `None` and defaulted when missing, so every
+    /// step already in a journal (a batch's filed before this field included) reads as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covers: Option<i64>,
 }
 
 impl Step {
     pub fn new(undo: Vec<Op>, redo: Vec<Op>) -> Self {
-        Self { undo, redo }
+        Self {
+            undo,
+            redo,
+            delta: None,
+            covers: None,
+        }
+    }
+
+    /// [`Step::covers`] when it is a count worth saying — more than the one row a step is keyed
+    /// on. A batch of one op reads exactly as its single command does.
+    fn covers_several(&self) -> Option<i64> {
+        self.covers.filter(|&n| n > 1)
     }
 }
 
@@ -799,23 +831,155 @@ pub fn record_cells(
     before: Vec<CardRow>,
     made: Option<Vec<i64>>,
 ) -> Result<(), String> {
+    let step = cells_step(tx, deck_id, cells, before, made, None)?;
+    record_step(tx, audit_id, deck_id, &step)
+}
+
+/// [`record_cells`] for a **batch** of card writes (`crate::deck_apply`): one step over every cell
+/// the batch's writes noted in `log`, plus the token half from `tokens` — the token entries the
+/// batch's rerouted adds filed, which each file a step of their own when pressed one at a time.
+///
+/// `journalled` is the batch's journalled history rows, in order: the step is keyed on the last
+/// — [`record_step`]'s rule for a press that writes several rows: one press is one Ctrl+Z, keyed
+/// on the last of them — and counts them all ([`Step::covers`]). `delta` is the sum of their
+/// `delta`s, which the step carries ([`Step::delta`]). No row, no step.
+///
+/// **A batch that changed nothing files nothing** — an add and a removal of the same card on a
+/// list that files its removals (theory, a virtual deck), say: every cell as it found it, no pile
+/// made, no token moved. Such a step would be a Ctrl+Z that changes nothing and still writes an
+/// "Undid" row. Answers whether a step was filed.
+pub(crate) fn record_logged(
+    tx: &Connection,
+    journalled: &[i64],
+    deck_id: i64,
+    log: CellLog,
+    made: Option<Vec<i64>>,
+    tokens: &crate::deck_tokens::TokenLog,
+    delta: i64,
+) -> Result<bool, String> {
+    let Some(&audit_id) = journalled.last() else {
+        return Ok(false);
+    };
+    let mut step = cells_step(tx, deck_id, log.cells, log.before, made, Some(tokens))?;
+    // Any other op — a pile made, a token moved, the reconcile's share — is a change by being there.
+    let unchanged = match (step.undo.as_slice(), step.redo.as_slice()) {
+        ([], []) => true,
+        ([Op::Cards { rows: before, .. }], [Op::Cards { rows: after, .. }]) => {
+            same_rows(after.clone(), before)
+        }
+        _ => false,
+    };
+    if unchanged {
+        return Ok(false);
+    }
+    step.delta = Some(delta);
+    step.covers = Some(journalled.len() as i64);
+    record_step(tx, audit_id, deck_id, &step)?;
+    Ok(true)
+}
+
+/// The step [`record_cells`] and [`record_logged`] file.
+///
+/// With a token log, a batch that touched no cell (every add was a token) carries no
+/// [`Op::Cards`] at all, and the token pair goes **last** on both sides, after the reconcile's —
+/// the reconcile's share is filtered to the tokens the log does not hold, so the two never name
+/// one token and their order is free.
+fn cells_step(
+    tx: &Connection,
+    deck_id: i64,
+    cells: Vec<Cell>,
+    before: Vec<CardRow>,
+    made: Option<Vec<i64>>,
+    tokens: Option<&crate::deck_tokens::TokenLog>,
+) -> Result<Step, String> {
     let after = read_cells(tx, deck_id, &cells)?;
     // **The token reconcile, inside this write's own transaction** (spec §4.2 rule 7): a list
     // that stopped deriving a token loses that token's entries, and they ride this step so one
     // Ctrl+Z puts back the card *and* the reader's printings of what it made. Read after the
     // write and before the step is built, because what it removed is part of the step.
-    let removed = crate::deck_tokens::reconcile_in(tx, deck_id, &variants_of(&cells))?;
-    let mut undo = vec![Op::Cards {
-        scope: cells.clone(),
-        rows: before,
-    }];
-    let mut redo = vec![Op::Cards {
-        scope: cells,
-        rows: after,
-    }];
+    let mut removed = crate::deck_tokens::reconcile_in(tx, deck_id, &variants_of(&cells))?;
+    let (mut undo, mut redo) = (Vec::new(), Vec::new());
+    if tokens.is_none() || !cells.is_empty() {
+        undo.push(Op::Cards {
+            scope: cells.clone(),
+            rows: before,
+        });
+        redo.push(Op::Cards {
+            scope: cells,
+            rows: after,
+        });
+    }
     push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
+    if let Some(tokens) = tokens {
+        removed = tokens.without_mine(removed);
+    }
     push_removed_tokens(removed, &mut undo, &mut redo);
-    record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
+    if let Some((back, forth)) = tokens.map(|t| t.settle(tx, deck_id)).transpose()?.flatten() {
+        undo.push(back);
+        redo.push(forth);
+    }
+    Ok(Step::new(undo, redo))
+}
+
+/// The cells a batch of card writes is about, **found as the writes go**, each read the first
+/// time a write names it — so its "before" is the cell as the batch found it, whatever the
+/// batch's later writes do to it (`crate::deck_apply`).
+///
+/// **Found as they go because the batch cannot know them up front**: an add filed by name makes
+/// its pile partway through, and the cell is in a pile that did not exist when the batch began.
+/// Read at first sight rather than before the batch is the same fact: a cell no earlier write in
+/// the batch named is a cell no earlier write changed.
+///
+/// **Each cell once.** Two adds of one printing into one pile are one cell; a scope naming it
+/// twice would delete it once and insert its rows twice on Ctrl+Z.
+#[derive(Debug, Default)]
+pub struct CellLog {
+    cells: Vec<Cell>,
+    before: Vec<CardRow>,
+    seen: HashSet<(String, i64, Option<String>)>,
+}
+
+impl CellLog {
+    /// Name `cell` as one the write about to happen changes, reading its rows if this is the
+    /// first write to name it. Called **before** that write, inside its transaction.
+    pub fn note(&mut self, tx: &Connection, deck_id: i64, cell: Cell) -> Result<(), String> {
+        let key = (cell.variant.clone(), cell.category_id, cell.card_id.clone());
+        if self.seen.contains(&key) {
+            return Ok(());
+        }
+        let rows = read_cells(tx, deck_id, std::slice::from_ref(&cell))?;
+        self.seen.insert(key);
+        self.before.extend(rows);
+        self.cells.push(cell);
+        Ok(())
+    }
+
+    /// How far the log has got — taken before one write of a batch, so a write the batch rolls
+    /// back can be [`CellLog::rewind`]ed out of it.
+    pub fn mark(&self) -> (usize, usize) {
+        (self.cells.len(), self.before.len())
+    }
+
+    /// Forget every cell noted since `mark`: the write that named them was rolled back.
+    pub fn rewind(&mut self, (cells, before): (usize, usize)) {
+        for cell in self.cells.drain(cells..) {
+            self.seen
+                .remove(&(cell.variant, cell.category_id, cell.card_id));
+        }
+        self.before.truncate(before);
+    }
+
+    /// Whether no write has named a cell yet — what `crate::deck_apply` asks before a live cut,
+    /// which may land only while the step it would otherwise leak into is still empty.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// The scope and its "before", for a write that records its own step through
+    /// [`record_cells`].
+    pub fn into_parts(self) -> (Vec<Cell>, Vec<CardRow>) {
+        (self.cells, self.before)
+    }
 }
 
 /// Every list a scope names, once each and in the schema's order — what
@@ -1050,8 +1214,10 @@ pub fn record_variant(
 pub fn read_cells(conn: &Connection, deck_id: i64, cells: &[Cell]) -> Result<Vec<CardRow>, String> {
     let mut rows = Vec::new();
     for cell in cells {
+        // Cached: a batch (`crate::deck_apply`) reads a cell per write, and a step over many
+        // cells reads them all twice and checks them once more on Ctrl+Z.
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
                         label_id, quantity, needs_review, finish
                    FROM deck_cards
@@ -2592,19 +2758,33 @@ pub fn read_step(conn: &Connection, audit_id: i64) -> Result<Option<(Step, bool)
 /// The whole `DeckAuditEntry` rather than a sentence, because a sentence is domain logic —
 /// `auditText.ts` words it, and the button reads "Undo — Removed 2 × Lightning Bolt" by asking
 /// that module. The same split every row of the history drawer already goes through.
+///
+/// **A batch's step is keyed on one row and takes back many** (`crate::deck_apply`), so the
+/// entry alone would label a 50-card move `Undo — Moved Bear`. `undo_covers` / `redo_covers` are
+/// that step's [`Step::covers`] — how many journalled rows it takes back — for `auditText.ts` to
+/// word as a count; `None` for a step that covers one (every single command's, and a batch's
+/// filed before the field).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckUndoState {
     pub undo: Option<crate::deck_audit::DeckAuditEntry>,
     pub redo: Option<crate::deck_audit::DeckAuditEntry>,
+    pub undo_covers: Option<i64>,
+    pub redo_covers: Option<i64>,
 }
 
 /// The `deck` payload an undo or a redo records, and the whole of what makes the pair legible.
 ///
 /// `of` is the history row being reversed, which is what lets `auditText.ts` render the undone
-/// change's own sentence inside the verb rather than "Changed the deck".
-fn reversal_payload(field: &str, of: i64) -> Value {
-    json!({ "field": field, "of": of })
+/// change's own sentence inside the verb rather than "Changed the deck". `covers` is the step's
+/// count where it took back more than that one row ([`Step::covers`]) — `Undid: Moved 50 cards`
+/// rather than the last card's name — and absent otherwise, so a single command's reversal row
+/// is written exactly as it always was.
+fn reversal_payload(field: &str, of: i64, covers: Option<i64>) -> Value {
+    match covers {
+        Some(covers) => json!({ "field": field, "of": of, "covers": covers }),
+        None => json!({ "field": field, "of": of }),
+    }
 }
 
 /// One history row for the reversal itself.
@@ -2618,6 +2798,7 @@ fn record_reversal(
     field: &str,
     of: i64,
     delta: i64,
+    covers: Option<i64>,
 ) -> Result<(), String> {
     crate::deck_audit::record(
         tx,
@@ -2625,7 +2806,7 @@ fn record_reversal(
         crate::deck_audit::DECK_LEVEL,
         crate::deck_audit::DECK,
         None,
-        &reversal_payload(field, of),
+        &reversal_payload(field, of, covers),
         delta,
     )?;
     Ok(())
@@ -2745,12 +2926,16 @@ pub fn apply_reversal(
     }
     .map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
+    // The press's own net where the step carries one (a batch, [`Step::delta`]); otherwise the
+    // row the step is keyed on is the whole press, and its `delta` is the press's.
+    let delta = step.delta.unwrap_or(entry.delta);
     record_reversal(
         &tx,
         deck_id,
         if undoing { "undo" } else { "redo" },
         audit_id,
-        if undoing { -entry.delta } else { entry.delta },
+        if undoing { -delta } else { delta },
+        step.covers_several(),
     )?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -2779,7 +2964,17 @@ pub fn undo_state(
         }
         _ => None,
     };
-    Ok(DeckUndoState { undo, redo })
+    // The step of the same row, read only where there is an entry to label.
+    let covers = |entry: &Option<crate::deck_audit::DeckAuditEntry>| match entry {
+        Some(e) => Ok(read_step(conn, e.id)?.and_then(|(step, _)| step.covers_several())),
+        None => Ok::<_, String>(None),
+    };
+    Ok(DeckUndoState {
+        undo_covers: covers(&undo)?,
+        redo_covers: covers(&redo)?,
+        undo,
+        redo,
+    })
 }
 
 #[cfg(test)]

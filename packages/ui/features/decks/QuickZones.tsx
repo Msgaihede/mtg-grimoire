@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
 import { plural } from "@/lib/counts";
 import {
+  anyDropWrites,
   dropWrite,
   dropWrites,
   readCards,
@@ -217,7 +218,10 @@ export function QuickZoneBar({
     // same thing about a pile.
     // `held` rather than the `payload` above it, and the difference is the point: that one is
     // what this render was drawn for, and this is what the library is holding *now*.
-    accepts: (data) => dropWrites(readDragGroup(data), target).length > 0,
+    // `anyDropWrites`, not `dropWrites(…).length`: this is asked on every collision pass, and the
+    // list it would build is as long as the picked set. The group itself is parsed once per drag
+    // (`readDragGroup`'s memo).
+    accepts: (data) => anyDropWrites(readDragGroup(data), target),
     drop: (data) => {
       // Every card the drag was carrying — `dropWrites`' rule that a mixed set is not refused
       // whole, so four deck rows and one search tile dropped on `Auto` file the four and pass
@@ -516,7 +520,8 @@ function QuickCategoryBody({
       <p className="text-[0.6875rem] leading-relaxed text-dim">
         {cardNames.length > 1 ? (
           <>
-            <span className="text-text">{plural(cardNames.length, "card")}</span> will move to the new category.
+            <span className="text-text">{plural(cardNames.length, "card")}</span> will move to the
+            new category.
           </>
         ) : cardNames[0] ? (
           <>

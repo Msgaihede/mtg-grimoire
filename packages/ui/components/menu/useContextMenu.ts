@@ -29,6 +29,19 @@ export function isTextField(el: EventTarget | null): boolean {
   return el.closest("input, textarea, [contenteditable=''], [contenteditable='true']") !== null;
 }
 
+/**
+ * The two presses Windows spells "open the context menu" with: the dedicated key, and Shift+F10
+ * for the keyboards that do not have one — exactly the presses {@link useContextMenu}'s `menuKey`
+ * answers.
+ *
+ * Exported so a surface that builds its `menuKey` handler per press (a card wall's tile, whose
+ * builder may sort a picked set of thousands) can test the key **before** building anything; an
+ * arrow key held down on a tile must not pay for a menu nobody asked for.
+ */
+export function isMenuKey(e: { key: string; shiftKey: boolean }): boolean {
+  return e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey);
+}
+
 /** What the provider hands every surface: open a menu, close the one that is open. */
 export interface ContextMenuApi {
   openMenu: (items: MenuItem[], at: MenuPosition, opener: HTMLElement | null) => void;
@@ -173,10 +186,9 @@ export function useContextMenu(): ContextMenuHandles {
     const menuKey = (build: () => MenuItem[]) => {
       const open = opened<ReactKeyboardEvent>(build, atOpener);
       return (e: ReactKeyboardEvent): void => {
-        // The two presses Windows spells "open the context menu" with: the dedicated key, and
-        // Shift+F10 for the keyboards that do not have one. Tested before the shared body, so a
-        // caret in a field still keeps every other key — including cut, copy and paste.
-        if (e.key !== "ContextMenu" && !(e.key === "F10" && e.shiftKey)) return;
+        // `isMenuKey`'s two presses. Tested before the shared body, so a caret in a field still
+        // keeps every other key — including cut, copy and paste.
+        if (!isMenuKey(e)) return;
         open(e);
       };
     };

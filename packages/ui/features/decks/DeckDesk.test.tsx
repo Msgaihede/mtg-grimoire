@@ -20,7 +20,9 @@ vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
  *   which draws each of them — the ledger, the stats band, the notes band and the docked search
  *   wall the issue names;
  * - `DeckCardFace`, keyed by the card's name, counts **`CardStack`** — the stack draws one face per
- *   card, so a stack that was skipped draws none.
+ *   card, so a stack that was skipped draws none;
+ * - `CardGrid` counts **the docked search column's tab** that draws the wall — skipped whole when
+ *   the memoised `DeckSearchPanel` above it is handed what it was handed last.
  *
  * Every probe keeps the real component's whole behaviour, so nothing here is a claim about a
  * surface that is not on screen.
@@ -90,6 +92,17 @@ vi.mock("./DeckNotesPanel", async (importOriginal) => {
     },
   };
 });
+vi.mock("@/features/search/CardGrid", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/search/CardGrid")>();
+  const Real = actual.CardGrid;
+  return {
+    ...actual,
+    CardGrid: (props: Parameters<typeof Real>[0]) => {
+      bump("CardGrid");
+      return <Real {...props} />;
+    },
+  };
+});
 vi.mock("./DeckSearchPanel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./DeckSearchPanel")>();
   const Real = actual.DeckSearchPanel;
@@ -106,6 +119,7 @@ import { installWorld } from "@grimoire/fake/world";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { useAppStore } from "@/lib/store";
 import { DeckEditor } from "./DeckEditor";
 
 /** The starter world's first deck. Its Main pile holds lands and spells; its Maybeboard holds
@@ -200,6 +214,27 @@ describe("DeckDesk — what a filter keystroke re-renders (issue #557)", () => {
   });
 
   /**
+   * **The docked search column is not drawn again by a render of the editor that changed nothing
+   * it is handed** (2026-11). It was handed the add mutation whole — a new object every render — so
+   * every editor render drew the column and every tile in it; the editor renders a dozen times as
+   * a write's queries land. It takes `mutateAsync` and the refusal in words now, and is memoised.
+   */
+  it("does not redraw the docked search wall for a render of the editor that changed nothing it shows", async () => {
+    const world = await openSettled();
+    const user = userEvent.setup();
+    // The wall is up — the probe would read 0 for a column that drew nothing at all.
+    expect(screen.getByRole("group", { name: "Your collection" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "History" }));
+    await screen.findByRole("dialog");
+    await settle(world.client);
+
+    expect(count("DeckStats")).toBeGreaterThan(0);
+    expect(count("DeckSearchPanel")).toBeGreaterThan(0);
+    expect(count("CardGrid")).toBe(0);
+  });
+
+  /**
    * **A stepper press redraws the pile it stepped and no other** (issue #1402). The press rewrites
    * one row, which is a new `deck.cards` — and every callback the desk's `actions` bag was built
    * from used to depend on it, as did the card menu's, the picked set's empty `[]` and the marks'
@@ -222,5 +257,28 @@ describe("DeckDesk — what a filter keystroke re-renders (issue #557)", () => {
     // The Maybeboard's pile holds nothing the press touched.
     expect(count("face:Ancient Tomb")).toBe(0);
     await settle(world.client);
+  });
+
+  /**
+   * **A Ctrl-click redraws the pile it landed in and no other** (2026-11). The picked set used to
+   * ride in the `actions` bag as `isPicked`, which a pick replaced — so every memoised pile was
+   * handed a new bag and drew every face again to move one ring. Each pile is handed its own
+   * picked slots now (`views/pickedMarks.ts`), compared by item like every array prop.
+   */
+  it("redraws only the pile a Ctrl-click picked in", async () => {
+    const world = await openSettled();
+    const user = userEvent.setup();
+    const island = screen.getAllByRole("button", { name: /^Island\b/ })[0];
+
+    await user.keyboard("{Control>}");
+    await user.click(island);
+    await user.keyboard("{/Control}");
+    await waitFor(() => expect(useAppStore.getState().cardSelection?.keys).toHaveLength(1));
+    await settle(world.client);
+
+    // The control: Island's own stack was drawn again, with its ring.
+    expect(count("face:Island")).toBeGreaterThan(0);
+    // The Maybeboard's pile holds no picked card, so it was not.
+    expect(count("face:Ancient Tomb")).toBe(0);
   });
 });

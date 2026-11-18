@@ -92,7 +92,8 @@ import { quickAddBlock, quickAddShort, type QuickAddTarget } from "./quickCollec
 // The rules a deck card's rows are greyed by — moved to a leaf on 2026-10-03 so the light app's
 // phone face asks them too, rather than a second spelling of each.
 import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "./deckCardRules";
-import { reportPresses, type PressWording } from "./receipts";
+import { reportPresses, reportSettled, workLabel, type PressWording } from "./receipts";
+import type { DeckEdit } from "./useDeckCore";
 
 /**
  * The card a right-click on a deck row is about, as `CardMenuTarget` describes it.
@@ -119,12 +120,14 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
   };
 }
 
-
 /**
  * What a per-row write may answer: nothing, or the promise of its outcome — which is what lets a
  * plural row hand a whole batch to {@link DeckCardMenuDeps.batch}.
  */
 type Press = void | Promise<unknown>;
+
+/** A row's slot — what every batched edit is addressed by. */
+const slotOf = ({ cardId, categoryId, finish }: DeckCard) => ({ cardId, categoryId, finish });
 
 /** Hand a plural row's presses to the surface as one batch — see {@link DeckCardMenuDeps.batch}. */
 function reportBatch(deps: DeckCardMenuDeps, presses: readonly Press[]) {
@@ -153,6 +156,34 @@ function pressRows(
     rows.map((row) => row.name),
     say,
   );
+}
+
+/**
+ * **A row's writes over several cards, as one batch when the surface can send one** (issue #1164).
+ *
+ * With {@link DeckCardMenuDeps.edits} wired and more than one row, the row is one `deck_apply` —
+ * `edit(row)` per card, in the set's order — and its one toast is read off that batch's answer
+ * ({@link reportSettled}), so `Moved 47 of 50 cards` and its first refusal read exactly as they did
+ * when each card was its own write. A single card, and a surface with no batch (a story's spies),
+ * keep the single write each row always made, through {@link pressRows}.
+ */
+function pressMany(
+  deps: DeckCardMenuDeps,
+  rows: readonly DeckCard[],
+  single: (row: DeckCard) => Press,
+  edit: (row: DeckCard) => DeckEdit,
+  work: string,
+  say: PressWording,
+) {
+  if (rows.length > 1 && deps.edits !== undefined) {
+    reportSettled(
+      deps.edits(rows.map(edit), work),
+      rows.map((row) => row.name),
+      say,
+    );
+    return;
+  }
+  pressRows(deps, rows, rows.map(single), say);
 }
 
 /** Everything the deck's own rows need that is not the card. Built once per surface, never
@@ -252,9 +283,10 @@ export interface DeckCardMenuDeps {
    */
   otherList?: { variant: DeckVariant; add: (card: DeckCard) => Press };
   /**
-   * **Every outcome of a row's writes, handed back as one batch** (issue #553) — `Move N cards
-   * to`, `Add N cards to …`, `Label N cards` and `Remove N cards` each make one write per picked
-   * row, and a single-card row makes one. Every one of them is toasted here, so the surface's
+   * **Every outcome of a row's writes, handed back as one batch** (issue #553) — a single-card
+   * row's one write, and a plural row's write per card on a surface with no {@link edits} (where
+   * there is one, the set is one `deck_apply` and the surface files it). Every one of them is
+   * toasted here, so the surface's
    * banner must *not* repeat the refusal — yet each write is a call on an observer the stepper
    * and the drags share, whose refusals that banner does report. Handing the batch over is what
    * lets the surface tell the two apart (the editor's `reportToasted`). Called with the promises
@@ -264,6 +296,20 @@ export interface DeckCardMenuDeps {
    * workbench's stories build this menu with bare `act` spies.
    */
   batch?: (presses: readonly Promise<unknown>[]) => void;
+  /**
+   * **A plural row's writes as one batch** (issue #1164) — `Category for N cards`, `Label N cards`,
+   * `Remove N cards` and `Add N cards to …` each hand their set here as {@link DeckEdit}s and get
+   * one settled result per card back, which is what their one toast is read from. `work` is the
+   * busy indicator's sentence. The surface sends one `deck_apply` and files the banner's record
+   * itself (the editor's `editBatch`), so {@link batch} is not called for them.
+   *
+   * Optional: without it a plural row is one write per card, as it was — the workbench's stories
+   * build this menu with bare spies.
+   */
+  edits?: (
+    edits: readonly DeckEdit[],
+    work: string,
+  ) => Promise<readonly PromiseSettledResult<unknown>[]>;
   /**
    * **Quick add to collection** — record the copies this row is short of and file them in the
    * deck's own group, and write nothing to the wishlist (`deck_quick_add_to_collection` with no
@@ -472,8 +518,9 @@ function splitItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  *
  * `Category`, `Label` and `Remove` act on **every** picked card when the right-clicked one is
  * in the set (issue #214), and so does `Add to actual` / `Add to theory` (issue #592). All four are
- * per-row writes over an address the row already carries, so plural is a loop and the label is the
- * only thing that has to change.
+ * per-row writes over an address the row already carries, so plural is the same write over a set
+ * — sent as one `deck_apply` where the surface wires {@link DeckCardMenuDeps.edits} (issue #1164:
+ * one transaction, one Ctrl+Z) — and the label is the only thing that has to change.
  *
  * **`Finish`, `Set as commander` and `Set as companion` stay about the one card, and that is a
  * statement rather than an omission.** A finish is a property of a *printing* — the two-finish
@@ -532,10 +579,12 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       items: [
         ...deckCardLabelRows(card, deps.labels, (_card, labelId) => {
           const label = deps.labels.find((l) => l.id === labelId)?.name;
-          pressRows(
+          pressMany(
             deps,
             rows,
-            rows.map((row) => deps.setLabel(row, labelId)),
+            (row) => deps.setLabel(row, labelId),
+            (row) => ({ edit: "setLabel", ...slotOf(row), labelId }),
+            workLabel("Labeling", rows.length),
             labelWording(label),
           );
         }),
@@ -582,15 +631,18 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       // menus — a deck, a folder, a pile — and this takes a card out of a pile that stays.
       Icon: CircleMinus,
       // **Still no confirmation, and the plural is where that is worth re-arguing.** One card is
-      // one add to put back; four is four, and four presses of Ctrl+Z, because `deck_audit` has a
-      // row per write. What keeps it unconfirmed is that the reader picked those four themselves,
-      // one Ctrl-click at a time, and every one of them is wearing a gold ring while they read
-      // this row — the pile's `Clear stack…` asks because a pile is a column nobody enumerated.
+      // one add to put back; four is four — one batch since issue #1164, so one Ctrl+Z off the
+      // live list (a live cut files no step, one card or forty). What keeps it unconfirmed is that
+      // the reader picked those four themselves, one Ctrl-click at a time, and every one of them
+      // is wearing a gold ring while they read this row — the pile's `Clear stack…` asks because a
+      // pile is a column nobody enumerated.
       onSelect: () =>
-        pressRows(
+        pressMany(
           deps,
           rows,
-          rows.map((row) => deps.remove(row)),
+          (row) => deps.remove(row),
+          (row) => ({ edit: "remove", ...slotOf(row) }),
+          workLabel("Removing", rows.length),
           {
             done: (what) => `Removed ${what} from the deck`,
             failed: (what) => `Couldn't remove ${what} from the deck`,
@@ -683,10 +735,18 @@ function categoryItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
         id: `move-${category.id}`,
         label: category.name,
         onSelect: () =>
-          pressRows(
+          pressMany(
             deps,
             moving,
-            moving.map((row) => deps.moveTo(row, category.id)),
+            (row) => deps.moveTo(row, category.id),
+            (row) => ({
+              edit: "move",
+              cardId: row.cardId,
+              from: row.categoryId,
+              to: category.id,
+              finish: row.finish,
+            }),
+            workLabel("Moving", moving.length, `to “${category.name}”`),
             {
               done: (what) => `Moved ${what} to “${category.name}”`,
               failed: (what) => `Couldn't move ${what} to “${category.name}”`,
@@ -727,10 +787,12 @@ function otherListItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     {
       ...item,
       onSelect: () =>
-        pressRows(
+        pressMany(
           deps,
           addable,
-          addable.map((row) => otherList.add(row)),
+          (row) => otherList.add(row),
+          (row) => ({ edit: "addToOtherList", ...slotOf(row) }),
+          workLabel("Adding", addable.length, `to the ${list} list`),
           {
             done: (what) => `Added ${what} to the ${list} list`,
             failed: (what) => `Couldn't add ${what} to the ${list} list`,
@@ -865,7 +927,7 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const block =
     pressed.length > 0
       ? null
-      : (blocks.every((b) => b === blocks[0]) ? blocks[0] : null) ?? "nothing-missing";
+      : ((blocks.every((b) => b === blocks[0]) ? blocks[0] : null) ?? "nothing-missing");
   const reason = block === null ? undefined : QUICK_ADD_REASON[block];
   const pressedCards = pressed.map((target) => target.card);
   /** One row: live, or greyed **with** its reason — never greyed with a live `onSelect` behind
@@ -917,11 +979,8 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
         // already owns loose and moves them — one of these presses changes what the binder holds
         // and the other only changes where it is, which is a different act and is drawn as one.
         { kind: "separator", id: "sep-pull" },
-        row(
-          "pull-from-collection",
-          `Pull ${copies} from your collection`,
-          PackageOpen,
-          () => pullCard(pressedCards),
+        row("pull-from-collection", `Pull ${copies} from your collection`, PackageOpen, () =>
+          pullCard(pressedCards),
         ),
       ],
     },
@@ -1028,14 +1087,12 @@ export function deckCardNoteRows(
     // **`submenu` and never `lazy`.** The notes are already in hand — the surface read them for
     // the band and for the cards' own marks — so there is nothing to fetch when the row expands,
     // which is exactly the test `types.ts` states for the two kinds.
-    items: mine.map(
-      (note): MenuItem => ({
-        kind: "action",
-        id: `note-${note.id}`,
-        label: noteTitle(note),
-        onSelect: () => onOpen(note),
-      }),
-    ),
+    items: mine.map((note): MenuItem => ({
+      kind: "action",
+      id: `note-${note.id}`,
+      label: noteTitle(note),
+      onSelect: () => onOpen(note),
+    })),
   });
   return rows;
 }
@@ -1080,7 +1137,6 @@ function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     ),
   );
 }
-
 
 /**
  * One zone row: live, or greyed — and **greyed silently**, which is this menu's one row that
@@ -1231,8 +1287,6 @@ function finishItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     }));
 }
 
-
-
 /**
  * The label choices, as rows.
  *
@@ -1273,14 +1327,12 @@ export function deckCardLabelRows(
       checked: card.labelId === null,
       onSelect: () => setLabel(card, null),
     },
-    ...labels.map(
-      (label): MenuItem => ({
-        kind: "radio",
-        id: `label-${label.id}`,
-        label: label.name,
-        checked: card.labelId === label.id,
-        onSelect: () => setLabel(card, label.id),
-      }),
-    ),
+    ...labels.map((label): MenuItem => ({
+      kind: "radio",
+      id: `label-${label.id}`,
+      label: label.name,
+      checked: card.labelId === label.id,
+      onSelect: () => setLabel(card, label.id),
+    })),
   ];
 }

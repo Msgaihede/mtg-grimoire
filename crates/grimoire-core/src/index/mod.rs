@@ -35,14 +35,40 @@ pub mod lifecycle;
 
 use bitset::BitSet;
 use rusqlite::Connection;
+use std::sync::Arc;
 
-// `Clone` is for exactly one caller: `lifecycle::invalidate_owned`, which copies the
-// published index, re-reads `owned` into the copy and publishes that. Copy-on-write rather
-// than mutation because readers hold the live one behind an `Arc` — there is no `&mut` to be
-// had, and there should not be. It is a deep copy of every bitset and ordinal (~1 MB over the
-// live corpus, all of it memcpy), which is the price of not blocking them.
+/// The facet index: the corpus's dimensions, and the reader's `owned` over them.
+///
+/// **Two parts because they change at two rates.** [`Corpus`] is everything read from `cards`
+/// and changes only with a sync; `owned` is read from `collection_entries` and changes with
+/// every collection write. `lifecycle::invalidate_owned` publishes a new `CardIndex` per write,
+/// copy-on-write because readers hold the live one behind an `Arc` — there is no `&mut` to be
+/// had, and there should not be — and the corpus half is shared into the copy by its own
+/// `Arc` rather than copied. Until 2026-11-18 it was one struct and `Clone` was a deep copy of
+/// every bitset and ordinal (~1 MB over the live corpus) on every stepper press; now it is one
+/// pointer and the one bitset that actually moved.
+///
+/// Reads go through `Deref`, so `ix.paper`, `ix.capacity` and the rest read as they always
+/// did.
 #[derive(Clone)]
 pub struct CardIndex {
+    /// Shared, never amended: a new corpus is a new build ([`CardIndex::build`]).
+    pub corpus: Arc<Corpus>,
+    /// Printings the collection has an **entry** for — quantity 0 included, exactly as the
+    /// search's `owned` filter reads it. As long as [`Corpus::capacity`].
+    pub owned: BitSet,
+}
+
+impl std::ops::Deref for CardIndex {
+    type Target = Corpus;
+
+    fn deref(&self) -> &Corpus {
+        &self.corpus
+    }
+}
+
+/// Every dimension of [`CardIndex`] that is read from `cards` — all of it but `owned`.
+pub struct Corpus {
     /// Rowid ceiling every bitset here was built against, **rounded up to a whole word** —
     /// see `build`. Every sibling array indexed by a doc id is this long.
     pub capacity: usize,
@@ -54,14 +80,14 @@ pub struct CardIndex {
     /// WUBRG then C, indexed by [`CardIndex::color_index`].
     pub colors: [BitSet; 6],
     /// 0–7 exact, 8 is "8 or more", 9 is "no mana value at all".
-    pub mana: [BitSet; Self::MANA_BUCKETS],
+    pub mana: [BitSet; CardIndex::MANA_BUCKETS],
     /// Printings whose printed cost carries an `{X}` — [`crate::filters::CardFilters::mana_x`]'s
     /// bitset, mirroring that filter's `mana_cost LIKE '%{X}%'`.
     ///
     /// **A field of its own and not an eleventh bucket, because the two are different kinds of
     /// thing.** [`Self::mana`] is a *partition*: every printing lands in exactly one of its
     /// slots (or, for a fraction below 8, in none), which is what lets a bucket be counted by a
-    /// single `and_count` and what makes [`Self::MANA_BUCKETS`] a closed list. X is an
+    /// single `and_count` and what makes [`CardIndex::MANA_BUCKETS`] a closed list. X is an
     /// *overlay*: a card is in its mana-value bucket **and**, if its cost is variable, in here
     /// too — `{X}{B}{B}{B}` is `mana[3]` and `mana_x` at once, because Scryfall scores X as 0
     /// when it computes `cmc`. Widening `MANA_BUCKETS` to make room would put a card in two
@@ -96,7 +122,7 @@ pub struct CardIndex {
     /// can be in none of these four, and their counts do not sum to the result set. That is the
     /// same shape [`Self::mana`] has for a fractional cost, and it is why nothing may derive a
     /// total from them.
-    pub rarity: [BitSet; Self::RARITY_KEYS.len()],
+    pub rarity: [BitSet; CardIndex::RARITY_KEYS.len()],
     /// One bitset per [`crate::cardtypes::TYPE_KEYS`] entry, same order.
     ///
     /// **Not a partition, for [`Self::rarity`]'s reason twice over.** A card can be Artifact
@@ -131,13 +157,10 @@ pub struct CardIndex {
     /// 51 628 of the 109 254 paper printings, measured 2026-09-27 — and a NULL `finishes` puts it
     /// in none, the answer `instr(NULL, ?)` gives in SQL.
     pub finishes: [BitSet; crate::filters::FINISH_KEYS.len()],
-    /// Set ordinal per doc, indexing [`CardIndex::set_codes`]. `u16` because 986 codes is
+    /// Set ordinal per doc, indexing [`Corpus::set_codes`]. `u16` because 986 codes is
     /// three orders of magnitude inside its range and this array is one per printing.
     pub set_ord: Vec<u16>,
     pub set_codes: Vec<String>,
-    /// Printings the collection has an **entry** for — quantity 0 included, exactly as the
-    /// search's `owned` filter reads it.
-    pub owned: BitSet,
 }
 
 impl CardIndex {
@@ -223,7 +246,7 @@ impl CardIndex {
         let paper = BitSet::new(highest);
         let capacity = paper.capacity();
 
-        let mut ix = CardIndex {
+        let mut ix = Corpus {
             capacity,
             all: BitSet::new(capacity),
             paper,
@@ -240,7 +263,6 @@ impl CardIndex {
             finishes: std::array::from_fn(|_| BitSet::new(capacity)),
             set_ord: vec![0; capacity],
             set_codes: Vec::new(),
-            owned: BitSet::new(capacity),
         };
 
         // The finish needles, quoted once rather than per row — the same `"foil"` the SQL binds,
@@ -420,18 +442,26 @@ impl CardIndex {
         drop(rows);
         drop(stmt);
 
+        let mut ix = CardIndex {
+            corpus: Arc::new(ix),
+            owned: BitSet::new(capacity),
+        };
         ix.rebuild_owned(conn)?;
         Ok(ix)
     }
 
     /// Re-read just the `owned` dimension — cheap enough to run on every collection write.
     ///
-    /// 10–23 ms at 200/2 000/12 000 owned printings, **per the design doc; not re-measured
-    /// here**, because the snapshot `build`'s figure above was taken over held no collection
-    /// entries at all. Unlike that figure, this one is inherited.
+    /// The design doc put it at 10–23 ms for 200/2 000/12 000 owned printings, and that was not
+    /// what the app paid. **Measured 2026-11-18** (`lifecycle::tests::owned_refresh_timing`: a
+    /// synthetic corpus of 110 000 printings with a ~2.4 KB `raw` apiece, 30 000 owned, on a
+    /// shared 4-core Linux box): **154–177 ms** release and 162–198 ms debug with the old
+    /// statement, whose plan scanned `cards`; **10–16 ms** release and 12 ms debug with
+    /// [`crate::collection_source::owned_rowids`] as it is now. Debug and release are close
+    /// because the work is SQLite's, which a debug build compiles at `opt-level = 2`.
     ///
     /// The join reads `cards`' primary-key index for the rowid and never the row, so the
-    /// cost is one index probe per collection entry.
+    /// cost is one index probe per distinct owned card.
     pub fn rebuild_owned(&mut self, conn: &Connection) -> rusqlite::Result<()> {
         let mut owned = BitSet::new(self.capacity);
         let mut stmt = conn.prepare(&crate::collection_source::owned_rowids(conn))?;
@@ -452,7 +482,7 @@ mod tests {
     use super::fixtures::{doc, framed, own, seeded, typed};
     use super::*;
 
-    /// The slot in [`CardIndex::types`] one type key occupies — the bit position
+    /// The slot in [`Corpus::types`] one type key occupies — the bit position
     /// `crate::cardtypes::type_mask` writes, read back by name so a reordering of that frozen
     /// list breaks the assertion rather than silently relabelling it.
     fn type_slot(name: &str) -> usize {
@@ -650,7 +680,7 @@ mod tests {
     /// `playable` is the whole mask asked one question — "is any bit set" — and it has to
     /// answer it for a bit this build cannot *name*, because the SQL it mirrors
     /// (`legal_mask != 0`) tests the stored integer rather than the 23 keys
-    /// [`crate::legalities::LEGALITY_KEYS`] holds. Folding [`CardIndex::formats`] together
+    /// [`crate::legalities::LEGALITY_KEYS`] holds. Folding [`Corpus::formats`] together
     /// instead would pass every assertion here but the last one, and would grey a card out of
     /// a search that returns it the day Scryfall's list outruns ours.
     #[test]
@@ -928,7 +958,7 @@ pub mod fixtures {
     /// card, a two-colour one, a digital-only one, and one with no `cmc` at all.
     ///
     /// **None of them carries a type line**, so all four mask to 0 and sit in none of
-    /// [`super::CardIndex::types`]' eight bitsets. That is a property to seed against rather
+    /// [`super::Corpus::types`]' eight bitsets. That is a property to seed against rather
     /// than around — a type facet over these four counts zero everywhere, which is what the
     /// chips must grey on — and [`typed`] is how a test that needs a type adds one.
     ///
@@ -986,12 +1016,69 @@ pub mod fixtures {
     /// The directory is [`crate::scratch::path`]'s, private to the calling test and to this
     /// `cargo test` process, so `name` only labels it.
     pub fn state_with_seeded_cards(name: &str) -> std::sync::Arc<crate::state::State> {
+        state_over(name, seed)
+    }
+
+    /// A **file** state over a synthetic corpus of `cards` printings, `owned` of them with one
+    /// collection entry each — for the `#[ignore]`d stopwatches, which need the index and the
+    /// `owned` re-read to cost what they cost at the live corpus's size rather than four rows'.
+    ///
+    /// The printings are spread over every column [`super::CardIndex::build`] reads, so a build
+    /// over them does the same work per row a real one does, and each carries a `raw` of about
+    /// 2.4 KB — a Scryfall card object's order of size — because a plan that scans `cards` pays
+    /// for its pages, and four-byte rows would hide that. Ids are `c1`…`cN`; the owned ones
+    /// are every `cards / owned`-th, so their rowids are spread across the whole bitset rather
+    /// than packed into its first words.
+    pub fn state_with_corpus(
+        name: &str,
+        cards: usize,
+        owned: usize,
+    ) -> std::sync::Arc<crate::state::State> {
+        state_over(name, |conn| {
+            conn.execute_batch("BEGIN").unwrap();
+            conn.execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+                 INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,cmc,
+                     color_identity,is_paper,legal_mask,rarity,mana_cost,type_line,type_mask,
+                     border_color,full_art,finishes,raw)
+                 SELECT 'c' || i, 'o' || (i / 3), 'Card ' || i, 's' || (i % 1047), i, 'en',
+                     'normal', i % 9,
+                     substr('WUBRG', 1 + i % 5, 1 + i % 2), (i % 25) > 1, i % 4096,
+                     CASE i % 4 WHEN 0 THEN 'common' WHEN 1 THEN 'uncommon'
+                                WHEN 2 THEN 'rare' ELSE 'mythic' END,
+                     CASE WHEN i % 11 = 0 THEN '{X}{R}' ELSE '{1}{R}' END,
+                     'Creature', 1 << (i % 8),
+                     CASE WHEN i % 12 = 0 THEN 'borderless' ELSE 'black' END, i % 50 = 0,
+                     CASE WHEN i % 2 = 0 THEN '[\"nonfoil\",\"foil\"]' ELSE '[\"nonfoil\"]' END,
+                     '{\"pad\":\"' || hex(randomblob(1200)) || '\"}'
+                 FROM n",
+                [cards as i64],
+            )
+            .unwrap();
+            let step = (cards / owned.max(1)).max(1) as i64;
+            conn.execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+                 INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
+                     quantity,created_at,updated_at)
+                 SELECT 'c' || (i * ?2), 'lea', '1', 'en', 'nonfoil', 1, unixepoch(), unixepoch()
+                 FROM n",
+                rusqlite::params![owned as i64, step],
+            )
+            .unwrap();
+            conn.execute_batch("COMMIT").unwrap();
+        })
+    }
+
+    fn state_over(
+        name: &str,
+        fill: impl FnOnce(&Connection),
+    ) -> std::sync::Arc<crate::state::State> {
         let dir = crate::scratch::path(&format!("lifecycle-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::db::open_write(&dir).unwrap();
         crate::schema::build_pair(&conn);
-        seed(&conn);
+        fill(&conn);
         let read = crate::db::open_read(&dir).unwrap();
         let images = crate::images::Cache::new(dir.join("images"));
         // **Hooked up, so what these fixtures drive runs with the cross-file fence armed.**

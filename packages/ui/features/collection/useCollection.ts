@@ -3,8 +3,10 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import {
   bordersParam,
   colorParam,
@@ -35,12 +37,7 @@ import {
   type ShelfCount,
 } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
-import {
-  buildShelves,
-  shelvesToCount,
-  shelvesToFetch,
-  visibleShelves,
-} from "@/lib/shelves";
+import { buildShelves, shelvesToCount, shelvesToFetch, visibleShelves } from "@/lib/shelves";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -81,6 +78,15 @@ export const COLLECTION_TRAY: readonly TrayCell[] = [
  * thousands of rows rather than the search's 116 k, so the page is twice the search's.
  */
 export const COLLECTION_PAGE_SIZE = 100;
+
+/**
+ * The most rows one page may ask for — `collection.rs`' `MAX_LIMIT`, which clamps anything larger.
+ * What a Ctrl+A walk's pages ask for on a collection wall (`lib/pageLimit.ts`), which is uncapped:
+ * a three-thousand-card collection was thirty round trips at {@link COLLECTION_PAGE_SIZE}, and is
+ * seven at this. The wishlist's wall and the deck editor's collection tab use it too — the same
+ * clamp, in `wishlist.rs` and on the same `collection_list`.
+ */
+export const COLLECTION_MAX_PAGE_SIZE = 500;
 
 /** The sort key the backend understands. Re-exported so call sites keep one import. */
 export type CollectionSort = CollectionSortKey;
@@ -617,9 +623,17 @@ export function useCollection({
   const fetchKey = viewAll ? "all" : toFetch.join(",");
   const listKey = ["collection", "list", filterKey, sortKey, fetchKey];
 
+  /**
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
+   */
+  const { pin: pinWant, at: wantAt } = useWantedPage(listKey, nextOffset);
+  const queryClient = useQueryClient();
+
   const query = useInfiniteQuery({
     queryKey: listKey,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, queryKey: key }) =>
       ipc.collectionList({
         ...filters,
         // **The open shelves, in wall order** — the backend orders by position in this list and
@@ -632,7 +646,15 @@ export function useCollection({
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces exactly
         // the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
-        limit: COLLECTION_PAGE_SIZE,
+        // The ordinary page unless a Ctrl+A walk asked for more — `lib/pageLimit.ts`, which keeps
+        // a refetch to the page sizes the cache holds.
+        limit: pageLimit(
+          pageParam,
+          queryClient.getQueryData<InfiniteData<CollectionPage>>(listKey)?.pages,
+          COLLECTION_PAGE_SIZE,
+          COLLECTION_MAX_PAGE_SIZE,
+          wantAt(key, pageParam),
+        ),
         offset: pageParam,
       }),
     initialPageParam: 0,
@@ -640,6 +662,21 @@ export function useCollection({
     placeholderData: keepPreviousData,
     enabled: censusReady,
   });
+
+  /**
+   * The next page, **as many rows as `want` says the wall is owed** (up to the backend's ceiling) —
+   * what a wall's `onNeedNextPage` hands over during a Ctrl+A walk (`CardGrid`, `lib/pageLimit.ts`).
+   * No `want` is the ordinary page. The caller keeps its own guard around it, as around
+   * `query.fetchNextPage`, which this calls.
+   */
+  const { fetchNextPage } = query;
+  const fetchMore = useCallback(
+    (want?: number) => {
+      pinWant(want);
+      void fetchNextPage();
+    },
+    [fetchNextPage, pinWant],
+  );
 
   const summary = useQuery({
     queryKey: ["collection", "summary", filterKey, countKey, ...minimumKey],
@@ -791,10 +828,13 @@ export function useCollection({
           firstDir: COLLECTION_FIRST_DIR[key as CollectionSortKey] ?? "asc",
         }),
       ),
-    [],
+    // `setSort` is a state setter and never changes; named because the React Compiler's check
+    // infers it as a dependency of this hook and skips the whole hook over an empty list.
+    [setSort],
   );
 
   return {
+    fetchMore,
     valueSettings,
     text,
     setText,

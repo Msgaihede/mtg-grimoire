@@ -460,7 +460,7 @@ mod tests {
                         // the app — actually does. A parked waiter is woken when the lock
                         // is released, which is the mechanism [`RECLAIM_YIELD`] exists to
                         // give time to; the polling `lock_for` form cannot see a window
-                        // narrower than its own 20 ms poll and would make this test a
+                        // narrower than its own poll (up to 20 ms) and would make this test a
                         // measurement of the sampling rate instead of the property.
                         let _guard = crate::db::lock_blocking(&db);
                         if running.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {

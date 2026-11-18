@@ -28,6 +28,8 @@ import {
   oracleTagActivity,
   syncActivity,
   updateActivity,
+  WORK_ACTIVITY_KEY,
+  workActivity,
 } from "@/lib/activity";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { editionHas, useEdition } from "@/lib/edition";
@@ -59,6 +61,7 @@ import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
 import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
+import { useBusy } from "@/lib/work";
 
 /**
  * The `<nav>`'s id, so the toggle at its foot can point `aria-controls` at the region it is
@@ -433,11 +436,20 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   useRegisterActivity(oracleTagActivity(oracleTags.refreshing, oracleTags.progress));
   useRegisterActivity(comboActivity(combos.refreshing, combos.progress));
   useRegisterActivity(updateActivity(update.progress, update.status?.available?.version ?? null));
+  // **The reader's own work** — a long add, a `Ctrl+A` reading every page (`@/lib/work`), raised
+  // from wherever it was pressed. The store hands it over only once it has outlasted
+  // `ACTIVITY_DELAY_MS`, and holds it for a minimum stay, so it is registered as soon as there is
+  // anything to say; `RANK.work` puts it above every background job.
+  const busyWork = useBusy();
+  useRegisterActivity(workActivity(busyWork));
   const activity = useTopActivity();
   // The line moves the moment a job starts; the sentence waits, so a sub-second `checking`
   // phase never flashes words the reader cannot finish. It gates the *slot* rather than one
   // job, so a sync handing over to a download swaps the sentence without the row blinking.
-  const activityVisible = useDelayedFlag(activity !== null, ACTIVITY_DELAY_MS);
+  // **The reader's work skips the second wait**: it has already waited out the same delay in
+  // its own store, and the pill by the toasts says it at that moment — the header must agree.
+  const activityDelayed = useDelayedFlag(activity !== null, ACTIVITY_DELAY_MS);
+  const activityVisible = activityDelayed || activity?.key === WORK_ACTIVITY_KEY;
 
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
 

@@ -13,9 +13,11 @@ import type {
   CardSummary,
   CategoryKind,
   DeckCard,
+  DeckApplyOutcome,
   DeckCategory,
   DeckDetail,
   DeckNote,
+  DeckOp,
   DeckRow,
   DeckLabel,
   DeckTokenRow,
@@ -60,6 +62,9 @@ const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 // transaction. Every removal in this view is one of these two, never both.
 const deckToCollection = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
+// The batched card write (issue #1164) — every multi-card gesture's one command. Answered by
+// {@link landEvery} unless a case says otherwise: every op lands, as its single command would.
+const deckApply = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 // The card menu's `Add to actual` / `Add to theory` (issue #592): one copy into the other list.
 const deckAddCardToOtherList = vi.hoisted(() => vi.fn());
@@ -206,6 +211,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSetCardQuantity,
     deckToCollection,
     deckMoveCard,
+    deckApply,
     deckAddCard,
     deckAddCardToOtherList,
     deckMissingToWishlist,
@@ -439,6 +445,49 @@ const DECK: DeckRow = {
   bracket: 0,
   tags: [],
 };
+
+/**
+ * What `deck_apply` answers when every op lands — each op's result shaped as its single command
+ * answers: an add's row (id 9), a move's target pile, a removal's `removed: true`.
+ */
+function landEvery(_deckId: number, _variant: string, ops: DeckOp[]): DeckApplyOutcome {
+  return {
+    results: ops.map((op) => ({
+      change:
+        op.op === "remove"
+          ? { id: 0, quantity: 0, removed: true }
+          : op.op === "add" || op.op === "addToOtherList"
+            ? { id: 9, quantity: 1, removed: false }
+            : null,
+      categoryId: op.op === "move" ? op.toCategoryId : op.op === "add" ? op.categoryId : null,
+      refusal: null,
+    })),
+    landed: ops.length,
+    collectionMoved: false,
+  };
+}
+
+/** `landEvery`, with the first op refused in `sentence` — a partial batch. */
+function refuseFirst(sentence: string) {
+  return (deckId: number, variant: string, ops: DeckOp[]): DeckApplyOutcome => {
+    const landed = landEvery(deckId, variant, ops);
+    landed.results[0] = { change: null, categoryId: null, refusal: sentence };
+    return { ...landed, landed: ops.length - 1 };
+  };
+}
+
+/** The ops the latest `deck_apply` carried. */
+const opsSent = (): DeckOp[] => deckApply.mock.calls[deckApply.mock.calls.length - 1][2];
+
+/** A `move` op as the editor sends a drop's move: by id, never by name. */
+const move = (cardId: string, from: number, to: number): DeckOp => ({
+  op: "move",
+  cardId,
+  fromCategoryId: from,
+  toCategoryId: to,
+  toCategoryName: null,
+  finish: null,
+});
 
 /** One row of what `deck_notes` answers — the Notes band's read, and the source of the per-card
  *  note mark through `notedOracleIds`. `cards` empty is the ordinary case: a note about the mana
@@ -981,6 +1030,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ entryId: 21, fromDeck: null, deckCardId: null, quantity: 1 });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
+  deckApply.mockReset().mockImplementation(landEvery);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckAddCardToOtherList.mockReset().mockResolvedValue({ id: 10, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
@@ -2592,9 +2642,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValue(null);
     await writeToDeck();
 
-    expect(
-      await screen.findByText(/^this deck no longer exists\.$/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/^this deck no longer exists\.$/i)).toBeInTheDocument();
     expect(useAppStore.getState().selectedCardId).not.toBeNull();
   });
 
@@ -7715,9 +7763,7 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: row }));
     let dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Add 4 copies" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Couldn't add those copies",
-    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Couldn't add those copies");
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(
@@ -8867,8 +8913,13 @@ describe("DeckEditor multi-select", () => {
 
       await userEvent.keyboard("{Delete}");
 
-      await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
-      expect(JSON.stringify(deckToCollection.mock.calls)).not.toContain("c-Ponder");
+      // One batch of two removals (issue #1164), and the hidden card in neither.
+      await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+      expect(opsSent().map((op) => [op.op, op.cardId])).toEqual([
+        ["remove", "c-Sol Ring"],
+        ["remove", "c-Opt"],
+      ]);
+      expect(deckToCollection).not.toHaveBeenCalled();
     });
 
     /** The variant: a pick made while the stack was drawn is put down when the stack is hidden. */
@@ -8903,17 +8954,12 @@ describe("DeckEditor multi-select", () => {
 
     await pointerDrag(row("Lightning Bolt"), boxed(group("Sideboard"), 300, 80));
 
-    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
-    expect(deckMoveCard).toHaveBeenCalledWith(
-      4,
-      "c-Lightning Bolt",
-      MAIN,
-      SIDE,
-      null,
-      "live",
-      null,
-    );
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, SIDE, null, "live", null);
+    // **One write for the whole set** (issue #1164): one `deck_apply`, a `move` per card in the
+    // set's order — one transaction, one Ctrl+Z, one re-read — and no single move at all.
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(deckApply.mock.calls[0].slice(0, 2)).toEqual([4, "live"]);
+    expect(opsSent()).toEqual([move("c-Lightning Bolt", MAIN, SIDE), move("c-Bear", MAIN, SIDE)]);
+    expect(deckMoveCard).not.toHaveBeenCalled();
   });
 
   /**
@@ -8938,9 +8984,9 @@ describe("DeckEditor multi-select", () => {
     await userEvent.type(screen.getByLabelText("New category name"), "Removal");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
-    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, 9, null, "live", null);
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, 9, null, "live", null);
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(opsSent()).toEqual([move("c-Lightning Bolt", MAIN, 9), move("c-Bear", MAIN, 9)]);
+    expect(deckMoveCard).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
         title: "Created “Removal” and moved 2 cards into it",
@@ -8980,8 +9026,9 @@ describe("DeckEditor multi-select", () => {
   });
 
   /**
-   * Delete takes the set out — the only keyboard verb this editor has that is not undo, and the
-   * same `setQuantity(…, 0)` the stepper's zero, the tray's drop and the menu's row all make.
+   * Delete takes the set out — the only keyboard verb this editor has that is not undo — as **one**
+   * `deck_apply` of `remove` ops (issue #1164), each the stepper's zero for its row: on this live
+   * list Rust routes it as the cut, so no single cut is sent.
    */
   it("removes every picked card on Delete", async () => {
     await open();
@@ -8990,7 +9037,13 @@ describe("DeckEditor multi-select", () => {
 
     await userEvent.keyboard("{Delete}");
 
-    await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(opsSent()).toEqual([
+      { op: "remove", cardId: "c-Lightning Bolt", categoryId: MAIN, finish: null },
+      { op: "remove", cardId: "c-Bear", categoryId: MAIN, finish: null },
+    ]);
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
     // **One press, one toast** (the owner's rule): two writes, said once with the count.
     await waitFor(() =>
       expect(useNotifications.getState().notices[0]).toMatchObject({
@@ -9009,7 +9062,7 @@ describe("DeckEditor multi-select", () => {
    * `setQuantity` observer saw only the last card's success — leaves the refusal to it.
    */
   it("says which part of a Delete was refused when the last card went through", async () => {
-    deckToCollection.mockRejectedValueOnce("The database is busy with a sync.");
+    deckApply.mockImplementationOnce(refuseFirst("The database is busy with a sync."));
     await open();
     await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
     await pressWith("Bear", { ctrl: true });
@@ -9032,7 +9085,7 @@ describe("DeckEditor multi-select", () => {
    *  refused and the second lands. A drag inside the editor takes no toast, so this one is the
    *  banner's. */
   it("says which part of a multi-card drop was refused", async () => {
-    deckMoveCard.mockRejectedValueOnce("That card is not in the pile any more.");
+    deckApply.mockImplementationOnce(refuseFirst("That card is not in the pile any more."));
     await open();
     await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
     await pressWith("Bear", { ctrl: true });
@@ -9041,6 +9094,36 @@ describe("DeckEditor multi-select", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "1 of 2 cards wasn't changed — That card is not in the pile any more.",
+    );
+  });
+
+  /**
+   * **The rows leave the desk at the press** (issue #1164), as the stepper's zero takes its one
+   * row: a batch of three hundred removals that waited for its answer to redraw would be a desk
+   * that sat still for the length of the write. A whole refusal puts them back.
+   */
+  it("takes a Delete's rows off the desk before the batch answers, and back on a refusal", async () => {
+    let refuse: (reason: string) => void = () => {};
+    deckApply.mockImplementationOnce(() => new Promise((_, reject) => (refuse = reject)));
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: /^Bear/ })).toBeNull();
+
+    await act(async () => refuse("The database is busy."));
+    expect(await screen.findByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't remove 2 cards from the deck",
+        body: "The database is busy.",
+        tone: "error",
+      }),
     );
   });
 
@@ -9121,6 +9204,107 @@ describe("DeckEditor multi-select", () => {
     expect(screen.getByRole("menuitem", { name: /^Remove 2 cards/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /^Category for 2 cards/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /^Label 2 cards/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **A plural row is one write and one toast** (issue #1164): `Category for 2 cards ▸ Sideboard`
+   * sends one `deck_apply` of two moves, and its receipt counts what landed in that batch's
+   * answer — a refusal inside it folded in, exactly as N single moves were said.
+   */
+  it("sends a plural menu row as one batch, said in one toast", async () => {
+    deckApply.mockImplementationOnce(refuseFirst("That card is not in the pile any more."));
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Bear", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^Category for 2 cards/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Sideboard" }));
+
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(opsSent()).toEqual([move("c-Lightning Bolt", MAIN, SIDE), move("c-Bear", MAIN, SIDE)]);
+    expect(deckMoveCard).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Moved 1 of 2 cards to “Sideboard”",
+        body: "That card is not in the pile any more.",
+        tone: "warning",
+      }),
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    // The toast is the refusal's one report: the banner leaves it alone.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A label over a set takes an older refusal down, as one label did** (issue #1164 review).
+   * The dialog's set is one `deck_apply` that files no `lastBatch`, and `applyEdits` was in neither
+   * banner list — so a refused stepper press stayed on the line after a successful twelve-card
+   * label, where the single `setLabel` it replaced was the newest write and cleared it.
+   */
+  it("clears a stale stepper refusal when More labels… over a set lands", async () => {
+    deckSetCardQuantity.mockRejectedValueOnce("The database is busy with a sync.");
+    deckLabelAll.mockResolvedValue([
+      { id: 8, name: "Budget swap", color: "moss", cardCount: 3, deckCount: 2 },
+    ]);
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: `Increase ${COPIES}` }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't change this deck — The database is busy with a sync.",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Bear", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^Label 2 cards/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add label" });
+    await userEvent.click(await within(dialog).findByRole("button", { name: /Budget swap/ }));
+
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(opsSent().map((op) => op.op)).toEqual(["setLabel", "setLabel"]);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({ tone: "success" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  /**
+   * **A batch refused in part still throws the redo stack away** (issue #1164 review). Its record
+   * is a refusal stamped when it settled — newer than its own `applyEdits` call — so the newest
+   * write read as no success and the stack survived, while the card that landed had edited past
+   * the branch exactly as a single write would have.
+   */
+  it("throws the redo stack away after a Delete that landed in part", async () => {
+    deckUndoState.mockImplementation((_deckId: number, redoId: number | null) =>
+      Promise.resolve(
+        redoId === null ? { undo: UNDOABLE, redo: null } : { undo: null, redo: UNDOABLE },
+      ),
+    );
+    deckApply.mockImplementationOnce(refuseFirst("The database is busy with a sync."));
+    await open();
+    await screen.findByRole("button", { name: /^Undo —/ });
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(deckUndoApply).toHaveBeenCalledWith(4, 77));
+    await screen.findByRole("button", { name: /^Redo —/ });
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Removed 1 of 2 cards from the deck",
+      }),
+    );
+    const redo = await screen.findByRole("button", { name: "Redo" });
+    expect(redo).toHaveAttribute("aria-disabled", "true");
   });
 
   /** A right-click on a card **outside** the set is about that card — the press rule that

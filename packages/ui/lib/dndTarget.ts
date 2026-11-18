@@ -127,8 +127,21 @@ export function useDndDropTarget<T>({
   pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
-  /** This feature's payload out of the library's untyped store, or `null` for everything else. */
+  /**
+   * This feature's payload out of the library's untyped store, or `null` for everything else.
+   *
+   * **Must be pure in the drag record and the render**: the collision passes' answer is cached
+   * per drag record and per render of this target (`accept` below), so a `read` that also looked
+   * at something else — a clock, a store read at the call, a ref written between renders — would
+   * be answered from the cache until the target re-renders. Anything it depends on must arrive
+   * as a prop or state, so a change is a render.
+   */
   read: (data: Record<string, unknown>) => T | null;
+  /**
+   * Whether this target takes `drop`. **Pure in its argument and the render, as {@link read} is**,
+   * for the same cache. (The drop itself asks again uncached, so a stale answer can light a
+   * target but never write through one.)
+   */
   canDrop: (drop: T) => boolean;
   onDrop: (drop: T) => void;
   /**
@@ -210,6 +223,13 @@ export function useDndDropTarget<T>({
     const element = ref.current;
     if (!element) return;
 
+    /** The last `accept` answer, and the drag record and render it was given for. */
+    let accepted: {
+      data: Record<string, unknown>;
+      rules: typeof latest.current;
+      answer: boolean;
+    } | null = null;
+
     /** The payload this target would act on, or `null` — both questions at once, because every
      *  caller below asks them together and asking them apart is how they drift. */
     const taken = (source: { data: Record<string, unknown> } | null | undefined): T | null => {
@@ -226,7 +246,24 @@ export function useDndDropTarget<T>({
         register: false,
         // Asked once per collision pass rather than at registration, which is what lets it read
         // live state through the ref above.
-        accept: (source) => taken(source) !== null,
+        //
+        // **And answered once per drag per render of this target** (2026-11): a pass is a pointer
+        // move, every registered target is asked, and a deck pile's question is a walk over the
+        // whole carried group (`dropWrites`) — a Ctrl+A's thousand cards, times the piles, per
+        // move. The record is one object for the gesture and `latest` is replaced on every render
+        // of the target, so the pair names exactly one answer: a new drag or a target re-rendered
+        // with new rules (its `armed`/`over` changing is one) asks again. `dragstart`, `dragover`
+        // and the drop itself still ask afresh — they are once per gesture, and the drop is the
+        // one that writes.
+        accept: (source) => {
+          const memo = accepted;
+          if (memo !== null && memo.data === source.data && memo.rules === latest.current) {
+            return memo.answer;
+          }
+          const answer = taken(source) !== null;
+          accepted = { data: source.data, rules: latest.current, answer };
+          return answer;
+        },
         ...(overlay
           ? { collisionDetector: pointerIntersection, collisionPriority: CollisionPriority.Highest }
           : pointerOnly

@@ -256,11 +256,14 @@ pub fn record(
         Some((id, name)) => (Some(id), Some(name)),
         None => (None, None),
     };
-    tx.execute(
+    // Cached: a batch (`crate::deck_apply`) writes one row per card.
+    tx.prepare_cached(
         "INSERT INTO deck_audit
             (deck_id, at, variant, kind, card_id, card_name, payload, delta)
          VALUES (?1, unixepoch(), ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
+    )
+    .and_then(|mut stmt| {
+        stmt.execute(params![
             deck_id,
             variant,
             kind,
@@ -268,8 +271,8 @@ pub fn record(
             card_name,
             payload.to_string(),
             delta
-        ],
-    )
+        ])
+    })
     .map_err(|e| e.to_string())?;
     Ok(tx.last_insert_rowid())
 }

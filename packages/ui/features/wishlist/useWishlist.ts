@@ -3,9 +3,11 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { nextOffset } from "@/features/collection/useCollection";
+import { COLLECTION_MAX_PAGE_SIZE, nextOffset } from "@/features/collection/useCollection";
+import { pageLimit, useWantedPage } from "@/lib/pageLimit";
 import {
   bordersParam,
   colorParam,
@@ -467,9 +469,17 @@ export function useWishlist({
   // `["wishlist", …]`, so every write to *this* list refreshes it.
   const listKey = [...listIdentity, viewAll ? "all" : fetchIds.join(",")];
 
+  /**
+   * The rows a Ctrl+A walk's {@link fetchMore} said the next page is owed, pinned to that page's
+   * offset so a retry or a resumed fetch asks for the same size (`lib/pageLimit.ts`'s
+   * `useWantedPage`); every other fetch asks for what `pageLimit` says it always did.
+   */
+  const { pin: pinWant, at: wantAt } = useWantedPage(listKey, nextOffset);
+  const queryClient = useQueryClient();
+
   const query = useInfiniteQuery({
     queryKey: listKey,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, queryKey: key }) =>
       ipc.wishlistList({
         ...scope,
         // The open shelves in wall order — or, on the `View all` wall, every wish wherever it is
@@ -478,7 +488,15 @@ export function useWishlist({
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
-        limit: WISHLIST_PAGE_SIZE,
+        // The ordinary page unless a Ctrl+A walk asked for more — `lib/pageLimit.ts`. The
+        // backend's ceiling is the collection's, 500.
+        limit: pageLimit(
+          pageParam,
+          queryClient.getQueryData<InfiniteData<{ items: unknown[] }>>(listKey)?.pages,
+          WISHLIST_PAGE_SIZE,
+          COLLECTION_MAX_PAGE_SIZE,
+          wantAt(key, pageParam),
+        ),
         offset: pageParam,
       }),
     initialPageParam: 0,
@@ -486,6 +504,21 @@ export function useWishlist({
     placeholderData: keepPreviousData,
     enabled: ready,
   });
+
+  /**
+   * The next page, **as many rows as `want` says the wall is owed** (up to the backend's ceiling) —
+   * what a wall's `onNeedNextPage` hands over during a Ctrl+A walk (`CardGrid`, `lib/pageLimit.ts`).
+   * No `want` is the ordinary page. The caller keeps its own guard around it, as around
+   * `query.fetchNextPage`, which this calls.
+   */
+  const { fetchNextPage } = query;
+  const fetchMore = useCallback(
+    (want?: number) => {
+      pinWant(want);
+      void fetchNextPage();
+    },
+    [fetchNextPage, pinWant],
+  );
 
   /**
    * The per-shelf counts (spec §4.2) — `["wishlist", …]` like the list, so `settleWhole`'s
@@ -616,6 +649,7 @@ export function useWishlist({
   const setViewAll = useCallback((on: boolean) => setViewAllState(on), []);
 
   return {
+    fetchMore,
     text,
     setText,
     format,

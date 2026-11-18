@@ -290,7 +290,8 @@ function importLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine 
 
 /**
  * The one row a **bulk add** writes — *send this deck's missing cards to my wishlist*, and
- * anything later shaped like it.
+ * *Add N cards to → Collection / Wishlist* (`collection_add_many`, `wishlist_add_many`), which
+ * writes the same shape into either cabinet.
  *
  * {@link importLine}'s rule read from the other end. That one words a file the reader chose; this
  * words a run of ordinary adds the app made on their behalf, and **the kind stored is `add`
@@ -448,7 +449,7 @@ function undoLine(
       if (entries > 0) {
         const to = bulkDestination(p, cabinet);
         return {
-          text: `Undid moving ${counted(entries, "card")}${to === null ? "" : ` to ${to}`}`,
+          text: `Undid moving ${counted(entries, "card")}${to === null ? "" : ` to ${to}`}${onWishlist ? ` on ${cabinet.place}` : ""}`,
           detail: null,
         };
       }
@@ -484,6 +485,10 @@ function collectionLine(entry: ActivityEntry): ActivityLine {
 
   switch (entry.kind) {
     case "add": {
+      // "Add N cards to → Collection" (`collection::add_entries`) writes the wishlist's run row —
+      // no card, a card count — and is worded by the same {@link bulkAddLine}: an `add`, never
+      // an import. {@link wishlistLine}'s fence, for its reason.
+      if (entry.cardName === null && numberField(p.cards) > 0) return bulkAddLine(p, COLLECTION);
       const n = copies(entry);
       return {
         text: n > 1 ? `Added ${count(n)} × ${name}` : `Added ${name}`,
@@ -558,8 +563,8 @@ function collectionLine(entry: ActivityEntry): ActivityLine {
  * up. The phrasing is the app's own — *Add to wishlist*, *Remove … from your wishlist* and
  * *Edit … on your wishlist* are all strings already on screen elsewhere.
  *
- * **The `add` arm words two things and is the only one that does**: a card, and a *run* of cards
- * — {@link bulkAddLine}. That is not a seventeenth act, it is the same act at a different grain,
+ * **The `add` and `move` arms word two things each**: a card, and a *run* of cards —
+ * {@link bulkAddLine}, and a bulk move's `entries`. That is not a seventeenth act, it is the same act at a different grain,
  * which is why it shares the kind rather than taking one of its own; the sixteen are still eight
  * kinds said about two cabinets, and the test that walks them drives every row with a card name.
  */
@@ -607,8 +612,19 @@ function wishlistLine(entry: ActivityEntry): ActivityLine {
     }
     case "edit":
       return { text: `Edited ${name} on ${place}`, detail: fieldsClause(p.fields) };
-    case "move":
+    case "move": {
+      // `Move to` over several wishes (`wishlist_folders::set_wishes_folder`) — the collection's
+      // bulk move row, the destination in the detail since the sentence has spent `on`.
+      const entries = bulkEntries(entry, p);
+      if (entries > 0) {
+        const to = bulkDestination(p, WISHLIST);
+        return {
+          text: `Moved ${counted(entries, "card")} on ${place}`,
+          detail: to === null ? null : `to ${to}`,
+        };
+      }
       return { text: `Moved ${name} on ${place}`, detail: moveClause(p, WISHLIST) };
+    }
     case "folder":
       return folderLine(p, WISHLIST);
     case "import":

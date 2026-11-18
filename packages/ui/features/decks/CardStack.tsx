@@ -41,6 +41,7 @@ import {
 import { deckCardSlot } from "./dnd";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "./theoryMatch";
 import { ruleBreak, violationsFor } from "./violations";
+import { usePickedMarking } from "./views/pickedMarks";
 import { sameDrawnProps } from "./views/sameDrawn";
 import type { ValidationIssue } from "./validation/types";
 import { ShortfallFigure } from "./ShortfallFigure";
@@ -642,6 +643,11 @@ export interface CardStackProps {
    */
   actions?: DeckCardActions;
   /**
+   * The slots of these cards that are picked — `views/pickedMarks.ts`, which is why a Ctrl-click
+   * redraws the stack it landed in and no other. Absent marks by `actions.isPicked`, as before.
+   */
+  picked?: readonly string[];
+  /**
    * How large the reader has asked cards to be drawn — `useAppStore`'s `cardZoom.deck`, which is
    * the deck desk's own number and not the docked search column's beside it.
    *
@@ -738,6 +744,7 @@ export const CardStack = memo(function CardStack({
   tracksCollection = true,
   onSelect,
   actions,
+  picked: pickedSlots,
   zoom = DEFAULT_ZOOM,
   selectedSlot = null,
   landed = NONE_LANDED,
@@ -752,6 +759,7 @@ export const CardStack = memo(function CardStack({
   const onMenuFrom = useCallback((cardId: number, el: HTMLElement) => {
     setMenuFrom((prev) => (prev?.cardId === cardId && prev.el === el ? prev : { cardId, el }));
   }, []);
+  const marking = usePickedMarking(actions, pickedSlots);
   if (cards.length === 0) return null;
 
   // `-1` for a pile that does not hold the picked card, which is every pile but one — folded to
@@ -804,7 +812,7 @@ export const CardStack = memo(function CardStack({
           // since issue #214 they are two questions. A stack fans one card — the one the pane is
           // on — because fanning four would be a pile with no shape left; the gold ring is worn
           // by every card the reader has Ctrl-clicked, which is what `deckCardMarked` answers.
-          selected={deckCardMarked(card, selectedSlot, actions)}
+          selected={deckCardMarked(card, selectedSlot, marking)}
           landedKey={landed.get(card.id)}
           zoom={zoom}
           onArm={arm}

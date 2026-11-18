@@ -43,6 +43,7 @@
 //! without moving a single card. The rule the old note was making — that a rename and a reorder
 //! change what a pile is called and nothing about what is in it — now covers every write in the
 //! module.
+use crate::collection::ItemError;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
@@ -584,20 +585,33 @@ pub fn category_for_name(
     variant: &str,
     name: &str,
 ) -> Result<i64, String> {
-    let variant = valid_variant(variant)?;
-    let name = valid_name(name, "A category")?;
+    Ok(category_for_name_in(conn, deck_id, variant, name)?)
+}
+
+/// [`category_for_name`] with its two refusals (the variant, the empty name) kept apart from a
+/// database that could not be asked — for `crate::deck_apply`, which refuses one op over the first
+/// and fails the whole batch over the second.
+pub(crate) fn category_for_name_in(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+    name: &str,
+) -> Result<i64, ItemError> {
+    let variant = valid_variant(variant).map_err(ItemError::Refused)?;
+    let name = valid_name(name, "A category").map_err(ItemError::Refused)?;
     if let Some(id) = conn
-        .query_row(
+        .prepare_cached(
             "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2 AND name = ?3",
-            params![deck_id, variant, name],
-            |r| r.get(0),
         )
-        .optional()
-        .map_err(|e| e.to_string())?
+        .and_then(|mut stmt| {
+            stmt.query_row(params![deck_id, variant, name], |r| r.get(0))
+                .optional()
+        })
+        .map_err(ItemError::failed)?
     {
         return Ok(id);
     }
-    let next_order = next_sort_order(conn, deck_id, variant)?;
+    let next_order = next_sort_order(conn, deck_id, variant).map_err(ItemError::Failed)?;
     // **`'auto'`, and only on this branch** — the one the app reaches when it had to invent a
     // column for a card it was filing. The lookup above is what makes that safe to record as a
     // fact: a pile the *reader* made is found rather than re-made, so it keeps its `'user'`
@@ -612,7 +626,7 @@ pub fn category_for_name(
         params![deck_id, variant, name, next_order],
         |r| r.get(0),
     )
-    .map_err(|e| e.to_string())
+    .map_err(ItemError::failed)
 }
 
 /// The pile in list `variant` that stands for pile `source` of the other list — found, or made
@@ -2019,66 +2033,123 @@ pub fn set_card_label(
     // and the foil as two rows, and a label belongs to one of them.
     let finish = crate::deck::normalise_finish(finish)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut log = crate::deck_undo::CellLog::default();
+    let audit_id = set_card_label_in(
+        &tx,
+        deck_id,
+        card_id,
+        category_id,
+        variant,
+        finish.as_deref(),
+        label_id,
+        true,
+        &mut log,
+    )?;
+    let (cells, before) = log.into_parts();
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// [`set_card_label`]'s write **inside the caller's transaction**: the label fence, the deck's
+/// `touch_deck` where `touch` asks for it (a batch, `crate::deck_apply`, touches once for the
+/// whole press), the row fence, the cell noted in `log` before the UPDATE, and the `label`
+/// history row, whose id it answers. Files no step — the caller does, one per press.
+///
+/// Answers an [`ItemError`] so a batch can tell this write's refusals ([`LABEL_GONE`],
+/// [`CARD_NOT_IN_CATEGORY`], `deck::GONE`) from a database that failed under it; a single press
+/// hears the same sentence either way, through `From`.
+// `set_card_label`'s arguments, and the two a transaction-taking write adds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn set_card_label_in(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    category_id: i64,
+    variant: &str,
+    finish: Option<&str>,
+    label_id: Option<i64>,
+    touch: bool,
+    log: &mut crate::deck_undo::CellLog,
+) -> Result<i64, ItemError> {
     // The new label's own name — the history needs the word rather than the id, and the same
     // read is what stands between a stale editor and a `label_id` pointing at nothing.
     let applied: Option<String> = match label_id {
         Some(label) => {
             let row: Option<String> = tx
-                .query_row(
-                    "SELECT name FROM deck_labels WHERE id = ?1",
-                    params![label],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?;
-            Some(row.ok_or_else(|| LABEL_GONE.to_owned())?)
+                .prepare_cached("SELECT name FROM deck_labels WHERE id = ?1")
+                .and_then(|mut stmt| stmt.query_row(params![label], |r| r.get(0)).optional())
+                .map_err(ItemError::failed)?;
+            Some(row.ok_or_else(|| ItemError::Refused(LABEL_GONE.to_owned()))?)
         }
         None => None,
     };
-    crate::deck::touch_deck(&tx, deck_id)?;
+    if touch {
+        crate::deck::touch_deck(tx, deck_id)
+            .map_err(|e| ItemError::sorted(e, &[crate::deck::GONE]))?;
+    }
     // The card's name and the label it is wearing *now*, read before the UPDATE replaces one
     // of them. This is also the "is there a row" fence — `DECK_CARD_GRAIN` exactly, so at most
     // one row can match, and a stale editor is refused here rather than by an UPDATE that
     // touched nothing.
     let card: Option<(String, Option<String>)> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT dc.name, t.name
                FROM deck_cards dc LEFT JOIN deck_labels t ON t.id = dc.label_id
               WHERE dc.deck_id = ?1 AND dc.card_id = ?2 AND dc.category_id = ?3
                 AND dc.variant = ?4 AND coalesce(dc.finish, '') = coalesce(?5, '')",
-            params![deck_id, card_id, category_id, variant, finish],
-            |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let (card_name, previous) = card.ok_or_else(|| CARD_NOT_IN_CATEGORY.to_owned())?;
+        .and_then(|mut stmt| {
+            stmt.query_row(
+                params![deck_id, card_id, category_id, variant, finish],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+        })
+        .map_err(ItemError::failed)?;
+    let (card_name, previous) =
+        card.ok_or_else(|| ItemError::Refused(CARD_NOT_IN_CATEGORY.to_owned()))?;
     // The whole row, not just its label. The history carries the two label *names* and `previous`
     // is `null` for an unlabelled card — indistinguishable from a card wearing a label called
     // nothing — while the step carries the id the column actually held.
-    let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
-    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
-    tx.execute(
+    log.note(
+        tx,
+        deck_id,
+        crate::deck_undo::Cell::card(variant, category_id, card_id),
+    )
+    .map_err(ItemError::Failed)?;
+    tx.prepare_cached(
         "UPDATE deck_cards SET label_id = ?6, updated_at = unixepoch()
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
             AND coalesce(finish, '') = coalesce(?5, '')",
-        params![deck_id, card_id, category_id, variant, finish, label_id],
     )
-    .map_err(|e| e.to_string())?;
+    .and_then(|mut stmt| {
+        stmt.execute(params![
+            deck_id,
+            card_id,
+            category_id,
+            variant,
+            finish,
+            label_id
+        ])
+    })
+    .map_err(ItemError::failed)?;
     // `card_id` set is what marks this the *card's* half of the `label` kind, and `label: null` is
     // how a row says the card wears nothing now — clearing a label is as much a change as
     // applying one, and `previous` is the only place the label it lost is written down.
-    let audit_id = crate::deck_audit::record(
-        &tx,
+    //
+    // `record`'s own refusals are a variant and a kind, both fixed by this call: whatever it
+    // answers here is the database's.
+    crate::deck_audit::record(
+        tx,
         deck_id,
         variant,
         crate::deck_audit::LABEL,
         Some((card_id, &card_name)),
         &json!({ "label": applied, "previous": previous }),
         0,
-    )?;
-    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
+    )
+    .map_err(ItemError::Failed)
 }
 
 // ---------------------------------------------------------------------------------------

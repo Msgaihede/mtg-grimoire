@@ -51,6 +51,10 @@ const syncLiveState = vi.hoisted(() => vi.fn());
  *  deck — the sidebar borrows `useDeck`, so the shell asks for a deck like the editor does. */
 const deckAddCard = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
+/** A carried set's one write on each entry (2026-11-18): the deck's `deck_apply`, the wishlist's
+ *  `wishlist_add_many`. */
+const deckApply = vi.hoisted(() => vi.fn());
+const wishlistAddMany = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 /** The rail's own `app_meta` row: whether the sidebar opens as 68px of icons or 208px of
  *  labels. Hoisted spies rather than a fixed answer, because the collapse block below drives
@@ -169,6 +173,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     }),
     deckAddCard,
     wishlistAdd,
+    deckApply,
+    wishlistAddMany,
+    // `addCards` reads the set's Oracle tags in one call to file the Auto arm.
+    oracleTagsForPrintings: vi.fn().mockResolvedValue([]),
     deckGet,
   },
 }));
@@ -188,6 +196,7 @@ import { queryClient } from "@/lib/query";
 // that drifts, which is why the hook exports it.
 import { START_VIEW_KEY } from "@/lib/useStartView";
 import { useAppStore } from "@/lib/store";
+import { beginWork } from "@/lib/work";
 import { boxed, startPointerDrag } from "@/test-drag";
 
 /**
@@ -311,6 +320,20 @@ beforeEach(() => {
   syncLiveState.mockReset().mockResolvedValue("off");
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  deckApply
+    .mockReset()
+    .mockImplementation((_deckId: number, _variant: string, ops: readonly unknown[]) =>
+      Promise.resolve({
+        results: ops.map(() => ({ change: null, categoryId: null, refusal: null })),
+        landed: ops.length,
+        collectionMoved: false,
+      }),
+    );
+  wishlistAddMany
+    .mockReset()
+    .mockImplementation((items: readonly unknown[]) =>
+      Promise.resolve({ added: items.length, copies: items.length, refused: [], undoId: 5 }),
+    );
   deckGet.mockReset().mockResolvedValue(null);
   navCollapsed.mockReset().mockResolvedValue(false);
   setNavCollapsed.mockReset().mockResolvedValue(undefined);
@@ -656,6 +679,40 @@ describe("the status line", () => {
     expect(
       await screen.findByText("116,568 cards · data from 2026-08-03", {}, { timeout: 3000 }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The reader's own work (`@/lib/work`) is a job like the sync, ranked above it: the header's line
+ * says it, the mana line moves, and the summary comes back when it ends. Real timers, the sync
+ * test's reason — the claim is about the 400 ms delay and `findBy*` is already a polling wait.
+ */
+describe("the reader's own work", () => {
+  it("takes the status line while it runs, and gives the summary back after", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    await screen.findByText("116,568 cards · data from 2026-08-03");
+
+    let done!: () => void;
+    act(() => {
+      done = beginWork("Adding 300 cards to “Burn”…");
+    });
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+
+    expect(
+      await screen.findByRole("progressbar", { name: "Adding 300 cards to “Burn”…" }),
+    ).toBeInTheDocument();
+    // Said twice, from one store: the header's line and the busy pill by the toasts.
+    const said = screen.getAllByText("Adding 300 cards to “Burn”…");
+    expect(said).toHaveLength(2);
+    const line = said.find((el) => el.closest("[data-busy-pill]") === null)!;
+    expect(line).toHaveAttribute("role", "status");
+    expect(document.documentElement).toHaveAttribute("data-busy");
+
+    act(() => done());
+    expect(
+      await screen.findByText("116,568 cards · data from 2026-08-03", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveAttribute("data-busy");
   });
 });
 
@@ -1441,7 +1498,7 @@ describe("the sidebar's drop targets", () => {
    * notice with the count, never one per card — and a set some of which was refused is one
    * warning saying how many of them landed, with the first refusal under it.
    */
-  it("says a multi-card drop once, with the count", async () => {
+  it("says a multi-card drop once, with the count — one deck_apply for the set", async () => {
     openDeck(7, "Burn");
     const helix: DragPayload = { ...BOLT, cardId: "c-helix", name: "Lightning Helix" };
     const ponder: DragPayload = { ...BOLT, cardId: "c-ponder", name: "Ponder" };
@@ -1450,20 +1507,60 @@ describe("the sidebar's drop targets", () => {
     await held.over(boxedEntry("Decks"));
     await held.drop();
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(3));
+    // **One write for the set**, in the order carried — not one `deck_add_card` per card, which
+    // were N transactions racing to make the same auto pile.
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(deckAddCard).not.toHaveBeenCalled();
+    const ops = deckApply.mock.calls[0][2] as readonly { cardId: string }[];
+    expect(ops.map((op) => op.cardId)).toEqual(["c-bolt", "c-helix", "c-ponder"]);
     await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
     expect(said()).toMatchObject({ tone: "success", title: "Added 3 cards to “Burn”" });
   });
 
+  it("folds a partly refused deck drop into one warning", async () => {
+    openDeck(7, "Burn");
+    deckApply.mockResolvedValue({
+      results: [
+        { change: null, categoryId: 1, refusal: null },
+        { change: null, categoryId: null, refusal: "That printing is not there any more." },
+      ],
+      landed: 1,
+      collectionMoved: false,
+    });
+    const helix: DragPayload = { ...BOLT, cardId: "c-helix", name: "Lightning Helix" };
+    const held = await pickUp(BOLT, [helix]);
+
+    await held.over(boxedEntry("Decks"));
+    await held.drop();
+
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(said()).toMatchObject({
+      tone: "warning",
+      title: "Added 1 of 2 cards to “Burn”",
+      body: "That printing is not there any more.",
+    });
+  });
+
   it("folds a partly refused drop into one warning", async () => {
     const helix: DragPayload = { ...BOLT, cardId: "c-helix", name: "Lightning Helix" };
-    wishlistAdd.mockRejectedValueOnce("That printing is not there any more.");
+    wishlistAddMany.mockResolvedValueOnce({
+      added: 1,
+      copies: 1,
+      refused: [{ index: 1, reason: "That printing is not there any more." }],
+      undoId: 6,
+    });
     const held = await pickUp(BOLT, [helix]);
 
     await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
-    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
+    // One write for the two, each item the single add's.
+    await waitFor(() => expect(wishlistAddMany).toHaveBeenCalledTimes(1));
+    expect(wishlistAdd).not.toHaveBeenCalled();
+    expect(wishlistAddMany).toHaveBeenCalledWith([
+      { cardId: "c-bolt", quantity: 1 },
+      { cardId: "c-helix", quantity: 1 },
+    ]);
     await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
     expect(said()).toMatchObject({
       tone: "warning",

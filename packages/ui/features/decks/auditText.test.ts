@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckAuditEntry, DeckAuditKind, DeckVariant } from "@/lib/ipc";
-import { auditDays, auditSentence } from "./auditText";
+import { auditDays, auditSentence, stepSentence } from "./auditText";
 
 let nextId = 1;
 
@@ -1522,6 +1522,49 @@ describe("auditSentence over a contract it does not fully know", () => {
       const second = entry("deck", { field: "undo", of: first.id }, { cardId: null });
       expect(auditSentence(second, [first, second]).text).toBe("Undid: Undid a change");
     });
+
+    /** A batch's reversal names its count (`covers`), not the last card of it — and a payload
+     *  without one reads as it always did. */
+    it("counts a batch it reversed", () => {
+      const moved = entry("move", { from: "Main", to: "Side" });
+      const undone = entry("deck", { field: "undo", of: moved.id, covers: 50 }, { cardId: null });
+      expect(auditSentence(undone, [moved, undone])).toEqual({
+        text: "Undid: Moved 50 cards",
+        detail: null,
+      });
+      const redone = entry("deck", { field: "redo", of: moved.id, covers: 1 }, { cardId: null });
+      expect(auditSentence(redone, [moved]).text).toBe("Redid: Moved Sol Ring");
+    });
+  });
+});
+
+/**
+ * What an undo step takes back: a batch's step is keyed on its last row and covers every one, so
+ * past one it is a count in that row's verb — and one op, or no count, is the row's own sentence.
+ */
+describe("stepSentence", () => {
+  it("words a batch as a count in its keyed row's verb", () => {
+    expect(stepSentence(entry("move", { from: "Main", to: "Side" }), 50)).toBe("Moved 50 cards");
+    expect(stepSentence(entry("add", { quantity: 1, category: "Main" }), 300)).toBe(
+      "Added 300 cards",
+    );
+    expect(stepSentence(entry("remove", { quantity: 1 }), 12)).toBe("Removed 12 cards");
+    expect(stepSentence(entry("label", { label: "Cut" }), 4)).toBe("Labeled 4 cards");
+    expect(stepSentence(entry("label", { label: null }), 4)).toBe("Unlabeled 4 cards");
+    // A rerouted token add is a `token` row, and still an add.
+    expect(
+      stepSentence(entry("deck", { field: "token", action: "add" }, { cardId: null }), 3),
+    ).toBe("Added 3 cards");
+    // A row with no card verb of its own says only that the cards changed.
+    expect(stepSentence(entry("swap", {}), 5)).toBe("Changed 5 cards");
+  });
+
+  it("reads a step of one op exactly as its row does", () => {
+    const removed = entry("remove", { category: "Ramp", quantity: 2, reason: null });
+    const own = auditSentence(removed).text;
+    expect(stepSentence(removed)).toBe(own);
+    expect(stepSentence(removed, null)).toBe(own);
+    expect(stepSentence(removed, 1)).toBe(own);
   });
 });
 

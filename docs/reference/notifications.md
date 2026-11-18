@@ -39,6 +39,49 @@ callback, a `then` handler or a module function alike — no hook and no provide
   arrived; a row can be removed, or the whole list cleared. The entry carries an unread count
   (a pip on the bell when the rail is collapsed); opening the inbox reads everything in it.
 
+## Busy work
+
+The toast is the receipt *after*; this is the "working on it" *during* (2026-11-18). The owner's
+complaint was a long add or a `Ctrl+A` over twenty pages leaving the window looking frozen, with
+nothing to say the press was heard.
+
+```ts
+import { beginWork, trackWork } from "@/lib/work";
+
+const done = beginWork("Adding 300 cards to “Burn”…");
+try { await addAll(); } finally { done(); } // idempotent
+await trackWork("Selecting all cards…", selectAll()); // resolves/rejects as the work does
+```
+
+- **What it is**: one app-wide indicator, raised from anywhere (no hook, like `notify`), for any
+  reader-started work that can outlast ~400 ms. The label is a short present-progressive sentence
+  the caller writes. It is a module store (`useWorkStore`; `useBusy()` is what surfaces draw).
+- **When it shows**: a piece is *shown* only once it has been live for `ACTIVITY_DELAY_MS` (400),
+  and once up the indicator stays at least `WORK_MIN_SHOWN_MS` (700) so it never blinks. Both are
+  derived in one place (`settle` in `lib/work.ts`), so every surface agrees. A piece's ripe timer
+  firing makes it ripe even if `Date.now()` lags the timer; each sentence gets its own stay (a
+  second piece ripening late in the first's stay is not shown for a blink); and once up, the
+  indicator stays up while any work is live — a piece begun during the stay takes it over when
+  the stay runs out rather than the pill dropping and returning.
+- **Several at once**: one indicator, never a stack — the oldest shown piece's sentence and a
+  count (`Adding 300 cards… and 2 more`).
+- **Where it is drawn**: (1) the desktop header's activity line and mana line, as a job
+  (`workActivity`, `RANK.work` = −20, above every background job including the device sync, and
+  past the header's own delay since it has waited already); (2) a pill drawn by `Toaster` at the
+  foot of the toast stack — the receipt toast lands just above it while it sees out its minimum
+  stay, then the pill goes — so every face with a `Toaster`
+  (the desktop's `AppShell`, the phone's `PhoneFace`) has it, placed by the same `className`.
+  `role="status"` (polite by the role; never `aria-busy`, which would hold the announcement the
+  pill itself is — it unmounts still busy), `LAYER.toast`, not focusable, `pointer-events-none`; the
+  glyph's spin stops under reduced motion; (3) a `progress` cursor (`html[data-busy]`, one rule in
+  `index.css`) — never `wait`, and no press is ever blocked.
+- **What it is not**: not a toast (nothing is filed in the inbox, and the success or failure is
+  still the caller's `notify`), not a receipt, and not a progress bar — it counts nothing. A job
+  that does count (a sync, a download) is an `Activity` of its own in `lib/activity.ts`.
+- Tests: `test-setup.ts` runs `resetWork` after every test. `lib/work.ts` imports nothing of the
+  app's at runtime (it is loaded by the setup file, before any suite's `vi.mock`), which is why
+  `ACTIVITY_DELAY_MS` now lives there and `lib/activity.ts` re-exports it.
+
 ## The rule for collection, wishlist and deck edits
 
 **Every deliberate edit of the reader's cards publishes a toast, and so a notification** (the
@@ -51,8 +94,11 @@ or confirm, a sidebar drop, a bulk action, an import, the scanner, a finished tr
   `Removed 12 cards from the collection`.
 - **One action is one toast.** A picked set moved, removed or added in one press (50 cards
   dragged to a deck, a multi-select `Move to`, a bulk remove) is a single toast with the count:
-  `Moved 50 cards to “Trade binder”`. Never one toast per card. A loop of per-card writes reports
-  once, after the loop. A partial failure is folded into that one toast:
+  `Moved 50 cards to “Trade binder”`. Never one toast per card — and, since 2026-11-18, never one
+  *write* per card either: a press over a picked set is one batch write (`collection_add_many`,
+  `wishlist_add_many`, `wishlist_set_folder_many`, one `deck_apply`), so the toast is said off its
+  one answer, with the batch's per-card refusals folded in. A partial failure is folded into that
+  one toast:
   `notify.warning("Moved 47 of 50 cards to “Trade binder”", { body: firstRefusal })`, or
   `notify.error` when none landed. `useCardToDeck`'s `deckAddReceipt` is the pattern.
 - Failure is `notify.error("Couldn't …", { body: ipcError(e) })`, never swallowed. A page banner
@@ -120,8 +166,8 @@ The sweep of 2026-10-12 put every surface on it. By area:
 
 | Area | Toasts | Stays inline / no toast |
 | --- | --- | --- |
-| Card menu, card modal, All printings (`features/card/`) | Adds to collection / wishlist / deck (one per press, picked sets batched by `menuReceipts.ts`'s `filingBatcher`), moves, printing swaps and splits, copy name/image, set deck image; refused `Open on …` links (`refusedOpen.ts`) | Steppers; category/label/printing pickers inside the open modal |
-| Sidebar drops (`components/useSidebarDrops.ts`) | `Added N cards to “Deck”` / `… to the wishlist`, one per drop, partials folded | — (the rail's self-clearing report line is gone) |
+| Card menu, card modal, All printings (`features/card/`) | Adds to collection / wishlist / deck (one per press: a picked set is one batch write, said off its one answer by `menuReceipts.ts`' `reportBulkFiling`, with an undo offer on the collection or wishlist page), moves, printing swaps and splits, copy name/image, set deck image; refused `Open on …` links (`refusedOpen.ts`) | Steppers; category/label/printing pickers inside the open modal |
+| Sidebar drops (`components/useSidebarDrops.ts`) | `Added N cards to “Deck”` / `… to the wishlist`, one per drop (one `deck_apply` / `wishlist_add_many` for a set), partials folded | — (the rail's self-clearing report line is gone) |
 | Collection (`features/collection/`, wording in `collectionReceipts.ts`) | Removes (row, menu, bulk confirm), Recently removed clear, copy-picker moves, drops from the search column, a picked set dragged onto a shelf (one `collection_set_folder_many`, one receipt — issue #1501), folder create/rename/move/delete/lock, Edit copy save, share link copy / publish / stop | Steppers, Quick Add popup, a single copy dragged between shelves of the open wall, folder reorders. `UndoNotice` stays beside the receipt |
 | Wishlist (`features/wishlist/`) | Removes, panel moves, search-column drops, a picked set dragged onto a shelf (one receipt, partials folded — issue #1501), folder move/delete/clear | Steppers, a single wish dragged inside the list, folder reorders, rename/create in place |
 | Deck gallery (`features/decks/` gallery side, `useDecks.ts`'s `receipt`) | Deck/folder move, duplicate, archive/restore, delete, menu tags, create (`CreateDeckDialog`, one receipt for every host — `receipt` prop to override), settings folder move, Clear list | Autosaving settings fields, renames, folder reorders |
@@ -163,7 +209,8 @@ write that serves both a toasted press and an exempt one needs a way to say whic
   filing write as the drags' `setFolder` for the presses that toast.
 - **By a record stamped after the press settles** — the deck editor's `reportToasted`, for
   `setQuantity`, `moveCard` and `update`, whose menu presses and steppers send the same shape.
-  It shares `lastBatch` with the drags' `reportBatch`, marked `toasted`, and is newer than the
+  It shares `lastBatch` with `editBatch` (the multi-card drop, Delete and the plural menu rows,
+  one `deck_apply`, filed `toasted` or not by its caller), marked `toasted`, and is newer than the
   observer's own call, so the banner reads it and says nothing.
 
 **The token writes keep the editor's banner** while the Tokens & Emblems wall is shut: their

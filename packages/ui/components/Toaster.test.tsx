@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { ACTIVITY_DELAY_MS } from "@/lib/activity";
 import { notify, useNotifications } from "@/lib/notifications";
+import { WORK_MIN_SHOWN_MS, beginWork } from "@/lib/work";
 import { CLOSE_TOAST, Toaster } from "./Toaster";
 
 const mount = () =>
@@ -92,5 +94,62 @@ describe("Toaster", () => {
 
     act(() => vi.advanceTimersByTime(60_000));
     expect(useNotifications.getState().toasts).toHaveLength(1);
+  });
+});
+
+describe("the busy pill", () => {
+  it("appears once the work outlasts the delay, says it politely, and goes when it ends", async () => {
+    vi.useFakeTimers();
+    mount();
+    let done!: () => void;
+    act(() => {
+      done = beginWork("Adding 300 cards to “Burn”…");
+    });
+
+    act(() => vi.advanceTimersByTime(ACTIVITY_DELAY_MS - 1));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1));
+    const pill = screen.getByRole("status");
+    expect(pill).toHaveTextContent("Adding 300 cards to “Burn”…");
+    // `status` is polite already; `aria-busy` would hold the announcement it is there to make.
+    expect(pill).not.toHaveAttribute("aria-busy");
+    expect(pill).not.toHaveAttribute("tabindex");
+    expect(pill).toHaveClass("pointer-events-none");
+    expect(screen.getByRole("region", { name: "Notifications" })).toContainElement(pill);
+
+    act(() => done());
+    act(() => vi.advanceTimersByTime(WORK_MIN_SHOWN_MS - 1));
+    expect(screen.getByRole("status")).toBe(pill);
+    act(() => vi.advanceTimersByTime(1));
+    // Its exit is `motion`'s, which settles on the real clock rather than the faked one.
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  });
+
+  it("is one line however much is running, counting the rest", () => {
+    vi.useFakeTimers();
+    mount();
+    act(() => {
+      beginWork("Adding 300 cards…");
+      beginWork("Selecting all cards…");
+    });
+    act(() => vi.advanceTimersByTime(ACTIVITY_DELAY_MS));
+
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Adding 300 cards… and 1 more");
+  });
+
+  it("stands below the toasts, where the receipt will land", () => {
+    vi.useFakeTimers();
+    mount();
+    act(() => {
+      notify({ title: "Earlier", duration: null });
+      beginWork("Adding 300 cards…");
+    });
+    act(() => vi.advanceTimersByTime(ACTIVITY_DELAY_MS));
+
+    const region = screen.getByRole("region", { name: "Notifications" });
+    expect(region.lastElementChild).toHaveTextContent("Adding 300 cards…");
   });
 });

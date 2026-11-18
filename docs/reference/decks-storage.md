@@ -2142,6 +2142,58 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
   not soften this: the park is a field of its own and the deck is not handed back until Decks
   is on screen again, so on those three views the entry is inert exactly as it was.
 
+## Many card writes as one: `deck_apply` (issue #1164)
+
+`deck_apply(deckId, variant, ops)` (`crates/grimoire-core/src/deck_apply.rs`) is the command every
+multi-card gesture sends: a drop of a picked set, Delete over one, the card menu's plural rows, a
+label over several rows, Add N cards. Each `DeckOp` is one single command's arguments less the deck
+and the variant — `add` is `deck_add_card`, `move` `deck_move_card`, `remove` the row's removal,
+`setLabel` `deck_card_set_label`, `addToOtherList` `deck_add_card_to_other_list` — and runs through
+the very function that command runs, so a batch cannot file, fold or refuse a card differently from
+a press. Until it, each card was its own command fired in parallel: N transactions queued on the
+write lock (told `database is busy` past a few hundred), N undo steps against a journal that keeps
+200 per deck, and a `["decks"]` re-read per card.
+
+- **One transaction, the ops in the order given.** Order is part of the request: two adds filed by
+  name into a pile that does not exist yet find-or-make it once, and every op sees what the ones
+  before it did.
+- **Per-op refusals.** Each op runs in a savepoint of its own; one its command would refuse is rolled
+  back alone and answered in `results[i].refusal` with that command's sentence, while the rest land.
+  What would refuse every op — a deck that is gone, a variant that is not one, busy — fails the call.
+  **A refusal is a sentence, never a database error**: the ops' writes answer `ItemError`
+  (`Refused` / `Failed`, `collection.rs`), and anything SQLite says under an op — a constraint, a
+  malformed row, an I/O error — fails the whole call with every op rolled back.
+- **One undo step**, keyed on the batch's last history row (`record_step`'s rule for a press that
+  writes several), scoped to the cells the ops touched — so one Ctrl+Z takes the whole gesture back.
+  The step carries the batch's net `delta` (`Step::delta`, the sum of its journalled rows'), which
+  the undo and redo rows carry negated and straight, so the day header reads `+300 / −300` for 300
+  adds undone rather than `+300 / −1`. A batch whose writes left every cell, pile and token as they
+  were files no step. The history keeps a row per op, so the drawer reads as if the cards had gone
+  one at a time. **The step counts the journalled rows it covers** (`Step::covers`, absent from a
+  single command's step and from a batch's filed before it), and `deck_undo_state` answers it beside
+  each entry (`undoCovers` / `redoCovers`, `null` for one), so the buttons read `Undo — Moved 50
+  cards` in the keyed row's verb (`auditText.ts`' `stepSentence`) rather than naming the last card;
+  the reversal's history row carries it too (`{"field":"undo","of":…,"covers":50}`), and the drawer
+  reads `Undid: Moved 50 cards`. A mixed batch — a drop of desk and search cards — is worded by its
+  last op's verb, which is all the keyed row can tell.
+- **The live cut files no step**, here as in `deck_to_collection`: a `remove` on the live list of a
+  deck that keeps cardboard is the cut — the row's copies go back to `Recently removed` — and a step
+  could put the list back and not the custody. **So a cut lands only ahead of every write the step
+  records**: once an earlier op of the batch has noted a cell or a token, a cut is refused
+  (`CUT_AFTER_A_WRITE`) — mixed in, it would leave half a step (`[move X A→B, cut X]` undoing to X
+  back in A with its copies in `Recently removed`), an empty one, or a cut's token reconcile inside
+  another card's step. After the cuts, before the first other op, the list's tokens are reconciled
+  (the backstop a single cut gets from `with_write`). A batch whose every landed op is a cut files no
+  step. Any other removal (a theory row, a virtual deck) is the stepper's zero and is journalled like
+  any write. `collectionMoved` tells the page to re-read the collection.
+- **`variant` is the list written.** For `addToOtherList` that is the list the copies go *into*, so
+  those ops never share a batch with this list's writes.
+
+The page's side is `useDeckCore`'s `applyEdits` (the editor's own requests, planned on the single
+writes' rules — the default pile and the Oracle tags read once for the batch — with removals patched
+off the desk at the press) and `addCards`/`applyOps` beside it; a gesture over one card still sends
+its single command.
+
 ## The third deck kind: a deck with no cardboard behind it
 
 `decks.virtual_only`, user schema **v40**, landed 2026-09-08 for

@@ -9192,6 +9192,104 @@ describe("collection_remove_many", () => {
   });
 });
 
+describe("the batch adds and the wishlist's bulk move", () => {
+  /** N single adds in one write: a refused item is named by index in the single add's sentence,
+   *  the rest land and fold on the grain, and one ticket takes the whole press back. */
+  it("collection_add_many lands what it can, reports the rest and undoes as one", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })] });
+    const w = writeHandlers(db);
+    const items = [
+      { cardId: BOLT.id, finish: "nonfoil" as const, quantity: 2 },
+      { cardId: "gone", finish: "nonfoil" as const, quantity: 1 },
+      { cardId: BOLT_JA.id, finish: "nonfoil" as const, quantity: 0 },
+      { cardId: BOLT_2X2.id, finish: "nonfoil" as const, quantity: 3 },
+    ];
+    const reasons = [1, 2].map((i) => {
+      try {
+        writeHandlers(makeDb()).collection_add({ entry: items[i] });
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error("the single add should have refused it");
+    });
+
+    const out = w.collection_add_many({ items });
+
+    expect(out).toEqual({
+      added: 2,
+      copies: 5,
+      refused: [
+        { index: 1, reason: reasons[0] },
+        { index: 2, reason: reasons[1] },
+      ],
+      undoId: 1,
+    });
+    expect(db.collectionEntries.map((e) => [e.cardId, e.quantity])).toEqual([
+      [BOLT.id, 3],
+      [BOLT_2X2.id, 3],
+    ]);
+    w.bulk_undo({ undoId: out.undoId! });
+    expect(db.collectionEntries.map((e) => [e.cardId, e.quantity])).toEqual([[BOLT.id, 1]]);
+    expect(w.collection_add_many({ items: [] })).toEqual({
+      added: 0,
+      copies: 0,
+      refused: [],
+      undoId: null,
+    });
+  });
+
+  it("wishlist_add_many files each wish in its own folder and skips a gone one", () => {
+    const db = makeDb({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }],
+    });
+    const out = writeHandlers(db).wishlist_add_many({
+      items: [
+        { cardId: BOLT.id, quantity: 0, folderId: 1 },
+        { cardId: BOLT.id, quantity: 2 },
+        { cardId: BOLT.id, quantity: 1, folderId: 404 },
+      ],
+    });
+
+    expect(out).toMatchObject({ added: 2, copies: 3, undoId: 1 });
+    expect(out.refused.map((r) => r.index)).toEqual([2]);
+    expect(db.wishlistEntries.map((w) => [w.folderId, w.quantity])).toEqual([
+      [1, 1],
+      [null, 2],
+    ]);
+  });
+
+  it("wishlist_set_folder_many moves and merges as one press, or moves nothing", () => {
+    const db = makeDb({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }],
+      wishlistEntries: [
+        wish({ id: 1, quantity: 2 }),
+        wish({ id: 2, cardId: BOLT_JA.id, quantity: 1 }),
+        wish({ id: 3, quantity: 5, folderId: 1 }),
+      ],
+    });
+    const w = writeHandlers(db);
+
+    expect(() => w.wishlist_set_folder_many({ ids: [2, 404], folderId: 1 })).toThrow(
+      /not there any more/,
+    );
+    expect(db.wishlistEntries.find((x) => x.id === 2)?.folderId).toBeNull();
+
+    const out = w.wishlist_set_folder_many({ ids: [1, 2, 1], folderId: 1 });
+    expect(out.changes.map((c) => [c.id, c.quantity])).toEqual([
+      [3, 7],
+      [2, 1],
+      [3, 7],
+    ]);
+    w.bulk_undo({ undoId: out.undoId! });
+    const byId = [...db.wishlistEntries].sort((a, b) => a.id - b.id);
+    expect(byId.map((x) => [x.id, x.folderId, x.quantity])).toEqual([
+      [1, null, 2],
+      [2, null, 1],
+      [3, 1, 5],
+    ]);
+  });
+});
+
 describe("collection_set_folder_many", () => {
   /** `Binder` for the reader, and a deck's group for the fence. */
   const FOLDERS: FakeCollectionFolder[] = [
@@ -13824,7 +13922,11 @@ describe("the busy fault", () => {
     // read, `custom_widgets`, sits in `readHandlers`. Count again after a merge.
     // 153 → 154 on 2026-11-01 with `set_collection_value`, the reduced price's two figures
     // (issues #1449, #1450), through `with_write`.
-    expect(names).toHaveLength(154);
+    // 154 → 158 on 2026-11-18 with the batched writes: `deck_apply`, the batched card write,
+    // and the batch adds and the wishlist's bulk move — `collection_add_many`,
+    // `wishlist_add_many` and `wishlist_set_folder_many` — each reaching `refuseIfBusy` before
+    // anything else runs. Count again after a merge, never add to it.
+    expect(names).toHaveLength(158);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -25984,5 +26086,457 @@ describe("entry tags", () => {
       { tag: "cube", count: 1 },
       { tag: "modern", count: 1 },
     ]);
+  });
+});
+
+/**
+ * `deck_apply` — the multi-card gestures' one command. What it must get right is what the crate
+ * promises: the ops land in order, each exactly as its single command would; a refused op is put
+ * back alone and the rest stand; and the whole batch is **one** undo step.
+ */
+describe("deck_apply", () => {
+  const add = (cardId: string, categoryId: number | null, categoryName: string | null = null) =>
+    ({
+      op: "add",
+      cardId,
+      categoryId,
+      categoryName,
+      finish: null,
+      quantity: 1,
+    }) as const;
+
+  it("applies the ops in order, each as its single command would", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const outcome = h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [
+        add(BOLT.id, main),
+        add(BOLT.id, main),
+        // Sees the two adds above: the fold made one row of 2, and the move takes all of it.
+        {
+          op: "move",
+          cardId: BOLT.id,
+          fromCategoryId: main,
+          toCategoryId: side,
+          toCategoryName: null,
+          finish: null,
+        },
+        add(BOLT_2X2.id, null, "Burn"),
+      ],
+    });
+
+    expect(outcome.landed).toBe(4);
+    expect(outcome.collectionMoved).toBe(false);
+    expect(outcome.results.map((r) => r.refusal)).toEqual([null, null, null, null]);
+    expect(outcome.results[1].change).toMatchObject({ quantity: 2, removed: false });
+    expect(outcome.results[2]).toEqual({ change: null, categoryId: side, refusal: null });
+    const burn = db.deckCategories.find((c) => c.deckId === 1 && c.name === "Burn");
+    expect(outcome.results[3].categoryId).toBe(burn?.id);
+    expect(db.deckCards.map((c) => [c.cardId, c.categoryId, c.quantity])).toEqual([
+      [BOLT.id, side, 2],
+      [BOLT_2X2.id, burn?.id, 1],
+    ]);
+  });
+
+  it("puts a refused op back alone, and lands the rest", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const main = categoryId(1, "main");
+    const piles = db.deckCategories.length;
+    const outcome = h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [
+        add(BOLT.id, main),
+        // The name arm makes `Elsewhere` before it finds no row to move — and the savepoint's
+        // stand-in must take the pile back out with the refusal.
+        {
+          op: "move",
+          cardId: BOLT_2X2.id,
+          fromCategoryId: main,
+          toCategoryId: null,
+          toCategoryName: "Elsewhere",
+          finish: null,
+        },
+        add(BOLT_2X2.id, main),
+      ],
+    });
+
+    expect(outcome.landed).toBe(2);
+    expect(outcome.results[0].refusal).toBeNull();
+    expect(outcome.results[1]).toMatchObject({ change: null, categoryId: null });
+    expect(outcome.results[1].refusal).toEqual(expect.any(String));
+    expect(outcome.results[2].refusal).toBeNull();
+    expect(db.deckCategories).toHaveLength(piles);
+    expect(db.deckCategories.some((c) => c.name === "Elsewhere")).toBe(false);
+    expect(db.deckCards.map((c) => c.cardId)).toEqual([BOLT.id, BOLT_2X2.id]);
+  });
+
+  it("files the whole batch as one undo step", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const main = categoryId(1, "main");
+    const steps = db.deckUndo.length;
+    h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT.id, main), add(BOLT_2X2.id, main), add(BOLT.id, main)],
+    });
+
+    expect(db.deckAudit.length).toBeGreaterThanOrEqual(3);
+    expect(db.deckUndo.length).toBe(steps + 1);
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards).toEqual([]);
+  });
+
+  it("files a token as the deck's token entry, answering id 0 and no pile", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(TOKEN_PRINTING.treasureTafr, categoryId(1, "main"))],
+    });
+
+    expect(outcome.results[0]).toMatchObject({
+      change: { id: 0, removed: false },
+      categoryId: null,
+      refusal: null,
+    });
+    expect(db.deckCards).toEqual([]);
+  });
+
+  it("says when a removal on the live list released copies", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [{ op: "remove", cardId: BOLT.id, categoryId: main, finish: null }],
+    });
+
+    expect(outcome.results[0].change).toMatchObject({ removed: true, quantity: 0 });
+    expect(outcome.collectionMoved).toBe(true);
+    expect(db.deckCards).toEqual([]);
+    expect(db.collectionEntries.every((e) => e.folderId !== groupId(1))).toBe(true);
+  });
+
+  /** A removal from a regular deck's live list, as Delete over a set sends it. */
+  const cut = (cardId: string, categoryId: number) =>
+    ({ op: "remove", cardId, categoryId, finish: null }) as const;
+
+  /**
+   * **A live cut files no undo step** (`deck_apply.rs`, `DeckOp::Remove`): the copies went back
+   * to `Recently removed`, and a step could put the list back and not the custody. The fake filed
+   * one for Delete over a set, which no Rust build does.
+   */
+  it("files no undo step for a batch of only live cuts", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const steps = db.deckUndo.length;
+    const history = db.deckAudit.length;
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [cut(BOLT.id, main), cut(BOLT_2X2.id, main)],
+    });
+
+    expect(outcome.landed).toBe(2);
+    expect(db.deckCards).toEqual([]);
+    // The history keeps a row per removal; the journal keeps no step.
+    expect(db.deckAudit.length).toBe(history + 2);
+    expect(db.deckUndo.length).toBe(steps);
+  });
+
+  /**
+   * **A live cut lands only ahead of every other write** (`deck_apply.rs`, `CUT_AFTER_A_WRITE`):
+   * behind one, it would leave half a step — `[add, cut]`'s Ctrl+Z would take the add back and
+   * leave the cut's copies in `Recently removed`. Refused in the crate's words; the add lands.
+   */
+  it("refuses a live cut behind a write of the same batch, in the crate's sentence", () => {
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const h = allHandlers(db);
+    const outcome = h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT_2X2.id, side), cut(BOLT.id, main)],
+    });
+
+    expect(outcome.landed).toBe(1);
+    expect(outcome.results[1]).toEqual({
+      change: null,
+      categoryId: null,
+      refusal:
+        "That card was not taken out of the deck: in one change, cards come out of a deck that " +
+        "keeps its cardboard before anything else is changed. Remove it on its own.",
+    });
+    expect(db.deckCards.map((c) => c.cardId).sort()).toEqual([BOLT.id, BOLT_2X2.id].sort());
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    expect(undo.kind).toBe("add");
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards.map((c) => [c.cardId, c.quantity])).toEqual([[BOLT.id, 2]]);
+  });
+
+  /** …and a stale pile still hears its own sentence, not the cut rule's. */
+  it("answers a cut on a pile that is gone with the command's own refusal", () => {
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT_2X2.id, categoryId(1, "side")), cut(BOLT.id, 999)],
+    });
+    expect(outcome.results[1].refusal).toEqual(expect.any(String));
+    expect(outcome.results[1].refusal).not.toMatch(/before anything else is changed/);
+  });
+
+  /**
+   * **Leading cuts land**, and the batch's one step stands behind them: a Ctrl+Z takes the move
+   * back and never puts the cut row back — its copies are in `Recently removed`.
+   */
+  it("lands the cuts ahead of the other ops and keeps them out of the step", () => {
+    const main = categoryId(1, "main");
+    const side = categoryId(1, "side");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const h = allHandlers(db);
+    const outcome = h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [
+        cut(BOLT.id, main),
+        {
+          op: "move",
+          cardId: BOLT_2X2.id,
+          fromCategoryId: main,
+          toCategoryId: side,
+          toCategoryName: null,
+          finish: null,
+        },
+      ],
+    });
+    expect(outcome.landed).toBe(2);
+    expect(db.deckCards.map((c) => [c.cardId, c.categoryId])).toEqual([[BOLT_2X2.id, side]]);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    expect(undo.kind).toBe("move");
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards.map((c) => [c.cardId, c.categoryId])).toEqual([[BOLT_2X2.id, main]]);
+  });
+
+  /**
+   * **A batch whose net effect is nothing files no step** (`record_logged`): an add and a removal
+   * of the same card on a list that journals its removals — a virtual deck's.
+   */
+  it("files no step for a batch that changed nothing", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({ decks: [deck({ virtualOnly: true })] });
+    const steps = db.deckUndo.length;
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT.id, main), cut(BOLT.id, main)],
+    });
+    expect(outcome.landed).toBe(2);
+    expect(db.deckCards).toEqual([]);
+    expect(db.deckUndo.length).toBe(steps);
+  });
+
+  /**
+   * **The step counts what it covers and reverses the batch's net**: the state answers
+   * `undoCovers`/`redoCovers` for the buttons' `Moved 3 cards`, the reversal row carries the
+   * batch's `delta` negated (undo) and straight (redo) and names its `covers`. A single command's
+   * step answers `null` and writes the payload it always did.
+   */
+  it("answers a batch's count and reverses its net delta", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [add(BOLT.id, main), add(BOLT_2X2.id, main), add(BOLT_JA.id, main)],
+    });
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state).toMatchObject({ undoCovers: 3, redoCovers: null });
+
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+    const undone = db.deckAudit[db.deckAudit.length - 1];
+    expect(undone.delta).toBe(-3);
+    expect(JSON.parse(undone.payload)).toEqual({ field: "undo", of: state.undo!.id, covers: 3 });
+    expect(h.deck_undo_state({ deckId: 1, redoId: state.undo!.id })).toMatchObject({
+      redoCovers: 3,
+    });
+
+    h.deck_redo_apply({ deckId: 1, auditId: state.undo!.id });
+    expect(db.deckAudit[db.deckAudit.length - 1].delta).toBe(3);
+
+    h.deck_add_card({
+      deckId: 1,
+      variant: "live",
+      cardId: BOLT.id,
+      categoryId: main,
+      categoryName: null,
+      finish: null,
+      quantity: 2,
+    });
+    const single = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(single.undoCovers).toBeNull();
+    h.deck_undo_apply({ deckId: 1, auditId: single.undo!.id });
+    const reversal = db.deckAudit[db.deckAudit.length - 1];
+    expect(JSON.parse(reversal.payload)).toEqual({ field: "undo", of: single.undo!.id });
+    expect(reversal.delta).toBe(-2);
+  });
+
+  /** The other removals are the stepper's zero, and file a step like it: a virtual deck's. */
+  it("files a step for a removal from a virtual deck", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck({ virtualOnly: true })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const h = allHandlers(db);
+    const steps = db.deckUndo.length;
+    h.deck_apply({ deckId: 1, variant: "live", ops: [cut(BOLT.id, main)] });
+
+    expect(db.deckUndo.length).toBe(steps + 1);
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(db.deckCards.map((c) => [c.cardId, c.quantity])).toEqual([[BOLT.id, 2]]);
+  });
+
+  /** A label answers the pile it went on — the crate's `Done.category_id` — never `null`. */
+  it("answers a label's own pile", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({
+      decks: [deck()],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [{ op: "setLabel", cardId: BOLT.id, categoryId: main, finish: null, labelId: null }],
+    });
+
+    expect(outcome.results[0]).toEqual({ change: null, categoryId: main, refusal: null });
+  });
+
+  /**
+   * **A batch that wrote nothing leaves the deck as it found it, `updatedAt` included** — the
+   * crate drops the transaction and its touch with it. A removal of a row already gone and an op
+   * refused are the two ways to write nothing.
+   */
+  it("leaves updatedAt alone for a batch that wrote nothing", () => {
+    const main = categoryId(1, "main");
+    const db = makeDeckDb({ decks: [deck({ updatedAt: 5 })] });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "live",
+      ops: [
+        cut(BOLT.id, main),
+        {
+          op: "move",
+          cardId: BOLT.id,
+          fromCategoryId: main,
+          toCategoryId: categoryId(1, "side"),
+          toCategoryName: null,
+          finish: null,
+        },
+      ],
+    });
+
+    expect(outcome.results[0].refusal).toBeNull();
+    expect(outcome.results[1].refusal).toEqual(expect.any(String));
+    expect(db.decks[0].updatedAt).toBe(5);
+  });
+
+  /**
+   * **The direction of `addToOtherList`**, which the fake once had backwards: the batch's
+   * `variant` is the list the copies go **into**, and `fromCategoryId` is a pile of the other list
+   * — so `Add 2 to theory` on two actual rows is a `theory` batch naming live piles.
+   */
+  it("adds to the batch's own list from a pile of the other one", () => {
+    const liveMain = categoryId(1, "main");
+    const theoryMain = categoryId(1, "main", "theory");
+    const db = makeDeckDb({
+      decks: [deck({ theoryEnabled: true })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 3 })],
+    });
+    const outcome = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "theory",
+      ops: [
+        {
+          op: "addToOtherList",
+          cardId: BOLT.id,
+          fromCategoryId: liveMain,
+          finish: null,
+          quantity: 1,
+        },
+      ],
+    });
+
+    expect(outcome.results[0]).toMatchObject({ categoryId: theoryMain, refusal: null });
+    expect(db.deckCards.map((c) => [c.variant, c.categoryId, c.quantity])).toEqual([
+      ["live", liveMain, 3],
+      ["theory", theoryMain, 1],
+    ]);
+    // And the other way round is refused: a theory batch naming a theory pile is the same list.
+    const back = allHandlers(db).deck_apply({
+      deckId: 1,
+      variant: "theory",
+      ops: [
+        {
+          op: "addToOtherList",
+          cardId: BOLT.id,
+          fromCategoryId: theoryMain,
+          finish: null,
+          quantity: 1,
+        },
+      ],
+    });
+    expect(back.results[0].refusal).toEqual(expect.any(String));
+  });
+
+  it("answers an empty batch empty, and refuses the whole call for a busy or missing deck", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    expect(allHandlers(db).deck_apply({ deckId: 1, variant: "live", ops: [] })).toEqual({
+      results: [],
+      landed: 0,
+      collectionMoved: false,
+    });
+    expect(() =>
+      allHandlers(db).deck_apply({ deckId: 99, variant: "live", ops: [add(BOLT.id, null, "X")] }),
+    ).toThrow();
+    db.fault = "busy";
+    expect(() =>
+      allHandlers(db).deck_apply({ deckId: 1, variant: "live", ops: [add(BOLT.id, null, "X")] }),
+    ).toThrow(/busy/i);
   });
 });

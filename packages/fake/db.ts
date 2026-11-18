@@ -139,7 +139,9 @@ import type {
   ActivityEntry,
   BracketCardRow,
   BreakdownRow,
+  BulkAddOutcome,
   BulkMoveOutcome,
+  BulkRefusal,
   BulkRemoveOutcome,
   BulkUndoOutcome,
   CardCombo,
@@ -192,6 +194,9 @@ import type {
   DeckPullOutcome,
   DeckPullPick,
   DeckPullRow,
+  DeckApplyOutcome,
+  DeckOp,
+  DeckOpResult,
   DeckOwnedElsewhere,
   DeckElsewherePlace,
   DeckQuickAddOutcome,
@@ -1148,6 +1153,12 @@ export interface FakeDeckUndo {
   /** `null` while the change is still applied. **Persisted**, like the column — so undo carries
    *  on where it stopped. The *redo* stack is the webview's and dies with the window. */
   undoneAt: number | null;
+  /** `Step::delta` — a `deck_apply` batch's net copies, which its reversal row negates (undo) or
+   *  carries (redo). Absent: the keyed row's own `delta` is the press's. */
+  delta?: number;
+  /** `Step::covers` — how many history rows a batch's step takes back. Absent for a single
+   *  command's step. */
+  covers?: number;
 }
 
 /** Everything about one deck a step puts back. */
@@ -18882,6 +18893,46 @@ function distinctIds(ids: readonly number[]): number[] {
 }
 
 /**
+ * `collection::land_each` — a batch add's items one at a time, **a refusal the item's and not the
+ * press's**: the sentence the single add would have thrown is kept against the item's index and
+ * the rest go on. Every single-add helper here ({@link addEntry}, {@link addWish}) refuses before
+ * it writes, so a refused item has left nothing behind — the crate's per-item savepoint. A throw
+ * that is not an `Error` is the fake's own bug and ends the batch.
+ */
+function landEach<I>(
+  items: readonly I[],
+  one: (item: I) => EntryChange,
+): { landed: { index: number; change: EntryChange }[]; refused: BulkRefusal[] } {
+  const landed: { index: number; change: EntryChange }[] = [];
+  const refused: BulkRefusal[] = [];
+  items.forEach((item, index) => {
+    try {
+      landed.push({ index, change: one(item) });
+    } catch (e) {
+      if (!(e instanceof Error)) throw e;
+      refused.push({ index, reason: e.message });
+    }
+  });
+  return { landed, refused };
+}
+
+/** `wishlist_folders::set_wish_folder` for one wish — {@link writeHandlers}' `wishlist_set_folder`
+ *  and `wishlist_set_folder_many` both, so the fences and the merge are written once. */
+function setWishFolder(db: FakeDb, id: number, folderId: number | null): EntryChange {
+  if (folderId !== null && !wishFolderById(db, folderId)) throw refuse(FOLDER_GONE);
+  const wish = db.wishlistEntries.find((w) => w.id === id);
+  if (!wish) throw refuse(WISH_GONE);
+  // Both ends: into a deck's managed wishlist, and out of one.
+  refuseIfManagedFolder(db, folderId);
+  refuseIfManagedFolder(db, wish.folderId);
+  const merged = mergeWishOnto(db, wish, { ...wish, folderId });
+  if (merged) return merged;
+  wish.folderId = folderId;
+  wish.updatedAt = stamp(db);
+  return { id: wish.id, quantity: wish.quantity, removed: false };
+}
+
+/**
  * `collection::remove_entry`'s one statement, as a function — the row it deleted, or `null` for
  * an id that named nothing, which both of its callers treat as a success.
  * {@link writeHandlers}' `collection_remove` answers for one id and `collection_remove_many` for
@@ -19437,6 +19488,25 @@ export function writeHandlers(db: FakeDb) {
         copies += row.quantity;
       }
       return { removed, copies, undoId: collectionUndo(db, before) };
+    },
+
+    /**
+     * `collection::add_entries` — "Add N cards to → Collection" in **one write**: {@link addEntry}
+     * per item through {@link landEach}, so a refused item is skipped and named by index in the
+     * single add's sentence while the rest land. One ticket for the press, `null` when nothing
+     * landed; no feed row, as no write in this fake records one.
+     */
+    collection_add_many: (args: { items: readonly EntryInput[] }): BulkAddOutcome => {
+      refuseIfBusy(db);
+      const before = db.collectionEntries.map((e) => ({ ...e }));
+      const { landed, refused } = landEach(args.items, (input) => addEntry(db, input));
+      const copies = landed.reduce((n, { index }) => n + args.items[index].quantity, 0);
+      return {
+        added: landed.length,
+        copies,
+        refused,
+        undoId: landed.length > 0 ? collectionUndo(db, before) : null,
+      };
     },
 
     /**
@@ -20521,6 +20591,24 @@ export function writeHandlers(db: FakeDb) {
       return addWish(db, args.wish);
     },
 
+    /** `wishlist::add_wishes` — {@link collection_add_many}'s contract over {@link addWish}: each
+     *  item in its own folder, a quantity below one read as one, a refusal the item's. */
+    wishlist_add_many: (args: { items: readonly WishInput[] }): BulkAddOutcome => {
+      refuseIfBusy(db);
+      const before = db.wishlistEntries.map((w) => ({ ...w }));
+      const { landed, refused } = landEach(args.items, (input) => addWish(db, input));
+      const copies = landed.reduce(
+        (n, { index }) => n + Math.max(1, args.items[index].quantity),
+        0,
+      );
+      return {
+        added: landed.length,
+        copies,
+        refused,
+        undoId: landed.length > 0 ? wishlistUndo(db, before) : null,
+      };
+    },
+
     /** `wishlist::set_wish_quantity`. **Zero removes the row**, because `wishlist_entries`
      *  carries `CHECK (quantity > 0)` and a wish holds nothing worth keeping once it is emptied.
      *
@@ -20831,17 +20919,39 @@ export function writeHandlers(db: FakeDb) {
      */
     wishlist_set_folder: (args: { id: number; folderId: number | null }): EntryChange => {
       refuseIfBusy(db);
-      if (args.folderId !== null && !wishFolderById(db, args.folderId)) throw refuse(FOLDER_GONE);
-      const wish = db.wishlistEntries.find((w) => w.id === args.id);
-      if (!wish) throw refuse(WISH_GONE);
-      // Both ends: into a deck's managed wishlist, and out of one.
-      refuseIfManagedFolder(db, args.folderId);
-      refuseIfManagedFolder(db, wish.folderId);
-      const merged = mergeWishOnto(db, wish, { ...wish, folderId: args.folderId });
-      if (merged) return merged;
-      wish.folderId = args.folderId;
-      wish.updatedAt = stamp(db);
-      return { id: wish.id, quantity: wish.quantity, removed: false };
+      return setWishFolder(db, args.id, args.folderId);
+    },
+
+    /**
+     * `wishlist_folders::set_wishes_folder` — {@link collection_set_folder_many} one table over:
+     * {@link setWishFolder} per distinct id, **any refusal leaves nothing moved** and rejects with
+     * its own sentence, one {@link EntryChange} per id sent with quantities read back once the
+     * whole press is in, and one ticket.
+     */
+    wishlist_set_folder_many: (args: {
+      ids: readonly number[];
+      folderId: number | null;
+    }): BulkMoveOutcome => {
+      refuseIfBusy(db);
+      const before = db.wishlistEntries.map((w) => ({ ...w }));
+      const landed = new Map<number, EntryChange>();
+      try {
+        for (const id of distinctIds(args.ids)) {
+          landed.set(id, setWishFolder(db, id, args.folderId));
+        }
+      } catch (e) {
+        db.wishlistEntries = before.map((row) => ({ ...row }));
+        throw e;
+      }
+      for (const change of landed.values()) {
+        const now = db.wishlistEntries.find((w) => w.id === change.id);
+        if (now) change.quantity = now.quantity;
+      }
+      const changes = args.ids.flatMap((id) => {
+        const change = landed.get(id);
+        return change ? [{ ...change }] : [];
+      });
+      return { changes, undoId: wishlistUndo(db, before) };
     },
 
     /**
@@ -22412,6 +22522,157 @@ export function writeHandlers(db: FakeDb) {
         0,
       );
       return to.id;
+    },
+
+    /**
+     * `deck_apply` — many card writes to one list of one deck, in **one** command and one undo
+     * step: the multi-card gestures (Add N cards, a drag of a picked set, Delete over a picked
+     * set, a label over several rows).
+     *
+     * **Composed of the single handlers above rather than a second copy of them**, which is the
+     * crate's arrangement too — each op does exactly what its own command does, so a batch can
+     * never file, fold or refuse a card differently from a press. They are this table's own
+     * handlers, unwrapped: {@link journalled} wraps `deck_apply` itself, so the batch's history
+     * rows are filed as **one** step keyed on the last of them, and one Ctrl+Z puts the lot back.
+     *
+     * **A refused op is rolled back alone and answered in its own result**; the rest land. The
+     * crate does it with a savepoint per op, and this stands one in with {@link opSavepoint}: the
+     * tables an op can write, as shallow copies of their arrays and of this deck's rows (the
+     * collection's only for a removal, the one op that releases copies), put back when it throws —
+     * a refusal after the name arm invented a pile must not leave that pile standing. Not a deep
+     * clone of every table per op: a 300-op story paid nine `structuredClone`s of the world per
+     * card. The deck-level refusals (busy, an unknown variant, a deck that is gone) are asked first
+     * and reject the whole call.
+     *
+     * `remove` is the whole row out, `deck_set_card_quantity`'s zero: on a live list that already
+     * releases the copies the group held (issue #1494), which is what the app's cut does, and a
+     * virtual deck has no group to release from. `collectionMoved` is read off the collection
+     * itself, before and after, rather than added up from the ops.
+     *
+     * **The undo step is the crate's** (`deck_apply.rs`, `DeckOp::Remove`): a removal from the live
+     * list of a deck that keeps cardboard is a **cut**, which files no step — so a batch of only
+     * cuts files none, and **a cut lands only ahead of every other write**: once an earlier op has
+     * written something the step records, a cut is refused with the crate's
+     * {@link CUT_AFTER_A_WRITE}. After the leading cuts, before the first other op, the list's
+     * tokens are reconciled and the step's before-image is taken there ({@link takeApplyStep},
+     * read by {@link journalled}), so a Ctrl+Z never puts a cut row or a cut's token back. The step
+     * is keyed on the batch's last journalled row, carries the batch's net `delta` and how many
+     * rows it `covers`, and is not filed at all when the batch left the deck's cards, piles and
+     * tokens as they were. A batch that wrote nothing — every op refused, or a no-op (a removal of
+     * a row already gone) — leaves the deck's `updatedAt` as it found it, as the crate's dropped
+     * transaction rolls its touch back.
+     */
+    deck_apply: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      ops: DeckOp[];
+    }): DeckApplyOutcome => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const deck = requireDeck(db, args.deckId);
+      if (args.ops.length === 0) return { results: [], landed: 0, collectionMoved: false };
+      const single = writeHandlers(db);
+      const { deckId } = args;
+      const collection = () =>
+        JSON.stringify(db.collectionEntries.map((e) => [e.id, e.folderId, e.quantity]));
+      const collectionBefore = collection();
+      const touchedAt = deck.updatedAt;
+      // `deck_apply.rs`' `cuts`: a removal here is a cut — the live list of a deck that keeps
+      // cardboard — and files no undo step.
+      const cuts = variant === LIVE && !deck.virtualOnly;
+      /** The step's before-image, once the leading cuts are behind it — `null` until then. */
+      let stepBefore: FakeDeckState | null = null;
+      let stepAudit: number | null = null;
+      // `record_logged`'s `journalled`: one per op that wrote a row the step stands for.
+      let covers = 0;
+      let delta = 0;
+      // `CellLog`/`TokenLog` not empty: a landed op other than a cut wrote something.
+      let noted = false;
+      // `cut_unsettled`: a cut landed, and the list's tokens are owed a reconcile.
+      let cutLanded = false;
+      let wrote = false;
+      /** The pile a deck row now sits in, or `null` for a token's `id: 0`. */
+      const pileOf = (change: EntryChange): number | null =>
+        db.deckCards.find((dc) => dc.id === change.id)?.categoryId ?? null;
+      const one = (op: DeckOp): DeckOpResult => {
+        switch (op.op) {
+          case "add": {
+            const change = single.deck_add_card({ deckId, variant, ...op });
+            return { change, categoryId: pileOf(change), refusal: null };
+          }
+          case "move": {
+            const categoryId = single.deck_move_card({ deckId, variant, ...op });
+            return { change: null, categoryId, refusal: null };
+          }
+          case "remove": {
+            const change = single.deck_set_card_quantity({ deckId, variant, ...op, quantity: 0 });
+            return { change, categoryId: null, refusal: null };
+          }
+          case "setLabel":
+            single.deck_card_set_label({ deckId, variant, ...op });
+            // The crate answers the pile the label went on (`Done.category_id`).
+            return { change: null, categoryId: op.categoryId, refusal: null };
+          case "addToOtherList": {
+            // The batch's `variant` is the list the copies go **into**, and the op's pile is in
+            // the other one — Rust's reading (`deck_apply.rs`), and the single command's.
+            const change = single.deck_add_card_to_other_list({ deckId, ...op, variant });
+            return { change, categoryId: pileOf(change), refusal: null };
+          }
+        }
+      };
+      const results = args.ops.map((op): DeckOpResult => {
+        const isCut = cuts && op.op === "remove";
+        if (!isCut && stepBefore === null) {
+          // What the cuts stopped making, settled outside the step — the backstop a single cut
+          // gets from `with_write` — and the step's "before" taken here, behind the cuts.
+          if (cutLanded) reconcileTokens(db, deckId, [variant]);
+          stepBefore = deckState(db, deckId);
+        }
+        // After the command's own fence — a stale pile still hears its own sentence.
+        if (
+          isCut &&
+          noted &&
+          db.deckCategories.some(
+            (c) => c.id === op.categoryId && c.deckId === deckId && c.variant === variant,
+          )
+        ) {
+          return { change: null, categoryId: null, refusal: CUT_AFTER_A_WRITE };
+        }
+        const restore = opSavepoint(db, deckId, op.op === "remove");
+        const written = db.deckAudit.length;
+        try {
+          const result = one(op);
+          const rows = db.deckAudit.slice(written);
+          // `Done.wrote`: a history row, or a label (which writes its cell even unchanged).
+          const did = rows.length > 0 || op.op === "setLabel";
+          if (!isCut && did) {
+            noted = true;
+            if (rows.length > 0) {
+              stepAudit = rows[rows.length - 1].id;
+              covers += 1;
+              delta += rows.reduce((sum, row) => sum + row.delta, 0);
+            }
+          }
+          cutLanded ||= isCut && did;
+          wrote ||= did;
+          return result;
+        } catch (error) {
+          restore();
+          return {
+            change: null,
+            categoryId: null,
+            refusal: error instanceof Error ? error.message : String(error),
+          };
+        }
+      });
+      const landed = results.filter((r) => r.refusal === null).length;
+      if (!wrote) {
+        deck.updatedAt = touchedAt;
+        applySteps.set(db, { before: null, auditId: null, delta: 0, covers: 0 });
+        return { results, landed, collectionMoved: false };
+      }
+      applySteps.set(db, { before: stepBefore, auditId: stepAudit, delta, covers });
+      return { results, landed, collectionMoved: collection() !== collectionBefore };
     },
 
     /**
@@ -29154,6 +29415,7 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * `deck_split_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`), so each
  * files a step here as it does in the app. Until issue #1186 they recorded none, and a Ctrl+Z
  * labelled with an older write restored a snapshot taken before them — and took them with it.
+ * `deck_apply` runs several of them under its own name, so its whole batch is **one** step.
  *
  * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
  * are not among those, and closing the gap on the add side alone would have left the pair
@@ -29192,23 +29454,114 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
       const { result, dirty } = step(args);
       const omitted = takeStepOmissions(db);
       const rows = db.deckAudit.slice(written);
-      if (before !== null && rows.length > 0) {
-        db.deckUndo.push({
-          auditId: rows[rows.length - 1].id,
-          deckId,
-          before: {
-            ...before,
-            tokenPrintings: before.tokenPrintings.filter((e) => !omitted.has(e.id)),
-          },
-          after: deckState(db, deckId) as FakeDeckState,
-          undoneAt: null,
-        });
+      // `deck_apply` says its own key, its before-image (behind its leading cuts — a live cut
+      // files no step, `deck_apply.rs`), its net delta and its count; every other write is keyed
+      // on the last history row it wrote, and its row's delta is the press's.
+      const applied = name === "deck_apply" ? takeApplyStep(db) : undefined;
+      const auditId = applied ? applied.auditId : (rows[rows.length - 1]?.id ?? null);
+      const from = applied?.before ?? before;
+      if (from !== null && auditId !== null) {
+        const after = deckState(db, deckId) as FakeDeckState;
+        // `record_logged`: a batch whose writes left every card, pile and token as they were
+        // files no step — a Ctrl+Z that changes nothing would still write an "Undid" row.
+        if (!(applied && sameDeckContent(from, after))) {
+          db.deckUndo.push({
+            auditId,
+            deckId,
+            before: {
+              ...from,
+              tokenPrintings: from.tokenPrintings.filter((e) => !omitted.has(e.id)),
+            },
+            after,
+            undoneAt: null,
+            ...(applied ? { delta: applied.delta, covers: applied.covers } : {}),
+          });
+        }
       }
       reconcileBackstop(db, dirty);
       return result;
     }) as (args: never) => unknown;
   }
   return wrapped as T;
+}
+
+/**
+ * What a `deck_apply` call owes its undo step, keyed by the database — read once by
+ * {@link journalled} as it files the step. `auditId` is the history row the step is keyed on (the
+ * last one an op other than a live cut wrote), `null` for no step; `before` the deck as the
+ * leading cuts left it (`null`: no op but cuts, or none ran — the wrapper's own snapshot); `delta`
+ * and `covers` the step's `Step::delta` and `Step::covers`.
+ */
+const applySteps = new WeakMap<
+  FakeDb,
+  { before: FakeDeckState | null; auditId: number | null; delta: number; covers: number }
+>();
+
+/**
+ * `CUT_AFTER_A_WRITE` (`deck_apply.rs`), word for word: a live cut after an op of the same batch
+ * that wrote something the step records — it would leave half a step behind.
+ */
+const CUT_AFTER_A_WRITE =
+  "That card was not taken out of the deck: in one change, cards come out of a deck that keeps " +
+  "its cardboard before anything else is changed. Remove it on its own.";
+
+/** Whether two snapshots hold the same cards, piles and tokens — `record_logged`'s "unchanged",
+ *  which ignores the deck row's `updatedAt` and the labels a card write never changes. */
+function sameDeckContent(a: FakeDeckState, b: FakeDeckState): boolean {
+  const content = (s: FakeDeckState) =>
+    JSON.stringify([s.cards, s.categories, s.tokens, s.tokenPrintings]);
+  return content(a) === content(b);
+}
+
+/** The running `deck_apply`'s step, cleared as it is read. */
+function takeApplyStep(db: FakeDb) {
+  const step = applySteps.get(db);
+  applySteps.delete(db);
+  return step;
+}
+
+/** The tables a `deck_apply` op can write, and whether a row of one is this deck's. */
+const OP_TABLES = [
+  ["decks", (r: { id: number }, deckId: number) => r.id === deckId],
+  ["deckCategories", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+  ["deckCards", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+  ["deckTokens", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+  ["deckTokenPrintings", (r: { deckId: number }, deckId: number) => r.deckId === deckId],
+] as const;
+/** Written only by a removal (it releases the copies the row held), and by no op in place of
+ *  another deck's row — so every row is kept. */
+const OP_COLLECTION_TABLES = ["collectionEntries", "collectionFolders"] as const;
+/** Appended to, never edited. */
+const OP_APPEND_TABLES = ["deckAudit", "activity"] as const;
+
+/**
+ * `deck_apply`'s savepoint stand-in for one op: answers the restore that puts back what the op
+ * wrote. Each table's array is copied shallowly (so a push or a filter is undone by putting the
+ * old array back) and each row an op can edit **in place** — this deck's rows, and the
+ * collection's for a removal — as a shallow copy written back over it. Cheap next to a deep clone
+ * of every table, and enough: no op edits another deck's row or a nested value in place.
+ */
+function opSavepoint(db: FakeDb, deckId: number, collection: boolean): () => void {
+  const tables = db as unknown as Record<string, Record<string, unknown>[]>;
+  const arrays = new Map<string, Record<string, unknown>[]>();
+  const rows = new Map<Record<string, unknown>, Record<string, unknown>>();
+  for (const [name, ofDeck] of OP_TABLES) {
+    arrays.set(name, tables[name].slice());
+    for (const row of tables[name]) {
+      if ((ofDeck as (r: unknown, d: number) => boolean)(row, deckId)) rows.set(row, { ...row });
+    }
+  }
+  if (collection) {
+    for (const name of OP_COLLECTION_TABLES) {
+      arrays.set(name, tables[name].slice());
+      for (const row of tables[name]) rows.set(row, { ...row });
+    }
+  }
+  for (const name of OP_APPEND_TABLES) arrays.set(name, tables[name].slice());
+  return () => {
+    for (const [name, array] of arrays) tables[name] = array;
+    for (const [row, copy] of rows) Object.assign(row, copy);
+  };
 }
 
 /**
@@ -29689,9 +30042,14 @@ function undoHandlers(db: FakeDb) {
         typeof args.redoId === "number" && nextRedo(db, args.deckId)?.auditId === args.redoId
           ? nextRedo(db, args.deckId)
           : undefined;
+      const undoEntry = undo ? (auditById(db, undo.auditId) ?? null) : null;
+      const redoEntry = redoStep ? (auditById(db, redoStep.auditId) ?? null) : null;
       return {
-        undo: undo ? (auditById(db, undo.auditId) ?? null) : null,
-        redo: redoStep ? (auditById(db, redoStep.auditId) ?? null) : null,
+        undo: undoEntry,
+        redo: redoEntry,
+        // `undo_state`: the step's count, only beside an entry and only past one.
+        undoCovers: undoEntry ? coversSeveral(undo) : null,
+        redoCovers: redoEntry ? coversSeveral(redoStep) : null,
       };
     },
 
@@ -29725,7 +30083,7 @@ function undoHandlers(db: FakeDb) {
         ...db.deckUndo.filter((s) => s.deckId === args.deckId).map((s) => s.undoneAt ?? 0),
       );
       cursor.undoneAt = Math.max(stamp(db), newest + 1);
-      recordReversal(db, args.deckId, "undo", cursor.auditId);
+      recordReversal(db, args.deckId, "undo", cursor);
     },
 
     deck_redo_apply: (args: { deckId: number; auditId: number }): void => {
@@ -29750,7 +30108,7 @@ function undoHandlers(db: FakeDb) {
       if (!applied) throw refuse(MOVED_ON);
       settleManagedWishlist(db, args.deckId);
       step.undoneAt = null;
-      recordReversal(db, args.deckId, "redo", step.auditId);
+      recordReversal(db, args.deckId, "redo", step);
     },
   };
 }
@@ -29787,10 +30145,25 @@ function auditById(db: FakeDb, id: number): DeckAuditEntry | undefined {
  *
  * **`kind: "deck"` and not a tenth audit kind** — `deck_audit.kind` carries a CHECK, SQLite
  * cannot alter one, and a tenth word would rebuild every reader's whole deck history for a
- * spelling. `delta` is negated on the way back so the day header's roll-up still adds up.
+ * spelling. `delta` is negated on the way back so the day header's roll-up still adds up — a
+ * batch's net, not its keyed row's — and a batch's step adds its `covers` to the payload, so the
+ * drawer reads "Undid: Moved 50 cards".
  */
-function recordReversal(db: FakeDb, deckId: number, field: "undo" | "redo", of: number): void {
-  const original = db.deckAudit.find((a) => a.id === of);
-  const delta = original?.delta ?? 0;
-  record(db, deckId, DECK_LEVEL, "deck", null, { field, of }, field === "undo" ? -delta : delta);
+function recordReversal(
+  db: FakeDb,
+  deckId: number,
+  field: "undo" | "redo",
+  step: FakeDeckUndo,
+): void {
+  const of = step.auditId;
+  // A batch's own net (`Step::delta`); otherwise the keyed row is the whole press.
+  const delta = step.delta ?? db.deckAudit.find((a) => a.id === of)?.delta ?? 0;
+  const covers = coversSeveral(step);
+  const payload = covers === null ? { field, of } : { field, of, covers };
+  record(db, deckId, DECK_LEVEL, "deck", null, payload, field === "undo" ? -delta : delta);
+}
+
+/** `Step::covers_several`: a batch's count where it is more than the one keyed row, else `null`. */
+function coversSeveral(step: FakeDeckUndo | undefined): number | null {
+  return step?.covers !== undefined && step.covers > 1 ? step.covers : null;
 }

@@ -974,12 +974,20 @@ export function CollectionPage() {
   // The four fields rather than `query`, which is a new object on every render (issue #557): the
   // memoised wall and table are both handed this, and keyed on `query` it was new on every
   // keystroke. `fetchNextPage` is the observer's own bound method and holds still.
-  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = query;
-  const onNeedNextPage = useCallback(() => {
-    if (!levelHeld && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
-      void fetchNextPage();
-    }
-  }, [levelHeld, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+  //
+  // `want` is a Ctrl+A walk's — the rows the wall is still owed, fetched in pages as large as the
+  // backend answers (`useCollection`'s `fetchMore`) — and the answer is whether rows are still to
+  // come, which keeps the app's busy mark up while the walk fetches (`CardGrid`'s `onNeedNextPage`).
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchMore } = collection;
+  const onNeedNextPage = useCallback(
+    (want?: number) => {
+      const more = !levelHeld && hasNextPage && !isFetchNextPageError;
+      if (more && !isFetchingNextPage) fetchMore(want);
+      return more;
+    },
+    [levelHeld, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchMore],
+  );
 
   /** The wall's tiles — `collectionWall.ts`'s {@link collectionTiles}, where the folding rule is
    *  argued: the card, the finish and the folder make a tile; the grade and the language do not. */
@@ -1992,6 +2000,7 @@ export function CollectionPage() {
    */
   const {
     addDropped,
+    addDroppedMany,
     crossing,
     setCrossing,
     readersOwnLevel,
@@ -2362,6 +2371,7 @@ export function CollectionPage() {
     toasted(moveCopy),
     toasted(setFolderMany),
     toasted(addDropped),
+    toasted(addDroppedMany),
     folders.create,
     folders.rename,
     toasted(folders.move),

@@ -48,6 +48,7 @@ import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { pickedIn, usePickedMarking, usePickedSet } from "./pickedMarks";
 import { sameDrawnProps } from "./sameDrawn";
 import { hasTokenPile, TokenGridPile, type TokenPile } from "./TokenPile";
 import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
@@ -86,6 +87,7 @@ export const GridView = memo(function GridView({
   noted,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   tokenPile,
@@ -137,6 +139,9 @@ export const GridView = memo(function GridView({
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
+  /** The picked slots — each pile is handed its own share, so a pick redraws the piles it touched
+   *  and no other (`views/pickedMarks.ts`). Absent marks by `actions.isPicked`, as before. */
+  picked?: readonly string[];
   /** The slot the pane is open on ({@link deckCardSlot}), so its tile wears the same gold ring a
    *  search tile does. By the slot rather than the printing, so a card filed in two piles is
    *  marked in the one the reader clicked — `CardStack` has why. */
@@ -161,6 +166,7 @@ export const GridView = memo(function GridView({
   // the other. What still makes the two views *look* alike is that the tile is the stacked card
   // in proportion (`deckCardScale`), not that they share a number.
   const cardZoom = useAppStore((s) => s.cardZoom.deckGrid);
+  const pickedSet = usePickedSet(picked);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ctrl+wheel, on this element because this is the one that scrolls — the group sections and
   // the tiles inside it do not, and a wheel over the gap between two groups belongs to neither.
@@ -253,6 +259,7 @@ export const GridView = memo(function GridView({
             tracksCollection={tracksCollection}
             onSelect={onSelect}
             actions={actions}
+            picked={picked === undefined ? undefined : pickedIn(item.cards, pickedSet)}
             selectedSlot={selectedSlot}
             landed={landed}
             zoom={cardZoom}
@@ -275,6 +282,7 @@ const GridGroup = memo(function GridGroup({
   tracksCollection,
   onSelect,
   actions,
+  picked,
   selectedSlot,
   landed,
   zoom,
@@ -293,6 +301,8 @@ const GridGroup = memo(function GridGroup({
   tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
+  /** This pile's picked slots — see `views/pickedMarks.ts`. */
+  picked?: readonly string[];
   /** Handed through to the tiles — see {@link GridView}'s own props. */
   selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
@@ -300,6 +310,7 @@ const GridGroup = memo(function GridGroup({
   zoom: number;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
+  const marking = usePickedMarking(actions, picked);
 
   return (
     <section
@@ -372,7 +383,7 @@ const GridGroup = memo(function GridGroup({
               tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
-              selected={deckCardMarked(card, selectedSlot, actions)}
+              selected={deckCardMarked(card, selectedSlot, marking)}
               landedKey={landed?.get(card.id)}
               zoom={zoom}
             />

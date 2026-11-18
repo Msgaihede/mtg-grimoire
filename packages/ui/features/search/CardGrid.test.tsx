@@ -22,6 +22,23 @@ const wishlistAdd = vi.hoisted(() => vi.fn());
 // green while three requests fail on every render, which is the shape of a mock that has quietly
 // stopped describing the component. They answer the shape and nothing useful: this file is about
 // tiles, columns and gutters, and a real price here would be a fixture nobody is asserting on.
+/**
+ * **One render of the wall itself, counted.** `useCardZoomGesture` is a hook the wall — and only
+ * the wall, never a tile — calls on every render, so wrapping it is a render counter for
+ * `CardGridWall` that a tile's memo cannot mask. Pass-through otherwise.
+ */
+const wallRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/lib/useCardZoomGesture", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/useCardZoomGesture")>();
+  return {
+    ...real,
+    useCardZoomGesture: (...args: Parameters<typeof real.useCardZoomGesture>) => {
+      wallRenders.count++;
+      real.useCardZoomGesture(...args);
+    },
+  };
+});
+
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -53,6 +70,7 @@ import {
 import { consumeCaretNote } from "@/lib/caretWalk";
 import { parseFinishes } from "@/lib/finish";
 import { useAppStore } from "@/lib/store";
+import { useWorkStore } from "@/lib/work";
 import { cn } from "@/lib/utils";
 
 /**
@@ -2172,8 +2190,94 @@ describe("CardGrid multi-select", () => {
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
     await pressWith("Ponder", "Control");
 
+    // The builder is asked at the press (2026-11), so the menu is opened on each tile.
+    for (const name of ["Lightning Bolt", "Brainstorm"]) {
+      fireEvent.contextMenu(screen.getByRole("button", { name }).closest("[data-grid-index]")!);
+    }
     expect(seen["aaa"]).toEqual(["aaa", "ccc"]);
     expect(seen["ddd"]).toEqual([]);
+  });
+
+  /**
+   * **A pick redraws the tile it moved, and no other** (2026-11). Every tile is memoised and the
+   * wall's own callbacks hold still, so the ring — a boolean prop — is the only thing a Ctrl-click
+   * changes about a tile. The badge slot is asked once per draw of a tile, which is what counts.
+   */
+  it("draws a tile again only when its own ring moves", async () => {
+    const drawn: string[] = [];
+    const badge = (card: CardSummary) => {
+      drawn.push(card.id);
+      return null;
+    };
+    wall({ badge });
+    drawn.length = 0;
+
+    await pressWith("Ponder", "Control");
+    expect(new Set(drawn)).toEqual(new Set(["ccc"]));
+
+    drawn.length = 0;
+    await pressWith("Lightning Bolt", "Control");
+    expect(new Set(drawn)).toEqual(new Set(["aaa"]));
+  });
+
+  /**
+   * The wall is memoised too: a parent render that hands it the same props draws nothing — not
+   * the wall itself (counted by {@link wallRenders}, which a tile's memo cannot hide; a count of
+   * tile draws alone would pass with the wall's `memo` removed), and so no tile either.
+   */
+  it("is not drawn again by a parent render that changed none of its props", () => {
+    const drawn: string[] = [];
+    const badge = (card: CardSummary) => {
+      drawn.push(card.id);
+      return null;
+    };
+    const props = {
+      rows: ROWS,
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      zoomSection: "search" as const,
+      selectionScope: "search",
+      badge,
+    };
+    const { rerender } = render(<CardGrid {...props} />);
+    expect(wallRenders.count).toBeGreaterThan(0); // The counter does count the wall.
+    wallRenders.count = 0;
+    drawn.length = 0;
+    rerender(<CardGrid {...props} />);
+    expect(wallRenders.count).toBe(0);
+    expect(drawn).toEqual([]);
+
+    // And a prop that did change does draw it — the counter is not simply dead.
+    rerender(<CardGrid {...props} listKey="k2" />);
+    expect(wallRenders.count).toBeGreaterThan(0);
+  });
+
+  /**
+   * **The keyboard menu is built only for the keys that open it** (2026-11). For a tile in the
+   * picked set the builder is handed every picked row — a sort and a map over the set — so an
+   * arrow key held down on a 5,000-card wall must not run it per auto-repeat.
+   */
+  it("asks the keyboard menu builder only for Shift+F10 and the ContextMenu key", async () => {
+    const build = vi.fn((...args: [CardSummary, readonly CardSummary[]]) => {
+      void args;
+      return () => {};
+    });
+    wall({ cardMenuKey: build });
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+    const art = screen.getByRole("button", { name: "Ponder" });
+
+    fireEvent.keyDown(art, { key: "ArrowRight" });
+    fireEvent.keyDown(art, { key: "F10" });
+    fireEvent.keyDown(art, { key: "ArrowDown" });
+    expect(build).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(art, { key: "F10", shiftKey: true });
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build.mock.calls[0][1].map((p) => p.id)).toEqual(["aaa", "ccc"]);
+    fireEvent.keyDown(art, { key: "ContextMenu" });
+    expect(build).toHaveBeenCalledTimes(2);
   });
 
   /**
@@ -2241,6 +2345,63 @@ describe("CardGrid multi-select", () => {
       onNeedNextPage.mockClear();
       rerender(<CardGrid rows={[...ROWS]} onNeedNextPage={onNeedNextPage} {...base} />);
       expect(onNeedNextPage).not.toHaveBeenCalled();
+    });
+
+    /** It says how many rows it is owed, so a caller can fetch them in fewer, larger pages. */
+    it("tells the caller how many rows the set is still owed", async () => {
+      const onNeedNextPage = vi.fn(() => true);
+      render(
+        <CardGrid
+          rows={ROWS.slice(0, 2)}
+          onNeedNextPage={onNeedNextPage}
+          selectAllLimit={1000}
+          {...base}
+        />,
+      );
+      onNeedNextPage.mockClear();
+
+      await pressSelectAll();
+
+      expect(onNeedNextPage).toHaveBeenCalledWith(998);
+    });
+
+    /**
+     * **The app says it is busy while the set is still growing** (`lib/work.ts`), and stops when
+     * the list is whole — the first of the two limits `keyboard-shortcuts.md` records, closed.
+     */
+    it("keeps the busy mark up while rows are to come, and puts it down when the list is whole", async () => {
+      const labels = () => useWorkStore.getState().live.map((work) => work.label);
+      let more = true;
+      const onNeedNextPage = vi.fn(() => more);
+      const { rerender } = render(
+        <CardGrid rows={ROWS.slice(0, 2)} onNeedNextPage={onNeedNextPage} {...base} />,
+      );
+
+      await pressSelectAll();
+      expect(labels()).toEqual(["Selecting all cards…"]);
+
+      // A page lands and it is the last.
+      more = false;
+      rerender(<CardGrid rows={ROWS} onNeedNextPage={onNeedNextPage} {...base} />);
+      expect(labels()).toEqual([]);
+    });
+
+    it("puts the busy mark down when Escape ends the walk, and when the wall goes", async () => {
+      const labels = () => useWorkStore.getState().live.map((work) => work.label);
+      const onNeedNextPage = vi.fn(() => true);
+      const { unmount } = render(
+        <CardGrid rows={ROWS.slice(0, 2)} onNeedNextPage={onNeedNextPage} {...base} />,
+      );
+
+      await pressSelectAll();
+      expect(labels()).toHaveLength(1);
+      await userEvent.keyboard("{Escape}");
+      expect(labels()).toEqual([]);
+
+      await pressSelectAll();
+      expect(labels()).toHaveLength(1);
+      unmount();
+      expect(labels()).toEqual([]);
     });
 
     it("fetches no further ahead than its limit", async () => {
@@ -2615,6 +2776,9 @@ describe("flipping a tile", () => {
         {...base}
       />,
     );
+    // Asked at the press, not at render (2026-11).
+    expect(cardMenu).not.toHaveBeenCalled();
+    for (const tile of document.querySelectorAll("[data-grid-index]")) fireEvent.contextMenu(tile);
     expect(cardMenu).toHaveBeenCalledWith(dfc, [], true);
     expect(cardMenu).toHaveBeenCalledWith(plain, [], false);
   });

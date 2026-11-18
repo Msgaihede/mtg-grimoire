@@ -15,6 +15,8 @@ import type { SortSpec } from "../sort";
 import type { CardFilters, WishlistSortKey } from "./cards";
 import type {
   BreakdownRow,
+  BulkAddOutcome,
+  BulkMoveOutcome,
   EntryChange,
   FolderRule,
   ImportCommitOutcome,
@@ -534,6 +536,13 @@ export interface WishlistFolderSummary {
 /** The wishlist commands — spread into `ipc` by `../ipc.ts`, which is the only reader of this object. */
 export const wishlistCommands = {
   wishlistAdd: (wish: WishInput) => invoke<EntryChange>("wishlist_add", { wish }),
+  /**
+   * N × {@link ipc.wishlistAdd} in **one transaction with one activity row and one undo ticket**
+   * — each item filed in its own `folderId`; an item the single add would refuse is skipped and
+   * named in `refused` while the rest land.
+   */
+  wishlistAddMany: (items: readonly WishInput[]) =>
+    invoke<BulkAddOutcome>("wishlist_add_many", { items }),
   /** An absolute quantity — and `0` *removes* the row, because a wish holds nothing worth
    *  keeping once it is emptied. This was the opposite of the collection's rule until schema
    *  v24, when the collection joined it for a different reason: a wish has no acquisition story
@@ -628,6 +637,13 @@ export const wishlistCommands = {
    */
   wishlistSetFolder: (id: number, folderId: number | null) =>
     invoke<EntryChange>("wishlist_set_folder", { id, folderId }),
+  /**
+   * {@link ipc.wishlistSetFolder} over several wishes — the same merge per wish, in **one
+   * transaction with one activity row and one undo ticket**. Any refusal rolls the whole press
+   * back, so a move never lands half-filed.
+   */
+  wishlistSetFolderMany: (ids: readonly number[], folderId: number | null) =>
+    invoke<BulkMoveOutcome>("wishlist_set_folder_many", { ids, folderId }),
   /**
    * The counts and subtotal every folder card on the wishlist page is drawn from, one
    * {@link WishlistFolderSummary} per folder — **direct per folder, never recursive**; see that

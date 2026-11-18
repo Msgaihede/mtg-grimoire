@@ -12,12 +12,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const wishlistAdd = vi.hoisted(() => vi.fn());
+/** A press over more than one want — one `wishlist_add_many` for the set (2026-11-18). */
+const wishlistAddMany = vi.hoisted(() => vi.fn());
 const wishlistFolderList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { wishlistAdd, wishlistFolderList },
+  ipc: { wishlistAdd, wishlistAddMany, wishlistFolderList },
 }));
 
+import { useBulkUndo } from "@/lib/bulkUndo";
 import type { WishlistFolder } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 import type { ShareCard } from "@/lib/shareSnapshot";
@@ -100,7 +103,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   wishlistFolderList.mockResolvedValue([folder(1, "Trade targets"), folder(2, "Someday")]);
   wishlistAdd.mockResolvedValue({ id: 1, quantity: 1, removed: false });
+  wishlistAddMany.mockImplementation((items: readonly unknown[]) =>
+    Promise.resolve({ added: items.length, copies: items.length, refused: [], undoId: 41 }),
+  );
 });
+
+/** The batch's answer with the item at `index` refused in `reason` and the rest landed. */
+const refusedAt = (index: number, reason: string, of: number) => ({
+  added: of - 1,
+  copies: of - 1,
+  refused: [{ index, reason }],
+  undoId: 42,
+});
+
+/** The items of the batch's `n`th call. */
+const sent = (n = 0) => wishlistAddMany.mock.calls[n][0] as readonly { cardId: string }[];
 
 describe("adding picked rows from somebody else's binder", () => {
   it("adds the ticked rows to an existing wishlist folder", async () => {
@@ -113,11 +130,15 @@ describe("adding picked rows from somebody else's binder", () => {
     await user.selectOptions(screen.getByLabelText("Add to"), "1");
     await user.click(addButton());
 
-    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
-    // One wish per picked copy, pinned to the printing that is in *their* binder — the snapshot
-    // carries no oracle id, so an any-printing wish is not expressible from here at all.
-    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: 1 });
-    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "sol", quantity: 1, folderId: 1 });
+    // One write for the press, one wish per picked copy, pinned to the printing that is in
+    // *their* binder — the snapshot carries no oracle id, so an any-printing wish is not
+    // expressible from here at all.
+    await waitFor(() => expect(wishlistAddMany).toHaveBeenCalledTimes(1));
+    expect(wishlistAdd).not.toHaveBeenCalled();
+    expect(sent()).toEqual([
+      { cardId: "bolt", quantity: 1, folderId: 1 },
+      { cardId: "sol", quantity: 1, folderId: 1 },
+    ]);
     // The receipt is a toast naming the destination the reader chose — the dialog closes on it.
     await waitFor(() => expect(onAdded).toHaveBeenCalled());
     expect(useNotifications.getState().notices[0]).toMatchObject({
@@ -125,6 +146,11 @@ describe("adding picked rows from somebody else's binder", () => {
       tone: "success",
     });
     expect(onClose).toHaveBeenCalled();
+    // And the press can be taken back from the wishlist page, by the drawer's name.
+    expect(useBulkUndo.getState().offers.wishlist).toMatchObject({
+      id: 41,
+      label: "Added 2 cards to Trade targets.",
+    });
   });
 
   it("offers only folders that already exist, and does not create one", async () => {
@@ -254,24 +280,21 @@ describe("adding picked rows from somebody else's binder", () => {
     await screen.findByRole("option", { name: "Trade targets" });
     await user.click(addButton());
 
-    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(wishlistAddMany).toHaveBeenCalledTimes(1));
     // A wish *for the foil* is a different wish and is not filled by the nonfoil, so the finish
     // travels. `nonfoil` goes unmarked — this app's rule everywhere, and here it is the
     // difference between no preference and a preference the reader never expressed.
-    expect(wishlistAdd).toHaveBeenCalledWith({
-      cardId: "foilbolt",
-      quantity: 1,
-      folderId: null,
-      preferredFinish: "foil",
-    });
-    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "plain", quantity: 1, folderId: null });
+    expect(sent()).toEqual([
+      { cardId: "foilbolt", quantity: 1, folderId: null, preferredFinish: "foil" },
+      { cardId: "plain", quantity: 1, folderId: null },
+    ]);
   });
 
   it("reports how many landed when the backend refuses part way", async () => {
     const user = userEvent.setup();
-    wishlistAdd
-      .mockResolvedValueOnce({ id: 1, quantity: 1, removed: false })
-      .mockRejectedValueOnce("The card database is busy finishing a sync.");
+    wishlistAddMany.mockResolvedValueOnce(
+      refusedAt(1, "The card database is busy finishing a sync.", 2),
+    );
     const { onAdded, onClose } = mount({
       cards: [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })],
     });
@@ -296,6 +319,29 @@ describe("adding picked rows from somebody else's binder", () => {
     });
   });
 
+  it("reads a refused batch as nothing added", async () => {
+    const user = userEvent.setup();
+    wishlistAddMany.mockRejectedValueOnce("database is busy");
+    const { onAdded } = mount({
+      cards: [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })],
+    });
+
+    await screen.findByRole("option", { name: "Trade targets" });
+    await user.click(addButton());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Added 0 of 2 cards. database is busy",
+    );
+    expect(onAdded).not.toHaveBeenCalled();
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Couldn't add 2 cards to your wishlist",
+      body: "database is busy",
+      tone: "error",
+    });
+    // The retry is the whole press again: nothing landed, so nothing is held back.
+    expect(screen.getByRole("button", { name: "Add 2 cards" })).toBeInTheDocument();
+  });
+
   /**
    * Issue #1543: "Added 1 of 2. …" is a sentence about one press. Over a different selection it
    * is a refusal for something the reader did not do; reopened over the same one, the button's
@@ -303,9 +349,9 @@ describe("adding picked rows from somebody else's binder", () => {
    */
   it("drops the partial refusal over a new selection and on reopening", async () => {
     const user = userEvent.setup();
-    wishlistAdd
-      .mockResolvedValueOnce({ id: 1, quantity: 1, removed: false })
-      .mockRejectedValueOnce("The card database is busy finishing a sync.");
+    wishlistAddMany.mockResolvedValueOnce(
+      refusedAt(1, "The card database is busy finishing a sync.", 2),
+    );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const two = [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })];
     const dialog = (open: boolean, cards: readonly ShareCard[]) => (
@@ -340,9 +386,9 @@ describe("adding picked rows from somebody else's binder", () => {
    *  cards are not raised to 2. */
   it("adds only the cards that did not land when pressed again", async () => {
     const user = userEvent.setup();
-    wishlistAdd
-      .mockResolvedValueOnce({ id: 1, quantity: 1, removed: false })
-      .mockRejectedValueOnce("The card database is busy finishing a sync.");
+    wishlistAddMany.mockResolvedValueOnce(
+      refusedAt(1, "The card database is busy finishing a sync.", 2),
+    );
     const { onAdded, onClose } = mount({
       cards: [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })],
     });
@@ -355,7 +401,9 @@ describe("adding picked rows from somebody else's binder", () => {
 
     await waitFor(() => expect(onAdded).toHaveBeenCalled());
     expect(onClose).toHaveBeenCalled();
-    expect(wishlistAdd.mock.calls.map(([wish]) => wish.cardId)).toEqual(["bolt", "sol", "sol"]);
+    // The first press was one write for both; the retry is the single add, for the one left.
+    expect(sent().map((wish) => wish.cardId)).toEqual(["bolt", "sol"]);
+    expect(wishlistAdd.mock.calls.map(([wish]) => wish.cardId)).toEqual(["sol"]);
     expect(useNotifications.getState().notices[0]).toMatchObject({
       title: "Added 2 cards to your wishlist",
       tone: "success",
@@ -377,14 +425,11 @@ describe("adding picked rows from somebody else's binder", () => {
     expect(addButton()).toHaveAccessibleName("Add 2 cards");
     await user.click(addButton());
 
-    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
-    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: null });
-    expect(wishlistAdd).toHaveBeenCalledWith({
-      cardId: "bolt",
-      quantity: 1,
-      folderId: null,
-      preferredFinish: "foil",
-    });
+    await waitFor(() => expect(wishlistAddMany).toHaveBeenCalledTimes(1));
+    expect(sent()).toEqual([
+      { cardId: "bolt", quantity: 1, folderId: null },
+      { cardId: "bolt", quantity: 1, folderId: null, preferredFinish: "foil" },
+    ]);
   });
 
   it("folds two picked copies of one printing and finish into a single wish", async () => {

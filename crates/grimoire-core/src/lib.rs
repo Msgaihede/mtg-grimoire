@@ -87,6 +87,7 @@ pub mod custom_widgets;
 /// background batch that stands aside for one.
 pub mod db;
 pub mod deck;
+pub mod deck_apply;
 pub mod deck_audit;
 pub mod deck_completion;
 pub mod deck_meta;

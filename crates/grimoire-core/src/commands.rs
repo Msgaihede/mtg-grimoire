@@ -411,6 +411,7 @@ commands! {
         commit_import(conn, &items, &mode, folder_id)
     };
     owned collection_remove_many in collection(ids: Vec<i64>) = |conn| remove_entries(conn, &ids);
+    owned collection_add_many in collection(items: Vec<EntryInput>) = |conn| add_entries(conn, &items);
 
     // collection_alloc
     // An owned write, and `blocking` only because the pile is read before the lock is taken, as
@@ -546,6 +547,16 @@ commands! {
             finish.as_deref(),
             quantity,
         )
+    };
+    // Many card writes as one (issue #1164). `blocking` only to choose the lock's kind from the
+    // request: `owned` when a live removal can move copies, plain `write` otherwise.
+    blocking deck_apply in deck_apply(deck_id: i64, variant: String, ops: Vec<DeckOp>) = |state| {
+        let write = |c: &::rusqlite::Connection| apply(c, deck_id, &variant, &ops);
+        if moves_copies(&variant, &ops) {
+            crate::collection_source::with_write_owned(&state, write)
+        } else {
+            crate::state::with_write(&state, write)
+        }
     };
     write deck_set_card_quantity in deck(deck_id: i64, card_id: String, category_id: i64, variant: String, finish: Option<String>, quantity: i64) = |conn| {
         set_card_quantity(
@@ -1317,6 +1328,7 @@ commands! {
         summarise_wishlist(conn, marketplace)
     };
     write wishlist_add in wishlist(wish: WishInput) = |conn| add_wish(conn, &wish);
+    write wishlist_add_many in wishlist(items: Vec<WishInput>) = |conn| add_wishes(conn, &items);
     write wishlist_set_quantity in wishlist(id: i64, quantity: i64) = |conn| {
         set_wish_quantity(conn, id, quantity)
     };
@@ -1360,6 +1372,9 @@ commands! {
     };
     write wishlist_set_folder in wishlist_folders(id: i64, folder_id: Option<i64>) = |conn| {
         set_wish_folder(conn, id, folder_id)
+    };
+    write wishlist_set_folder_many in wishlist_folders(ids: Vec<i64>, folder_id: Option<i64>) = |conn| {
+        set_wishes_folder(conn, &ids, folder_id)
     };
 
     // wishlist_optimize
@@ -2461,6 +2476,10 @@ mod tests {
             "collection_add" => {
                 json!({ "entry": { "cardId": "c-bolt", "finish": "nonfoil", "quantity": 3 } })
             }
+            "collection_add_many" => {
+                json!({ "items": [{ "cardId": "c-bolt", "finish": "nonfoil", "quantity": 1 }] })
+            }
+            "wishlist_add_many" => json!({ "items": [{ "cardId": "c-bolt", "quantity": 1 }] }),
             "collection_list" | "collection_summary" | "collection_shelf_counts" => {
                 json!({ "query": {} })
             }
@@ -2496,6 +2515,16 @@ mod tests {
             // `blocking`. A ticket that is still good and a copy that is really there, so
             // each reaches the write it decides on.
             "bulk_undo" => json!({ "undoId": seeded.undo }),
+            // An add that lands and a live removal, so the `owned` arm and its refresh run.
+            "deck_apply" => json!({
+                "deckId": seeded.deck,
+                "variant": "live",
+                "ops": [
+                    { "op": "add", "cardId": "c-bolt", "categoryName": seeded.pile,
+                      "quantity": 1 },
+                    { "op": "remove", "cardId": "c-bolt", "categoryId": 0 },
+                ],
+            }),
             "collection_to_deck" => json!({
                 "entryId": seeded.entry,
                 "deckId": seeded.deck,

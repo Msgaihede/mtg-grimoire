@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { expect, userEvent, within } from "storybook/test";
 import { NotificationsDialog } from "@/components/NotificationsDialog";
 import { notify, resetNotifications, type NotifyOptions } from "@/lib/notifications";
+import { beginWork, resetWork, trackWork } from "@/lib/work";
 import { CLOSE_TOAST, Toaster } from "./Toaster";
 
 /**
@@ -13,12 +14,29 @@ import { CLOSE_TOAST, Toaster } from "./Toaster";
  * **The store is emptied on unmount**, because it is module state the workbench does not reset
  * between stories, and a toast left up here would sit in the corner of the next one.
  */
-function Raised({ notices, inbox = false }: { notices: NotifyOptions[]; inbox?: boolean }) {
+function Raised({
+  notices,
+  inbox = false,
+  work = [],
+}: {
+  notices: NotifyOptions[];
+  inbox?: boolean;
+  /** Pieces of busy work (`@/lib/work`) begun at mount and left running, by their sentence. */
+  work?: string[];
+}) {
   useState(() => {
     resetNotifications();
+    resetWork();
     for (const n of notices) notify(n);
+    for (const label of work) beginWork(label);
   });
-  useEffect(() => resetNotifications, []);
+  useEffect(
+    () => () => {
+      resetNotifications();
+      resetWork();
+    },
+    [],
+  );
   const [open, setOpen] = useState(inbox);
   return (
     <div className="flex h-[28rem] items-start gap-2 bg-bg p-4">
@@ -35,6 +53,18 @@ function Raised({ notices, inbox = false }: { notices: NotifyOptions[]; inbox?: 
         onClick={() => setOpen(true)}
       >
         Open the inbox
+      </button>
+      <button
+        type="button"
+        className="rounded-md border border-border px-3 py-1.5 text-sm"
+        onClick={() =>
+          void trackWork(
+            "Adding 300 cards to “Burn”…",
+            new Promise((resolve) => window.setTimeout(resolve, 2000)),
+          ).then(() => notify.success("Added 300 cards to “Burn”"))
+        }
+      >
+        Run slow work
       </button>
       <Toaster />
       <NotificationsDialog open={open} onClose={() => setOpen(false)} />
@@ -103,5 +133,25 @@ export const Inbox: Story = {
       { title: "Couldn't open Scryfall", tone: "error", toast: false },
       { title: "Copied “Lightning Bolt”", tone: "success", toast: false },
     ],
+  },
+};
+
+/**
+ * The busy pill: reader-started work (`beginWork`/`trackWork` from `@/lib/work`) that has outlasted
+ * 400 ms, drawn at the foot of the stack where its receipt toast will land, with the oldest piece
+ * named and the rest counted. A spinning glyph (still under reduced motion), never focusable,
+ * never in a press's way. **Run slow work** shows the whole life: nothing for 400 ms, the pill,
+ * then the receipt above it until the pill's minimum stay is out.
+ */
+export const Busy: Story = {
+  args: {
+    notices: [{ title: "Copied “Lightning Bolt”", tone: "success", duration: null }],
+    work: ["Adding 300 cards to “Burn”…", "Selecting all cards…"],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    const pill = await canvas.findByText("Adding 300 cards to “Burn”… and 1 more");
+    // The pill is its own announcement — `aria-busy` would hold it until busy cleared, never.
+    await expect(pill.closest("[role=status]")).not.toHaveAttribute("aria-busy");
   },
 };

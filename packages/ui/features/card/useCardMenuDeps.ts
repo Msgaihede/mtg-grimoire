@@ -15,7 +15,7 @@
  * taking it plain, because its rows are rows of an open deck — it names the slot in
  * `printingsDeck` — and because it carries the deck extras.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import {
   useCollectionFolderList,
   useSetCollectionFolder,
@@ -24,19 +24,26 @@ import {
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import { plural } from "@/lib/counts";
 import type { Finish } from "@/lib/finish";
-import { ipcError } from "@/lib/ipc";
+import { ipcError, type WishInput } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { trackWork } from "@/lib/work";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
 import {
   DeckTargetSubmenu,
   useOptionalAddCardToDeck,
   type CardMenuDeps,
   type CardMenuTarget,
+  type CollectionFiling,
 } from "./cardMenu";
-import { filingBatcher, type FilingWords } from "./menuReceipts";
-import { useCollectionAdd, useWishlistAdd } from "./useCardAdds";
+import { reportBulkFiling, reportFiling, type FilingWords } from "./menuReceipts";
+import {
+  useCollectionAdd,
+  useCollectionAddMany,
+  useWishlistAdd,
+  useWishlistAddMany,
+} from "./useCardAdds";
 
 /** What the collection's root is called in a sentence — the breadcrumb's first segment
  *  (`CollectionBreadcrumb`'s `ROOT`) and the activity feed's `COLLECTION.root`. */
@@ -49,6 +56,22 @@ const MOVED = (where: string): FilingWords => ({ done: "Moved", verb: "move", wh
  *  cabinet does not carry (another window just made it). */
 const quoted = (name: string | undefined): string =>
   name === undefined ? "a folder" : `“${name}”`;
+
+/** One wish, as the single add has always sent it — and each item of the batch, built here too so
+ *  the two cannot differ. */
+function wishInput(target: CardMenuTarget, folderId: number | null): WishInput {
+  return {
+    cardId: target.cardId,
+    quantity: 1,
+    // The surface's own where it names one — a wish for the foil is a different wish, and is not
+    // filled by the nonfoil. Absent is no preference, which is not nonfoil.
+    preferredFinish: target.finish,
+    // Where the reader pointed, and `null` for the root — never omitted. The field is part of the
+    // row's storage grain, so a folder the caller failed to pass is not a wish filed in the wrong
+    // drawer but a *second* wish for the same card.
+    folderId,
+  };
+}
 
 export interface CardMenuWiring {
   /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */
@@ -141,16 +164,6 @@ export function useCardMenuDeps(): CardMenuWiring {
    */
   const addToDeck = useOptionalAddCardToDeck();
 
-  /**
-   * **One toast per press, whatever the press filed** — see `./menuReceipts`. A picked set's
-   * `Add 4 cards to → Collection` is four calls of {@link addToCollection} in one tick, and this is
-   * what folds them back into the one sentence the reader's one press is owed (the owner's rule,
-   * 2026-10-12: every add, remove or move of cards toasts, and one action is one toast).
-   *
-   * In state rather than a module constant so two mounted pages cannot fold each other's presses
-   * together; `useState`'s initialiser runs once per mount.
-   */
-  const [file] = useState(filingBatcher);
   /** Where a cabinet's root is called in a receipt, and a folder by its own name. */
   const collectionWhere = useCallback(
     (folderId: number | null) =>
@@ -167,24 +180,48 @@ export function useCardMenuDeps(): CardMenuWiring {
     [wishlistFolders],
   );
 
+  /** What a cabinet's folder is called in the undo offer's sentence — the bare name, the way
+   *  {@link moveCopies}' `destination` says it, and the root in the receipt's own words. */
+  const collectionNamed = useCallback(
+    (folderId: number | null) =>
+      folderId === null
+        ? "your collection"
+        : (collectionFolders.find((folder) => folder.id === folderId)?.name ?? "a folder"),
+    [collectionFolders],
+  );
+  const wishlistNamed = useCallback(
+    (folderId: number | null) =>
+      folderId === null
+        ? "your wishlist"
+        : (wishlistFolders.find((folder) => folder.id === folderId)?.name ?? "a folder"),
+    [wishlistFolders],
+  );
+
   /**
    * One copy of exactly the printing that was right-clicked — `useCollectionAdd`, whose doc carries
    * the four keys it settles and why (out of this file on 2026-10-03, for the light app's phone
    * face).
    *
    * **No handlers, and the answer is read off `mutateAsync` at the call below instead.** The
-   * receipt needs the card's name and the press's batch, neither of which the mutation's own
-   * variables carry; and a promise held by the batch outlives the observer, where a
-   * `mutate`-scoped callback is dropped with it — the card modal's `Add to collection` can be
-   * pressed and closed inside one round trip.
+   * receipt needs the card's name, which the mutation's own variables do not carry; and a promise
+   * outlives the observer, where a `mutate`-scoped callback is dropped with it — the card modal's
+   * `Add to collection` can be pressed and closed inside one round trip.
    */
   const collectionAdd = useCollectionAdd();
+  /**
+   * Its batch twin, for a picked set — `useCollectionAddMany`: one `collection_add_many`, the same
+   * four keys settled once, and the undo offer made inside the hook. The answer is read off
+   * `mutateAsync` for the single add's reason.
+   */
+  const collectionAddMany = useCollectionAddMany();
 
   /**
    * A wish for **this exact printing** — the menu is opened on one, and "any printing" is a
    * choice the quick-add popup exists to offer. `useWishlistAdd`, with its two keys.
    */
   const wishlistAdd = useWishlistAdd();
+  /** And its batch twin, `useWishlistAddMany` — one `wishlist_add_many` for a picked set. */
+  const wishlistAddMany = useWishlistAddMany();
 
   /**
    * One row the reader already owns, filed somewhere else — the menu's half of the collection
@@ -213,60 +250,88 @@ export function useCardMenuDeps(): CardMenuWiring {
   // `mutateAsync` is stable for the life of the observer, which is what lets the callbacks below —
   // and therefore `deps` — hold still across a render of a wall of forty tiles.
   const addCopy = collectionAdd.mutateAsync;
+  const addCopies = collectionAddMany.mutateAsync;
   const addWish = wishlistAdd.mutateAsync;
+  const addWishes = wishlistAddMany.mutateAsync;
   const moveCopy = setFolder.mutateAsync;
   const moveMany = setFolderMany.mutateAsync;
 
   /**
-   * **Each write hands its promise to the press's batch**, keyed by the destination, so a picked
-   * set filed in one press is one toast — `Added 4 cards to “Binder”`, or `Added 3 of 4 cards …`
-   * with the first refusal under it. The card modal's `Add to collection` button reaches this same
-   * callback, and it toasts too even though the modal stays open: the owner's rule names the add,
-   * not the surface, and the rail's count ticking over is not a sentence about it.
+   * **Each press is one write and one toast** (`./menuReceipts`) — `Added “Sol Ring” to “Binder”`
+   * for one card, `Added 4 cards to “Binder”` for a set, or `Added 3 of 4 cards …` with the first
+   * refusal under it. The card modal's `Add to collection` button reaches the single callback, and
+   * it toasts too even though the modal stays open: the owner's rule names the add, not the
+   * surface, and the rail's count ticking over is not a sentence about it.
    */
   const addToCollection = useCallback(
     (target: CardMenuTarget, finish: Finish, folderId: number | null) =>
-      file(
-        `collection:${folderId}`,
+      reportFiling(
         target.name,
         addCopy({ cardId: target.cardId, finish, folderId }),
         ADDED(collectionWhere(folderId)),
       ),
-    [addCopy, file, collectionWhere],
+    [addCopy, collectionWhere],
+  );
+  /**
+   * A picked set's `Add N cards to → Collection` — **one** `collection_add_many`, each item built
+   * exactly as {@link addToCollection} builds its one (the hook's `entryInput`), and one receipt
+   * off its single answer. It can take a while over a few hundred cards, so it says so
+   * (`trackWork`, in the receipt's own words); the undo offer is the hook's.
+   */
+  const addManyToCollection = useCallback(
+    (filings: readonly CollectionFiling[], folderId: number | null) => {
+      const where = collectionWhere(folderId);
+      reportBulkFiling(
+        filings.map(({ target }) => target.name),
+        trackWork(
+          `Adding ${plural(filings.length, "card")} to ${where}…`,
+          addCopies({
+            items: filings.map(({ target, finish }) => ({
+              cardId: target.cardId,
+              finish,
+              folderId,
+            })),
+            destination: collectionNamed(folderId),
+          }),
+        ),
+        ADDED(where),
+      );
+    },
+    [addCopies, collectionWhere, collectionNamed],
   );
   const addToWishlist = useCallback(
     (target: CardMenuTarget, folderId: number | null) =>
-      file(
-        `wishlist:${folderId}`,
+      reportFiling(
         target.name,
-        addWish({
-          cardId: target.cardId,
-          quantity: 1,
-          // The surface's own where it names one — a wish for the foil is a different wish, and
-          // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
-          preferredFinish: target.finish,
-          // Where the reader pointed, and `null` for the root — never omitted. The field is part
-          // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
-          // in the wrong drawer but a *second* wish for the same card.
-          folderId,
-        }),
+        addWish(wishInput(target, folderId)),
         ADDED(wishlistWhere(folderId)),
       ),
-    [addWish, file, wishlistWhere],
+    [addWish, wishlistWhere],
+  );
+  /** {@link addManyToCollection}, one cabinet over — one `wishlist_add_many` for a picked set. */
+  const addManyToWishlist = useCallback(
+    (targets: readonly CardMenuTarget[], folderId: number | null) => {
+      const where = wishlistWhere(folderId);
+      reportBulkFiling(
+        targets.map((target) => target.name),
+        trackWork(
+          `Adding ${plural(targets.length, "card")} to ${where}…`,
+          addWishes({
+            items: targets.map((target) => wishInput(target, folderId)),
+            destination: wishlistNamed(folderId),
+          }),
+        ),
+        ADDED(where),
+      );
+    },
+    [addWishes, wishlistWhere, wishlistNamed],
   );
   /** The **entry** id rather than a target, because this is the one write here that is about a
    *  row the reader owns instead of a piece of cardboard — see `CardMenuTarget.entryId`. */
-  //
-  // Batched like the adds, for the one surface that loops it — a menu with no `moveCopies` wired.
   const moveToFolder = useCallback(
     (entryId: number, folderId: number | null, name?: string) =>
-      file(
-        `move:${folderId}`,
-        name,
-        moveCopy({ entryId, folderId }),
-        MOVED(collectionWhere(folderId)),
-      ),
-    [moveCopy, file, collectionWhere],
+      reportFiling(name, moveCopy({ entryId, folderId }), MOVED(collectionWhere(folderId))),
+    [moveCopy, collectionWhere],
   );
   /**
    * The several — one write, and the destination's name for the undo notice's sentence, read out
@@ -319,6 +384,9 @@ export function useCardMenuDeps(): CardMenuWiring {
       marketplace,
       addToCollection,
       addToWishlist,
+      // Their plurals, one write a press each — what a picked set's `Add N cards to` reaches.
+      addManyToCollection,
+      addManyToWishlist,
       // Straight through, and the array's *identity* is what matters here: `useWishlistFolders`
       // answers one stable empty array while nothing is filed and React Query's own cached array
       // once something is, so this memo holds still across a render of a wall of forty tiles for
@@ -357,6 +425,8 @@ export function useCardMenuDeps(): CardMenuWiring {
       marketplace,
       addToCollection,
       addToWishlist,
+      addManyToCollection,
+      addManyToWishlist,
       moveToFolder,
       moveCopies,
       wishlistFolders,

@@ -761,6 +761,12 @@ export function DeckDesk({
    * It carries two pile-level members beside the card's three, which is what `drop` always was:
    * the heading's own menu, and the rename field for the pile being renamed.
    *
+   * **The picked set is not in it** (it was, as `isPicked: picked.selected`, until the bulk-select
+   * work of 2026-11). A pick is a new set, so that member made a new bag per Ctrl-click, and every
+   * memoised pile compares `actions` by identity — one click drew every face on the desk again.
+   * The keys ride beside the bag as `viewProps.picked` instead, and each view hands each pile only
+   * its own picked slots (`views/pickedMarks.ts`), so a pick redraws the piles it touched.
+   *
    * **It is built here, below `groups`, rather than beside the writes it is made of** — moved for
    * issue #214, because three of its members are about the picked set and the set is measured
    * along the order `groups` decides. Nothing reads it before this point; `viewProps` below is
@@ -773,7 +779,6 @@ export function DeckDesk({
       menu: deckCardMenu,
       categoryMenu,
       groupDrag,
-      isPicked: picked.selected,
       pick: pickCard,
       renameCategory: (categoryId) =>
         categoryId === null ? null : renameCategoryField(categoryId),
@@ -794,7 +799,6 @@ export function DeckDesk({
       deckCardMenu,
       categoryMenu,
       groupDrag,
-      picked.selected,
       pickCard,
       renameCategoryField,
       shownGroupBy,
@@ -875,6 +879,10 @@ export function DeckDesk({
       tracksCollection: tracks,
       onSelect: openCard,
       actions,
+      // The picked slots, beside `actions` rather than in it — see the note on `actions`. A new
+      // array exactly when the set moves (`useCardSelection`'s `keys`), so a render that picked
+      // nothing hands every view the same one.
+      picked: picked.keys,
       // The two marks a card can carry here, in the four views that draw them. `landed` is this
       // editor's alone: nothing outside it can add a card to the deck the reader is looking at.
       // `selectedSlot` is derived from the store just above (in `DeckEditor`, which hands it here).
@@ -898,6 +906,7 @@ export function DeckDesk({
       tracks,
       openCard,
       actions,
+      picked.keys,
       selectedSlot,
       landed,
     ],

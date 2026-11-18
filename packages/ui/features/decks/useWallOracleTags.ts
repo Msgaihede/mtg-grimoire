@@ -11,10 +11,10 @@ import { ORACLE_TAGS_KEY } from "@/lib/useOracleTagProgress";
 /**
  * How many printings one read asks about.
  *
- * The card search pages 50 rows at a time, so a wall's ids arrive in runs of about this many and
- * a chunk that is full never changes again — only the last, part-full one is re-asked as the wall
- * grows. Nothing depends on the two numbers agreeing; a different page size costs one more
- * re-read of a short list.
+ * The card search pages 50 rows at a time — and a Ctrl+A walk 200 (`useCardSearch`'s
+ * `MAX_PAGE_SIZE`), a multiple of it — so a wall's ids arrive in runs of this many and a chunk that
+ * is full never changes again: only the last, part-full one is re-asked as the wall grows. Nothing
+ * depends on the numbers agreeing; a different page size costs one more re-read of a short list.
  */
 export const TAG_READ_CHUNK = 50;
 

@@ -169,6 +169,21 @@ pub async fn wishlist_set_folder(
     .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
+/// "Move to …" over several wishes — see [`set_wishes_folder`]: one transaction, all or nothing.
+#[tauri::command]
+pub async fn wishlist_set_folder_many(
+    state: tauri::State<'_, Arc<AppState>>,
+    ids: Vec<i64>,
+    folder_id: Option<i64>,
+) -> Result<crate::collection_folders::BulkMoveOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_wishes_folder(c, &ids, folder_id))
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be written: {e}"))?
+}
+
 /// **Read-only**, and priced at the marketplace the caller names — anything the app does not
 /// know is TCGplayer, [`crate::sorting::Marketplace::from_opt`]'s rule for every list query.
 #[tauri::command]

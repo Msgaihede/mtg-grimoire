@@ -67,6 +67,7 @@ import { useDecks } from "@/features/decks/useDecks";
 import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { userWishFolders } from "@/features/wishlist/managed";
 import { copyText } from "@/lib/clipboard";
+import { plural } from "@/lib/counts";
 import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
 import { recordableFinishes, type Finish } from "@/lib/finish";
 import { notify } from "@/lib/notifications";
@@ -82,6 +83,7 @@ import {
 import type { Marketplace } from "@/lib/marketplace";
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 import { sortOptions } from "@/lib/options";
+import { trackWork } from "@/lib/work";
 import { openMarketplaceForCard } from "./openMarketplace";
 import { FINISH_GLYPH, finishChoiceLabel, switchableFinishes } from "./finishChoice";
 import { toggleShownFace } from "./shownFace";
@@ -261,6 +263,17 @@ export interface CardMenuDeps {
    */
   addToCollection: (target: CardMenuTarget, finish: Finish, folderId: number | null) => void;
   /**
+   * {@link addToCollection} over a picked set — one copy of each, in its own finish, all filed in
+   * one folder — as **one** write (`collection_add_many`) with one refresh, one toast and an undo
+   * offer, where a loop of the single dep was N transactions and N refresh rounds that froze the
+   * window over a few hundred cards.
+   *
+   * **Optional, with the loop as the fallback**, for one reason: a surface that builds its deps by
+   * hand (a story, a test) rather than through `useCardMenuDeps` still gets a working row. Every
+   * surface in the app gets its deps from that hook, which wires this.
+   */
+  addManyToCollection?: (filings: readonly CollectionFiling[], folderId: number | null) => void;
+  /**
    * Move a copy the reader already owns into a folder — `null` is the root of the collection,
    * a real destination and not an omission.
    *
@@ -408,6 +421,12 @@ export interface CardMenuDeps {
    */
   addToWishlist: (target: CardMenuTarget, folderId: number | null) => void;
   /**
+   * {@link addToWishlist} over a picked set, as **one** write (`wishlist_add_many`) —
+   * {@link addManyToCollection}'s reason and its fallback: optional, and a surface that left it
+   * out has the single dep looped.
+   */
+  addManyToWishlist?: (targets: readonly CardMenuTarget[], folderId: number | null) => void;
+  /**
    * The wishlist's filing cabinet, flat, as the host page already holds it.
    *
    * **A value and not a query, which is what keeps the wishlist row a `submenu`.** Every host
@@ -467,10 +486,13 @@ export interface CardMenuDeps {
    *
    * The **writes** do: `Add to → Collection`, `Add to → Wishlist`, `Add to → Deck`, and the
    * collection's `Move to` and `Remove from collection`. Each is a per-card write over an address
-   * the target already carries, so the label is the one thing plural always changes. The three
-   * adds loop; the collection's two are **one** write over every id since issue #555
+   * the target already carries, so the label is the one thing plural always changes. **Every one
+   * of the five is one write over the whole set**: the collection's two since issue #555
    * (`moveCopies`, `removeCopies`), because a press that is N transactions is a press a refusal
-   * can leave half made.
+   * can leave half made; the three adds since 2026-11-18 (`addManyToCollection`,
+   * `addManyToWishlist`, and the deck picker's one `deck_apply`), because N adds were also N
+   * refresh rounds — seconds of a frozen window over a `Ctrl+A`. A set of one is still the single
+   * write.
    *
    * **`Copy card name`, `Copy card image`, `Open on` and `View all printings` stay about the one
    * card, and that is a statement rather than an omission.** A clipboard holds one image; a
@@ -478,6 +500,13 @@ export interface CardMenuDeps {
    * any of them that is not a different feature.
    */
   picked?: readonly CardMenuTarget[];
+}
+
+/** One card of a picked set filed into the collection, and the finish it is filed in — the finish
+ *  belongs to the printing, so each card of a set carries its own (see `collectionItem`). */
+export interface CollectionFiling {
+  target: CardMenuTarget;
+  finish: Finish;
 }
 
 /**
@@ -818,9 +847,9 @@ function collectionItem(
       ? undefined
       : {
           toDeck: (deckId: number) => deps.toDeck?.(rows, deckId),
-          // **The same `rows` the write loops over, and that identity is the whole point.** The
-          // deck rows are greyed unless the deck plays every one of these, so a `targets` naming a
-          // different set than the loop would grey against one list and write another — a fence
+          // **The same `rows` the write files, and that identity is the whole point.** The deck
+          // rows are greyed unless the deck plays every one of these, so a `targets` naming a
+          // different set than the write would grey against one list and write another — a fence
           // measuring something other than what it guards.
           targets: rows,
         };
@@ -835,10 +864,18 @@ function collectionItem(
    * once for the whole set, because a folder is about the reader's cabinet, not the cardboard.
    */
   if (rows.length > 1) {
+    const filings = rows.map((row) => ({
+      target: row,
+      finish: row.finish ?? recordableFinishes(row.finishes)[0],
+    }));
+    // **One write for the set** where the surface wired it — `addManyToCollection`; the loop is
+    // only for a surface whose hand-built deps leave it out.
     const fileAll = (folderId: number | null) => {
-      for (const row of rows) {
-        addToCollection(row, row.finish ?? recordableFinishes(row.finishes)[0], folderId);
+      if (deps.addManyToCollection !== undefined) {
+        deps.addManyToCollection(filings, folderId);
+        return;
       }
+      for (const { target: row, finish } of filings) addToCollection(row, finish, folderId);
     };
     if (folders.length === 0) return collectionRow(() => fileAll(null));
     const app = appTargets(rows);
@@ -941,8 +978,8 @@ function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem
         moveMany(entryIds, folderId);
         return;
       }
-      // Per-entry calls, but still one toast: the host batches a press's writes into one receipt
-      // (`useCardMenuDeps`, through `./menuReceipts`).
+      // Per-entry calls, and left so: every surface in the app takes `useCardMenuDeps`, which wires
+      // `moveCopies`, so only hand-built deps (stories, tests) that wire neither reach this.
       for (const entryId of entryIds) move(entryId, folderId);
     }),
   };
@@ -1128,11 +1165,17 @@ function removeItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuIt
  */
 function wishlistItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem {
   const row = { id: "add-wishlist", label: "Wishlist", Icon: Heart } as const;
-  // **The plural is a clean loop here and needs no note about finishes**, unlike the collection
-  // row above: a wish is oracle-grained and finish-blind by design (`add_wish` upserts, so two
-  // lines of one card fold into one wish), so filing four cards is four writes and nothing about
-  // any of them is a guess.
+  // **The plural needs no note about finishes**, unlike the collection row above: a wish is
+  // oracle-grained and finish-blind by design (`add_wish` upserts, so two lines of one card fold
+  // into one wish), so filing four cards is four wishes and nothing about any of them is a guess.
+  // One write for a set where the surface wired it; the single dep for one card, and looped only
+  // for a surface whose hand-built deps leave the batch out.
+  const many = deps.addManyToWishlist;
   const wishAll = (folderId: number | null) => {
+    if (rows.length > 1 && many !== undefined) {
+      many(rows, folderId);
+      return;
+    }
     for (const target of rows) deps.addToWishlist(target, folderId);
   };
   // The reader's own drawers: a deck's managed folder is never a destination (issue #512), so a
@@ -1386,8 +1429,9 @@ export function useCardToDeck(): CardToDeck {
   const [queue, setQueue] = useState<readonly DeckAddBatch[]>([]);
   const head = queue[0] ?? null;
 
-  const { addCard } = useDeck(head?.deckId ?? null, head?.variant ?? DEFAULT_VARIANT);
+  const { addCard, addCards } = useDeck(head?.deckId ?? null, head?.variant ?? DEFAULT_VARIANT);
   const add = addCard.mutateAsync;
+  const addMany = addCards.mutateAsync;
   /**
    * Which batch has already been sent, so it is written exactly once.
    *
@@ -1402,12 +1446,16 @@ export function useCardToDeck(): CardToDeck {
     written.current = head;
     void (async () => {
       /**
-       * **One card at a time, in the order the wall draws them.** Each add may make the auto pile
-       * it files into (`Ramp`, `Land`, …), and two adds racing to make the same pile is a refusal
-       * the reader did nothing to earn; one after another is also the order the undo journal
-       * then replays. `mutateAsync` rather than `mutate`, because `mutate`'s per-call callbacks
-       * fire for the **latest** call only — a loop of them reports on its last card and nothing
-       * else, which is this issue again one layer down.
+       * **One write for the whole press** — `addCards`, one `deck_apply` for the set, in the order
+       * the wall draws them. Until 2026-11-18 this was one `addCard` per card, awaited in turn: a
+       * set of 120 was 120 transactions, 120 Oracle-tag reads and 120 re-reads of the ~15
+       * `["decks"]` queries, which froze the window for seconds. `addCards` files every card by
+       * `addCard`'s own rule (`fileAdd`), reads the deck's default pile and the set's tags once,
+       * lands the ops in order in one transaction — so two cards that make the same auto pile
+       * (`Ramp`, `Land`, …) cannot race to make it, which is why the loop was sequential — as one
+       * undo step, and settles once. **One card keeps `addCard`**, the single command it always
+       * was. `mutateAsync` rather than `mutate`, because `mutate`'s per-call callbacks fire for the
+       * **latest** call only — a second press would take the first one's report with it.
        *
        * **No `categoryId`, and `deckDefault`, so each card lands where the deck says its adds
        * land** — `decks.default_category_id`, the pile the editor's own Add button files into
@@ -1417,34 +1465,49 @@ export function useCardToDeck(): CardToDeck {
        * the fallback (`null` where the surface has none); it is deliberately not *absent*, which is
        * the arm that files everything under `DEFAULT_CATEGORY_NAME` without consulting the card.
        *
-       * A refused card does not stop the rest: the reader asked for every card in the set, and a
-       * printing that has left `cards` says nothing about its neighbours. The **first** refusal is
-       * the sentence kept — a deck deleted under the press refuses every card in the same words.
+       * A refused card does not stop the rest: `deck_apply` answers it in its own result
+       * (`results[i]` is `head.targets[i]`'s) and lands the others, because the reader asked for
+       * every card in the set and a printing that has left `cards` says nothing about its
+       * neighbours. The **first** refusal is the sentence kept — a deck deleted under the press
+       * rejects the whole call, which reads as nothing landed.
        *
        * The `["decks"]` invalidation that carries a `GONE` back to the editor's columns stays on
-       * `useDeck.addCard`'s single definition, because two definitions would be two places to
-       * keep one rule.
+       * `useDeck`'s definitions, because two definitions would be two places to keep one rule.
        */
+      const requests = head.targets.map((target) => ({
+        cardId: target.cardId,
+        deckDefault: true,
+        typeLine: target.typeLine ?? null,
+        quantity: 1,
+      }));
+      const deck = head.deckName === undefined ? "the deck" : `“${head.deckName}”`;
       let refusal: string | null = null;
       let added = 0;
-      for (const target of head.targets) {
+      if (requests.length === 1) {
         try {
-          await add({
-            cardId: target.cardId,
-            deckDefault: true,
-            typeLine: target.typeLine ?? null,
-            quantity: 1,
-          });
-          added += 1;
+          await add(requests[0]);
+          added = 1;
         } catch (failure) {
-          refusal ??= ipcError(failure);
+          refusal = ipcError(failure);
+        }
+      } else {
+        try {
+          const outcome = await trackWork(
+            `Adding ${plural(requests.length, "card")} to ${deck}…`,
+            addMany({ cards: requests }),
+          );
+          for (const result of outcome.results) {
+            if (result.refusal === null) added += 1;
+            else refusal ??= result.refusal;
+          }
+        } catch (failure) {
+          refusal = ipcError(failure);
         }
       }
       // **One press, one toast** (`@/lib/notifications`): the menu that was pressed has closed and
       // the deck is on another page, so until this the reader had no sign the add landed — and
       // the refusal was a line under the rail, a hand-rolled toast. A partly refused set is one
       // warning, `Added 2 of 3 cards to …`, carrying the first refusal; none landing is an error.
-      const deck = head.deckName === undefined ? "the deck" : `“${head.deckName}”`;
       if (refusal === null) notify.success(deckAddReceipt(added, head.targets, head.deckName));
       else if (added === 0) notify.error(`Couldn't add to ${deck}`, { body: refusal });
       else {
@@ -1464,7 +1527,7 @@ export function useCardToDeck(): CardToDeck {
        */
       setQueue((waiting) => waiting.filter((batch) => batch !== head));
     })();
-  }, [head, add]);
+  }, [head, add, addMany]);
 
   const addToDeck = useCallback(
     (
@@ -1965,7 +2028,8 @@ const NOT_PLAYED_REASON = "not in this deck";
  *
  * ## Every target, never any
  *
- * `rows.length > 1` is a picked set, and a press writes **one add per target**. A deck that plays
+ * `rows.length > 1` is a picked set, and a press adds **one copy of every target** (one write for
+ * the set, `useCardToDeck`'s `addCards`, which answers each card on its own). A deck that plays
  * three of four cards would take the three and refuse the fourth — or, worse, take all four and
  * claim custody the fourth deck card does not back — and the reader would see one press, one menu
  * closing and no complaint anywhere. That is the failure this whole fence exists to prevent, made

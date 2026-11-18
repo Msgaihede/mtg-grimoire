@@ -131,12 +131,14 @@ export function applySelect(
   mods: SelectModifiers,
 ): Selection {
   if (mods.range) {
-    const from = selection.anchor !== null && order.includes(selection.anchor) ? selection.anchor : key;
+    const from =
+      selection.anchor !== null && order.includes(selection.anchor) ? selection.anchor : key;
     const run = keysBetween(order, from, key);
     // The anchor holds still through a range so a second Shift-click adjusts the same run from
     // the same end — but a range that had no anchor to measure from has just established one,
     // and `from` is it.
-    const anchor = selection.anchor !== null && order.includes(selection.anchor) ? selection.anchor : from;
+    const anchor =
+      selection.anchor !== null && order.includes(selection.anchor) ? selection.anchor : from;
     if (!mods.toggle) return { keys: run, anchor };
     // Ctrl+Shift adds the run to what was there. `dedupe` keeps the reader's own pick order for
     // everything already in the set and appends only what the run brought.
@@ -277,8 +279,9 @@ export function settleSelection(
  * the stack it is in.
  *
  * **And nothing picked picks nothing**, deliberately: `Delete` removes a picked set in the deck
- * editor and undo is one press per card, so a Ctrl+A that took the whole deck from nothing would
- * make `Ctrl+A`, `Delete` a deck emptied in two keys (`docs/reference/keyboard-shortcuts.md`).
+ * editor, and on the live list a cut files no undo step at all (`deck_apply`, issue #1164 — one
+ * Ctrl+Z for the set anywhere else), so a Ctrl+A that took the whole deck from nothing would make
+ * `Ctrl+A`, `Delete` a deck emptied in two keys (`docs/reference/keyboard-shortcuts.md`).
  * The whole deck is still one press away, for a reader who has picked a card in every stack.
  *
  * What was picked keeps its place in the set and the anchor stays where it was, so a Shift-click

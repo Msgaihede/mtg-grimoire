@@ -48,6 +48,8 @@ const deckFolderList = vi.fn();
 const deckGet = vi.fn();
 const deckCategoryList = vi.fn();
 const deckAddCard = vi.fn();
+/** The batch a picked set's press sends — one `deck_apply` for the whole set (2026-11-18). */
+const deckApply = vi.fn();
 const oracleTagsForPrintings = vi.fn();
 /**
  * The one command `Open on → TCGplayer` spends, and the second read in this whole file.
@@ -71,6 +73,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     deckGet: (...args: unknown[]) => deckGet(...args),
     deckCategoryList: (...args: unknown[]) => deckCategoryList(...args),
     deckAddCard: (...args: unknown[]) => deckAddCard(...args),
+    deckApply: (...args: unknown[]) => deckApply(...args),
     oracleTagsForPrintings: (ids: string[]) => oracleTagsForPrintings(ids),
     // `useDeck` reads the selected marketplace, because a deck is priced at it. Answered so the
     // hook's queries resolve rather than rejecting on a `vi.fn()` that is not there.
@@ -1924,8 +1927,20 @@ describe("useCardToDeck", () => {
       categories: [],
     });
     deckAddCard.mockResolvedValue(undefined);
+    // Every op lands unless a case says otherwise — one result per op, in order.
+    deckApply.mockImplementation((_deckId: number, _variant: string, ops: readonly unknown[]) =>
+      Promise.resolve({
+        results: ops.map(() => ({ change: null, categoryId: null, refusal: null })),
+        landed: ops.length,
+        collectionMoved: false,
+      }),
+    );
     oracleTagsForPrintings.mockResolvedValue([]);
   });
+
+  /** The card ids of the ops one `deck_apply` call sent, in order. */
+  const sentCards = (call: unknown[]) =>
+    (call[2] as readonly { op: string; cardId: string }[]).map((op) => op.cardId);
 
   it("adds one copy, naming no category so the app's own rule files the card", async () => {
     const { result } = arm();
@@ -2008,8 +2023,11 @@ describe("useCardToDeck", () => {
    * Issue #954: a Shift-picked range added to a deck put only its **last** card there. The picker
    * called this once per card, each call replaced the one armed add, and React batched the lot
    * into one render — so one write went out, for whichever card came last.
+   *
+   * And since 2026-11-18 the set is **one** `deck_apply` rather than one `deck_add_card` per card:
+   * N transactions and N re-reads of every deck query froze the window over a large set.
    */
-  it("adds every card of a picked set, in order, on one press (issue #954)", async () => {
+  it("adds every card of a picked set, in order, in one write (issue #954)", async () => {
     const { result } = arm();
     const helix = { ...BOLT, cardId: "helix-lea", name: "Lightning Helix", typeLine: "Instant" };
     const ponder = { ...BOLT, cardId: "ponder-lea", name: "Ponder", typeLine: "Sorcery" };
@@ -2017,22 +2035,56 @@ describe("useCardToDeck", () => {
       result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }, helix, ponder], 7, "live"),
     );
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(3));
-    expect(deckAddCard.mock.calls.map((call) => call[1])).toEqual([
-      "bolt-lea",
-      "helix-lea",
-      "ponder-lea",
-    ]);
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    expect(deckApply.mock.calls[0][0]).toBe(7);
+    expect(deckApply.mock.calls[0][1]).toBe("live");
+    expect(sentCards(deckApply.mock.calls[0])).toEqual(["bolt-lea", "helix-lea", "ponder-lea"]);
+    expect(deckAddCard).not.toHaveBeenCalled();
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      tone: "success",
+      title: "Added 3 cards to the deck",
+    });
   });
 
-  it("keeps writing the rest of a picked set past a refused card", async () => {
-    deckAddCard.mockRejectedValueOnce(new Error("That printing is not there any more"));
+  it("files a picked set by the deck's own add location, as the single add does", async () => {
+    deckGet.mockResolvedValue({
+      deck: { id: 7, name: "Burn", defaultCategoryId: 3 },
+      cards: [],
+      categories: [{ id: 3, name: "Sideboard" }],
+    });
+    const { result } = arm();
+    act(() =>
+      result.current.addToDeck(
+        [
+          { ...BOLT, typeLine: "Instant" },
+          { ...BOLT, cardId: "helix-lea", typeLine: "Instant" },
+        ],
+        7,
+        "live",
+      ),
+    );
+
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(1));
+    const ops = deckApply.mock.calls[0][2] as readonly { categoryId: number | null }[];
+    expect(ops.map((op) => op.categoryId)).toEqual([3, 3]);
+  });
+
+  it("keeps the rest of a picked set past a refused card, and says so once", async () => {
+    deckApply.mockResolvedValue({
+      results: [
+        { change: null, categoryId: null, refusal: "That printing is not there any more" },
+        { change: null, categoryId: 2, refusal: null },
+      ],
+      landed: 1,
+      collectionMoved: false,
+    });
     const { result } = arm();
     const helix = { ...BOLT, cardId: "helix-lea", typeLine: "Instant" };
     act(() => result.current.addToDeck([{ ...BOLT, typeLine: "Instant" }, helix], 7, "live"));
 
-    await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(useNotifications.getState().notices).not.toHaveLength(0));
+    expect(deckApply).toHaveBeenCalledTimes(1);
     // One press, one toast: what landed and the first refusal, folded into one warning.
     expect(useNotifications.getState().notices).toHaveLength(1);
     expect(useNotifications.getState().notices[0]).toMatchObject({
@@ -2040,6 +2092,30 @@ describe("useCardToDeck", () => {
       title: "Added 1 of 2 cards to the deck",
       body: "That printing is not there any more",
     });
+  });
+
+  it("says a rejected batch as the error arm", async () => {
+    deckApply.mockRejectedValue("database is busy");
+    const { result } = arm();
+    act(() =>
+      result.current.addToDeck(
+        [
+          { ...BOLT, typeLine: "Instant" },
+          { ...BOLT, cardId: "helix-lea", typeLine: "Instant" },
+        ],
+        7,
+        "live",
+        "Burn",
+      ),
+    );
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        tone: "error",
+        title: "Couldn't add to “Burn”",
+        body: "database is busy",
+      }),
+    );
   });
 
   it("queues a second press made while the first is still writing, rather than replacing it", async () => {
@@ -2051,6 +2127,25 @@ describe("useCardToDeck", () => {
 
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledTimes(2));
     expect(deckAddCard.mock.calls.map((call) => call[1])).toEqual(["bolt-lea", "helix-lea"]);
+  });
+
+  it("queues a second set behind the first, one write each", async () => {
+    const { result } = arm();
+    const set = (a: string, b: string) => [
+      { ...BOLT, cardId: a, typeLine: "Instant" },
+      { ...BOLT, cardId: b, typeLine: "Instant" },
+    ];
+    act(() => {
+      result.current.addToDeck(set("a", "b"), 7, "live");
+      result.current.addToDeck(set("c", "d"), 7, "live");
+    });
+
+    await waitFor(() => expect(deckApply).toHaveBeenCalledTimes(2));
+    expect(deckApply.mock.calls.map(sentCards)).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+    ]);
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(2));
   });
 
   it("stops observing the deck once the add has settled", async () => {
@@ -2392,6 +2487,50 @@ describe("buildCardMenu with a picked set", () => {
       "nonfoil",
       "nonfoil",
     ]);
+  });
+
+  /** Where the surface wires the batch deps — every surface in the app, through `useCardMenuDeps`
+   *  — a set's add is **one** call of the plural, never the single dep looped. */
+  it("hands a picked set to the batch deps in one call each", () => {
+    const addToCollection = vi.fn();
+    const addToWishlist = vi.fn();
+    const addManyToCollection = vi.fn();
+    const addManyToWishlist = vi.fn();
+    const items = buildCardMenu(
+      BOLT,
+      deps({
+        picked: PICKED,
+        addToCollection,
+        addToWishlist,
+        addManyToCollection,
+        addManyToWishlist,
+      }),
+    );
+    (find(rowsOf(find(items, "Add 3 cards to")), "Collection") as MenuAction).onSelect();
+    (find(rowsOf(find(items, "Add 3 cards to")), "Wishlist") as MenuAction).onSelect();
+
+    expect(addManyToCollection).toHaveBeenCalledTimes(1);
+    expect(addManyToCollection).toHaveBeenCalledWith(
+      [
+        { target: BOLT, finish: "nonfoil" },
+        { target: HELIX, finish: "nonfoil" },
+        { target: PONDER, finish: "nonfoil" },
+      ],
+      null,
+    );
+    expect(addManyToWishlist).toHaveBeenCalledExactlyOnceWith(PICKED, null);
+    expect(addToCollection).not.toHaveBeenCalled();
+    expect(addToWishlist).not.toHaveBeenCalled();
+  });
+
+  /** One card is the single write, batch deps or not — no undo ticket where none was before. */
+  it("keeps the single dep for a set of one", () => {
+    const addToWishlist = vi.fn();
+    const addManyToWishlist = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ picked: [BOLT], addToWishlist, addManyToWishlist }));
+    (find(rowsOf(find(items, "Add to")), "Wishlist") as MenuAction).onSelect();
+    expect(addToWishlist).toHaveBeenCalledExactlyOnceWith(BOLT, null);
+    expect(addManyToWishlist).not.toHaveBeenCalled();
   });
 
   /** A foil-only printing keeps its own only finish rather than being recorded as plain — the

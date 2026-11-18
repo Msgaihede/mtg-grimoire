@@ -1,8 +1,9 @@
-import type {
-  KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactElement,
-  ReactNode,
+import {
+  useCallback,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+  type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { rowHasBackFace } from "@/features/card/printings";
@@ -219,6 +220,30 @@ export function CardSearchBody({
   const failure = failureOf(search);
   const empty = rows.length === 0;
 
+  // **The wall's slots, held still** (2026-11). `CardGrid` and every tile on it are memoised, and
+  // this body re-renders on every keystroke and every page that lands — so a fresh arrow here was a
+  // changed prop on every tile, every time. Each is held on exactly what it reads.
+  const select = useCallback((id: string) => onSelect(id), [onSelect]);
+  const money = useCallback(
+    (card: CardSummary) => priceRange(card.priceLow, card.priceHigh, currency),
+    [currency],
+  );
+  // On the four fields rather than `query`, which is a new object per render — the collection
+  // page's arrangement (issue #557). A failed page or one landing is a new callback, which is what
+  // re-runs the wall's paging effects at the moments the answer moves. It says whether rows are
+  // still to come, and passes on how many the wall is owed (a Ctrl+A walk) — see `CardGrid`'s
+  // `onNeedNextPage` and `useCardSearch`'s `fetchMore`.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchMore } = search;
+  const onNeedNextPage = useCallback(
+    (want?: number) => {
+      const more = hasNextPage && !isFetchNextPageError;
+      if (more && !isFetchingNextPage) fetchMore(want);
+      return more;
+    },
+    [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchMore],
+  );
+
   return (
     <>
       {/* Grown into place rather than shoved in: this panel is a fixed-width column of stacked
@@ -302,7 +327,7 @@ export function CardSearchBody({
           baseTileWidth={baseTileWidth}
           selectedId={selectedId}
           arrowNav={arrowNav}
-          onSelect={(id) => onSelect(id)}
+          onSelect={select}
           dragPayload={dragPayload}
           dragRecord={dragRecord}
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
@@ -322,7 +347,7 @@ export function CardSearchBody({
           //
           // Spec §5's as-of sentence is said once for this wall, not on every tile, which is why
           // this slot is a bare figure.
-          money={(card) => priceRange(card.priceLow, card.priceHigh, currency)}
+          money={money}
           // The whole tile is the target — the art, its corner chip and the caption under it.
           // The wall's own `cardMenu` slot, so this component knows nothing about menus beyond
           // where a right-click lands.
@@ -332,11 +357,7 @@ export function CardSearchBody({
           flips={rowHasBackFace}
           badge={badge}
           action={action}
-          onNeedNextPage={() => {
-            if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
-              void query.fetchNextPage();
-            }
-          }}
+          onNeedNextPage={onNeedNextPage}
         />
       )}
 

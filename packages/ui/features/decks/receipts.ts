@@ -15,9 +15,11 @@ import type { DeckTokenView, TokenEntryRef } from "./deckTokens";
  * or whose answer lands somewhere else (the collection, the wishlist, the other list).
  *
  * **One action is one toast** (the owner's second rule): a plural menu row or the Delete key over
- * a picked set is one write per card, and {@link reportPresses} waits the whole loop out and says
- * it once — the count that landed, a warning naming the first refusal when only some did, an
- * error when none did. Never per card: `deckAddReceipt` in `cardMenu.tsx` is the pattern.
+ * a picked set is **one** `deck_apply` since issue #1164, answered with a refusal per card, and
+ * {@link reportSettled} says it once — the count that landed, a warning naming the first refusal
+ * when only some did, an error when none did. A single card's press is still its own write, and
+ * {@link reportPresses} says that the same way. Never per card: `deckAddReceipt` in `cardMenu.tsx`
+ * is the pattern.
  */
 
 /** `“Sol Ring”` for one card, `3 cards` for more — the object of every receipt below. */
@@ -53,20 +55,71 @@ export function reportPresses(
     press instanceof Promise ? [{ press, name: names[i] ?? "" }] : [],
   );
   if (writes.length === 0) return;
-  void Promise.allSettled(writes.map((w) => w.press)).then((results) => {
-    const landed = writes.filter((_, i) => results[i].status === "fulfilled").map((w) => w.name);
+  reportSettled(
+    Promise.allSettled(writes.map((w) => w.press)),
+    writes.map((w) => w.name),
+    say,
+  );
+}
+
+/**
+ * {@link reportPresses}' sentence over outcomes already gathered — `settled[i]` is the card named
+ * `names[i]`. What a batch says through: {@link settledEdits} turns one `deck_apply`'s answer into
+ * exactly the list N single writes used to settle into, so "47 of 50 cards" and its first refusal
+ * read as they always did.
+ */
+export function reportSettled(
+  settled: Promise<readonly PromiseSettledResult<unknown>[]>,
+  names: readonly string[],
+  say: PressWording,
+): void {
+  if (names.length === 0) return;
+  void settled.then((results) => {
+    const landed = names.filter((_, i) => results[i]?.status === "fulfilled");
     const refused = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
-    const all = writes.map((w) => w.name);
     if (refused === undefined) {
       notify.success(say.done(namedCards(landed)));
     } else if (landed.length > 0) {
-      notify.warning(say.done(`${landed.length} of ${plural(all.length, "card")}`), {
+      notify.warning(say.done(`${landed.length} of ${plural(names.length, "card")}`), {
         body: ipcError(refused.reason),
       });
     } else {
-      notify.error(say.failed(namedCards(all)), { body: ipcError(refused.reason) });
+      notify.error(say.failed(namedCards(names)), { body: ipcError(refused.reason) });
     }
   });
+}
+
+/**
+ * One batch's answer as **one settled result per edit** — fulfilled where the edit landed (or
+ * was an Auto refile already where it belongs), rejected with its own refusal where it was not —
+ * and, when the whole call was refused (a busy database, a deck that is gone), `count` rejections
+ * with that one sentence. Never rejects. What {@link reportSettled} and the editor's banner
+ * (`useDeckDrops`' `lastBatch`) read, so a batch is said exactly as its N single writes were.
+ */
+export function settledEdits(
+  outcome: Promise<{ results: readonly { refusal: string | null }[] }>,
+  count: number,
+): Promise<PromiseSettledResult<unknown>[]> {
+  return outcome.then(
+    ({ results }) =>
+      results.map((r): PromiseSettledResult<unknown> =>
+        r.refusal === null
+          ? { status: "fulfilled", value: r }
+          : { status: "rejected", reason: r.refusal },
+      ),
+    (reason: unknown) =>
+      Array.from({ length: count }, (): PromiseRejectedResult => ({ status: "rejected", reason })),
+  );
+}
+
+/**
+ * The busy indicator's sentence for a batch (`lib/work.ts`) — `Moving 240 cards to “Sideboard”…`,
+ * `Removing 300 cards…`. Present progressive, a count and an ellipsis: the receipt (or, for a drag,
+ * the desk) that follows says the same thing in the past tense. Only batches raise it, so a count
+ * is always the object — one card is a single write and never waits long enough to be drawn.
+ */
+export function workLabel(verb: string, count: number, where?: string): string {
+  return `${verb} ${plural(count, "card")}${where === undefined ? "" : ` ${where}`}…`;
 }
 
 /** One write's refusal, as a toast — the `Couldn't …` half of a single-write receipt. */

@@ -10,7 +10,13 @@ import {
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
 import { DEBOUNCE_MS, type FormatFilterOption } from "@/features/search/useCardSearch";
-import type { CardSummary, CollectionRow, DeckCategory, SearchResponse } from "@/lib/ipc";
+import {
+  ipcError,
+  type CardSummary,
+  type CollectionRow,
+  type DeckCategory,
+  type SearchResponse,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
@@ -379,7 +385,15 @@ interface Props {
 
 function Harness(props: Props) {
   const deck = useDeck(4);
-  return <DeckSearchPanel add={deck.addCard} {...props} />;
+  // The editor's own two props, read off the mutation the way it reads them — `mutateAsync` and the
+  // refusal in words, never the object (see `DeckSearchPanelProps.add`).
+  return (
+    <DeckSearchPanel
+      add={deck.addCard.mutateAsync}
+      addFailure={deck.addCard.isError ? ipcError(deck.addCard.error) : null}
+      {...props}
+    />
+  );
 }
 
 function panel({

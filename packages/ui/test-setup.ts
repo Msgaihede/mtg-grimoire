@@ -5,6 +5,7 @@ import { afterAll, afterEach } from "vitest";
 import { resetBulkUndo } from "@/lib/bulkUndo";
 import { resetNotifications } from "@/lib/notifications";
 import { resetViewMemory } from "@/lib/viewMemory";
+import { resetWork } from "@/lib/work";
 import { resetPackMarketplaces } from "@/features/draft/packs/marketplacePick";
 import { resetPackReduced } from "@/features/draft/packs/reducedPick";
 import { resetSideboard } from "@/features/draft/pick/split";
@@ -109,6 +110,10 @@ afterEach(resetDraftTrayLayout);
 // `@/lib/notifications` too: a toast one test raised would otherwise be on screen, and in the
 // inbox, of the next.
 afterEach(resetNotifications);
+
+// `@/lib/work` too: a piece of work one test left running would hold the next test's busy pill,
+// header line and `data-busy` cursor up — and its timers would fire into that test.
+afterEach(resetWork);
 
 /**
  * **A file that scrolled a virtualised list waits out the scroll's trailing timer before its
