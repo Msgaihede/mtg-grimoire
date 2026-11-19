@@ -32,7 +32,7 @@
  * shared is the chrome and nothing else, which is exactly what a class recipe carries and a shell
  * component would not.
  */
-import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
 import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -164,38 +164,40 @@ export const CONFIRM_CANCEL = cn(
 
 /** The two words a row offers, in one shape, so a category row and a label row read as one
  *  family. */
-export function RowAction({
-  children,
-  onClick,
-  disabled,
-  destructive,
-  ref,
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  destructive?: boolean;
-  /** So the row can put the caret back on the control that opened a confirmation — which it
-   *  cannot do until the render that re-enables it. See `CategoryRow`'s effect. */
-  ref?: Ref<HTMLButtonElement>;
-}) {
-  return (
-    <button
-      ref={ref}
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "shrink-0 rounded-sm text-[0.6875rem] text-dim",
-        "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
-        destructive ? "hover:text-destructive" : "hover:text-text",
-        FOCUS,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+export const RowAction = forwardRef<
+  HTMLButtonElement,
+  {
+    children: ReactNode;
+    onClick: () => void;
+    disabled?: boolean;
+    destructive?: boolean;
+  }
+>(
+  // `ref` is so the row can put the caret back on the control that opened a confirmation — which
+  // it cannot do until the render that re-enables it. See `CategoryRow`'s effect.
+  //
+  // `forwardRef` rather than React 19's ref-as-a-prop: this module is in the design system's
+  // bundle, which runs on React 18.3.1 and hands a function component no `ref`
+  // (`.design-sync/NOTES.md`). The same thing under React 19.
+  function RowAction({ children, onClick, disabled, destructive }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className={cn(
+          "shrink-0 rounded-sm text-[0.6875rem] text-dim",
+          "transition-colors duration-150 disabled:opacity-50 motion-reduce:transition-none",
+          destructive ? "hover:text-destructive" : "hover:text-text",
+          FOCUS,
+        )}
+      >
+        {children}
+      </button>
+    );
+  },
+);
 
 /** Rename in place: one field, its own Save, and Escape's job left to the dialog around it — a
  *  second Escape rung inside an `"inner"` layer is the case `useDismissOnEscape` explicitly does

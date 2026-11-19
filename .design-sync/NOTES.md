@@ -226,7 +226,8 @@ published here. The artifact's `project/design-system.json` still names the old 
 What was done, in order:
 
 1. **Build and grade locally**: `buildCmd`, then `package-build.mjs`, then
-   `node .design-sync/card-art.mjs --copy ds-bundle`, `package-validate.mjs` and a scoped
+   `node .design-sync/card-art.mjs --copy ds-bundle`, `node .design-sync/artifact/react18-audit.mjs`
+   (since 2026-11-19; it must exit 0), `package-validate.mjs` and a scoped
    `compare.mjs --components …`. No upload channel is involved.
 2. **`node .design-sync/artifact/bundle-css.mjs`** rebuilds `components/bundle.css`. The migration
    made it by joining `styles.css`, `fonts/fonts.css` and `_ds_bundle.css` under section comments
@@ -247,6 +248,8 @@ What was done, in order:
    from the artifact's own `components/lib/`, with the bundle **inlined**, and photographs it.
    Measured 2026-10-01: all six cards mounted with no script error and every image loaded from
    `card-art/normal/`.
+   **It mounts and never presses**, so it cannot see a control that only fails once opened; that
+   is `react18-audit.mjs`'s half (below, "The artifact runs React 18.3.1").
 6. **Publish in three calls** — the content files, then `card-art/**`, then
    `project/design-system.json` alone and last, re-read right before, with only `lastChange`
    moved. **Read the artifact itself (no `path`) first and publish to the `claude.ai/artifact/…`
@@ -254,10 +257,50 @@ What was done, in order:
    "not the latest version" after reading only files by path; the next, after both changes, went
    through. Which of the two cleared it was not separated.
 
-**The artifact runs React 18.3.1 and the app is React 19**, and the converter vendors 19. Two
-components take `ref` as a plain prop, which only React 19 passes — `PopupListbox` (the dropdown's
-listbox) and a row in `metaRows.tsx` — so their refs are `null` in the artifact and on every
-canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fixed here.
+**The artifact runs React 18.3.1 and the app is React 19** — and the bundle runs on the page's
+React, never its own: its `react` imports are a shim over `window.React`. So everything under
+`packages/ui/` that the barrel reaches has to work on both, and nothing in `pnpm verify` runs it
+on 18.
+
+- **It stays 18; the bundle is what bends** (decided 2026-11-19). The Design System type packs and
+  lists React 18.3.1 (`components/lib/`, the index's `libraries`), and a Design canvas supplies its
+  own React 18 and leaves the system's copy behind — its reference says so in as many words: "the
+  artboard supplies React 18, and a bundle carrying its own React cannot share the page's".
+  Declaring 19 here would fix the artifact's page cards and nothing on a canvas, which is where the
+  components are used.
+- **`ref` as a plain prop is the construct that bit** (fixed 2026-11-19). React 18 hands a function
+  component no `ref`, so `PopupPanel`'s was `null`, `usePopupPlacement` returned before measuring,
+  and every `Dropdown`, `MultiDropdown` and the title bar's shortcut map opened a panel that kept
+  `invisible` at 0,0 — `aria-expanded="true"` and nothing on screen. Four components in the
+  bundle's graph took one and all four are `forwardRef` now: `PopupPanel`, `RowAction`
+  (`metaRows.tsx`), and the two pile grips, `CategoryGrip` (`StackView.tsx`) and `TokenPileGrip`
+  (`tokenRail.tsx`). **The grips correct this file's earlier claim that "the deck parts are
+  unaffected"**: their `ref` is `attachHandle`, so on 18 the drag source never learned its handle
+  and a pile could be moved by arrow keys and not by its grip. `forwardRef` is the same thing
+  under React 19; `PopupListbox.test.tsx` fences the first.
+- **`node .design-sync/artifact/react18-audit.mjs` after every converter build**, before grading.
+  It reads the module list out of `ds-bundle/_ds_bundle.js` and refuses a `ref` prop on a function
+  component, `<Component ref>` on anything that is not a `forwardRef` or `motion.*`, a context
+  rendered as its own provider, and the hooks 18 does not export. Clean on 291 modules at 0.71.1.
+  One more `ref`-as-prop component in `packages/ui/` is outside the graph today, and the audit
+  will name it the day the barrel reaches it: `ViewAllToggle`. (`PageBar`'s crumb carries a `ref`
+  as a field of a plain object and `FilterBar` takes `rootRef` — both are any React's.)
+- **Still React-19-shaped, and left alone: a callback ref that returns its cleanup.** 18 ignores
+  the return and calls the callback with `null` instead. Every such callback here takes `null`
+  without throwing, so nothing breaks at unmount, but what the cleanup releases stays held:
+  measured on the Stacks desk, 4 drag sources registered, **4 still registered after unmount on
+  18.3.1 and 0 on 19**. A leak on a canvas that mounts and unmounts a desk, and possibly a second
+  registration where such a callback changes identity while mounted (not measured). Curing it
+  means every cleanup-returning ref also answering `null`; not done.
+- **And one attribute**: `ContextMenu`'s panel is `inert` for the length of its fade
+  (`inert={!present || undefined}`), which React 18 drops as an unknown boolean. `aria-hidden` is
+  still written, so only the focus order differs, for ~150 ms.
+- **How it was verified, since the compare cannot** (a `fixed` panel is outside the cropped
+  root): a page with the artifact's own `components/lib/react*.js`, the bundle built from this
+  tree, and real presses. Dropdown, MultiDropdown and a Dropdown under a transformed ancestor:
+  panel `visible`, 4px under its trigger, left edges equal, a pressed row picked. The shortcut
+  map: placed inside the viewport. A pile grip: a real press-and-move starts the drag. Tooltip,
+  context menu with a submenu, and Dialog's focus trap: the same numbers on 18.3.1 as on 19.2.8.
 
 **The 2026-10-17 run (bundle 0.53.0, artifact versions 16–17)** changed the procedure in four ways:
 
@@ -274,8 +317,10 @@ canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fix
   card throwing (`Cannot read properties of null (reading 'progress')`): `update` stopped taking
   `null`. The card now lives in `page-cards.mjs` with an idle `Update`, so it is the repo's.
 - **`Dropdown`, `TooltipProvider` and `WorkInProgress` have page cards** (drawn at rest — an open
-  listbox or tooltip is input-driven, and `PopupListbox` has no ref on React 18). All 27 cards
-  mounted on React 18.3.1 with no script error and every card image loaded.
+  listbox or tooltip is input-driven, and `PopupListbox` had no ref on React 18 until 2026-11-19;
+  the artifact's bundle is this run's until the next sync, so its `Dropdown` still opens
+  invisibly). All 27 cards mounted on React 18.3.1 with no script error and every card image
+  loaded.
 
 The remaining 404s in a render check are the migration's own: `components/bundle.css` inlines
 `styles.css`'s two `@import`s and `fonts.css`'s relative `url()`s, which resolve under

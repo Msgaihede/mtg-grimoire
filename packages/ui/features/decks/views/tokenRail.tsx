@@ -41,7 +41,7 @@
  * reads to it as a ref read during render, where the same prop on a JSX `<button>` — which is
  * exactly `CategoryGrip`'s — is the ordinary thing it is.
  */
-import { useCallback, useState, type JSX } from "react";
+import { forwardRef, useCallback, useState, type JSX } from "react";
 import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
 import { GripVertical } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -201,48 +201,50 @@ export const GRIP_ATTR = "data-category-grip";
  * The accessible name says where the pile is, `CategoryGrip`'s rule: `n of N` counts every rail
  * pile and the tokens themselves, which is every place the pile can be.
  */
-export function TokenPileGrip({
-  ref,
-  slot,
-  railLength,
-  onMove,
-}: {
-  ref: (el: HTMLElement | null) => void;
-  /** Where the pile is now — {@link tokenRailSlot}'s answer, never the stored value. */
-  slot: number;
-  /** How many rail piles there are besides the tokens. */
-  railLength: number;
-  /** A step to slot `to`, in `[0, railLength]`. The caller stores it ({@link storedRailIndex}). */
-  onMove: (slot: number) => void;
-}): JSX.Element {
-  const tip = useTooltip();
-  const step = (to: number) => {
-    if (to >= 0 && to <= railLength) onMove(to);
-  };
+export const TokenPileGrip = forwardRef<
+  HTMLButtonElement,
+  {
+    /** Where the pile is now — {@link tokenRailSlot}'s answer, never the stored value. */
+    slot: number;
+    /** How many rail piles there are besides the tokens. */
+    railLength: number;
+    /** A step to slot `to`, in `[0, railLength]`. The caller stores it ({@link storedRailIndex}). */
+    onMove: (slot: number) => void;
+  }
+>(
+  // `forwardRef` rather than React 19's ref-as-a-prop, `CategoryGrip`'s reason: the design
+  // system's bundle runs this on React 18.3.1, where a function component is handed no `ref`, the
+  // source never learns its handle and the pile cannot be picked up (`.design-sync/NOTES.md`).
+  function TokenPileGrip({ slot, railLength, onMove }, ref): JSX.Element {
+    const tip = useTooltip();
+    const step = (to: number) => {
+      if (to >= 0 && to <= railLength) onMove(to);
+    };
 
-  return (
-    <button
-      ref={ref}
-      type="button"
-      {...{ [GRIP_ATTR]: "" }}
-      onKeyDown={(e) => {
-        if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          step(slot - 1);
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          step(slot + 1);
-        }
-      }}
-      aria-label={`Move ${TOKENS_HEADING}, ${slot + 1} of ${railLength + 1}`}
-      {...tip("Drag or use the arrow keys to reorder")}
-      className={cn(
-        "shrink-0 cursor-grab rounded-sm text-dim",
-        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-        FOCUS,
-      )}
-    >
-      <GripVertical className="size-3.5" aria-hidden="true" />
-    </button>
-  );
-}
+    return (
+      <button
+        ref={ref}
+        type="button"
+        {...{ [GRIP_ATTR]: "" }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            step(slot - 1);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            step(slot + 1);
+          }
+        }}
+        aria-label={`Move ${TOKENS_HEADING}, ${slot + 1} of ${railLength + 1}`}
+        {...tip("Drag or use the arrow keys to reorder")}
+        className={cn(
+          "shrink-0 cursor-grab rounded-sm text-dim",
+          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+          FOCUS,
+        )}
+      >
+        <GripVertical className="size-3.5" aria-hidden="true" />
+      </button>
+    );
+  },
+);
