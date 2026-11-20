@@ -23,6 +23,10 @@ describe("the navigation census", () => {
       "shared",
       "scanner",
       "trade",
+      // The Life tracker (2026-11-20): the light app's alone (`edition.ts`'s `LIGHT_ONLY_VIEWS`),
+      // after Trade so the phone's tab bar ends on it — and without a chord, so nothing below it
+      // moves.
+      "life",
       "playtesting",
       // Draft & Packs (2026-10-29), before Settings so Settings stays last — and without a
       // chord, so Settings keeps `Ctrl+9` (see the last case here).
@@ -58,8 +62,8 @@ describe("the navigation census", () => {
    * module.
    *
    * `Ctrl+1…9` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
-   * `CHORD_NAV[i]`, where `CHORD_NAV` is this list minus `shared` and `draft`. So the two lists are one
-   * binding written down twice, and nothing in the program holds them together —
+   * `CHORD_NAV[i]`, where `CHORD_NAV` is this list minus `shared`, `life` and `draft`. So the two
+   * lists are one binding written down twice, and nothing in the program holds them together —
    * `shortcuts.ts` deliberately does not import this module, because the catalogue is pure data
    * over a plain event and a runtime edge from it to a file of React components is the wrong
    * direction. A *test* importing both is the fence that costs nothing at runtime.
@@ -69,15 +73,16 @@ describe("the navigation census", () => {
    * appears and disappears would mean two things to two readers. Settings was the second, pushed
    * past `Ctrl+9` when Home arrived; the Tagger row leaving (issue #937, tag search is the search
    * page's sidebar now) gave it back. Draft & Packs (2026-10-29) arrived with every digit spoken
-   * for and goes without too, so that Settings keeps the ninth.
+   * for and goes without too, so that Settings keeps the ninth — and so does the Life tracker
+   * (2026-11-20), the light app's alone, after Trade.
    *
    * **The first and ninth entries are pinned by name**, because a length can only say *how many*
    * are reached, never *which* — and it is the *which* a reader has in their fingers.
    */
   it("puts nine destinations inside the run of digits, ending at Settings", () => {
     // Written out rather than imported from `AppShell`, per the rule that an assertion must not
-    // read its own constant: these are the two rows without a digit.
-    const chorded = NAV.filter((n) => n.id !== "shared" && n.id !== "draft");
+    // read its own constant: these are the three rows without a digit.
+    const chorded = NAV.filter((n) => n.id !== "shared" && n.id !== "life" && n.id !== "draft");
     // The run itself: nine digits, `Ctrl+1` through `Ctrl+9`, as `shortcuts.test.ts` pins
     // literally. Read rather than restated, so the two files cannot disagree about the length.
     const digits = shortcut("global", "switchView").chords.length;
@@ -97,6 +102,9 @@ describe("the navigation census", () => {
     // Playtesting, the row just above it.
     expect(chorded.map((n) => n.id)).not.toContain("draft");
     expect(chorded[7].id).toBe("playtesting");
-    expect(chorded).toHaveLength(NAV.length - 2);
+    // …and so is `life`, between Trade and Playtesting on the rail: `Ctrl+7` is still Trade.
+    expect(chorded.map((n) => n.id)).not.toContain("life");
+    expect(chorded[6].id).toBe("trade");
+    expect(chorded).toHaveLength(NAV.length - 3);
   });
 });

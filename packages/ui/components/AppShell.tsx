@@ -87,7 +87,7 @@ const NEW_WINDOW = shortcut("global", "newWindow");
 
 /**
  * The list `Ctrl+1…9` is bound against, by index — `NAV` minus the one row that is not always
- * drawn, and minus Draft & Packs, which arrived with every digit spoken for.
+ * drawn, and minus Life and Draft & Packs, which arrived with every digit spoken for.
  *
  * **Ten destinations against nine digits, and the one that goes without is `shared`, because
  * its row is _conditional_.** Somebody else's binder appears on the rail only once a link has
@@ -111,10 +111,16 @@ const NEW_WINDOW = shortcut("global", "newWindow");
  * renumbering of digits readers have in their fingers. So the new row goes without, and every
  * existing chord stays where it was.
  *
+ * **`life` is the third, for `draft`'s reason** (the Life tracker, 2026-11-20): it sits after
+ * Trade, and a digit for it would push Playtesting and Settings one along. It is the light
+ * edition's alone besides (`edition.ts`'s `LIGHT_ONLY_VIEWS`), so the full edition's rail draws
+ * no row for it — but the exclusion is by name all the same, because the index is the binding:
+ * left in this list it would take `Ctrl+8` from Playtesting in every edition, drawn or not.
+ *
  * Derived rather than written out, so a destination added to `NAV` joins the list by construction
- * and only a deliberate *exclusion* — these two — is a decision.
+ * and only a deliberate *exclusion* — these three — is a decision.
  */
-const UNCHORDED: ReadonlySet<ViewId> = new Set<ViewId>(["shared", "draft"]);
+const UNCHORDED: ReadonlySet<ViewId> = new Set<ViewId>(["shared", "life", "draft"]);
 const CHORD_NAV = NAV.filter((n) => !UNCHORDED.has(n.id));
 
 /**

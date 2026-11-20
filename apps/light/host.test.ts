@@ -6,6 +6,7 @@ import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
 import signScript from "../../scripts/android-release/sign-bundle.sh?raw";
 import releaseYml from "../../.github/workflows/release.yml?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
+import proguardRules from "./src-tauri/gen/android/app/proguard-rules.pro?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
 import nightThemes from "./src-tauri/gen/android/app/src/main/res/values-night/themes.xml?raw";
 import colors from "./src-tauri/gen/android/app/src/main/res/values/colors.xml?raw";
@@ -259,6 +260,70 @@ describe("the light app's web manifest", () => {
   });
 });
 
+describe("the immersive bridge", () => {
+  // `ImmersiveBridge`, from its declaration to the end of the activity.
+  const bridge = (() => {
+    const at = mainActivity.indexOf("inner class ImmersiveBridge");
+    return at < 0 ? "" : mainActivity.slice(at);
+  })();
+  const onWebViewCreate = (() => {
+    const at = mainActivity.indexOf("override fun onWebViewCreate(");
+    return at < 0 ? "" : mainActivity.slice(at, mainActivity.indexOf("\n  }", at));
+  })();
+
+  it("puts the bridge on the WebView under the name the page asks for, before the first page", () => {
+    // wry calls `onWebViewCreate` before its first `loadUrl`; an interface added later reaches
+    // only the pages loaded after it. The name is `packages/ui/lib/core/hostImmersive.ts`'s.
+    expect(onWebViewCreate).toMatch(
+      /webView\.addJavascriptInterface\(ImmersiveBridge\(\), "grimoireImmersive"\)/,
+    );
+  });
+
+  it("hands the page exactly one method, setImmersive", () => {
+    expect(bridge).not.toBe("");
+    const exposed = [...bridge.matchAll(/@JavascriptInterface\s+fun\s+(\w+)\s*\(([^)]*)\)/g)];
+    expect(exposed.map(([, name, params]) => [name, params.trim()])).toEqual([
+      ["setImmersive", "on: Boolean"],
+    ]);
+    // And once in the whole activity: no second interface beside it.
+    expect(mainActivity.match(/@JavascriptInterface/g)).toHaveLength(1);
+    expect(mainActivity.match(/addJavascriptInterface\(/g)).toHaveLength(1);
+  });
+
+  it("hops to the UI thread, hides the system bars behind a swipe, and shows them again", () => {
+    // The WebView calls an interface on a thread of its own; the window is the UI thread's.
+    expect(bridge).toMatch(/runOnUiThread\s*\{/);
+    expect(bridge.indexOf("runOnUiThread")).toBeLessThan(bridge.indexOf("getInsetsController"));
+    expect(bridge).toMatch(/WindowCompat\.getInsetsController\(window, window\.decorView\)/);
+    expect(bridge).toMatch(/\.hide\(WindowInsetsCompat\.Type\.systemBars\(\)\)/);
+    expect(bridge).toMatch(/\.show\(WindowInsetsCompat\.Type\.systemBars\(\)\)/);
+    expect(bridge).toMatch(
+      /systemBarsBehavior =\s*WindowInsetsControllerCompat\.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE/,
+    );
+    for (const name of [
+      "android.webkit.JavascriptInterface",
+      "androidx.core.view.WindowCompat",
+      "androidx.core.view.WindowInsetsControllerCompat",
+    ]) {
+      expect(mainActivity).toContain(`import ${name}\n`);
+    }
+  });
+
+  it("pads the page by the bars' visible insets, so hidden bars leave no band", () => {
+    // `getInsets` (not `getInsetsIgnoringVisibility`): hidden, the bars report zero and the page
+    // takes the screen; the cutout stays in the same call.
+    expect(mainActivity).toMatch(/insets\.getInsets\(/);
+    expect(mainActivity).not.toMatch(/getInsetsIgnoringVisibility/);
+  });
+
+  it("keeps the bridge's method through a release build's R8", () => {
+    expect(proguardRules).toMatch(
+      /-keepclassmembers class com\.mtggrimoire\.app\.MainActivity\$ImmersiveBridge \{\s*@android\.webkit\.JavascriptInterface public <methods>;\s*\}/,
+    );
+    expect(proguardRules).toMatch(/^-keepattributes \*Annotation\*$/m);
+  });
+});
+
 describe("Android's back gesture", () => {
   // The callback MainActivity adds, from `addCallback(` to the end of its `handleOnBackPressed`.
   const callback = (() => {
@@ -395,16 +460,19 @@ describe("the Android launcher icon", () => {
   const at = (density: string, file: string) =>
     launcherPngs[`./src-tauri/gen/android/app/src/main/res/mipmap-${density}/${file}`];
 
-  it.each(Object.entries(DENSITIES))("is drawn at %s: 48dp, and a 108dp layer", (density, scale) => {
-    expect(pngSize(at(density, "ic_launcher.png"))).toEqual({
-      width: 48 * scale,
-      height: 48 * scale,
-    });
-    expect(pngSize(at(density, "ic_launcher_foreground.png"))).toEqual({
-      width: 108 * scale,
-      height: 108 * scale,
-    });
-  });
+  it.each(Object.entries(DENSITIES))(
+    "is drawn at %s: 48dp, and a 108dp layer",
+    (density, scale) => {
+      expect(pngSize(at(density, "ic_launcher.png"))).toEqual({
+        width: 48 * scale,
+        height: 48 * scale,
+      });
+      expect(pngSize(at(density, "ic_launcher_foreground.png"))).toEqual({
+        width: 108 * scale,
+        height: 108 * scale,
+      });
+    },
+  );
 
   it("is adaptive: the app's ground behind, the mark in front", () => {
     expect(adaptiveIcon).toContain('<background android:drawable="@color/ground" />');

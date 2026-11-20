@@ -21,12 +21,13 @@ import { HomePage } from "@/features/home/HomePage";
 import { PriceHistoryDialog } from "@/features/home/priceHistory/PriceHistoryDialog";
 import { SearchPage } from "@/features/search/SearchPage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
+import { editionHas, useEdition } from "@/lib/edition";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { useUpdate, type Update } from "@/lib/useUpdate";
 
 /**
- * **Seven views are a chunk of their own each, fetched the first time the reader opens one**
+ * **Eight views are a chunk of their own each, fetched the first time the reader opens one**
  * (issue #557). Every view used to be a static import here, so the app's first script was one
  * 1.72 MB file (537 KB gzipped) that carried the scanner, `jsQR` for the pairing camera, the
  * Settings panels and four more views the reader may never open in a session — and on the web
@@ -37,7 +38,7 @@ import { useUpdate, type Update } from "@/lib/useUpdate";
  * the Collection, the Wishlist and the Decks view — stay in the first chunk: the app opens on one
  * of them (`useStartView`), the sidebar's drop targets borrow their writes, and a fetch on a
  * press is a blank frame on the views a reader moves between most. Scanner, Settings,
- * Trade, Playtesting, Draft & Packs and Shared are the ones a session can go without, and the
+ * Trade, Life, Playtesting, Draft & Packs and Shared are the ones a session can go without, and the
  * scanner and Settings are where the heavy dependencies are.
  *
  * A named export each, so `.then` lifts it into the default `lazy` wants. **The `import()`
@@ -52,6 +53,14 @@ const SettingsPage = lazy(() =>
 );
 const TradePage = lazy(() =>
   import("@/features/trade/TradePage").then((m) => ({ default: m.TradePage })),
+);
+// **The Life tracker** (2026-11-20): life totals, commander damage and counters for a game at a
+// real table — the light app's alone (`lib/edition.ts`'s `LIGHT_ONLY_VIEWS`), so the desktop app
+// never fetches it, and a light session that never opens it does not either. Its setup and its
+// board are one chunk, as Playtesting's are. This is the light app's desktop face; the phone face
+// draws its own page over the same setup (`apps/light/phone/pages/LifePage.tsx`).
+const LifePage = lazy(() =>
+  import("@/features/life/LifePage").then((m) => ({ default: m.LifePage })),
 );
 const PlaytestingPage = lazy(() =>
   import("@/features/playtesting/PlaytestingPage").then((m) => ({ default: m.PlaytestingPage })),
@@ -77,6 +86,7 @@ const SharedPage = lazy(() =>
 
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
+  const reachesLife = editionHas(useEdition(), "life");
   const openDeckId = useAppStore((s) => s.openDeckId);
   const draftDeckId = useAppStore((s) => s.draftDeckId);
   const goldfish = useAppStore((s) => s.goldfish);
@@ -101,6 +111,11 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "shared") return <SharedPage />;
   if (activeView === "scanner") return <ScannerPage />;
   if (activeView === "trade") return <TradePage />;
+  // Only where the edition draws it: the full edition's rail has no row for it, and nothing there
+  // moves the store onto it (`isStartView` refuses the word) — this is the belt to that, so a stray
+  // `setActiveView("life")` in the desktop app draws an empty view rather than fetching a chunk the
+  // desktop app does not ship a way into.
+  if (activeView === "life") return reachesLife ? <LifePage /> : null;
   if (activeView === "playtesting") return <PlaytestingPage />;
   // No chord, like Shared but for its own reason: it arrived with every digit spoken for, and a
   // digit for it would have pushed Settings off `Ctrl+9` (`AppShell`'s `CHORD_NAV`).

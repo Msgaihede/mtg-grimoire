@@ -11,7 +11,8 @@ import type { ViewId } from "./store";
  * **`trade` sits where `NAV` has it** — after Scanner, before Settings — because both readers of
  * this list filter `NAV` by it: the desktop face's rail and the phone's tab bar draw the rail's
  * order whatever this one says, and `edition.test.ts` holds the two equal so the list never reads
- * as an order nothing draws.
+ * as an order nothing draws. **`life` follows it**, where `NAV` has it, and is the one row here
+ * the full edition does not draw ({@link LIGHT_ONLY_VIEWS}).
  */
 export const LIGHT_VIEWS = [
   "search",
@@ -20,8 +21,26 @@ export const LIGHT_VIEWS = [
   "wishlist",
   "scanner",
   "trade",
+  "life",
   "settings",
 ] as const satisfies readonly ViewId[];
+
+/**
+ * The destinations **only** the light app draws — the views the full edition's `views: null`
+ * leaves out of "every destination `NAV` holds".
+ *
+ * **The Life tracker** (2026-11-20, `features/life/`): life totals, commander damage and counters
+ * on a phone or a tablet lying on the table, or a browser window everyone reads. The owner wants
+ * it on the light app's two hosts and not in the desktop app, whose rail is the collection's tools.
+ *
+ * **An exclusion rather than a list for the full edition**, so `views: null` keeps its promise
+ * that the full edition cannot fall behind a view added to `NAV` — a new desktop view still joins
+ * by construction, and only a view named here is a decision. Every reader of the full edition's
+ * set goes through {@link editionHas}: `AppShell`'s rail and chords, `useReaches`, Settings'
+ * opening-view picker (`StartViewPanel`), and `isStartView`, which reads a stored word naming one
+ * of these as no view at all.
+ */
+export const LIGHT_ONLY_VIEWS: readonly ViewId[] = ["life"];
 
 export type LightView = (typeof LIGHT_VIEWS)[number];
 
@@ -108,8 +127,8 @@ export function isLightView(value: string): value is LightView {
  */
 export interface Edition {
   id: "full" | "light";
-  /** The rail's rows. `null` is every destination `NAV` holds, so the full edition cannot fall
-   *  behind a view added to the rail. */
+  /** The rail's rows. `null` is every destination `NAV` holds but {@link LIGHT_ONLY_VIEWS}, so
+   *  the full edition cannot fall behind a view added to the rail. */
   views: readonly ViewId[] | null;
   /** Whether this window draws its own window verbs (Minimize, Maximize, Close) and drag regions.
    *  False wherever a browser or an OS owns the frame; the header band is drawn either way. */
@@ -162,8 +181,9 @@ export const LIGHT_EDITION: Edition = {
   updater: false,
 };
 
+/** Whether `edition` draws `view` — the one question every reader of an edition's views asks. */
 export function editionHas(edition: Edition, view: ViewId): boolean {
-  return edition.views === null || edition.views.includes(view);
+  return edition.views === null ? !LIGHT_ONLY_VIEWS.includes(view) : edition.views.includes(view);
 }
 
 /**

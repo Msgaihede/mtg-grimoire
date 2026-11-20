@@ -13,17 +13,27 @@ import {
   FULL_EDITION,
   isLightView,
   LIGHT_EDITION,
+  LIGHT_ONLY_VIEWS,
   LIGHT_SETTINGS,
   LIGHT_START,
   LIGHT_VIEWS,
 } from "@/lib/edition";
 
 describe("the two editions", () => {
-  it("lets the full edition draw every destination", () => {
-    for (const { id } of NAV) expect(editionHas(FULL_EDITION, id)).toBe(true);
+  it("lets the full edition draw every destination but the light app's own", () => {
+    for (const { id } of NAV) {
+      expect(editionHas(FULL_EDITION, id)).toBe(!LIGHT_ONLY_VIEWS.includes(id));
+    }
+    // Written out, for the rule that an assertion must not read its own constant: the Life
+    // tracker is the light app's, and nothing else is.
+    expect(NAV.filter((n) => !editionHas(FULL_EDITION, n.id)).map((n) => n.id)).toEqual(["life"]);
   });
 
-  it("gives the light edition seven destinations, in the rail's own order", () => {
+  it("draws every light-only view in the light edition", () => {
+    for (const view of LIGHT_ONLY_VIEWS) expect(editionHas(LIGHT_EDITION, view)).toBe(true);
+  });
+
+  it("gives the light edition eight destinations, in the rail's own order", () => {
     // The rail filters `NAV`, so a list written in another order would be a list the rail
     // silently re-sorts — and the phone's tab bar reads this one directly.
     const railOrder = NAV.filter((n) => editionHas(LIGHT_EDITION, n.id)).map((n) => n.id);
@@ -35,6 +45,7 @@ describe("the two editions", () => {
       "wishlist",
       "scanner",
       "trade",
+      "life",
       "settings",
     ]);
   });
@@ -57,6 +68,7 @@ describe("the two editions", () => {
 
   it("narrows a word to a light view without walking the prototype", () => {
     expect(isLightView("decks")).toBe(true);
+    expect(isLightView("life")).toBe(true);
     expect(isLightView("home")).toBe(false);
     expect(isLightView("toString")).toBe(false);
   });

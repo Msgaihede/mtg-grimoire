@@ -191,6 +191,13 @@ describe("useStartView", () => {
     expect(isStartView("toString")).toBe(false);
     expect(isStartView("constructor")).toBe(false);
   });
+
+  /** The Life tracker is the light app's alone (`LIGHT_ONLY_VIEWS`), and the stored start view is
+   *  the full edition's: a stored `"life"` names a view the desktop's rail has no row for. */
+  it("reads a view only the light app draws as no view at all", () => {
+    expect(isStartView("trade")).toBe(true);
+    expect(isStartView("life")).toBe(false);
+  });
 });
 
 /**
