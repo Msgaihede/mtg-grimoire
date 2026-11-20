@@ -12,7 +12,7 @@ source does — re-count rather than trust this page.
 ## The seven formats
 
 `EXPORT_FORMATS` (`packages/ui/features/transfer/formats.ts`) — **counted**, 7 entries, in the order the
-export dialog's radio row draws them:
+export dialog's format picker draws them:
 
 | Format | Printing | Finish | Category | Sections | Read back? |
 | --- | --- | --- | --- | --- | --- |
@@ -23,6 +23,15 @@ export dialog's radio row draws them:
 | Archidekt | Set + number (lowercase) | `*F*`/`*E*` | `[Name]` bracket, `{noDeck}` | Reader's own category names | Yes |
 | TCGplayer | `[SET] number` | — (chosen in cart) | — | Flat, no headings at all | **No** |
 | CSV | Set + number columns | `Finish` column | `Category` column, `Category active` | One row per card, header row | **Yes, since Task 10** |
+
+**The picker is two halves** (issue #1702): `EXPORT_FORMAT_PLACE` puts Plain text, Arena, Archidekt
+and CSV on the radio row and MTGO, Moxfield and TCGplayer behind a **More formats** dropdown after it —
+the app's searchable `<Dropdown>` (the set filter's shell), drawn by `export/MoreFormats.tsx` on both
+faces. Each half keeps `EXPORT_FORMATS`' order. A pick in the dropdown is the export's format through
+the same `chooseFormat` a radio press calls; while it holds the format no radio is checked, the trigger
+reads the format's name in the radios' gold, and its accessible name is `More formats: <format>`.
+Re-picking the format already chosen does nothing, so it never resets the reader's fields. The place is
+a `Record`, so a new writer does not compile until it is given a half.
 
 **TCGplayer is the one write-only format now.** `decklists.test.ts`'s `READABLE` array excludes it
 by name — `parse.ts`'s bracket group is anchored to the end of the line, so `2 Lightning Bolt
@@ -358,6 +367,46 @@ date on it. What a pass owes an answer to: the box on a deck whose only inactive
 Archidekt's `{noDeck}` round trip, and whether the two count lines can be made to appear together
 by any sequence of presses — the fences say no, and only the window can say it about the shipped
 build.
+
+## The example lines — issue #1701, 2026-11-20
+
+Both faces draw **a few lines of made-up cards in the chosen format** under the field row, open,
+while the decklist disclosure stays shut — so a reader can tell the formats apart without opening
+their own text. On a deck, Archidekt's example reads:
+
+```
+Commander
+1x Example Commander (set) 1 [Commander]
+
+Example category
+4x Example Card (set) 123 [Example category] *F* ^Buy,#0066ff^
+1x Another Card (set) 45 [Example category]
+```
+
+- **Written by the real writer, never spelled out.** `export/example.ts`'s `exampleText` is
+  `formatExport` over a fixed pile (`EXAMPLE_CARDS`) with the reader's own format and fields, so
+  the example follows every checkbox and cannot drift from what Copy and Save as… write.
+  `useExportModel` returns it as `example`, beside `text`.
+- **Made-up cards, not the first lines of the reader's file.** An example has to show what the
+  format *can* say — a finish marker, a pile, a label, a section heading — which the reader's first
+  three cards may not (a collection with no foils has no `*F*`), and a plainly invented name cannot
+  be mistaken for a line of the real export.
+- **One pile per surface, holding only that surface's facts** — the deck's is a commander and two
+  cards in one pile (so Arena's and Moxfield's headings, MTGO's `SB:` and Archidekt's piles all
+  show); the collection's carries condition and the copy's own facts; the wishlist's has no set
+  name. The record is total over `TransferSurface`. **Counted**: 3 to 6 lines in every format on
+  every surface with the default fields (`example.test.ts` holds the bound, and that every CSV
+  column a surface can write is filled in at least one example row).
+- **Untouched by the row filters.** Every example card is in a switched-on pile with a name of its
+  own, so neither filter, `omittedCount` nor the fold can remove a line — which cards reach the
+  file is the count lines' question, not the example's.
+- **Drawn by one component**, `export/ExportExample.tsx`, in `ExportDialog` and the light app's
+  `ExportSheet`: a `<figure>` named `Example`, one block per line with a hanging indent (a wrapped
+  Archidekt line at a phone's width still starts where its line starts), a dashed border against
+  the preview's solid one. **Not a `<pre>`**: the decklist preview is the dialog's one `<pre>`,
+  and the suites and stories find it that way.
+- **No golden or Rust change** — the writer did not move, and the plain-text mirror has no example
+  to draw.
 
 ## The field registry and the intersection rule
 
@@ -1336,6 +1385,9 @@ deck-specific rules this feature reads or reaches into — categories, validatio
 `inactiveCopies` — the three answers the writer already knew privately, each now a named export
 with a test under it), `export/ExportDialog.tsx` (the checkbox, `offersInactive`, the filter above
 `formatExport` and the count line) and `packages/ui/lib/store.ts` (`ExportPrefs.includeInactive`).
+
+The example lines (issue #1701) are `export/example.ts` (the made-up piles and `exampleText`),
+`export/ExportExample.tsx` (the one component both faces draw) and `useExportModel`'s `example`.
 
 The "Add cards to collection" box is three files of that tree: `destinations/DeckPreview.tsx`
 (`OwnCopies`, `OWN_COPIES_HINT`, and the outcome line), `destinations/NewDeckPreview.tsx` (which

@@ -4555,6 +4555,109 @@ pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
     Ok(out)
 }
 
+/// The colour identity of one deck's command zone, per list — the home page's *Deck colors*
+/// widget's fact, for filing a Commander deck under its colour combination.
+///
+/// **Three answers per list, not two.** `Some("WU")` is a command zone of white and blue;
+/// `Some("")` is a **colourless** commander (Kozilek, a Karn) — a deck that *has* a command zone
+/// and is filed under colourless; `None` is a list with no card in its command zone at all. The
+/// last is the one TypeScript falls back from, to the deck's printed pips ([`pip_costs`]), so
+/// folding it into `Some("")` would file every commanderless deck as colourless.
+///
+/// **Absent rather than empty**, [`DeckPipCosts`]' rule: a deck with no commander in either list
+/// answers no entry, and the reading side treats a deck it cannot find as a deck with no command
+/// zone.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckCommanderIdentity {
+    pub deck_id: i64,
+    /// The Actual (`live`) list's command zone — the union of every card there, partners and a
+    /// background alike, as WUBRG letters in that order.
+    pub identity: Option<String>,
+    /// The theory list's command zone, by the same rule — so a plan that swaps the commander
+    /// files under the colours it would become.
+    pub theory_identity: Option<String>,
+}
+
+/// The command zone's identity letters, one row per list of every deck that has one.
+///
+/// **The pile is the active `commander` category, and no format is asked.** Which formats have a
+/// command zone is `format_specs.commanderRule`, TypeScript's question (the same reason
+/// [`bracket_reads`] takes ids rather than a `WHERE format_key`): a deck that filed a card under
+/// its Commander pile has said what its commander is, and whether that deck is drawn as a
+/// Commander deck is the page's to decide. A pile switched off counts toward nothing, as
+/// everywhere else.
+///
+/// **`cards.color_identity` rather than anything derived here** — Scryfall's precomputed letters
+/// already fold in DFC backs, colour indicators and rules-text symbols
+/// ([`DeckCardRow::color_identity`]). The join is inner, [`PIP_COSTS_SQL`]'s: a commander whose
+/// printing has left `cards` has no identity this read could know, so it contributes nothing —
+/// and if it was the only one, the list has no row and answers `None`. A NULL or `''` identity is coalesced to `''`, so a
+/// colourless commander still makes a row, and `group_concat` hands the union's raw letters to
+/// [`wubrg`].
+const COMMANDER_IDENTITIES_SQL: &str = "
+SELECT dc.deck_id, dc.variant = 'theory', group_concat(coalesce(c.color_identity, ''), '')
+  FROM deck_cards dc
+  JOIN decks d ON d.id = dc.deck_id AND d.draft = 0
+  JOIN deck_categories cat ON cat.id = dc.category_id
+  JOIN cards c ON c.id = dc.card_id
+ WHERE dc.variant IN ('live','theory')
+   AND cat.is_active = 1
+   AND cat.kind = 'commander'
+ GROUP BY dc.deck_id, dc.variant
+ ORDER BY dc.deck_id, dc.variant";
+
+/// The colour letters in `letters`, once each, in canonical **WUBRG** order — anything else
+/// (a stray `C`, a separator) is dropped. A union of `"R"` and `"W"` is `"WR"` whichever
+/// commander was filed first, so two decks of one pairing always file under one key.
+fn wubrg(letters: &str) -> String {
+    "WUBRG".chars().filter(|l| letters.contains(*l)).collect()
+}
+
+/// Every deck's command-zone identity, per list — one round trip for the whole home page.
+///
+/// **No parameters, [`pip_costs`]' reasoning**: the widget files every deck at once, so a
+/// per-deck read would be one query per deck for a handful of letters. Ordered by deck id, and
+/// an unsaved draft deck has no entry (the `JOIN decks … d.draft = 0`), as in every gallery read.
+pub fn commander_identities(conn: &Connection) -> Result<Vec<DeckCommanderIdentity>, String> {
+    let mut stmt = conn
+        .prepare(COMMANDER_IDENTITIES_SQL)
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, bool>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    // [`pip_costs`]' fold: at most two rows per deck, contiguous, `live` before `theory`.
+    let mut out: Vec<DeckCommanderIdentity> = Vec::new();
+    for row in rows {
+        let (deck_id, theory, letters) = row.map_err(|e| e.to_string())?;
+        let last = match out.last_mut() {
+            Some(last) if last.deck_id == deck_id => last,
+            _ => {
+                out.push(DeckCommanderIdentity {
+                    deck_id,
+                    identity: None,
+                    theory_identity: None,
+                });
+                out.last_mut().expect("the entry just pushed")
+            }
+        };
+        let identity = Some(wubrg(&letters));
+        if theory {
+            last.theory_identity = identity;
+        } else {
+            last.identity = identity;
+        }
+    }
+    Ok(out)
+}
+
 /// One card of a deck as the bracket estimator reads it — **five fields, and there is no sixth.**
 ///
 /// `packages/ui/features/decks/validation/bracket.ts` is the whole of the audience: `estimateBracket`
@@ -10835,6 +10938,199 @@ mod tests {
             all.iter().map(|d| d.deck_id).collect::<Vec<_>>(),
             vec![burn.id, angels.id],
             "one entry per deck that has something to say, and no deck twice"
+        );
+    }
+
+    // ── The command zone's identity ─────────────────────────────────────────────────────
+    //
+    // [`commander_identities`], which the home page's Deck colors widget files decks from. Its
+    // three answers per list — letters, `""`, absent — are the whole contract, so each test
+    // below pins one of them against the one beside it.
+
+    /// One deck's `(live, theory)` command-zone identities, or `None` if the deck is absent.
+    fn identities(conn: &Connection, deck_id: i64) -> Option<(Option<String>, Option<String>)> {
+        commander_identities(conn)
+            .unwrap()
+            .into_iter()
+            .find_map(|d| (d.deck_id == deck_id).then_some((d.identity, d.theory_identity)))
+    }
+
+    fn letters(s: &str) -> Option<String> {
+        Some(s.to_owned())
+    }
+
+    /// **The command zone, and only the command zone**: a mono-red commander files its deck as
+    /// red, whatever colours the ninety-nine around it are.
+    #[test]
+    fn a_commander_files_its_deck_under_its_own_identity() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Bolt Tribal", "commander")).unwrap();
+        add(&conn, deck.id, "serra-lea", main_of(&conn, deck.id), 1);
+        add(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            kind_of(&conn, deck.id, "commander"),
+            1,
+        );
+
+        assert_eq!(
+            identities(&conn, deck.id),
+            Some((letters("R"), None)),
+            "the white card in the main deck is not the command zone's"
+        );
+    }
+
+    /// **Partners union, in WUBRG order whichever was filed first** — so a red and a white
+    /// commander are `"WR"`, the key every Boros deck files under, not `"RW"`.
+    #[test]
+    fn partners_union_their_identities_in_wubrg_order() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Boros", "commander")).unwrap();
+        let zone = kind_of(&conn, deck.id, "commander");
+        add(&conn, deck.id, "bolt-lea", zone, 1);
+        add(&conn, deck.id, "serra-lea", zone, 1);
+
+        assert_eq!(identities(&conn, deck.id), Some((letters("WR"), None)));
+    }
+
+    /// **A colourless commander is `Some("")`, not `None`** — a deck with a command zone, filed
+    /// under colourless, where `None` would send TypeScript to the pips. Both spellings of
+    /// "no colours" (`''` and NULL) read alike, and either contributes the empty set to a union.
+    #[test]
+    fn a_colourless_commander_is_an_empty_identity_and_not_an_absent_one() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,mana_cost,cmc,type_line,color_identity,raw)
+               VALUES
+                 ('karn','o5','Karn, Silver Golem','usg','298','en','normal','rare','{5}',5.0,
+                  'Legendary Artifact Creature — Construct','','{}'),
+                 ('golem','o6','Unknown Golem','usg','299','en','normal','rare','{4}',4.0,
+                  'Legendary Artifact Creature — Golem',NULL,'{}');"#,
+        )
+        .unwrap();
+        let karn = create_deck(&conn, &input("Karn", "commander")).unwrap();
+        let golem = create_deck(&conn, &input("Golem", "commander")).unwrap();
+        add(
+            &conn,
+            karn.id,
+            "karn",
+            kind_of(&conn, karn.id, "commander"),
+            1,
+        );
+        add(
+            &conn,
+            golem.id,
+            "golem",
+            kind_of(&conn, golem.id, "commander"),
+            1,
+        );
+
+        assert_eq!(identities(&conn, karn.id), Some((letters(""), None)));
+        assert_eq!(
+            identities(&conn, golem.id),
+            Some((letters(""), None)),
+            "a NULL identity is colourless too"
+        );
+
+        add(
+            &conn,
+            karn.id,
+            "bolt-lea",
+            kind_of(&conn, karn.id, "commander"),
+            1,
+        );
+        assert_eq!(
+            identities(&conn, karn.id),
+            Some((letters("R"), None)),
+            "a colourless partner adds nothing to the union"
+        );
+    }
+
+    /// **Each list answers for itself**: a plan's commander alone is a present deck with no
+    /// live identity, and a live commander beside it fills the other half without touching it.
+    #[test]
+    fn a_theory_commander_answers_the_theory_half_alone() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Angels", "commander")).unwrap();
+        let zone = kind_of(&conn, deck.id, "commander");
+        add_card(
+            &conn,
+            deck.id,
+            "serra-lea",
+            Some(plan_pile(&conn, deck.id, zone)),
+            None,
+            THEORY,
+            None,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(
+            identities(&conn, deck.id),
+            Some((None, letters("W"))),
+            "a plan's commander, and no live one"
+        );
+
+        add(&conn, deck.id, "bolt-lea", zone, 1);
+        assert_eq!(
+            identities(&conn, deck.id),
+            Some((letters("R"), letters("W")))
+        );
+    }
+
+    /// **A deck with no command zone is absent**, whether it never had a commander or switched
+    /// its Commander pile off — a pile switched off counts toward nothing, here as everywhere.
+    #[test]
+    fn a_deck_with_no_active_commander_is_absent() {
+        let conn = seeded();
+        let burn = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add(&conn, burn.id, "bolt-lea", main_of(&conn, burn.id), 4);
+        let off = create_deck(&conn, &input("Off", "commander")).unwrap();
+        let zone = kind_of(&conn, off.id, "commander");
+        add(&conn, off.id, "bolt-lea", zone, 1);
+        crate::deck_meta::set_category_active(&conn, zone, false).unwrap();
+
+        assert_eq!(identities(&conn, burn.id), None, "no commander at all");
+        assert_eq!(
+            identities(&conn, off.id),
+            None,
+            "a Commander pile switched off"
+        );
+    }
+
+    /// One entry per deck with a command zone, by deck id — and an unsaved draft deck has none,
+    /// as in every gallery read.
+    #[test]
+    fn every_saved_deck_with_a_commander_is_one_entry_by_id() {
+        let conn = seeded();
+        let first = create_deck(&conn, &input("First", "commander")).unwrap();
+        let second = create_deck(&conn, &input("Second", "commander")).unwrap();
+        let draft = create_deck(&conn, &input("Draft", "commander")).unwrap();
+        for deck in [&second, &first, &draft] {
+            add(
+                &conn,
+                deck.id,
+                "bolt-lea",
+                kind_of(&conn, deck.id, "commander"),
+                1,
+            );
+        }
+        conn.execute(
+            "UPDATE decks SET draft = 1 WHERE id = ?1",
+            params![draft.id],
+        )
+        .unwrap();
+
+        assert_eq!(
+            commander_identities(&conn)
+                .unwrap()
+                .iter()
+                .map(|d| d.deck_id)
+                .collect::<Vec<_>>(),
+            vec![first.id, second.id],
+            "by deck id, and the draft deck not at all"
         );
     }
 

@@ -24,7 +24,8 @@ use async_graphql::futures_util::future::BoxFuture;
 use async_graphql::{Context, Enum, EnumType, Json, Object, Result};
 use grimoire_core::activity::{recent, ActivityEntry as CoreActivityEntry};
 use grimoire_core::deck::{
-    get_deck, list_decks, list_format_specs, pip_costs, DeckCardRow, DeckDetail as CoreDeckDetail,
+    commander_identities, get_deck, list_decks, list_format_specs, pip_costs, DeckCardRow,
+    DeckCommanderIdentity as CoreCommanderIdentity, DeckDetail as CoreDeckDetail,
     DeckPipCosts as CorePipCosts, DeckRow, DeckValue as CoreDeckValue, FormatSpecRow,
     PipCost as CorePipCost,
 };
@@ -632,6 +633,28 @@ impl DeckPipCosts {
     /// Each cost once, in no particular order.
     async fn costs(&self) -> Vec<PipCost> {
         self.0.costs.iter().cloned().map(PipCost).collect()
+    }
+}
+
+/// The colour identity of one deck's command zone, per list.
+pub struct DeckCommanderIdentity(pub CoreCommanderIdentity);
+
+/// The colour identity of one deck's command zone (its active Commander category), per list —
+/// the union of every commander there, partners and backgrounds included. No format is asked: a
+/// deck of any format with a card in its Commander category answers.
+#[Object(rename_fields = "camelCase")]
+impl DeckCommanderIdentity {
+    async fn deck_id(&self) -> i64 {
+        self.0.deck_id
+    }
+    /// The colour identity of the live list's command zone, as WUBRG letters run together
+    /// (`"WU"`); `""` for a colourless commander; absent when the list has no commander.
+    async fn identity(&self) -> Option<&str> {
+        self.0.identity.as_deref()
+    }
+    /// The theory list's, by the same rule.
+    async fn theory_identity(&self) -> Option<&str> {
+        self.0.theory_identity.as_deref()
     }
 }
 
@@ -1411,6 +1434,19 @@ impl DecksQuery {
                 .filter(|p| !p.costs.is_empty())
                 .map(|p| DeckPipCosts(p.clone()))
                 .collect(),
+        ))
+    }
+
+    /// Every deck's command-zone colour identity, live and theory lists apart, by deck id. A
+    /// deck with no commander in either list is absent.
+    #[graphql(directive = invalidatedBy::apply(roots(&["decks"])))]
+    async fn deck_commander_identities(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<DeckCommanderIdentity>>> {
+        let identities = read(ctx, commander_identities)?;
+        Ok(Some(
+            identities.into_iter().map(DeckCommanderIdentity).collect(),
         ))
     }
 

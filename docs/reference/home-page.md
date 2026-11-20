@@ -163,6 +163,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | --- | --- | --- |
 | `summary` | Collection, Decks, Wishlist and Value figures; each a press that opens that view | `{ hide }` |
 | `decks` | deck shortcuts — cover, format, card count, value | `{ scope: recent·pinned·archived, deckIds, art }` |
+| `deckColors` | **Deck colors** — all 32 colour combinations, the reader's decks in each (name or cover, declared bracket, tags), the empty ones drawn empty; a deck opens in the editor (§19) | `{ face: name·art, limit: all·first, sort: alpha·pie, scope: all·chosen, folderIds, unfiled, subfolders, deckOrder, bracket, tags, names, empty, archived }` |
 | `folders` | collection and wishlist folder shortcuts with counts and value | `{ cabinets: both·collection·wishlist, collectionFolderIds, wishlistFolderIds, captions }` |
 | `collectionValue` | the collection's total and its split along one dimension, as bars or a list | `{ dimension, chart: bars·list, figures }` |
 | `valueHistory` | the same money over time — one line per bucket with one lit, the buckets beside or under it, and a readout of the hovered day (§14) | `{ split: total·type·color·set, window: 30d·90d·1y·all, measure: value·change, figures, markers }` |
@@ -566,6 +567,7 @@ Each goes **in the module its data lives in** — `search.rs` is the pattern.
 | `wishlist_value_history` | `value_history.rs` | the same shape over user schema v66's `wish_snapshots` — the wishlist's value per kept period plus a live point at `wishlist_summary`'s `cost` (§14) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
 | `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — under `compare: collection` every deck that is not virtual, its live list against its own group; under `theory` every deck that keeps a plan, its live list against that plan, by exact printing or — `theoryMatch: missing` — any printing (§15) |
+| `deck_commander_identities` | `deck.rs` | `[{ deckId, identity, theoryIdentity }]` — every deck's command-zone colour identity per list, WUBRG letters run together, `""` for a colourless commander, `null` for a list with no commander; a deck with neither is absent (§19) |
 | `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
 | `upcoming_sets` | `upcoming_sets.rs` | `{ today, sets: [{ code, name, releasedAt, previewed, inDecks }] }` — sets not yet out, soonest first (§15) |
 | `every_deck_todo_list` | `deck_todos.rs` | `[{ id, deckId, deckName, archived, todosOpen, title, body, updatedAt }]` — every to-do list whose body is not empty, archived decks' included, most recently edited first (§16) |
@@ -2485,3 +2487,73 @@ copies of it. The vocabulary, the state model and the stored table are
   catalogue, runs the query through `useGraphQL` and draws the spec in the card's fit. It says so
   instead when the definition is gone, the spec is refused, the document is refused, or the graph is
   not on this host (the light app). A partial answer is drawn with one dim line under it.
+
+## 19. Deck colors — `deckColors`, over `deck_commander_identities` (2026-11-20)
+
+A reader building a deck for every colour identity keeps a sheet: thirty-two rows, the decks
+written beside the colours they play, the empty rows the ones still to build. The request came
+with the spreadsheet itself. This kind is that sheet kept for them — filled from their own decks,
+refreshed by every deck write, and pressable. `deckColors.ts` holds every rule as a pure function;
+`widgets/DeckColorsWidget.tsx` draws the answer; `deckColorsDrag.ts` is the arranging gesture.
+Catalogue only, directly after `decks`, for every catalogue-only kind's reason (§3).
+
+### What colour a deck is
+
+**The command zone's colour identity first, the cards' printed colours otherwise.** A Commander
+deck is filed by its commander, which is the rule the format builds the deck by and the column a
+reader's sheet sorts by, and it is right even half-built: an Alesha deck holding only red cards
+is still Mardu. The fact is Rust's — `deck_commander_identities` (`deck.rs`'
+`commander_identities`), the union of every card's identity in the deck's **active** `commander`
+piles, so partners and a background fold together — and it is new with this widget: no read
+answered it before, and `deck_get` per deck is the heaviest read in the feature for one string
+each. A deck with no commander is filed by `deck_pip_costs` through the gallery's own `deckPips`
+and `tilePips`, so it lands where its tile's colour bar says, with `{C}` left out (a colourless pip
+is a kind of mana, not a colour). Both read the list the tile reads (`tileList`), so a `THEORY
+ONLY` deck is filed by its plan. **A deck with neither — empty, or nothing but lands — is not
+colourless**: it is counted apart and named in the summary line's hint.
+
+The read is a graph root field too (`deckCommanderIdentities`), as every home read must be
+(`graphCoverage.test.ts`); the widget's other three reads already were (`decks`, `deckPipCosts`,
+`deckFolders`), and each shares the gallery's query key, so a home page open beside the gallery
+reads each once.
+
+### What a row shows, and the settings
+
+The combination's mana symbols (`ms-cost`, sized by their box — `.ms-cost` sets its own
+`font-size: 0.95em`, which beats a class on the glyph), its name, and its decks as chips. Names
+are the community's: the guilds, the shards and wedges, the Nephilim for four colours
+(`Glint-Eye` lacks white … `Yore-Tiller` lacks green), `WUBRG`. Colourless sits at the foot of
+the mono section, where the reader's sheet put it.
+
+| Setting | Options | Default |
+| --- | --- | --- |
+| `face` | the deck's **name**, or its **cover** (the art crop, credited in the hint; a deck with no cover draws its name on the felt) | name |
+| `limit` | **all** decks in a row, or the **first** with a `+N` that opens the rest in place — the request's alternative layout | all |
+| `sort` | combinations **alphabetically** (the order the reader's sheet kept) or in **colour-pie** order (allied then enemy, shards then wedges) | alphabetical |
+| `scope` | **all decks**, or **chosen folders** — the whitelist (`folderIds`, `unfiled` for decks in no folder, `subfolders` on unless turned off), drawn by `DeckColorsWidgetSettings` | all |
+| `bracket` · `tags` · `names` · `empty` | the declared bracket (`B3`), the deck's tags (first one, `+N`), the combination names (never on a two-cell tile), empty combinations | on |
+| `archived` | archived decks counted | off |
+
+**The bracket is the declared one only.** The gallery's `~3` is estimated from every card of every
+deck (`deck_bracket_reads`), which the read graph does not carry; a deck on Auto shows no bracket
+here rather than a guess. Adding the estimate is a graph field for `deck_bracket_reads` first.
+
+### Arranging, and what it stores
+
+Which deck stands first in a combination is the reader's: `deckOrder` in the config, every deck id
+the reader has placed. A chip is dragged onto another chip of **its own** combination (the payload
+carries the combination, and `canDrop` compares it — a drag cannot change a deck's colours), or
+moved one place with **Ctrl+← / Ctrl+→** — `StickyNotesWidget`'s chord, plain arrows left for a
+caret walk. A move stores the row's whole new order at the end of the list (`rearranged`), which
+leaves every other row's relative order untouched and drops ids of deleted decks — a write the
+reader asked for, never one on render. Decks never placed stand after the placed ones, by name.
+**Reset deck order** in the settings removes the key. A keyboard move hands the chip its focus back
+after the write draws: React re-inserts a moved keyed node, which blurs it in Chromium.
+
+### The box
+
+The body scrolls rather than cutting to whole rows (§17's rule for lists): the rows are the
+subject, and a cut would drop exactly the empty ones. From ~300px a column the five sections lay
+out in balanced CSS columns (up to three), never split across two, so an eight-cell card shows the
+whole sheet. A two-cell tile draws the symbols a size down and no names. A summary line heads the
+body: `14 of 32 colors · 15 decks`, and the uncoloured count when there is one.

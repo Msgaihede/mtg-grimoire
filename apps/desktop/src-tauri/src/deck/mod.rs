@@ -145,6 +145,21 @@ pub async fn deck_pip_costs(
         .map_err(|e| format!("the deck colours could not be read: {e}"))?
 }
 
+/// Every deck's command-zone colour identity, per list, for the home page's Deck colors widget.
+/// **Read-only** connection, blocking pool, and no arguments — [`deck_pip_costs`]' shape; see
+/// [`commander_identities`] for what `""` and an absent list each mean.
+#[tauri::command]
+pub async fn deck_commander_identities(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<DeckCommanderIdentity>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        commander_identities(&crate::sync::lock_db_read(&state))
+    })
+    .await
+    .map_err(|e| format!("the commanders' colours could not be read: {e}"))?
+}
+
 /// Everything the Commander bracket estimate is made of, for the decks named. **Read-only**
 /// connection, blocking pool.
 ///

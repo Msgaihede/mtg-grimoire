@@ -50,6 +50,7 @@ describe("SettingsNav", () => {
       "Integrations",
       "Tags",
       "Appearance",
+      "Sound",
       "Scanner",
       "Storage and data",
       "Errors",

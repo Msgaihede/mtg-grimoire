@@ -14,6 +14,7 @@ import { ScanSoundsPanel } from "@grimoire/ui/features/settings/ScanSoundsPanel"
 import { SyncPanel } from "@grimoire/ui/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@grimoire/ui/features/settings/TheoryMarksPanel";
 import { VersionPanel } from "@grimoire/ui/features/settings/VersionPanel";
+import { VolumePanel } from "@grimoire/ui/features/settings/VolumePanel";
 import {
   GROUPS,
   PANELS,
@@ -83,6 +84,8 @@ function Panel({ id, log }: { id: LightPanel; log: ErrorLog }): JSX.Element {
       return <TheoryMarksPanel />;
     case "labels":
       return <LabelsPanel />;
+    case "volume":
+      return <VolumePanel />;
     case "scan-sounds":
       return <ScanSoundsPanel />;
     case "cache":
@@ -130,7 +133,7 @@ function Danger(): JSX.Element {
  * one; a group in the URL would be a change to that grammar and to the desktop's adapter.
  *
  * **No search box.** The desktop's answers a reader with a word rather than a category across
- * every panel it has; this list is seven rows on one screen, and the box would cost the screen's
+ * every panel it has; this list is one screen of rows, and the box would cost the screen's
  * first line to find what is already on it.
  *
  * Nothing here asks where it is running or which edition it is: this face draws the light

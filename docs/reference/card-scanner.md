@@ -1446,7 +1446,9 @@ the web build precaches them with the shell).
   `<audio>`'s `play()` without a fresh gesture, and a card lands seconds after the last press. One
   `AudioContext`, each file fetched and decoded once (preloaded as the page mounts), resumed on any
   press if the platform suspended it; one sound at a time, a new one stopping the last. A host
-  without Web Audio, or a file that will not decode, is a silent scan, never an error.
+  without Web Audio, or a file that will not decode, is a silent scan, never an error. **Every
+  sound goes through one gain at the app's volume** (issue #1703, Settings › Sound › Volume,
+  `packages/ui/lib/volume.ts`), made with the context and eased to a new level while a sound rings.
 - **The setting is `scansounds.rs`**: one `app_meta` row (`scan_sounds`) — on or off, and the four
   floors, default 1, 10, 100 and 1000 **in the reader's marketplace currency**, never converted.
   The write refuses a ladder that does not climb (`TIERS_MUST_CLIMB`; the page's `ladderRefusal`

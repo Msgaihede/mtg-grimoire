@@ -540,6 +540,9 @@ pub fn run() {
             // writes below.
             deck::deck_pip_costs,
             deck::deck_bracket_reads,
+            // The home page's Deck colors widget: every deck's command-zone identity at once,
+            // a gallery-wide read like the two above.
+            deck::deck_commander_identities,
             // The home page's deck tiles — every deck's value at one shop, in one read. A
             // third gallery-wide read, so it sits with the two above rather than with the
             // card writes below.
@@ -912,6 +915,15 @@ pub fn run() {
                 window::open_sized_to_monitor(&main);
                 camera::install(&main);
             }
+            // **The app's name in the Windows volume mixer** (issue #1703): every window's sound
+            // comes out of one WebView2 audio process, so one watcher for the process answers all
+            // of them, later windows included. A thread of its own; a no-op off Windows.
+            crate::mixer::start(
+                app.config()
+                    .product_name
+                    .as_deref()
+                    .unwrap_or("MTG Grimoire"),
+            );
 
             // Everything else happens on a thread of its own, and the window is already up to
             // wait for it. Tauri calls this closure from inside the event loop, on the window's

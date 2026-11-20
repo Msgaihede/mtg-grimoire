@@ -226,7 +226,8 @@ published here. The artifact's `project/design-system.json` still names the old 
 What was done, in order:
 
 1. **Build and grade locally**: `buildCmd`, then `package-build.mjs`, then
-   `node .design-sync/card-art.mjs --copy ds-bundle`, `package-validate.mjs` and a scoped
+   `node .design-sync/card-art.mjs --copy ds-bundle`, `node .design-sync/artifact/react18-audit.mjs`
+   (since 2026-11-19; it must exit 0), `package-validate.mjs` and a scoped
    `compare.mjs --components …`. No upload channel is involved.
 2. **`node .design-sync/artifact/bundle-css.mjs`** rebuilds `components/bundle.css`. The migration
    made it by joining `styles.css`, `fonts/fonts.css` and `_ds_bundle.css` under section comments
@@ -247,6 +248,8 @@ What was done, in order:
    from the artifact's own `components/lib/`, with the bundle **inlined**, and photographs it.
    Measured 2026-10-01: all six cards mounted with no script error and every image loaded from
    `card-art/normal/`.
+   **It mounts and never presses**, so it cannot see a control that only fails once opened; that
+   is `react18-audit.mjs`'s half (below, "The artifact runs React 18.3.1").
 6. **Publish in three calls** — the content files, then `card-art/**`, then
    `project/design-system.json` alone and last, re-read right before, with only `lastChange`
    moved. **Read the artifact itself (no `path`) first and publish to the `claude.ai/artifact/…`
@@ -254,10 +257,50 @@ What was done, in order:
    "not the latest version" after reading only files by path; the next, after both changes, went
    through. Which of the two cleared it was not separated.
 
-**The artifact runs React 18.3.1 and the app is React 19**, and the converter vendors 19. Two
-components take `ref` as a plain prop, which only React 19 passes — `PopupListbox` (the dropdown's
-listbox) and a row in `metaRows.tsx` — so their refs are `null` in the artifact and on every
-canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fixed here.
+**The artifact runs React 18.3.1 and the app is React 19** — and the bundle runs on the page's
+React, never its own: its `react` imports are a shim over `window.React`. So everything under
+`packages/ui/` that the barrel reaches has to work on both, and nothing in `pnpm verify` runs it
+on 18.
+
+- **It stays 18; the bundle is what bends** (decided 2026-11-19). The Design System type packs and
+  lists React 18.3.1 (`components/lib/`, the index's `libraries`), and a Design canvas supplies its
+  own React 18 and leaves the system's copy behind — its reference says so in as many words: "the
+  artboard supplies React 18, and a bundle carrying its own React cannot share the page's".
+  Declaring 19 here would fix the artifact's page cards and nothing on a canvas, which is where the
+  components are used.
+- **`ref` as a plain prop is the construct that bit** (fixed 2026-11-19). React 18 hands a function
+  component no `ref`, so `PopupPanel`'s was `null`, `usePopupPlacement` returned before measuring,
+  and every `Dropdown`, `MultiDropdown` and the title bar's shortcut map opened a panel that kept
+  `invisible` at 0,0 — `aria-expanded="true"` and nothing on screen. Four components in the
+  bundle's graph took one and all four are `forwardRef` now: `PopupPanel`, `RowAction`
+  (`metaRows.tsx`), and the two pile grips, `CategoryGrip` (`StackView.tsx`) and `TokenPileGrip`
+  (`tokenRail.tsx`). **The grips correct this file's earlier claim that "the deck parts are
+  unaffected"**: their `ref` is `attachHandle`, so on 18 the drag source never learned its handle
+  and a pile could be moved by arrow keys and not by its grip. `forwardRef` is the same thing
+  under React 19; `PopupListbox.test.tsx` fences the first.
+- **`node .design-sync/artifact/react18-audit.mjs` after every converter build**, before grading.
+  It reads the module list out of `ds-bundle/_ds_bundle.js` and refuses a `ref` prop on a function
+  component, `<Component ref>` on anything that is not a `forwardRef` or `motion.*`, a context
+  rendered as its own provider, and the hooks 18 does not export. Clean on 291 modules at 0.71.1.
+  One more `ref`-as-prop component in `packages/ui/` is outside the graph today, and the audit
+  will name it the day the barrel reaches it: `ViewAllToggle`. (`PageBar`'s crumb carries a `ref`
+  as a field of a plain object and `FilterBar` takes `rootRef` — both are any React's.)
+- **Still React-19-shaped, and left alone: a callback ref that returns its cleanup.** 18 ignores
+  the return and calls the callback with `null` instead. Every such callback here takes `null`
+  without throwing, so nothing breaks at unmount, but what the cleanup releases stays held:
+  measured on the Stacks desk, 4 drag sources registered, **4 still registered after unmount on
+  18.3.1 and 0 on 19**. A leak on a canvas that mounts and unmounts a desk, and possibly a second
+  registration where such a callback changes identity while mounted (not measured). Curing it
+  means every cleanup-returning ref also answering `null`; not done.
+- **And one attribute**: `ContextMenu`'s panel is `inert` for the length of its fade
+  (`inert={!present || undefined}`), which React 18 drops as an unknown boolean. `aria-hidden` is
+  still written, so only the focus order differs, for ~150 ms.
+- **How it was verified, since the compare cannot** (a `fixed` panel is outside the cropped
+  root): a page with the artifact's own `components/lib/react*.js`, the bundle built from this
+  tree, and real presses. Dropdown, MultiDropdown and a Dropdown under a transformed ancestor:
+  panel `visible`, 4px under its trigger, left edges equal, a pressed row picked. The shortcut
+  map: placed inside the viewport. A pile grip: a real press-and-move starts the drag. Tooltip,
+  context menu with a submenu, and Dialog's focus trap: the same numbers on 18.3.1 as on 19.2.8.
 
 **The 2026-10-17 run (bundle 0.53.0, artifact versions 16–17)** changed the procedure in four ways:
 
@@ -274,14 +317,117 @@ canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fix
   card throwing (`Cannot read properties of null (reading 'progress')`): `update` stopped taking
   `null`. The card now lives in `page-cards.mjs` with an idle `Update`, so it is the repo's.
 - **`Dropdown`, `TooltipProvider` and `WorkInProgress` have page cards** (drawn at rest — an open
-  listbox or tooltip is input-driven, and `PopupListbox` has no ref on React 18). All 27 cards
-  mounted on React 18.3.1 with no script error and every card image loaded.
+  listbox or tooltip is input-driven, and `PopupListbox` had no ref on React 18 until 2026-11-19;
+  the artifact's bundle is this run's until the next sync, so its `Dropdown` still opens
+  invisibly). All 27 cards mounted on React 18.3.1 with no script error and every card image
+  loaded.
 
 The remaining 404s in a render check are the migration's own: `components/bundle.css` inlines
 `styles.css`'s two `@import`s and `fonts.css`'s relative `url()`s, which resolve under
 `components/` to nothing. The faces load through the page's `tokens.css`. Not new; not fixed.
 The page-generated `api/components/Ribbon.md` outlived Ribbon's files — the page owns `api/`, so
 it was not removed by hand.
+
+## The 2026-11-20 run (bundle 0.71.1) — the skill's own artifact flow, from a cloud container
+
+The bundled skill (Claude Code 2.1.329) publishes to a Design System artifact itself:
+`artifact/SKILL.md` beside the claude.ai/design text, `artifact-publish.mjs` to plan and check the
+publish. This run used it, by Markus's choice, in place of the hand procedure above
+(`bundle-css.mjs`, `page-cards.mjs`, `assemble.mjs`, `render-check.mjs`), which was written for a
+converter that could not. **`.design-sync/artifact.json` now names the target** and is what a
+re-sync reads; the link is no longer only in this file. The run was made in a cloud session with
+no grade cache and no anchor in the artifact, so all 27 components were captured and graded.
+
+What the build needed that it had not before:
+
+- **[GENERAL] `cfg.extraFonts` listed Cinzel 400 and the app has not loaded that face for a long
+  time** (`packages/ui/index.css` imports `@fontsource/cinzel/500.css` and `600.css`). The bundle's
+  `fonts/fonts.css` therefore declared a 400 face the app never ships, default-weight `font-heading`
+  text used it, and every heading — the title bar's wordmark, SyncProgress' two headings, every
+  Dialog title — drew lighter and narrower than the app's (wordmark 130.1px against 132.5px), in
+  every design built from the bundle. The entry is `500.css` now. **`[FONT_MISSING]` cannot see
+  this**: it reports a face that is referenced and absent, never one that is shipped and wrong. It
+  was found by a pixel diff at the gutter offset, where the only differing pixels on 22 stories
+  were Cinzel text. `extraFonts` has to follow `index.css`'s `@fontsource` imports by hand.
+- **`cfg.storyImports.loaders: {".wav": "empty"}`.** The scanner's sounds
+  (`features/scanner/sounds/player.ts`) reach AppShell's story graph, the preview build has no
+  loader for `.wav`, and AppShell fell to the floor card with `! preview build failed`. `empty` is
+  enough: no card plays one. A new asset type on a story's graph needs its own line.
+- **`cfg.overrides.CardArt.cardMode: "column"`** — `[GRID_OVERFLOW]`: `FoilKinds` is wider than a
+  grid cell.
+- **`[TOKENS_MISSING]` grew by three, same class as `--dnd-*`**: `--table-x` (`PlaytestBoard`
+  writes it inline) and `--foil-tex-1`/`--foil-tex-2` (`FoilOverlay` writes them inline). Expected;
+  define nothing.
+- **`createContext` counts**: AppShell 8, ContextMenu **10** (7 at the last count — its story
+  compiles the menu stack from source, and the stack grew), Dialog 1, every other preview 0.
+- **Two owned previews changed.** `Dialog.tsx`'s stage lost `maxWidth: "100%"`: on the `?story=`
+  page it capped the stage at 912px, so the 880px panel drew 864 — which is the whole of the
+  `close` this file records for `Default` on 2026-10-17, and it grades `match` now.
+  `TooltipProvider.tsx`'s re-enacted act waits for `document.fonts.ready`: `OnFocus` opens with no
+  delay, measured the fallback face and sat 3px off centre once Geist swapped in.
+- **The three things the `CountPill` fix could not confirm without the converter all hold**: the
+  declaration build prints nothing, the roster resolves 27 components, and no `_preview/*.js`
+  compiles `features/decks/CountPill` from source. `FilterChips`' `CountPills` story (15th of 18,
+  past the cap) was probed directly: three `span[data-count-pill]`, pixel-identical to storybook.
+- **`react18-audit.mjs` is clean on the real `ds-bundle/_ds_bundle.js`** (291 modules), and the
+  real-press check was repeated with the converter's own bundle and stylesheet on React 18.3.1:
+  Dropdown, MultiDropdown and the shortcut map open visible and placed, a pile grip drags.
+
+Procedure, where it differs from the list above:
+
+- **In a Linux cloud session**: `export DS_CHROMIUM_PATH=/opt/pw-browsers/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell`
+  before validate, compare and the driver; never `playwright install`. Staged playwright was
+  1.65.1 and ran on that build.
+- **The art is copied for grading and must NOT be copied after the closing driver run.** The
+  artifact flow publishes only what the layout takes from `ds-bundle/` (`card-art/` is not part of
+  it — the artifact keeps the folder it already has), and `artifact-publish.mjs plan` refuses a
+  build with any file newer than the driver's verdict (`CHANGED_SINCE_VERDICT`). So: build, copy
+  art, capture and grade; then the driver alone, which carries every grade forward and captures
+  nothing; then plan.
+- **Grades this run**: 21 components `match` on every captured story. `close`, each for a reason
+  this file already gives: Dropdown `Multi` and `Picked Icon`; CardArt `Game Changer` and
+  `Game Changer Foil`; Figure `With As Of Title`; TooltipProvider `Interactive` and `On Focus`.
+  CardStack `Labelled And Short Of Copies` graded `match` — the capture landed after its play.
+  ContextMenu `No Stored Image` and `Add To Wishlist Folders` are timing-dependent the same way.
+- **Tail stories past the cap whose play changes a pressed state**, found by a probe and still
+  ungraded: ToggleChip `Colours Exact`, `Disclosures`, `Joined Or`, `Stack Printings`.
+- **[GENERAL] A primitive under ~30px cannot be judged from the sheet, and a pixel diff finds what
+  the eye misses.** Crop the storybook raw whole and the preview raw at (24,24) — (16,24) for
+  content centred in the root — to one size, upscale nearest-neighbour, and read that; then diff
+  at a threshold of ~40. Anything stretched to the root is 16px shorter in the preview: framing.
+
+**Published 2026-11-20 as artifact version 23** (`1795147163-0d85`), with
+`artifact-publish.mjs check` answering `CLEAN` (65 of 65 files as built). What that publish changed,
+for whoever syncs next:
+
+- **The page is now `"editing": "code"`** — read-only on claude.ai; the design system changes only
+  here and by `/design-sync`. Markus agreed to that, and to replacing the 32 files the hand-run
+  publishes had written (`README.md`, `bundle.js`/`bundle.css`, `tokens.*`, the 27 page cards).
+  The next run passes `plan --read-only` and needs no take-over code: those files now carry the
+  sync's record (`project/_ds_sync.json`), so the next sync is anchored and carries grades forward.
+- **The index's `libraries` is React 19.2.8 (`components/lib/react.js`)**, so the artifact's own
+  preview frames now run React 19. Canvases still supply React 18 and leave that file behind —
+  which is why the React 18 audit and the forwardRef rule stand.
+- **The page cards are the converter's now**, one cell per story, and **the hand-written cards
+  from `page-cards.mjs` are gone.** Those passed `cardArt: '../../card-art/'`; the converter's
+  pass nothing, so the provider finds the art from the bundle script's own address. Whether the
+  artifact's frame loads the bundle by URL (art draws) or inlines it (labelled placeholders) was
+  **not checked** — the page needs a signed-in browser. Open CardArt's card and look; if it draws
+  placeholders, the fix belongs in `preview-runtime.tsx`, not in a hand-edited card.
+  `bundle-css.mjs`, `page-cards.mjs`, `assemble.mjs` and `render-check.mjs` in `artifact/` are the
+  old hand procedure and are superseded; `react18-audit.mjs` is still current.
+- **The older files were removed the same day, at Markus's request** (artifact version 24, 182
+  files): the old per-group `components/<group>/<Name>/` docs, `docs/`, `assets/` (`_preview`,
+  `_vendor`, the migration report), `_ds_bundle.css`, `styles.css`, the React 18.3.1
+  `components/lib/react*.production.min.js`, and every font file but `mana` and `keyrune` (Geist
+  and Cinzel now ship inlined in `components/bundle.css`). **Kept**: this build's files,
+  `card-art/` (current, and only ever re-sent when it changes), the page's own generated `api/`
+  and `manifest.json` (`api/components/Ribbon.md` included — the page owns `api/`), and
+  `migration-map.json`, because the index's `source.map` still names it. The index's empty
+  `_preview`/`_vendor`/`notes` asset groups are the sync's to keep; nothing lists files in them.
+- **Cosmetic, from the pre-publish read**: the generated `README.md` component list and
+  `components/index.d.ts` cut descriptions at a fixed length (some mid-sentence), and the token
+  theme is named "light" though its values are the dark palette. Converter output; not fixed.
 
 ## Config decisions worth knowing
 
@@ -312,13 +458,29 @@ it was not removed by hand.
   them** — which reverses its 2026-09-27 decline above. Asked for the deck editor, a design agent
   could only redraw it by hand, so the barrel's `Deck editor` section exports `StackView` (the
   Stacks desk), `CardStack`, `DeckCardFace`, `CardMarks` (`QuantityTag`, `TheoryMatchMark`, …),
-  `CountPill`, `GroupHeader` and `CardChin`. Four have cards — `StackView`, `CardStack`,
+  `CountPill` (as `PileCountPill` since 2026-11-20 — below), `GroupHeader` and `CardChin`. Four have cards — `StackView`, `CardStack`,
   `CardChin` and `QuantityTag`, which `titleMap` sends `CardMarks` to for `FilterChips`' reason
   (the family module has no component of its own name; six of its seven stories render
   `QuantityTag`). `StackView` is `single` on `Default` at `1280x720`: its meta decorator is a
   672px-tall box, and 1280 is four 224px pile columns plus the rail — what the app's own 1920
   window leaves the desk with the card search docked. `GridView`, `TableView`, `TextView` and
   `TokenPile` are still out: each is a desk of its own needing its own audit and viewport.
+- **The barrel had two `CountPill`s from 2026-11-15 to 2026-11-20, and the build said so only to
+  whoever ran `tsc`.** The Filter bar redesign added one to `FilterChips`; the deck editor's was
+  already exported. Two `export *` of one name is TS2308 in `tsconfig.dts.json` — `buildCmd` stops
+  at its `&&` — and an ambiguous star export is *dropped*, not picked: a bundle built from that
+  tree had no `CountPill` on the global at all. Markus's call (2026-11-20): the filter bar's keeps
+  `CountPill`, because `FilterChips.stories.tsx` imports it by that name through the
+  `/components/FilterChips` shim; the pile heading's count is exported as **`PileCountPill`**, by
+  name, with `cardCountWords` and `tokenCountWords` beside it (`entry.ts`, `conventions.md`).
+  **Not confirmed with the converter** — that fix was made in a cloud session with no `.ds-sync/`
+  — so at the next sync check three things: `tsc -p .design-sync/tsconfig.dts.json` prints nothing;
+  the roster still resolves every deck title (a named re-export, where every other line of the
+  barrel is `export *`); and no `_preview/*.js` reaches `features/decks/CountPill` from source,
+  since rule 2 matches on the file's basename and would hand that import the *filter bar's* pill.
+  The same sync fixed the other error that `tsc` was stopping on: `pressCost` in
+  `lib/dndManager.ts` returned two `@dnd-kit/dom` classes a declaration cannot name (TS4058,
+  TS4094) and now says `ActivationConstraints<PointerEvent>`.
 - **Two shim lines came with them, and one is a module the barrel had to start exporting.**
   `/features/decks/CardMarks` — no export is named after that file, so rule 2 would compile a
   second copy into every deck preview. `/lib/dndManager` — a module-level `new DragDropManager`

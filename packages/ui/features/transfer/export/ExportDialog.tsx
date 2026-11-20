@@ -108,7 +108,10 @@ import { saveExport } from "../files";
 import { TRANSFER_FIELDS } from "../fields";
 import type { TransferSurface } from "../fields";
 import type { TransferCard } from "../TransferCard";
-import { EXPORT_FORMATS, EXPORT_FORMAT_EXTENSION, EXPORT_FORMAT_LABEL } from "./format";
+import { ROW_EXPORT_FORMATS } from "../formats";
+import { EXPORT_FORMAT_EXTENSION, EXPORT_FORMAT_LABEL } from "./format";
+import { ExportExample } from "./ExportExample";
+import { MoreFormats } from "./MoreFormats";
 import { useExportModel } from "./useExportModel";
 
 /**
@@ -288,6 +291,7 @@ function Body({
     notInArena,
     heldBackInactive,
     lines,
+    example,
     chooseFormat,
     toggleField,
     toggleArenaOnly,
@@ -387,32 +391,39 @@ function Body({
         </div>
       )}
 
-      {/* A radio group over every format `EXPORT_FORMATS` names, and the map is what keeps this
-          row from being a list to remember to grow. In that array's own order and
-          **not** through `sortOptions`: plain first is the one most readers want, the same kind
-          of deliberate order `lib/options.ts` exempts a grade scale for. One Tab stop and the
-          arrow keys choose, which is `radioKeys`' and every radio group's in this app. */}
-      <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
-        {EXPORT_FORMATS.map((f, i) => (
-          <button
-            key={f}
-            type="button"
-            role="radio"
-            aria-checked={format === f}
-            onClick={() => chooseFormat(f)}
-            {...radioKeys(EXPORT_FORMATS, format, chooseFormat, i)}
-            className={cn(
-              "h-8 shrink-0 rounded-md border px-3 text-sm",
-              "transition-colors duration-150 motion-reduce:transition-none",
-              format === f
-                ? "border-accent text-accent"
-                : "border-border text-dim hover:border-accent hover:text-accent",
-              FOCUS,
-            )}
-          >
-            {EXPORT_FORMAT_LABEL[f]}
-          </button>
-        ))}
+      {/* The format picker: a radio group over the formats `EXPORT_FORMAT_PLACE` puts on the
+          row, then **More formats** for the rest (issue #1702) — every format `EXPORT_FORMATS`
+          names is in exactly one of the two, and that `Record` is what keeps a new writer from
+          being offered nowhere. The radios keep that array's own order and are **not** sorted
+          through `sortOptions`: plain first is the one most readers want, the same kind of
+          deliberate order `lib/options.ts` exempts a grade scale for. One Tab stop and the arrow
+          keys choose, which is `radioKeys`' and every radio group's in this app; the dropdown is
+          a stop of its own after the group, outside it, because a radiogroup holds radios. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
+          {ROW_EXPORT_FORMATS.map((f, i) => (
+            <button
+              key={f}
+              type="button"
+              role="radio"
+              aria-checked={format === f}
+              onClick={() => chooseFormat(f)}
+              {...radioKeys(ROW_EXPORT_FORMATS, format, chooseFormat, i)}
+              className={cn(
+                "h-8 shrink-0 rounded-md border px-3 text-sm",
+                "transition-colors duration-150 motion-reduce:transition-none",
+                format === f
+                  ? "border-accent text-accent"
+                  : "border-border text-dim hover:border-accent hover:text-accent",
+                FOCUS,
+              )}
+            >
+              {EXPORT_FORMAT_LABEL[f]}
+            </button>
+          ))}
+        </div>
+        {/* Level with the radios: their `h-8 px-3` over the dropdown's own `md` geometry. */}
+        <MoreFormats format={format} onChoose={chooseFormat} className="h-8 px-3" />
       </div>
 
       {/* Only the fields this format and this surface share — `availableFields` is the whole of
@@ -435,6 +446,12 @@ function Body({
           ))}
         </fieldset>
       )}
+
+      {/* The example — issue #1701. Under the field row because the format and the fields are
+          the whole of what it answers, and above the two filters because neither changes it:
+          they decide which cards reach the file, and the count lines under them say so. Drawn
+          open, unlike the decklist, because three lines cost the buttons nothing. */}
+      <ExportExample text={example} />
 
       {/* The Arena filter — issue #192. **Drawn only for `arena`**, which is the field row's own
           rule reached from the other side: a format offers what it has a channel for, and "leave

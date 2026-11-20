@@ -1051,6 +1051,24 @@ type DeckCategory {
 	variant: DeckVariant!
 }
 
+"""
+The colour identity of one deck's command zone (its active Commander category), per list —
+the union of every commander there, partners and backgrounds included. No format is asked: a
+deck of any format with a card in its Commander category answers.
+"""
+type DeckCommanderIdentity {
+	deckId: Int!
+	"""
+	The colour identity of the live list's command zone, as WUBRG letters run together
+	(`"WU"`); `""` for a colourless commander; absent when the list has no commander.
+	"""
+	identity: String
+	"""
+	The theory list's, by the same rule.
+	"""
+	theoryIdentity: String
+}
+
 type DeckCompletion {
 	deckId: Int!
 	"""
@@ -2256,6 +2274,11 @@ type Query {
 	`marketplace` is the one to price at; the reader's own when omitted.
 	"""
 	deckCategories(deckId: Int!, marketplace: Marketplace, variant: DeckVariant = live): [DeckCategory!] @invalidatedBy(roots: ["decks"])
+	"""
+	Every deck's command-zone colour identity, live and theory lists apart, by deck id. A
+	deck with no commander in either list is absent.
+	"""
+	deckCommanderIdentities: [DeckCommanderIdentity!] @invalidatedBy(roots: ["decks"])
 	"""
 	How far every deck the comparison applies to is along (archived decks included), one row
 	per deck. Join on `deckId` for the deck's name.

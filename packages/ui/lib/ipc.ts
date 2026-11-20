@@ -22,7 +22,7 @@
  * `WishlistSummary`                              — `crates/grimoire-core/src/wishlist.rs`
  * `EntryTagUse`                                  — `crates/grimoire-core/src/entry_tags.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
- * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
+ * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/`DeckCommanderIdentity`/
  * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `crates/grimoire-core/src/deck.rs`
  * `ActivityEntry`                                — `crates/grimoire-core/src/activity.rs`
  * `TradeCreate`/`TradeLineInput`/`TradeLineChange`/`TradeFinishOptions`/`TradeLine`/

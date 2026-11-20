@@ -76,7 +76,23 @@ function withPlay(S: any, key: string, act: Act) {
     const ref = React.useRef<HTMLDivElement>(null);
     React.useEffect(() => {
       const button = ref.current?.querySelector("button");
-      if (button) act(button);
+      if (!button) return;
+      // A play runs on a settled page; an effect runs at mount, before the webfont is in. The
+      // panel centres itself on the width it measures as it opens, so `OnFocus` — which opens with
+      // no delay — measured the fallback face and sat 3px right of centre once Geist swapped in
+      // (346 against storybook's 343, measured 2026-11-20). Reading a box forces the layout that
+      // requests the face; the act then waits for it, as the play in effect does.
+      let live = true;
+      void button.offsetWidth;
+      const fonts = button.ownerDocument.fonts;
+      const run = () => {
+        if (live) act(button);
+      };
+      if (fonts) fonts.ready.then(run, run);
+      else run();
+      return () => {
+        live = false;
+      };
     }, []);
     // `display: contents` so the wrapper adds no box — the cell lays out exactly as the story's.
     return (

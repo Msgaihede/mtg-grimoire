@@ -974,6 +974,12 @@ it; moving the slider while muted unmutes. The synth plays it as one gain after 
 the level's square (loudness as heard), eased over 15 ms so a drag never clicks. The speaker shows
 a low-volume glyph under 50 and is crossed out at 0.
 
+**Under the app's volume** (issue #1703): Settings › Sound › Volume is one level over every sound the
+page makes (`packages/ui/lib/volume.ts`, `grimoire.volume`, per device and adopted by every window).
+`useTableSounds` gives the synth the two levels' gains multiplied, so either slider moves a sound
+that is already ringing; the board's slider is how loud the board is against the app's other
+sounds. `clampVolume` and `volumeGain` live in that module now, for both.
+
 ## Lobbies: playing with people (issue #1419)
 
 Built 2026-10-29: a host creates a lobby on the Playtesting page and reads out its code; others

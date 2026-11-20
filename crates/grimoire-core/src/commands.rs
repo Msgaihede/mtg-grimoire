@@ -496,6 +496,7 @@ commands! {
 
     // deck
     read deck_bracket_reads in deck(deck_ids: Vec<i64>) = |conn| bracket_reads(conn, &deck_ids);
+    read deck_commander_identities in deck() = |conn| commander_identities(conn);
     read deck_get in deck(id: i64, variant: String, marketplace: Option<String>) = |conn| {
         let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
         get_deck(conn, id, &variant, marketplace)

@@ -99,6 +99,7 @@ const RAIL: GroupId[] = [
   "integrations",
   "tags",
   "appearance",
+  "sound",
   "scanner",
   "storage",
   "errors",
@@ -113,6 +114,7 @@ const UNDER: Record<GroupId, PanelId[]> = {
   integrations: ["integrations"],
   tags: ["hidden-tags"],
   appearance: ["start-view", "theory-marks", "labels"],
+  sound: ["volume"],
   scanner: ["scan-sounds"],
   storage: ["data-folder", "backup", "cache", "danger"],
   errors: ["errors"],
@@ -141,9 +143,9 @@ describe("the settings rail", () => {
     expect([...ids].sort()).toEqual(declared.sort());
   });
 
-  it("has ten entries, in declaration order", () => {
+  it("has eleven entries, in declaration order", () => {
     expect(GROUP_ORDER).toEqual(RAIL);
-    expect(GROUP_ORDER).toHaveLength(10);
+    expect(GROUP_ORDER).toHaveLength(11);
     // `GROUP_ORDER` is derived from `GROUPS`, so this is what would catch the two coming apart —
     // an entry with a label and no place in the rail, or the reverse.
     expect(Object.keys(GROUPS)).toEqual(RAIL);
@@ -175,6 +177,7 @@ describe("PANEL_ORDER", () => {
       "start-view",
       "theory-marks",
       "labels",
+      "volume",
       "scan-sounds",
       "data-folder",
       "backup",
@@ -333,6 +336,19 @@ describe("visiblePanels", () => {
    */
   it("finds the labels without finding the tag panels", () => {
     expect(visiblePanels("updates", "label")).toEqual(["labels"]);
+  });
+
+  /**
+   * **`volume` is the app's slider's word, and only its** (issue #1703). `Scan sounds` carried it
+   * while it was the only panel about sound, and has a switch and a price ladder but no level — so
+   * an equality, which fails if the word drifts back into that line. `sound` has two honest
+   * answers, the entry's label and the scanner panel's title, in the page's order.
+   */
+  it("finds the app's volume by the words a reader would type", () => {
+    for (const query of ["volume", "louder", "quiet", "mixer", "app volume"]) {
+      expect(visiblePanels("updates", query)).toEqual(["volume"]);
+    }
+    expect(visiblePanels("updates", "sound")).toEqual(["volume", "scan-sounds"]);
   });
 
   /**

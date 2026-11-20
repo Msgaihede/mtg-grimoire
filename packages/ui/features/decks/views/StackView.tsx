@@ -3,6 +3,7 @@
  * built around.
  */
 import {
+  forwardRef,
   memo,
   useCallback,
   useEffect,
@@ -1601,53 +1602,56 @@ function RailTokenPile({
  * both. Stepping past either end sends nothing at all — `movedTo` would clamp it to a no-op
  * write, and a round trip that changes nothing is still a round trip.
  */
-function CategoryGrip({
-  ref,
-  categoryId,
-  name,
-  runIds,
-  onMove,
-}: {
-  /** {@link useCategoryDragSource}'s `attachHandle` — the press this grip takes is the one the
-   *  heading above it is allowed to be dragged by. */
-  ref: (element: HTMLElement | null) => void;
-  categoryId: number;
-  /** The pile's own heading, so a deck of fifteen grips is fifteen addressable controls rather
-   *  than one repeated fifteen times. */
-  name: string;
-  runIds: readonly number[];
-  onMove: (categoryId: number, targetId: number) => void;
-}) {
-  const tip = useTooltip();
-  const index = runIds.indexOf(categoryId);
-  const step = (to: number) => {
-    const target = runIds[to];
-    if (target !== undefined) onMove(categoryId, target);
-  };
+const CategoryGrip = forwardRef<
+  HTMLButtonElement,
+  {
+    categoryId: number;
+    /** The pile's own heading, so a deck of fifteen grips is fifteen addressable controls rather
+     *  than one repeated fifteen times. */
+    name: string;
+    runIds: readonly number[];
+    onMove: (categoryId: number, targetId: number) => void;
+  }
+>(
+  // `ref` is {@link useCategoryDragSource}'s `attachHandle` — the press this grip takes is the one
+  // the heading above it is allowed to be dragged by.
+  //
+  // **`forwardRef`, not React 19's ref-as-a-prop.** The same thing in the app; in the design
+  // system's bundle, which runs `StackView` on React 18.3.1, a function component is handed no
+  // `ref` at all — `attachHandle` was never called, the source registered nothing, and a pile
+  // could be moved by its arrow keys and not by its grip (`.design-sync/NOTES.md`).
+  function CategoryGrip({ categoryId, name, runIds, onMove }, ref) {
+    const tip = useTooltip();
+    const index = runIds.indexOf(categoryId);
+    const step = (to: number) => {
+      const target = runIds[to];
+      if (target !== undefined) onMove(categoryId, target);
+    };
 
-  return (
-    <button
-      ref={ref}
-      type="button"
-      {...{ [GRIP_ATTR]: "" }}
-      onKeyDown={(e) => {
-        if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          step(index - 1);
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          step(index + 1);
-        }
-      }}
-      aria-label={`Move ${name}, ${index + 1} of ${runIds.length}`}
-      {...tip("Drag or use the arrow keys to reorder")}
-      className={cn(
-        "shrink-0 cursor-grab rounded-sm text-dim",
-        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-        FOCUS,
-      )}
-    >
-      <GripVertical className="size-3.5" aria-hidden="true" />
-    </button>
-  );
-}
+    return (
+      <button
+        ref={ref}
+        type="button"
+        {...{ [GRIP_ATTR]: "" }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            step(index - 1);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            step(index + 1);
+          }
+        }}
+        aria-label={`Move ${name}, ${index + 1} of ${runIds.length}`}
+        {...tip("Drag or use the arrow keys to reorder")}
+        className={cn(
+          "shrink-0 cursor-grab rounded-sm text-dim",
+          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+          FOCUS,
+        )}
+      >
+        <GripVertical className="size-3.5" aria-hidden="true" />
+      </button>
+    );
+  },
+);
