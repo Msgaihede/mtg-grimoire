@@ -199,6 +199,25 @@ export function seatPlan(
 }
 
 /**
+ * The plan while one seat's commander damage is open. That seat's player reads every number on
+ * the board then — each other panel shows what its commander has dealt them — and presses its −
+ * and +, so **every other panel is turned to face them**: upright to them, − on their left and +
+ * on their right, whichever edge of the table its own player sits at. The boxes and the menu
+ * button stay where they are.
+ */
+export function facingSeat(plan: SeatPlan, seat: number): SeatPlan {
+  const to = plan.seats[seat];
+  if (!to) return plan;
+  return { ...plan, seats: plan.seats.map((s) => (s.rot === to.rot ? s : { ...s, rot: to.rot })) };
+}
+
+/** Two turns a quarter apart: a panel turned from one to the other is the other way round, as
+ *  tall in its own frame as it was wide. */
+export function quarterApart(a: number, b: number): boolean {
+  return Math.abs(a - b) % 180 === 90;
+}
+
+/**
  * A seat in pixels: its box on the board (`x`, `y`, `w`, `h`, inset by the board's pad and half
  * the gap on each side), and the size of its content as its player reads it (`lw` across, `lh`
  * up) — swapped for a seat turned to a side edge.
@@ -235,6 +254,14 @@ export interface HubRoom {
 /** The menu button's radius, and the air kept between it and a number. */
 export const HUB_RADIUS = 24;
 const HUB_AIR = 14;
+/**
+ * How far in from a side edge a number keeps when the menu button may sit anywhere along it: its
+ * bite into the panel (it is centred on the gap) and the air. {@link hubRoom} answers for the top
+ * and bottom edges of the panels the tables are laid out for; a panel {@link facingSeat} turns a
+ * quarter can have the button on a side edge instead, where the number has nothing else to go
+ * round.
+ */
+export const HUB_SIDE_KEEP = HUB_RADIUS - GAP / 2 + HUB_AIR;
 
 /**
  * Where the menu button lands on a panel. It sits on the gaps between panels, so it bites 21px

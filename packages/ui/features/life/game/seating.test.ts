@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  facingSeat,
   hubRoom,
   inSeatFrame,
+  quarterApart,
   quarterTurn,
   screenGrid,
   seatBox,
@@ -131,5 +133,42 @@ describe("a seat in pixels", () => {
     expect(inSeatFrame(180, 0, -50).up).toBeCloseTo(-50);
     // A seat at the left edge reads rightward as up.
     expect(inSeatFrame(90, 50, 0).up).toBeCloseTo(50);
+  });
+});
+
+describe("while a seat's commander damage is open", () => {
+  const place = ({ x, y, w, h }: SeatRect) => ({ x, y, w, h });
+
+  it("turns every other seat to face that seat's player", () => {
+    // Four round the table, two to a side: the far side turns a half to face the counted player,
+    // and the seat beside them already does.
+    const plan = tablePlan(4, "A", 390, 844);
+    expect(plan.seats.map((s) => s.rot)).toEqual([90, 90, -90, -90]);
+    expect(facingSeat(plan, 0).seats.map((s) => s.rot)).toEqual([90, 90, 90, 90]);
+    expect(facingSeat(plan, 3).seats.map((s) => s.rot)).toEqual([-90, -90, -90, -90]);
+    // A wide board's B table, its head, foot and sides alike.
+    const wide = seatPlan(4, "B", "table", 844, 390);
+    expect(new Set(facingSeat(wide, 1).seats.map((s) => s.rot))).toEqual(
+      new Set([wide.seats[1].rot]),
+    );
+  });
+
+  it("moves nothing but the turn", () => {
+    const plan = seatPlan(5, "B", "table", 390, 844);
+    const facing = facingSeat(plan, 2);
+    expect(facing.seats.map(place)).toEqual(plan.seats.map(place));
+    expect(facing.hub).toEqual(plan.hub);
+    expect(facing.blanks).toEqual(plan.blanks);
+    // No such seat (one player's opponents have none): the plan as it is.
+    expect(facingSeat(plan, 7)).toBe(plan);
+  });
+
+  it("tells a seat turned a quarter from one turned a half", () => {
+    expect(quarterApart(0, 90)).toBe(true);
+    expect(quarterApart(180, -90)).toBe(true);
+    expect(quarterApart(-90, 0)).toBe(true);
+    expect(quarterApart(90, -90)).toBe(false);
+    expect(quarterApart(0, 180)).toBe(false);
+    expect(quarterApart(90, 90)).toBe(false);
   });
 });

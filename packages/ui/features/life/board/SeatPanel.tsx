@@ -4,7 +4,9 @@
  *
  * Everything is laid out in the panel's own turned frame: the panel is a box on the board, and
  * inside it one `lw` × `lh` frame turned to face its player (`seating.ts`), so "top" below is the
- * edge furthest from the player whichever side of the table they sit at.
+ * edge furthest from the player whichever side of the table they sit at. While a seat's commander
+ * damage is open, every other panel's frame faces *that* seat's player instead (`facingSeat`):
+ * they read every count and press every − and +.
  *
  * **No names on the board**: a seat is its colour. Another seat is named on this one by a dot of
  * its colour, and everything that used to stand in the top row as words — dead, lethal, goes
@@ -61,6 +63,9 @@ export interface SeatPanelProps {
   keep: HubRoom;
   /** The one size every number on the board is drawn at (`commonSize`). */
   common: number;
+  /** Its − and + go under its number: this panel is turned a quarter from its own seat, to face
+   *  the seat whose commander damage is open, and is too narrow for them beside it. */
+  glyphsUnder: boolean;
   colors: string[];
   now: number;
   reduced: boolean;
@@ -98,6 +103,7 @@ export function SeatPanel({
   box,
   keep,
   common,
+  glyphsUnder,
   colors,
   now,
   reduced,
@@ -257,7 +263,7 @@ export function SeatPanel({
           <CountView
             {...{ game, view, i, box, keep, common, colors, act, dark, dead, source, active }}
             {...{ name, shown, value, sub, subDot, first, delta, deltaLook, movedHigh, grow, zoom }}
-            {...{ time, showPill, showMonarch, isMonarch, minusLabel, plusLabel }}
+            {...{ time, showPill, showMonarch, isMonarch, minusLabel, plusLabel, glyphsUnder }}
           />
         )}
       </div>
@@ -272,6 +278,7 @@ interface CountViewProps {
   box: SeatBox;
   keep: HubRoom;
   common: number;
+  glyphsUnder: boolean;
   colors: string[];
   act: PanelActions;
   dark: boolean;
@@ -313,6 +320,7 @@ function CountView(p: CountViewProps) {
     keep,
     solo: n === 1,
     commanderBand: setup.commander,
+    under: p.glyphsUnder,
   });
 
   // The shield is filled with the colour of whoever has dealt this seat the most; empty at none.
@@ -375,6 +383,7 @@ function CountView(p: CountViewProps) {
         onPointerDown={(e) => act.holdLife(i, e)}
         drop={place.glyphDrop}
         zoom={p.grow}
+        under={p.glyphsUnder ? place.glyphLift : undefined}
       />
 
       {/* The top row. From two players it stands in from the corners, where the menu button can
@@ -480,7 +489,7 @@ function CountView(p: CountViewProps) {
           style={{
             height: p.movedHigh,
             marginTop: place.underLift,
-            maxWidth: Math.round(lw - 150),
+            maxWidth: place.lineWidth,
           }}
         >
           {showSub && (
