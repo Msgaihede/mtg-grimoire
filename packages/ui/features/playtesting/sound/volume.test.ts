@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VOLUME_KEY, clampVolume, useTableSoundsVolume, volumeGain } from "./volume";
+import { VOLUME_KEY, useTableSoundsVolume } from "./volume";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -23,20 +23,10 @@ describe("useTableSoundsVolume", () => {
     expect(useTableSoundsVolume.getState().volume).toBe(25);
   });
 
-  it("holds a level to a whole number in 0–100, and reads nonsense as full", () => {
+  it("holds a level to 0–100", () => {
     useTableSoundsVolume.getState().setVolume(140);
     expect(useTableSoundsVolume.getState().volume).toBe(100);
     useTableSoundsVolume.getState().setVolume(-5);
     expect(useTableSoundsVolume.getState().volume).toBe(0);
-    expect(clampVolume(33.6)).toBe(34);
-    expect(clampVolume(Number("loud"))).toBe(100);
-  });
-});
-
-describe("volumeGain", () => {
-  it("follows loudness as heard: the square of the level", () => {
-    expect(volumeGain(100)).toBe(1);
-    expect(volumeGain(50)).toBe(0.25);
-    expect(volumeGain(0)).toBe(0);
   });
 });

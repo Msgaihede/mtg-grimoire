@@ -37,6 +37,7 @@ export type PanelId =
   | "start-view"
   | "theory-marks"
   | "labels"
+  | "volume"
   | "scan-sounds"
   | "data-folder"
   | "backup"
@@ -53,6 +54,7 @@ export type GroupId =
   | "integrations"
   | "tags"
   | "appearance"
+  | "sound"
   | "scanner"
   | "storage"
   | "errors";
@@ -220,6 +222,25 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     keywords: "colour color rename recolour recolor delete swatch dot cut candidate deck card",
   },
   /**
+   * **How loud the whole app is (issue #1703), under an entry of its own: `Sound`.** One slider
+   * over every sound the page makes — the scanner's and the playtest board's — so it belongs to
+   * neither of their entries, and a reader who wants the app quieter is not asking about the
+   * Scanner. Directly above `Scanner` in the rail, so `Scan sounds` is the next entry down.
+   *
+   * **`volume` is this panel's word and no longer `Scan sounds`'**, which carried it while it was
+   * the only panel about sound at all: that panel has a switch and a price ladder and no level, so
+   * a search for the word landing there would be the trip `Local cache`'s comment warns about.
+   * `mixer` and `windows` are here because the issue arrived from the Windows volume mixer, and
+   * the reader who saw the app there types what they saw.
+   */
+  volume: {
+    title: "Volume",
+    group: "sound",
+    keywords:
+      "volume loud louder loudness quiet quieter soft level audio speaker speakers master " +
+      "global app mixer windows",
+  },
+  /**
    * **The scanner's sounds, under an entry of their own** — the first Settings panel about the
    * Scanner. Its ladder is prices, but `Card data` is where those prices come from, not what a
    * scan does with them; and a reader looking for "why does it beep" looks for the Scanner.
@@ -228,7 +249,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     title: "Scan sounds",
     group: "scanner",
     keywords:
-      "scanner scan sound sounds audio beep jingle jackpot chime noise mute volume tier " +
+      "scanner scan sound sounds audio beep jingle jackpot chime noise mute tier " +
       "tiers price threshold expensive valuable",
   },
   "data-folder": {
@@ -320,6 +341,10 @@ type GroupMeta = {
  * section *of* `Tags`: see the comment on `theory-marks` in {@link PANELS} for the vocabulary
  * rule that decides it.
  *
+ * **`Sound` follows `Appearance`** (issue #1703): how loud the app is, which is the same rung of
+ * question — the app in front of the reader — and it sits directly above `Scanner`, whose one
+ * panel is the scanner's own sounds. A group of one for `Card data`'s reason.
+ *
  * **`Clear data` has no entry of its own and sits at the foot of `Storage and data`.** The
  * three clears empty the part of the app the data folder holds, so that is the question they
  * answer; and `DangerZonePanel`'s distance is kept *inside* the pane, where it has always been,
@@ -334,6 +359,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
   integrations: { label: "Integrations" },
   tags: { label: "Tags" },
   appearance: { label: "Appearance" },
+  sound: { label: "Sound" },
   scanner: { label: "Scanner" },
   storage: { label: "Storage and data" },
   errors: { label: "Errors", badge: "errors" },

@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlaytestAction, PlaytestHappened } from "@/lib/ipc";
+import { useAppVolume } from "@/lib/volume";
 import { useTableSoundsMuted } from "./muted";
 import type { TableSynth } from "./synth";
 import { useTableSounds } from "./useTableSounds";
@@ -33,6 +34,7 @@ function setup(initial: readonly PlaytestHappened[] = []) {
 afterEach(() => {
   act(() => useTableSoundsMuted.getState().setMuted(false));
   act(() => useTableSoundsVolume.getState().setVolume(100));
+  act(() => useAppVolume.getState().setVolume(100));
 });
 
 describe("useTableSounds", () => {
@@ -86,6 +88,16 @@ describe("useTableSounds", () => {
     act(() => useTableSoundsVolume.getState().setVolume(50));
     expect(synth.setVolume).toHaveBeenLastCalledWith(0.25);
     act(() => useTableSoundsVolume.getState().setVolume(0));
+    expect(synth.setVolume).toHaveBeenLastCalledWith(0);
+  });
+
+  it("plays under the app's volume too: the two levels' gains multiplied", () => {
+    const { synth } = setup();
+    act(() => useAppVolume.getState().setVolume(50));
+    expect(synth.setVolume).toHaveBeenLastCalledWith(0.25);
+    act(() => useTableSoundsVolume.getState().setVolume(50));
+    expect(synth.setVolume).toHaveBeenLastCalledWith(0.0625);
+    act(() => useAppVolume.getState().setVolume(0));
     expect(synth.setVolume).toHaveBeenLastCalledWith(0);
   });
 });

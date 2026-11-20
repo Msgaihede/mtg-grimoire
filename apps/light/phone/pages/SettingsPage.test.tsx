@@ -29,6 +29,7 @@ describe("Settings on the phone", () => {
       "Sync",
       "Tags",
       "Appearance",
+      "Sound",
       "Scanner",
       "Storage and data",
       "Errors",
@@ -78,6 +79,13 @@ describe("Settings on the phone", () => {
     const [newest] = await within(panel).findAllByRole("button", { expanded: false }, SETTLE);
     await userEvent.click(newest!);
     expect(newest).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("draws the app's volume under Sound, its own row", async () => {
+    renderPhone(<PhoneFace />, { path: "/settings" });
+    await userEvent.click(group("Sound"));
+    const panel = await screen.findByRole("region", { name: "Volume" });
+    expect(within(panel).getByRole("slider", { name: "App volume" })).toBeInTheDocument();
   });
 
   it("links to the privacy policy under the last group", async () => {

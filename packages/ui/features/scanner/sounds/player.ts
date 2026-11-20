@@ -11,10 +11,14 @@
  * **One sound at a time**: a new one stops the one before. A reader feeding a pile at the camera
  * lands a card a second, and the jackpot's three seconds under four beeps would be noise.
  *
+ * **At the app's volume** (`@/lib/volume`, Settings › Sound): every sound goes through one gain
+ * set from it, which follows the slider while a sound rings — a jackpot is three seconds long.
+ *
  * **Nothing here can throw at a caller.** A host with no Web Audio (jsdom, an old browser), a file
  * that will not decode and a context the platform will not resume each mean the scan is silent —
  * never a broken scanner.
  */
+import { appVolumeGain, useAppVolume } from "@/lib/volume";
 import jackpotUrl from "./jackpot.wav";
 import tier1Url from "./price-tier-1.wav";
 import tier2Url from "./price-tier-2.wav";
@@ -34,6 +38,8 @@ export const SOUND_URL: Record<ScanSound, string> = {
 };
 
 let context: AudioContext | null = null;
+/** Between every sound and the speakers: the app's volume. Made with the context. */
+let level: GainNode | null = null;
 const buffers = new Map<ScanSound, Promise<AudioBuffer | null>>();
 let playing: AudioBufferSourceNode | null = null;
 
@@ -43,7 +49,12 @@ function audio(): AudioContext | null {
   if (typeof AudioContext === "undefined") return null;
   try {
     context = new AudioContext();
+    level = context.createGain();
+    level.gain.value = appVolumeGain();
+    level.connect(context.destination);
   } catch {
+    context = null;
+    level = null;
     return null;
   }
   // A context made before the page was pressed starts suspended; any press brings it back.
@@ -89,7 +100,7 @@ export function playScanSound(sound: ScanSound): void {
     }
     const source = ctx.createBufferSource();
     source.buffer = decoded;
-    source.connect(ctx.destination);
+    source.connect(level ?? ctx.destination);
     source.onended = () => {
       if (playing === source) playing = null;
     };
@@ -97,3 +108,12 @@ export function playScanSound(sound: ScanSound): void {
     source.start();
   });
 }
+
+/**
+ * The slider moved: so does the level, eased over a few milliseconds so a drag never clicks — the
+ * playtest synth's `setVolume` does the same.
+ */
+useAppVolume.subscribe((state, previous) => {
+  if (state.volume === previous.volume || context === null || level === null) return;
+  level.gain.setTargetAtTime(appVolumeGain(), context.currentTime, 0.015);
+});
