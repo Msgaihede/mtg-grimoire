@@ -103,6 +103,9 @@ export function soundOf(h: PlaytestHappened): SoundId | null {
           return "toLibrary";
       }
       return null;
+    case "controlled":
+      // A card landing on a battlefield, a new side of the table's or its own.
+      return "play";
     case "drew":
       return "draw";
     case "attacked":

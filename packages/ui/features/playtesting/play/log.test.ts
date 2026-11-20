@@ -175,6 +175,73 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "Put the opponent's Ragavan into their hand",
     "move",
   ],
+  // A change of control by hand (issue #1713), on the battlefield or onto it from a zone.
+  [
+    {
+      type: "controlled",
+      seat: "opponent",
+      name: "Hill Giant",
+      from: "battlefield",
+      controller: "you",
+    },
+    "Gained control of the opponent's Hill Giant",
+    "move",
+  ],
+  [
+    {
+      type: "controlled",
+      seat: "opponent",
+      name: "Hill Giant",
+      from: "battlefield",
+      controller: "opponent",
+    },
+    "Gave the opponent's Hill Giant back",
+    "move",
+  ],
+  [
+    {
+      type: "controlled",
+      seat: "you",
+      name: "Grizzly Bears",
+      from: "battlefield",
+      controller: "opponent",
+    },
+    "Gave Grizzly Bears to the opponent",
+    "move",
+  ],
+  [
+    {
+      type: "controlled",
+      seat: "you",
+      name: "Grizzly Bears",
+      from: "battlefield",
+      controller: "you",
+    },
+    "Regained control of Grizzly Bears",
+    "move",
+  ],
+  [
+    {
+      type: "controlled",
+      seat: "opponent",
+      name: "Hill Giant",
+      from: "graveyard",
+      controller: "you",
+    },
+    "Put the opponent's Hill Giant onto the battlefield under your control",
+    "move",
+  ],
+  [
+    {
+      type: "controlled",
+      seat: "you",
+      name: "Grizzly Bears",
+      from: "exile",
+      controller: "opponent",
+    },
+    "Put Grizzly Bears onto the battlefield under the opponent's control",
+    "move",
+  ],
   [
     { type: "tapped", seat: "you", name: "Forest", count: 2, tapped: true },
     "Tapped 2 × Forest",
@@ -278,6 +345,24 @@ describe("playtestSentence", () => {
     expect(at4({ type: "counters", seat: "opponent2", name: "X", kind: "+1/+1", count: 2 })).toBe(
       "Opponent 2's X has 2 +1/+1 counters",
     );
+    expect(
+      at4({
+        type: "controlled",
+        seat: "opponent2",
+        name: "Hill Giant",
+        from: "battlefield",
+        controller: "opponent3",
+      }),
+    ).toBe("Gave Opponent 2's Hill Giant to Opponent 3");
+    expect(
+      at4({
+        type: "controlled",
+        seat: "opponent3",
+        name: "Hill Giant",
+        from: "graveyard",
+        controller: "opponent2",
+      }),
+    ).toBe("Put Opponent 3's Hill Giant onto the battlefield under Opponent 2's control");
     expect(at4({ type: "eliminated", seat: "opponent3" })).toBe("Opponent 3 is out");
     expect(at4({ type: "gameOver", winner: "opponent2" })).toBe("Opponent 2 won");
     expect(at4({ type: "gameOver", winner: "you" })).toBe("You won");

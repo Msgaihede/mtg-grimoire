@@ -141,6 +141,29 @@ function putSentence(
   return `${name} to ${PUT_YOURS[to]}`;
 }
 
+/**
+ * A card put under a player's control by hand (issue #1713), by whose card it is and who has it
+ * now. On the battlefield it is a change of control alone — "Gained control of the opponent's
+ * Hill Giant", "Gave Grizzly Bears to the opponent", "Gave the opponent's Hill Giant back",
+ * "Regained control of Grizzly Bears"; from anywhere else it is put onto the battlefield, as a
+ * reanimation says it — "Put the opponent's Hill Giant onto the battlefield under your control".
+ */
+function controlledSentence(
+  seat: PlaytestPlayer,
+  name: string,
+  from: GamePlace,
+  controller: PlaytestPlayer,
+  opponents: number,
+) {
+  const whose = seat === "you" ? "" : `${playerPossessive(seat, opponents, "mid")} `;
+  if (from !== "battlefield")
+    return `Put ${whose}${name} onto the battlefield under ${playerPossessive(controller, opponents, "mid")} control`;
+  if (controller === "you")
+    return seat === "you" ? `Regained control of ${name}` : `Gained control of ${whose}${name}`;
+  if (controller === seat) return `Gave ${whose}${name} back`;
+  return `Gave ${whose}${name} to ${playerName(controller, opponents, "mid")}`;
+}
+
 /** A tap or an untap by hand: "Tapped 2 × Forest", "Untapped the opponent's Llanowar Elves". */
 function tappedSentence(
   seat: PlaytestPlayer,
@@ -189,6 +212,8 @@ export function playtestSentence(
         : `Kept ${spelled(h.size)} · put ${spelled(h.bottomed)} on the bottom`;
     case "put":
       return putSentence(h.seat, h.name, h.from, h.to, opponents);
+    case "controlled":
+      return controlledSentence(h.seat, h.name, h.from, h.controller, opponents);
     case "tapped":
       return tappedSentence(h.seat, h.name, h.count, h.tapped, opponents);
     case "untappedAll":
@@ -288,6 +313,8 @@ export function playtestKind(h: PlaytestHappened): LogKind {
     case "put":
       // A spell put down unpaid is a cast, as its line says; any other placing is a move.
       return h.to === "graveyard" && (h.from === "hand" || h.from === "command") ? "cast" : "move";
+    case "controlled":
+      return "move";
     case "tapped":
     case "untappedAll":
       return "tap";

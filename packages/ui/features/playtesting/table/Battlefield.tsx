@@ -39,7 +39,7 @@ import {
   type PileApart,
 } from "./layout";
 import { cardMenu } from "./menus";
-import type { Pointed } from "./types";
+import type { ControlSeat, Pointed } from "./types";
 
 /** The section's own padding, 16 px top and bottom and 20 either side (`py-4 px-5`). */
 const PAD_X = 20;
@@ -127,6 +127,12 @@ export interface BattlefieldProps {
   /** Heads a permanent's menu with "Activate ability" (`cardMenu`'s `onActivate`). */
   onActivate?: (id: number) => void;
   /**
+   * Who this table's permanents can be put under the control of by hand (`cardMenu`'s
+   * `control`, issue #1713): every player still in the game but the one whose table it is. Only
+   * the table's own cards are offered it — an attachment drawn here from another table is not.
+   */
+  control?: readonly ControlSeat[];
+  /**
    * Less padding round the lanes (`py-2 px-3`), so the cards take the room — the playtest board,
    * whose two tables share the window's height.
    */
@@ -187,6 +193,7 @@ export function Battlefield({
   marks,
   pick,
   onActivate,
+  control,
   dense = false,
   across,
   emblems = NO_EMBLEMS,
@@ -270,6 +277,7 @@ export function Battlefield({
       mark={marks?.get(p.ids[0])}
       onPick={pick?.ids.has(p.ids[0]) ? pick.onPick : undefined}
       onActivate={onActivate}
+      control={control}
       own={own}
       marks={marks}
       pick={pick}
@@ -409,6 +417,7 @@ function PileView({
   mark,
   onPick,
   onActivate,
+  control,
   own,
   marks,
   pick,
@@ -427,6 +436,7 @@ function PileView({
   /** Present when a click picks this card rather than tapping it. */
   onPick: ((id: number) => void) | undefined;
   onActivate: ((id: number) => void) | undefined;
+  control: readonly ControlSeat[] | undefined;
   /** This table's own cards: an attachment that is not one is another table's guest. */
   own: ReadonlySet<number>;
   marks: ReadonlyMap<number, CardMark> | undefined;
@@ -497,6 +507,7 @@ function PileView({
       sandbox,
       onAct,
       onActivate: readOnly ? undefined : onActivate,
+      control,
     });
   const openMenu = menu(build);
   const picks = onPick !== undefined;
@@ -536,6 +547,7 @@ function PileView({
             mark={marks?.get(a.id)}
             onPick={pick?.ids.has(a.id) ? pick.onPick : undefined}
             onActivate={readOnly || !own.has(a.id) ? undefined : onActivate}
+            control={own.has(a.id) ? control : undefined}
             lifted={lifted === a.id}
             onLift={setLifted}
           />
@@ -707,6 +719,7 @@ function AttachedView({
   mark,
   onPick,
   onActivate,
+  control,
   lifted,
   onLift,
 }: {
@@ -726,6 +739,7 @@ function AttachedView({
   mark: CardMark | undefined;
   onPick: ((id: number) => void) | undefined;
   onActivate: ((id: number) => void) | undefined;
+  control: readonly ControlSeat[] | undefined;
   lifted: boolean;
   /** Lifts the attachment by its id, or puts every one back (`null`). */
   onLift: (id: number | null) => void;
@@ -749,7 +763,8 @@ function AttachedView({
     });
   }, [ids, card.name, carried]);
 
-  const build = () => cardMenu({ card, ids, place: "battlefield", sandbox, onAct, onActivate });
+  const build = () =>
+    cardMenu({ card, ids, place: "battlefield", sandbox, onAct, onActivate, control });
   const openMenu = menu(build);
   const ring = aimed
     ? MARK_RING.chosen

@@ -625,7 +625,8 @@ pub enum PlaytestAction {
     // The sandbox, refused while it is off, taken wherever the reader plays or declares (`main`,
     // `respond`, `attack`, `block`; issue #1522), never in a question: on any card the
     // reader owns or controls, and on any card the table shows (an opponent's battlefield,
-    // graveyard, exile or command zone) — never on an opponent's hand or library.
+    // graveyard, exile or command zone) — never on an opponent's hand or library. `Control`, the
+    // tenth, is below `SetLife`.
     Move {
         id: u64,
         to: Place,
@@ -657,6 +658,14 @@ pub enum PlaytestAction {
     SetLife {
         seat: PlaytestPlayer,
         life: i32,
+    },
+    /// Put a card under `seat`'s control by hand (issue #1713): a permanent changes controller
+    /// where it lies, and a card in a graveyard, in exile or in the command zone is put onto the
+    /// battlefield under that control — "under your control", as a reanimation spell says. Either
+    /// way it is summoning sick for its new controller (CR 302.6).
+    Control {
+        id: u64,
+        seat: PlaytestPlayer,
     },
     /// Take the reader's last action back, and all the opponent did after it: the game as it was
     /// at their last decision, exactly. Happens nothing.
@@ -770,6 +779,15 @@ pub enum PlaytestHappened {
         name: String,
         from: Place,
         to: Place,
+    },
+    /// The reader put a card under a player's control by hand (`control`): `seat` is whose card
+    /// it is, `from` where it was — the battlefield, for a change of control alone — and
+    /// `controller` who controls it on the battlefield now.
+    Controlled {
+        seat: PlaytestPlayer,
+        name: String,
+        from: Place,
+        controller: PlaytestPlayer,
     },
     Tapped {
         seat: PlaytestPlayer,

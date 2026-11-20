@@ -83,7 +83,14 @@ import {
   opponentHandWidth,
 } from "./OpponentZones";
 import { PlateFrame } from "./PlateFrame";
-import { OPPONENTS, playerName, playerPossessive, seatOfPlayer, tableCards } from "./players";
+import {
+  OPPONENTS,
+  controlSeats,
+  playerName,
+  playerPossessive,
+  seatOfPlayer,
+  tableCards,
+} from "./players";
 import { pickableCards } from "./prompt";
 import { DamagePanel } from "./DamagePanel";
 import { PickPanel } from "./PickPanel";
@@ -150,7 +157,9 @@ import { sandboxEditsAt } from "./sandbox";
  * table shows**: an opponent's permanents get the sandbox's card menu, their graveyard and exile
  * the same places to move a card to as the reader's own (issue #1521), and
  * their plates a stepper — but an opponent's cards are never dragged, and their hand and library
- * are counts the reader never touches.
+ * are counts the reader never touches. Every table's permanents can be put under another
+ * player's control (`controlSeats`, issue #1713), and an opponent's permanent card in their
+ * graveyard or exile onto the reader's battlefield.
  *
  * **Every action can take seconds** — the AI plays its whole turn before the engine answers — so
  * while one is with the engine (`busy`) the stage button says so and nothing new is offered;
@@ -818,6 +827,7 @@ export function PlaytestBoard({
                     marks={marks?.[seat.player]}
                     pick={theirPicks[seat.player]}
                     across={across[i + 1]}
+                    control={controlSeats(view, seat.player)}
                     aim={aims.tables[seat.player]}
                     plateAim={aims.plates[seat.player]}
                     aimable={aimable.includes(seat.player)}
@@ -850,6 +860,7 @@ export function PlaytestBoard({
                   marks={marks?.opponent}
                   pick={theirPick}
                   across={across[1]}
+                  control={controlSeats(view, "opponent")}
                   aim={aims.tables.opponent}
                   className="h-full w-full"
                 />
@@ -880,6 +891,7 @@ export function PlaytestBoard({
                 marks={marks?.you}
                 pick={yourPick}
                 onActivate={onActivate}
+                control={controlSeats(view, "you")}
                 across={across[0]}
                 carry={carry}
                 aim={aims.tables.you}
@@ -1573,7 +1585,7 @@ function PlaytestHelp({
       ) : sandbox ? (
         <>
           <span className="text-dim">
-            The sandbox is on. When the game waits on you, drag your cards anywhere, click a permanent to tap it (Shift-click taps the pile) and right-click any card for counters, copies and moves. Set any life total. Cards the rules can't play are put down unpaid. To change a step the game passes, add a stop there. Answer an open question first.
+            The sandbox is on. When the game waits on you, drag your cards anywhere, click a permanent to tap it (Shift-click taps the pile) and right-click any card for counters, copies, moves and who controls it. Set any life total. Cards the rules can't play are put down unpaid. To change a step the game passes, add a stop there. Answer an open question first.
           </span>
           <span className="text-dim">
             Point at one of your cards and press T to tap, G for graveyard, E to exile or H for hand.

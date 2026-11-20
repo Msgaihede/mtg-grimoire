@@ -29,6 +29,16 @@ describe("soundOf", () => {
     [moved("battlefield", "hand"), "toHand"],
     [moved("hand", "libraryBottom"), "toLibrary"],
     [moved("hand", "battlefield"), "play"],
+    [
+      {
+        type: "controlled",
+        seat: "opponent",
+        name: "Hill Giant",
+        from: "battlefield",
+        controller: "you",
+      },
+      "play",
+    ],
     [{ type: "life", seat: "you", amount: -3, total: 17 }, "lifeLoss"],
     [{ type: "life", seat: "you", amount: 2, total: 22 }, "lifeGain"],
     [{ type: "life", seat: "you", amount: 0, total: 20 }, null],

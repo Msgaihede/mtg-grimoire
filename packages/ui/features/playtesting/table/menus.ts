@@ -20,7 +20,7 @@
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat, PlaytestView } from "@/lib/ipc";
 import { FELTS } from "./playmats";
-import type { Playmat, ZoneLook } from "./types";
+import type { ControlSeat, Playmat, ZoneLook } from "./types";
 
 type Act = (a: PlaytestAction) => void;
 
@@ -61,6 +61,13 @@ function counted(card: GameCard, kind: string): number {
  * opponent's permanent nothing at all (an empty menu, which the caller does not open). On, every
  * hand move follows, on whichever seat's card it is: the engine puts an opponent's card in its
  * owner's zones.
+ *
+ * **`control` is who a permanent can be handed to** (the sandbox's `control`, issue #1713): every
+ * player still in the game but the one whose table it lies on. The reader among them is "Gain
+ * control" — an opponent's permanent taken, or the reader's own taken back; each other player is
+ * "Give control to the opponent", a submenu of them at a four-player table. A permanent changes
+ * controller where it lies and is summoning sick for its new one; the engine refuses one in
+ * combat.
  */
 export function cardMenu({
   card,
@@ -69,6 +76,7 @@ export function cardMenu({
   sandbox,
   onAct,
   onActivate,
+  control = [],
 }: {
   card: GameCard;
   ids: number[];
@@ -77,6 +85,8 @@ export function cardMenu({
   sandbox: boolean;
   onAct: Act;
   onActivate?: (id: number) => void;
+  /** The players a battlefield card can be put under the control of. None: no control rows. */
+  control?: readonly ControlSeat[];
 }): MenuItem[] {
   const id = ids[0] ?? card.id;
   const move = (to: GamePlace) => () => onAct({ type: "move", id, to });
@@ -137,6 +147,7 @@ export function cardMenu({
             : []),
         ]),
         action("copy", "Create a token copy", () => onAct({ type: "tokenCopy", id })),
+        ...controlRows(control, pile, (player) => onAct({ type: "control", id, seat: player })),
         { kind: "separator", id: "sep" },
         submenu("move", pile ? "Move one to" : "Move to", [
           action("hand", "Hand", move("hand")),
@@ -217,6 +228,44 @@ export function cardMenu({
       return [...head, submenu("move", "Move to", rows)];
     }
   }
+}
+
+/**
+ * A battlefield card's control rows: "Gain control" when the reader is among `control`, and the
+ * rest given — one row ("Give control to the opponent"), or a submenu of the players when there
+ * are several. A pile's rows act on its top card, and say so as its moves do.
+ */
+function controlRows(
+  control: readonly ControlSeat[],
+  pile: boolean,
+  give: (player: ControlSeat["player"]) => void,
+): MenuItem[] {
+  const rows: MenuItem[] = [];
+  const of = pile ? " of one" : "";
+  if (control.some((c) => c.player === "you")) {
+    rows.push(action("gainControl", `Gain control${of}`, () => give("you")));
+  }
+  const others = control.filter((c) => c.player !== "you");
+  const [only] = others;
+  if (others.length === 1 && only !== undefined) {
+    rows.push(action("giveControl", `Give control${of} to ${only.name}`, () => give(only.player)));
+  } else if (others.length > 1) {
+    rows.push(
+      submenu(
+        "giveControl",
+        `Give control${of} to`,
+        others.map((c) =>
+          action(`giveControl-${c.player}`, capitalised(c.name), () => give(c.player)),
+        ),
+      ),
+    );
+  }
+  return rows;
+}
+
+/** "the opponent" → "The opponent": a name that starts a menu row. */
+function capitalised(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 /**
