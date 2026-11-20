@@ -309,6 +309,30 @@ describe("the immersive bridge", () => {
     }
   });
 
+  it("holds the rotation it is in and keeps the screen on, and lets both go (issue #1716)", () => {
+    // The two halves of the one `if (on)`, each the inverse of the other, both inside the hop.
+    const hop = bridge.slice(bridge.indexOf("runOnUiThread"));
+    const elseAt = hop.indexOf("} else {");
+    const on = hop.slice(hop.indexOf("if (on) {"), elseAt);
+    const off = hop.slice(elseAt, hop.indexOf("\n        }\n", elseAt));
+    expect(on).toMatch(/requestedOrientation = ActivityInfo\.SCREEN_ORIENTATION_LOCKED\n/);
+    expect(on).toMatch(/window\.addFlags\(WindowManager\.LayoutParams\.FLAG_KEEP_SCREEN_ON\)/);
+    expect(off).toMatch(/requestedOrientation = ActivityInfo\.SCREEN_ORIENTATION_UNSPECIFIED\n/);
+    expect(off).toMatch(/window\.clearFlags\(WindowManager\.LayoutParams\.FLAG_KEEP_SCREEN_ON\)/);
+    // Off is UNSPECIFIED because that is what the activity declares: a `screenOrientation` in the
+    // manifest would be the rotation to give back instead.
+    expect(manifest).not.toMatch(/screenOrientation/);
+    // The activity handles a rotation itself, so holding or freeing one never recreates it (and
+    // the WebView and its game with it).
+    expect(manifest).toMatch(/android:configChanges="[^"]*\borientation\b[^"]*\bscreenSize\b/);
+    // Nothing else in the activity turns the screen or keeps it on behind the page's back.
+    expect(mainActivity.match(/requestedOrientation =/g)).toHaveLength(2);
+    expect(mainActivity.match(/LayoutParams\.FLAG_KEEP_SCREEN_ON/g)).toHaveLength(2);
+    for (const name of ["android.content.pm.ActivityInfo", "android.view.WindowManager"]) {
+      expect(mainActivity).toContain(`import ${name}\n`);
+    }
+  });
+
   it("pads the page by the bars' visible insets, so hidden bars leave no band", () => {
     // `getInsets` (not `getInsetsIgnoringVisibility`): hidden, the bars report zero and the page
     // takes the screen; the cutout stays in the same call.

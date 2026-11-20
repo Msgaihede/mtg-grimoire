@@ -16,7 +16,7 @@ Designed on the *Life Tracker — Light App* canvas, 2026-11-19 to 2026-11-20; t
 | `packages/ui/features/life/LifePage.tsx` | The desktop face's page (≥ 1024px), lazy in `App.tsx` |
 | `packages/ui/features/life/BoardFrame.tsx` | The box a board fills, a focus landing pad — shared by both pages (a file of its own because the desktop page reads the caption's `TitleBar`, which the phone's import fence refuses) |
 | `apps/light/phone/pages/LifePage.tsx` | The phone face's page (< 1024px), `PhoneApp.tsx`'s `case "life"` |
-| `packages/ui/lib/core/hostImmersive.ts` | `setImmersive(on)` — immersive full screen, where the hosts differ (§5) |
+| `packages/ui/lib/core/hostImmersive.ts` | `setImmersive(on)` — immersive: the bars away, the rotation held, the screen kept on, where the hosts differ (§5) |
 | `apps/light/src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt` | The Android host's `ImmersiveBridge` (§5) |
 
 ## 2. The view, and the edition that draws it
@@ -99,11 +99,18 @@ none) at `LAYER.stage`, as Playtesting's board is — so the board is the window
 what seating is resolved against. This face lends no Back step, so the board's claims are nothing
 here and **browser Back just leaves the view**; the setup's Continue game brings the game back.
 
-## 5. Immersive full screen
+## 5. Immersive: the bars, the rotation and the screen
 
-The owner asked (2026-11-20) that the tracker fill an Android phone's screen properly. The phone
-page calls `setImmersive(true)` **inside** the Start/Continue press, and `setImmersive(false)` when
-the board goes, when the page unmounts and on `pagehide`. The desktop face never asks.
+The owner asked (2026-11-20) that the tracker fill an Android phone's screen properly; a reader
+asked (issue #1716) that the board stop turning under the players and that the screen stop
+dimming and locking between turns. All three are one call: the phone page calls
+`setImmersive(true)` **inside** the Start/Continue press, and `setImmersive(false)` when the board
+goes, when the page unmounts and on `pagehide`. The desktop face never asks.
+
+**The rotation held is the one the board came up in**, exactly — upside down included, so a phone
+flat on the table, which the accelerometer reads badly, never flips. Not portrait: the setup is not
+held, and its Layout pictures are drawn in the window's shape (`useWindowShape`), so a reader who
+wants the board on its side turns the phone on the setup and presses Start there.
 
 `hostImmersive.ts` takes the first road that is there — feature detection of an object, not a
 platform probe (`phone/fence.test.ts`):
@@ -117,17 +124,37 @@ platform probe (`phone/fence.test.ts`):
    `WindowCompat.getInsetsController(window, window.decorView)`, hides the system bars with
    `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` or shows them. The content view's insets listener reads
    the bars' *visible* insets (`getInsets`), so hidden bars pad nothing and the cutout is still
-   respected. A release build minifies, so `proguard-rules.pro` keeps the method and its
-   annotation. `host.test.ts` holds the name, the one method, the UI-thread hop and the keep rule.
-2. **The browser's Fullscreen API** — the web app in a phone's browser — while
-   `document.fullscreenEnabled`: `documentElement.requestFullscreen({ navigationUI: "hide" })`, and
-   `exitFullscreen()` when off and something is full screen. A browser grants it only during a
-   press, hence the call in the handler. Refusals are swallowed; the board is drawn either way.
+   respected. In the same hop it sets the activity's `requestedOrientation` to
+   `SCREEN_ORIENTATION_LOCKED` (the rotation it is in) and adds `FLAG_KEEP_SCREEN_ON` to the window,
+   and off puts back `SCREEN_ORIENTATION_UNSPECIFIED` — the manifest declares no
+   `screenOrientation` — and clears the flag. The activity's `configChanges` already take
+   `orientation|screenSize`, so neither recreates it. A release build minifies, so
+   `proguard-rules.pro` keeps the method and its annotation. `host.test.ts` holds the name, the one
+   method, the UI-thread hop, both halves of the rotation and the flag, the manifest's silence on
+   `screenOrientation`, and the keep rule.
+2. **The browser's own APIs** — the web app in a phone's browser — each where it is there, each
+   refusal swallowed; the board is drawn either way:
+   - **The Fullscreen API**, while `document.fullscreenEnabled`:
+     `documentElement.requestFullscreen({ navigationUI: "hide" })`, and `exitFullscreen()` when off
+     and something is full screen. A browser grants it only during a press, hence the call in the
+     handler.
+   - **The Screen Orientation API**: `screen.orientation.lock(screen.orientation.type)`, asked once
+     the full-screen request has been answered, granted or not — Chrome holds a rotation only for a
+     page that is full screen or an installed app, and lets it go by itself when full screen ends —
+     and `unlock()` when off. A lock granted after the board has gone is let go at once.
+   - **The Screen Wake Lock API**: `navigator.wakeLock.request("screen")`, released when off. A
+     browser lets go of the lock whenever the page is hidden, so a `visibilitychange` listener,
+     there only while immersive, asks again each time the page is shown; never a second ask while
+     one is unanswered, and a lock handed over after the board has gone is released at once. It
+     needs no press, and iPhone Safari, which has no full screen for a page, has it.
 
 ## 6. Not verified
 
-- **The Kotlin has not been compiled here** (no Android SDK in the session that wrote it); CI's
-  `android` job builds the APK. The bridge has not been seen on a phone, nor has the Back
-  confirmation through Android's gesture.
-- The web road has not been driven in a phone's browser.
+- **The Kotlin has not been compiled here** (no Android SDK in the sessions that wrote it); CI's
+  `android` job builds the APK. The bridge has not been seen on a phone — the bars, the rotation
+  held or the screen kept on — nor has the Back confirmation through Android's gesture.
+- Android 16 ignores an app's requested rotation on a screen 600dp wide and up for apps that target
+  it (this one targets 36), so on a large tablet the board still turns; on a phone it is held.
+- The web road has not been driven in a phone's browser: full screen, the rotation lock or the wake
+  lock. The suites (`hostImmersive.test.ts`) stand each API in for itself.
 - The tab bar's seven-tab figures are arithmetic from the classes (§2), not a measurement.
