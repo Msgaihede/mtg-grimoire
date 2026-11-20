@@ -944,6 +944,7 @@ impl Playtest {
         } else {
             self.stage()
         };
+        let offers = self.offers(watching);
         let combat = s.combat.as_ref().map(|c| {
             let mut blocks: Vec<PlaytestBlockPair> = c
                 .blocker_to_attacker
@@ -1060,11 +1061,14 @@ impl Playtest {
             phase: phase_of(s.phase),
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
-            you: self.seat(self.you, &self.offers(watching)),
+            you: self.seat(self.you, &offers),
+            // The reader's offers on every seat: an opponent's card in a graveyard or exile is
+            // castable when the rules let the reader cast it (issue #1713) — Hostage Taker's
+            // hostage, Dire Fleet Daredevil's instant, a spell "from any graveyard".
             opponents: self
                 .others()
                 .into_iter()
-                .map(|p| self.seat(p, &Offers::default()))
+                .map(|p| self.seat(p, &offers))
                 .collect(),
             combat,
             attack,
@@ -2685,12 +2689,21 @@ impl Playtest {
     /// graveyard); else it is activated rather than played — or, in the sandbox, put onto the
     /// battlefield when it has nothing to activate and is not there already (a double-click on a
     /// graveyard's creature).
+    ///
+    /// A card the reader neither owns nor controls is played only by the rules, and only when
+    /// they offer it (issue #1713): an opponent's card in a graveyard or exile that an effect lets
+    /// the reader cast — Hostage Taker's, Dire Fleet Daredevil's, a spell "from any graveyard".
+    /// The sandbox's ways are for the reader's own cards.
     fn play(&mut self, id: ObjectId, out: &mut Log) -> Result<(), String> {
+        let ways = self.plays_of(id);
+        if self.own(id).is_err() && !ways.is_empty() {
+            let name = self.editable(id)?.name.clone();
+            return self.take_one(ways, "CastChoice", name, out, String::new);
+        }
         let obj = self.own(id)?;
         let name = obj.name.clone();
         let zone = obj.zone;
         let by_hand = self.sandbox;
-        let ways = self.plays_of(id);
         if !matches!(zone, Zone::Hand | Zone::Command) {
             if !ways.is_empty() {
                 return self.take_one(ways, "CastChoice", name, out, String::new);
@@ -3538,7 +3551,8 @@ impl Playtest {
         &self.state.players[seat.0 as usize]
     }
 
-    /// One of the reader's own objects — the only ones the rules let the board play or activate.
+    /// One of the reader's own objects — the ones the board activates, and plays by every way it
+    /// has (`play` takes an opponent's card only when the rules offer it).
     fn own(&self, id: ObjectId) -> Result<&engine::game::GameObject, String> {
         self.state
             .objects

@@ -344,6 +344,14 @@ A card elsewhere than the hand or the command zone is cast when the rules offer 
 and in the sandbox one with nothing to activate is put onto the battlefield (a double-click on a
 graveyard's creature).
 
+**An opponent's card the rules let the reader cast is the reader's to cast** (issue #1713, CR
+601.2a): Hostage Taker's hostage in its owner's exile, Dire Fleet Daredevil's instant, a spell
+"from any graveyard". Every seat's graveyard and exile carry the reader's offers, so the card is
+`castable` where it lies (until then only the reader's own seat had them, and the opponent's zone
+dialog's Cast was never lit), and `play` takes it whoever owns it — by the rules alone: the
+sandbox's ways (unpaid, put, activate) stay on the reader's own cards. phase decides what is
+offered; a permission it does not grant yet (Gonti's "look at and cast") is not.
+
 **`tapForMana`** taps one of the reader's permanents for mana by the rules (CR 605.3a), **sandbox
 or not** (issue #1326, 2026-10-21): the reader picks which lands pay for the next spell rather than
 `Auto`. It is phase's own list for a board (`activatable_mana_actions_for_player`, which its

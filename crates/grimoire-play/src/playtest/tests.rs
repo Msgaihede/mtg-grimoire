@@ -2060,3 +2060,186 @@ fn each_other_player_sacrifices_and_the_caster_makes_a_zombie_for_each() {
         .count();
     assert_eq!(zombies, 3, "{:?}", step.happened);
 }
+
+/// Issue #1713: a deck of the three colours a theft deck is cast from, and `extra`.
+fn thief(extra: Vec<CardFacts>) -> Vec<CardFacts> {
+    let mut deck = vec![
+        card(
+            "Island",
+            None,
+            "Basic Land — Island",
+            "({T}: Add {U}.)",
+            None,
+            "U",
+            12,
+        ),
+        card(
+            "Swamp",
+            None,
+            "Basic Land — Swamp",
+            "({T}: Add {B}.)",
+            None,
+            "B",
+            12,
+        ),
+        card(
+            "Mountain",
+            None,
+            "Basic Land — Mountain",
+            "({T}: Add {R}.)",
+            None,
+            "R",
+            12,
+        ),
+    ];
+    deck.extend(green().into_iter().filter(|c| c.name == "Grizzly Bears"));
+    deck.extend(extra);
+    deck
+}
+
+/// A game of `deck` against the red AI, past the opening hand, with `lands` put down by hand and
+/// the AI's Hill Giant on its battlefield.
+fn with_their_giant(deck: Vec<CardFacts>, lands: &[&str]) -> (Playtest, u64) {
+    let (mut game, _) = deal(deck, 2);
+    game.act(A::Keep { bottom: vec![] }).unwrap();
+    for land in lands {
+        put_down(&mut game, land);
+    }
+    game.put_for_test(AI_SEAT, "Hill Giant");
+    let giant = find(&game.view().opponents[0].battlefield, "Hill Giant")
+        .expect("the AI's giant")
+        .id;
+    (game, giant)
+}
+
+/// Issue #1713: Hostage Taker's hostage is cast by the rules from its owner's exile, sandbox
+/// off — offered on the opponent's exile (`castable`) and taken by `play`, whoever owns it — and
+/// enters under the reader's control.
+#[test]
+fn hostage_takers_hostage_is_cast_from_its_owners_exile() {
+    let (exiled, cast) = engine(|| {
+        let taker = card(
+            "Hostage Taker",
+            Some("{2}{U}{B}"),
+            "Creature — Human Pirate",
+            "When Hostage Taker enters, exile another target artifact or creature until Hostage \
+             Taker leaves the battlefield. You may cast that card for as long as it remains \
+             exiled, and mana of any type can be spent to cast that spell.",
+            Some(("2", "3")),
+            "U",
+            1,
+        );
+        let lands = [
+            "Island", "Island", "Swamp", "Swamp", "Mountain", "Mountain", "Mountain", "Mountain",
+        ];
+        let (mut game, giant) = with_their_giant(thief(vec![taker]), &lands);
+        assert!(!game.view().sandbox, "the rules, not the sandbox");
+        let id = in_hand(&mut game, "Hostage Taker");
+        let mut step = game.act(A::Play { id }).unwrap();
+        for _ in 0..4 {
+            if step.view.stage != Stage::Prompt {
+                break;
+            }
+            let at = step
+                .view
+                .prompt
+                .as_ref()
+                .unwrap()
+                .options
+                .iter()
+                .find(|o| o.cards.iter().any(|c| c.id == giant));
+            step = match at {
+                Some(o) => game.act(A::Choose { index: o.index }),
+                None => game.act(A::Auto),
+            }
+            .unwrap();
+        }
+        let exiled = step.view.clone();
+        let hostage = find(&exiled.opponents[0].exile, "Hill Giant").unwrap().id;
+        let mut cast = game.act(A::Play { id: hostage }).unwrap();
+        for _ in 0..4 {
+            if cast.view.stage != Stage::Prompt {
+                break;
+            }
+            cast = game.act(A::Auto).unwrap();
+        }
+        (exiled, cast)
+    });
+    let hostage = find(&exiled.opponents[0].exile, "Hill Giant").expect("exiled");
+    assert!(hostage.castable, "the rules let the reader cast it");
+    assert!(cast.happened.contains(&H::Cast {
+        seat: PlaytestPlayer::You,
+        name: Some("Hill Giant".into()),
+    }));
+    assert!(find(&cast.view.you.battlefield, "Hill Giant").is_some());
+    assert!(find(&cast.view.opponents[0].exile, "Hill Giant").is_none());
+}
+
+/// Issue #1713: a spell cast "from any graveyard" is an opponent's card in their graveyard,
+/// castable and cast by the reader — and a card the rules do not offer stays the opponent's
+/// to play, sandbox or not.
+#[test]
+fn a_spell_from_any_graveyard_is_cast_from_an_opponents() {
+    let (offered, cast, refused) = engine(|| {
+        let robbery = card(
+            "Grave Robbery",
+            Some("{U}"),
+            "Sorcery",
+            "Until end of turn, you may cast instant and sorcery spells from any graveyard.",
+            None,
+            "U",
+            1,
+        );
+        let (mut game, giant) = with_their_giant(thief(vec![robbery]), &["Island", "Mountain"]);
+        let bolt = {
+            let state = game.state_for_test();
+            let bolt = state.players[1]
+                .library
+                .iter()
+                .copied()
+                .find(|id| state.objects[id].name == "Lightning Bolt")
+                .unwrap();
+            engine::game::engine::apply(
+                state,
+                PlayerId(0),
+                engine::types::actions::GameAction::Debug(
+                    engine::types::actions::DebugAction::MoveToZone {
+                        object_id: bolt,
+                        to_zone: Zone::Graveyard,
+                        library_position: None,
+                        simulate: false,
+                    },
+                ),
+            )
+            .unwrap();
+            bolt.0
+        };
+        let refused = by_hand(&mut game, |game| game.act(A::Play { id: giant }));
+        let id = in_hand(&mut game, "Grave Robbery");
+        let offered = game.act(A::Play { id }).unwrap();
+        let asked = game.act(A::Play { id: bolt }).unwrap();
+        let face = asked
+            .view
+            .prompt
+            .as_ref()
+            .expect("which target")
+            .options
+            .iter()
+            .find(|o| o.players == vec![PlaytestPlayer::Opponent])
+            .unwrap()
+            .index;
+        (
+            offered,
+            game.act(A::Choose { index: face }).unwrap(),
+            refused,
+        )
+    });
+    let bolt = find(&offered.view.opponents[0].graveyard, "Lightning Bolt").unwrap();
+    assert!(bolt.castable);
+    assert_eq!(cast.view.opponents[0].life, 17);
+    assert!(
+        find(&cast.view.opponents[0].graveyard, "Lightning Bolt").is_some(),
+        "back to its owner's graveyard"
+    );
+    assert_eq!(refused.unwrap_err(), "That card is no longer where it was.");
+}

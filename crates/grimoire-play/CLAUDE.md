@@ -86,6 +86,11 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   was made at (`play_on`'s `held`): it never passes a priority or a stop. The board's
   `sandboxEditsAt` (`packages/ui/features/playtesting/play/sandbox.ts`) mirrors the stages. Never
   check the sandbox action by action, and never let a hand edit reach the engine some other way.
+- **What the rules let the reader cast is theirs to cast, whoever owns it** (issue #1713): every
+  seat is drawn with the reader's `offers`, so an opponent's card in a graveyard or exile is
+  `castable` when the rules offer it (Hostage Taker's hostage, a spell "from any graveyard"), and
+  `play` takes it by the rules alone — the sandbox's ways (unpaid, put, activate) are for the
+  reader's own cards (`own`).
 - **Tapping for mana is the rules', never the sandbox's** (`tap_for_mana`, issue #1326). It is
   taken sandbox or not, wherever the reader has priority, from phase's own board list
   (`activatable_mana_actions_for_player`) — never a list of this crate's, and never the
