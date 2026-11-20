@@ -4590,9 +4590,9 @@ pub struct DeckCommanderIdentity {
 ///
 /// **`cards.color_identity` rather than anything derived here** — Scryfall's precomputed letters
 /// already fold in DFC backs, colour indicators and rules-text symbols
-/// ([`DeckCardRow::color_identity`]). The join is inner, [`PIP_COSTS_SQL`]'s: a commander whose printing has left `cards` has no
-/// identity this read could know, so it contributes nothing — and if it was the only one, the
-/// list has no row and answers `None`. A NULL or `''` identity is coalesced to `''`, so a
+/// ([`DeckCardRow::color_identity`]). The join is inner, [`PIP_COSTS_SQL`]'s: a commander whose
+/// printing has left `cards` has no identity this read could know, so it contributes nothing —
+/// and if it was the only one, the list has no row and answers `None`. A NULL or `''` identity is coalesced to `''`, so a
 /// colourless commander still makes a row, and `group_concat` hands the union's raw letters to
 /// [`wubrg`].
 const COMMANDER_IDENTITIES_SQL: &str = "
