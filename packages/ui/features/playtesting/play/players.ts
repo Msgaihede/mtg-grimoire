@@ -10,6 +10,7 @@
  * `opponents` is how many opponents the game has (`view.opponents.length`): 1 or 3.
  */
 import type { PlaytestPlayer, PlaytestSeat, PlaytestView } from "@/lib/ipc";
+import type { ControlSeat } from "../table/types";
 
 /** Every opponent's player, in turn order after the reader. */
 export const OPPONENTS: readonly PlaytestPlayer[] = ["opponent", "opponent2", "opponent3"];
@@ -54,4 +55,18 @@ export function seatOfPlayer(
 /** Every battlefield card on the table, the reader's first — for a card an answer names. */
 export function tableCards(view: Pick<PlaytestView, "you" | "opponents">) {
   return [view.you, ...view.opponents].flatMap((s) => s.battlefield);
+}
+
+/**
+ * Who the permanents on `table`'s side can be put under the control of by hand (the sandbox's
+ * `control`, issue #1713): every player still in the game but `table`'s own, the reader first,
+ * each named as a menu row says it inside a sentence — "you", "the opponent", "Opponent 2".
+ */
+export function controlSeats(
+  view: Pick<PlaytestView, "you" | "opponents">,
+  table: PlaytestPlayer,
+): ControlSeat[] {
+  return [view.you, ...view.opponents]
+    .filter((s) => s.player !== table && !s.out)
+    .map((s) => ({ player: s.player, name: playerName(s.player, view.opponents.length, "mid") }));
 }

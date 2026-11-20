@@ -26,9 +26,10 @@
 //! answer is not asked at all (`sole_answer`): `advance` takes it, as the reader would have.
 //!
 //! **The sandbox is a setting** (`setSandbox`): a hand on the table, phase's debug actions — move a
-//! card anywhere, tap, counters, tokens, draws, life totals — on the reader's own cards and on
-//! every card the table shows (never an opponent's hand or library), and a play the rules refuse
-//! made unpaid instead: cast without paying, or put down when even that is not legal (`unpaid`).
+//! card anywhere, tap, counters, tokens, draws, life totals, a card put under any player's control
+//! (`control`, issue #1713) — on the reader's own cards and on every card the table shows (never
+//! an opponent's hand or library), and a play the rules refuse made unpaid instead: cast without
+//! paying, or put down when even that is not legal (`unpaid`).
 //! Taken whenever the game waits on the reader to play or to declare (issue #1522): their main
 //! phase, a moment to respond (any step they stop at), their declare-attackers and
 //! declare-blockers steps (`edit`) — never in the middle of a question, nor before the opening
@@ -144,6 +145,8 @@ const MAIN_ONLY: &str = "That can be done in your main phase, with nothing on th
 const SANDBOX_OFF: &str =
     "That changes the game by hand. Turn the sandbox on in the game menu to do it.";
 const HIDDEN: &str = "That card is in a zone you cannot see.";
+const NO_SUCH_PLAYER: &str = "There is no such player in this game.";
+const PLAYER_OUT: &str = "That player is out of the game.";
 const NOT_A_PERSON: &str = "That seat is not a person's at this table.";
 const NOT_YOURS: &str = "Another player is deciding. Wait for your turn to act.";
 const NO_UNDO_TOGETHER: &str = "A game with other people at the table cannot be taken back.";
@@ -2948,6 +2951,7 @@ impl Playtest {
     fn sandbox(&mut self, action: PlaytestAction, out: &mut Log) -> Result<(), String> {
         match action {
             PlaytestAction::Move { id, to } => self.put(ObjectId(id), to, out),
+            PlaytestAction::Control { id, seat } => self.control(ObjectId(id), seat, out),
             PlaytestAction::Tap { ids, tapped } => {
                 let mut name = String::new();
                 let mut seat = PlaytestPlayer::You;
@@ -3134,7 +3138,7 @@ impl Playtest {
             PlaytestAction::SetLife { seat, life } => {
                 let player = self.eyes().player(seat);
                 if player.0 as usize >= self.state.players.len() {
-                    return Err("There is no such player in this game.".into());
+                    return Err(NO_SUCH_PLAYER.into());
                 }
                 let was = self.player(player).life;
                 let life = life.clamp(-999, 9999);
@@ -3226,6 +3230,80 @@ impl Playtest {
             })?;
         }
         Ok(())
+    }
+
+    /// Put a card under `seat`'s control by hand (issue #1713): no cost, no trigger, no
+    /// replacement. A permanent changes controller where it lies (phase's `SetController`, which
+    /// writes Layer 2's base, so the next layers pass keeps it); a card the table shows anywhere
+    /// else is put onto the battlefield first, as `put` puts it, then given — "onto the
+    /// battlefield under your control". It stays its owner's card: it goes to its owner's zones
+    /// when it leaves.
+    ///
+    /// CR 302.6: either way it is summoning sick for its new controller, as phase's own control
+    /// change makes it (its layers re-apply sickness on a change they see, and a debug change
+    /// writes the controller before they look). CR 506.4 would take a permanent that changes
+    /// control out of combat, which no debug action does, so one in combat is refused rather
+    /// than left attacking or blocking for the other side.
+    fn control(&mut self, id: ObjectId, seat: PlaytestPlayer, out: &mut Log) -> Result<(), String> {
+        let player = self.eyes().player(seat);
+        if player.0 as usize >= self.state.players.len() {
+            return Err(NO_SUCH_PLAYER.into());
+        }
+        if self.player(player).is_eliminated {
+            return Err(PLAYER_OUT.into());
+        }
+        let obj = self.editable(id)?;
+        let from = place_of(obj.zone).ok_or(NOT_IN_GAME)?;
+        let name = obj.name.clone();
+        let owner = obj.owner;
+        if from == Place::Battlefield {
+            if obj.controller == player {
+                return Ok(());
+            }
+            if self.in_combat(id) {
+                return Err(format!(
+                    "{name} is in combat. Change who controls it before attackers are declared \
+                     or once combat is over."
+                ));
+            }
+        } else if !is_permanent(obj) {
+            return Err(format!(
+                "{name} is not a permanent card, so nothing can control it on the battlefield."
+            ));
+        } else {
+            self.debug(DebugAction::MoveToZone {
+                object_id: id,
+                to_zone: Zone::Battlefield,
+                library_position: None,
+                simulate: false,
+            })?;
+            self.enter_with_counters(id)?;
+        }
+        self.debug(DebugAction::SetController {
+            object_id: id,
+            controller: player,
+        })?;
+        self.debug(DebugAction::SetSummoningSickness {
+            object_id: id,
+            sick: true,
+        })?;
+        out.own(
+            self.you,
+            PlaytestHappened::Controlled {
+                seat: self.seat_of(owner),
+                name,
+                from,
+                controller: seat,
+            },
+        );
+        Ok(())
+    }
+
+    /// Whether a permanent is attacking or blocking.
+    fn in_combat(&self, id: ObjectId) -> bool {
+        self.state.combat.as_ref().is_some_and(|c| {
+            c.attackers.iter().any(|a| a.object_id == id) || c.blocker_to_attacker.contains_key(&id)
+        })
     }
 
     // ── Playing on ────────────────────────────────────────────────────────────────────────
@@ -3729,6 +3807,7 @@ fn is_sandbox(action: &PlaytestAction) -> bool {
     matches!(
         action,
         PlaytestAction::Move { .. }
+            | PlaytestAction::Control { .. }
             | PlaytestAction::Tap { .. }
             | PlaytestAction::UntapAll
             | PlaytestAction::Counters { .. }

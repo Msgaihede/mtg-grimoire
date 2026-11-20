@@ -38,7 +38,9 @@ import type { Pointed, ZoneLook } from "./types";
  * theirs (`owner`). It offers what the reader's own does (issue #1521): with the sandbox's moves
  * working each card carries the same places, and the engine puts it in its owner's zones (their
  * hand, their library — `session.rs`' `put`), as their battlefield's menu does; without them it
- * is read-only like the reader's own.
+ * is read-only like the reader's own. So the battlefield is two places on a permanent card of
+ * theirs (issue #1713): "Their battlefield", under its owner's control, and "Your battlefield",
+ * under the reader's (`control`) — a reanimation, or a hostage taken, acted out by hand.
  *
  * **A card the rules let the reader cast from here carries a Cast** ({@link GameCard.castable}: a
  * foretold card in exile, a flashback card in the graveyard — or an opponent's card an effect lets
@@ -98,9 +100,13 @@ export function LibraryDialog({
     searching && needle !== "" ? shown.filter((c) => c.name.toLowerCase().includes(needle)) : shown;
 
   const title = opponent ? opponentTitle(look, owner) : titleFor(look);
-  const places = readOnly ? [] : placesFor(look);
+  const places = readOnly ? [] : placesFor(look, opponent);
 
-  const send = (card: GameCard, to: GamePlace) => {
+  const send = (card: GameCard, to: Destination) => {
+    if (to === "yours") {
+      onAct({ type: "control", id: card.id, seat: "you" });
+      return;
+    }
     // Out of the window unless it went back on top of it.
     if (windowed && to !== "libraryTop") setMoved((n) => n + 1);
     onAct({ type: "move", id: card.id, to });
@@ -199,23 +205,25 @@ export function LibraryDialog({
                         Cast
                       </button>
                     )}
-                    {places.map(([to, label]) => (
-                      <button
-                        key={to}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => send(card, to)}
-                        className={cn(
-                          "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
-                          "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
-                          PRESS,
-                          FOCUS,
-                          HELD,
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                    {places
+                      .filter(([to]) => to !== "yours" || isPermanentCard(card))
+                      .map(([to, label]) => (
+                        <button
+                          key={to}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => send(card, to)}
+                          className={cn(
+                            "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
+                            "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
+                            PRESS,
+                            FOCUS,
+                            HELD,
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
                   </div>
                 )}
               </li>
@@ -302,8 +310,27 @@ function subtitleFor(look: ZoneLook, view: Pick<PlaytestSeat, "library">): strin
   }
 }
 
-/** The buttons under each card: where it can go from here, as the mode allows. */
-function placesFor(look: ZoneLook): [GamePlace, string][] {
+/**
+ * Where a button under a card sends it: a place, or — on an opponent's card — onto the reader's
+ * own battlefield, under their control (`"yours"`, the sandbox's `control`).
+ */
+type Destination = GamePlace | "yours";
+
+/**
+ * Whether a card is a permanent card (CR 110.4a), by the core types its type line leads with —
+ * the engine's own test for what can be put onto the battlefield under someone's control.
+ */
+function isPermanentCard(card: GameCard): boolean {
+  const types = card.typeLine.split(" — ")[0] ?? "";
+  return /\b(Artifact|Creature|Enchantment|Land|Planeswalker|Battle)\b/.test(types);
+}
+
+/**
+ * The buttons under each card: where it can go from here, as the mode allows. An opponent's
+ * graveyard or exile names whose battlefield, since a permanent card of theirs can go onto
+ * either (`opponent`).
+ */
+function placesFor(look: ZoneLook, opponent: boolean): [Destination, string][] {
   if (look.mode === "scry")
     return [
       ["libraryTop", "Top"],
@@ -324,12 +351,13 @@ function placesFor(look: ZoneLook): [GamePlace, string][] {
       ["exile", "Exile"],
       ["libraryTop", "Top"],
     ];
-  const rows: [GamePlace, string][] = [
+  const rows: [Destination, string][] = [
     ["hand", "Hand"],
     // A move, never a play: from the library, the graveyard or exile a card is put onto the
     // battlefield by whatever effect is being acted out, not cast.
-    ["battlefield", "Battlefield"],
+    ["battlefield", opponent ? "Their battlefield" : "Battlefield"],
   ];
+  if (opponent) rows.push(["yours", "Your battlefield"]);
   if (look.zone !== "graveyard") rows.push(["graveyard", "Graveyard"]);
   if (look.zone !== "exile") rows.push(["exile", "Exile"]);
   rows.push(["libraryTop", "Top"], ["libraryBottom", "Bottom"]);

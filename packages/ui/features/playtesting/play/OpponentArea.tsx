@@ -7,7 +7,7 @@ import { Battlefield, type CardMark, type TablePick } from "../table/Battlefield
 import type { DropAim, TableAim, TableDrag } from "../table/tableDrag";
 import type { Across, ZoneSize } from "../table/layout";
 import { LifePlate } from "../table/LifePlate";
-import type { Pointed, ZoneLook } from "../table/types";
+import type { ControlSeat, Pointed, ZoneLook } from "../table/types";
 import { OpponentCommand, OpponentHand, OpponentLibrary, OpponentPile } from "./OpponentZones";
 import { PlateFrame } from "./PlateFrame";
 import { playerName, playerPossessive } from "./players";
@@ -33,7 +33,8 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * **Looked at, and handled only through the sandbox**, as a duel's opponent is: the cards point
  * for the preview, the graveyard and exile open to look through, and a click picks only when the
  * rules ask for one (`pick`). With the sandbox's moves working (`sandbox`) a permanent has the
- * sandbox's card menu — tap, counters, a token copy, a move to its owner's zones — the graveyard's
+ * sandbox's card menu — tap, counters, a token copy, control handed to another player (`control`,
+ * issue #1713), a move to its owner's zones — the graveyard's
  * and exile's cards the reader's own places (issue #1521), and with the
  * sandbox on (`steppers`) the plate has a life stepper; nothing of theirs is ever dragged — but
  * the reader's cards are carried onto theirs, and onto the plate, to attack or aim (`aim`).
@@ -52,6 +53,7 @@ export function OpponentArea({
   marks,
   pick,
   across,
+  control,
   aimable,
   onAim,
   aim,
@@ -84,6 +86,8 @@ export function OpponentArea({
   pick?: TablePick;
   /** The attachments that cross between this table and the others (`Battlefield`'s). */
   across?: Across;
+  /** Who this player's permanents can be put under the control of by hand (`Battlefield`'s). */
+  control?: readonly ControlSeat[];
   /** The reader's attacker waiting to be aimed can attack this player: the plate is a target. */
   aimable: boolean;
   onAim: () => void;
@@ -197,6 +201,7 @@ export function OpponentArea({
             marks={marks}
             pick={pick}
             across={across}
+            control={control}
             aim={seat.out ? undefined : aim}
             className="h-full w-full"
           />

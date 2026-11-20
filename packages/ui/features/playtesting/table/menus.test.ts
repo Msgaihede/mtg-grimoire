@@ -72,6 +72,86 @@ describe("cardMenu", () => {
     expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [card.id], tapped: false });
   });
 
+  // Issue #1713: who a permanent can be handed to by hand.
+  it("gains control of an opponent's permanent, and gives the reader's own away", () => {
+    const onAct = vi.fn();
+    const giant = gameCard("Tarmogoyf");
+    const theirs = cardMenu({
+      card: giant,
+      ids: [giant.id],
+      place: "battlefield",
+      sandbox: true,
+      onAct,
+      control: [{ player: "you", name: "you" }],
+    });
+    expect(labels(theirs)).toEqual([
+      "Tap",
+      "Counters",
+      "Create a token copy",
+      "Gain control",
+      "Move to",
+    ]);
+    act(theirs, "Gain control").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "control", id: giant.id, seat: "you" });
+
+    const mine = cardMenu({
+      card: giant,
+      ids: [giant.id],
+      place: "battlefield",
+      sandbox: true,
+      onAct,
+      control: [{ player: "opponent", name: "the opponent" }],
+    });
+    act(mine, "Give control to the opponent").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "control", id: giant.id, seat: "opponent" });
+  });
+
+  it("gives control to one of several players from a submenu, a pile's top card alone", () => {
+    const onAct = vi.fn();
+    const goblin = gameCard("Tarmogoyf");
+    const items = cardMenu({
+      card: goblin,
+      ids: [21, 22],
+      place: "battlefield",
+      sandbox: true,
+      onAct,
+      control: [
+        { player: "you", name: "you" },
+        { player: "opponent", name: "Opponent 1" },
+        { player: "opponent3", name: "Opponent 3" },
+      ],
+    });
+    act(items, "Gain control of one").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "control", id: 21, seat: "you" });
+    const to = sub(items, "Give control of one to");
+    expect(labels(to)).toEqual(["Opponent 1", "Opponent 3"]);
+    act(to, "Opponent 3").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "control", id: 21, seat: "opponent3" });
+  });
+
+  it("offers no control rows with the sandbox off, or off the battlefield", () => {
+    const card = gameCard("Tarmogoyf");
+    const control = [{ player: "you" as const, name: "you" }];
+    const off = cardMenu({
+      card,
+      ids: [card.id],
+      place: "battlefield",
+      sandbox: false,
+      onAct: vi.fn(),
+      control,
+    });
+    expect(off).toEqual([]);
+    const yard = cardMenu({
+      card,
+      ids: [card.id],
+      place: "graveyard",
+      sandbox: true,
+      onAct: vi.fn(),
+      control,
+    });
+    expect(labels(yard)).not.toContain("Gain control");
+  });
+
   it("greys removing a counter the card does not carry", () => {
     const onAct = vi.fn();
     const bare = gameCard("Llanowar Elves");

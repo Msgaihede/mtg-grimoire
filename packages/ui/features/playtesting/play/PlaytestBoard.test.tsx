@@ -376,6 +376,19 @@ describe("PlaytestBoard's opponent", () => {
     expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [ragavan.id], tapped: true });
   });
 
+  // Issue #1713: the opponent's permanent is taken by hand, and the reader's own given away.
+  it("gains control of the opponent's permanent and gives the reader's own to them", async () => {
+    const { view, ragavan, elves } = turnFive();
+    const { onAct } = setup(sandboxed(view));
+    fireEvent.contextMenu(within(theirs()).getByRole("button", { name: /^Ragavan/ }));
+    await screen.findByRole("menu");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Gain control" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "control", id: ragavan.id, seat: "you" });
+    fireEvent.contextMenu(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Give control to the opponent" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "control", id: elves.id, seat: "opponent" });
+  });
+
   // Issue #1521: the opponent's graveyard offers what the reader's own does, sandbox permitting.
   it.each([
     ["a click", fireEvent.click],
@@ -389,9 +402,10 @@ describe("PlaytestBoard's opponent", () => {
     open(screen.getByRole("button", { name: /^The opponent's graveyard, / }));
     const dialog = screen.getByRole("dialog", { name: "The opponent's graveyard" });
     const card = within(within(dialog).getByRole("group", { name: "Lightning Bolt" }));
+    // An instant has no battlefield of the reader's to go to (issue #1713): only its owner's.
     expect(card.getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Hand",
-      "Battlefield",
+      "Their battlefield",
       "Exile",
       "Top",
       "Bottom",

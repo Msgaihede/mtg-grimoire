@@ -83,9 +83,12 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   `main`, `respond`, `attack`, `block` (`edit`, issue #1522) — never in a question or at the
   opening hand, on the reader's cards and on any card the table shows (`editable`) — **never an
   opponent's hand or library**. Outside the main phase an edit keeps the reader at the decision it
-  was made at (`play_on`'s `held`): it never passes a priority or a stop. The board's
-  `sandboxEditsAt` (`packages/ui/features/playtesting/play/sandbox.ts`) mirrors the stages. Never
-  check the sandbox action by action, and never let a hand edit reach the engine some other way.
+  was made at (`play_on`'s `held`): it never passes a priority or a stop. A card put under a
+  player's control by hand (`control`, issue #1713) is summoning sick for its new controller
+  (CR 302.6, which phase's layers do not see a debug change for) and refused in combat (no debug
+  action takes it out of combat, CR 506.4). The board's `sandboxEditsAt`
+  (`packages/ui/features/playtesting/play/sandbox.ts`) mirrors the stages. Never check the sandbox
+  action by action, and never let a hand edit reach the engine some other way.
 - **What the rules let the reader cast is theirs to cast, whoever owns it** (issue #1713): every
   seat is drawn with the reader's `offers`, so an opponent's card in a graveyard or exile is
   `castable` when the rules offer it (Hostage Taker's hostage, a spell "from any graveyard"), and

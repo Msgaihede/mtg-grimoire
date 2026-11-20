@@ -429,6 +429,21 @@ which the engine permits for the reader's seat (`debug_permitted`) and never for
   the reader may not see: "That card is in a zone you cannot see." Every emblem is out of reach
   too: no move, tap or counter takes one (CR 114.5 — it is not a card).
 
+**A card is put under any player's control by hand** (`control { id, seat }`, issue #1713,
+2026-11-20): an opponent's permanent taken ("Gain control"), the reader's given away ("Give
+control to the opponent"), and a permanent card in a graveyard, in exile or in the command zone
+put onto the battlefield under that player's control — a reanimation or a theft acted out when the
+card that does it is one phase does not play. A permanent changes controller where it lies
+(phase's `SetController`, which writes Layer 2's base, so a later layers pass keeps it); a card
+elsewhere is put onto the battlefield first, as `move` puts it, with its intrinsic counters. It
+stays its owner's card: it leaves to its owner's zones. **It is summoning sick for its new
+controller** (CR 302.6): phase's own control change re-applies sickness in its layers, which do
+not see a debug change, so `control` sets it. **A permanent in combat is refused** — CR 506.4
+would take it out of combat, which no debug action does — and so is a card that is not a
+permanent card ("… is not a permanent card"), or a player out of the game. Told as `controlled`:
+whose card, where it was, who controls it now ("Gained control of the opponent's Hill Giant",
+"Put the opponent's Hill Giant onto the battlefield under your control").
+
 **A permanent put onto the battlefield by hand enters with its intrinsic counters** (issue #1333):
 a planeswalker its loyalty and a battle its defense (CR 306.5b, 310.4b), phase's own
 `intrinsic_etb_counters` added after the move (`enter_with_counters`). phase's debug move is inert
@@ -870,10 +885,14 @@ facts are found as a run of `step.happened`, and the end takes the rest.
     is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
   - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,
     the keys and every drag ([goldfish.md](goldfish.md#the-table)). **The opponents' battlefield
-    cards get a card menu** too (tap, counters, token copy, move), their graveyard and exile the
-    same places to move a card to as the reader's own (issue #1521) — the engine puts it in its
-    owner's zones — and their plates steppers. An opponent's card is never dragged, and their hand
-    and library stay counts.
+    cards get a card menu** too (tap, counters, token copy, Gain control, move), their graveyard
+    and exile the same places to move a card to as the reader's own (issue #1521) — the engine
+    puts it in its owner's zones — and their plates steppers. An opponent's graveyard or exile
+    names whose battlefield: "Their battlefield", and on a permanent card "Your battlefield", under
+    the reader's control (issue #1713). Every permanent's menu says who it can be handed to
+    (`players.ts`' `controlSeats`: every player still in the game but the table's own) — "Gain
+    control", "Give control to the opponent", a submenu of them at a four-player table. An
+    opponent's card is never dragged, and their hand and library stay counts.
 - **Your cards:** a double-click or a drop on the table plays a card from the hand or the command
   zone, and "Activate ability" heads a battlefield card's menu. **A click on a permanent the rules
   let tap for mana (`canTapForMana`) taps it for mana**, sandbox or not, and "Tap for mana" is on

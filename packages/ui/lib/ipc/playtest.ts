@@ -454,6 +454,13 @@ export type PlaytestAction =
   | { type: "mill"; count: number }
   | { type: "shuffle" }
   | { type: "setLife"; seat: PlaytestPlayer; life: number }
+  /**
+   * Put a card under `seat`'s control by hand (issue #1713): a permanent changes controller where
+   * it lies, and a card in a graveyard, in exile or in the command zone is put onto the
+   * battlefield under that control. Summoning sick for its new controller (CR 302.6); refused for
+   * a permanent in combat and for a card that is not a permanent.
+   */
+  | { type: "control"; id: number; seat: PlaytestPlayer }
   /** Back to the reader's last decision, exactly. Happens nothing and plays nothing back. */
   | { type: "undo" }
   /** The game as it was before the last undo. Happens nothing. */
@@ -502,6 +509,17 @@ export type PlaytestHappened =
   | { type: "emblem"; seat: PlaytestPlayer; source: string | null }
   /** The reader put a card somewhere by hand; `seat` is whose card it is. */
   | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
+  /**
+   * The reader put a card under a player's control by hand; `seat` is whose card it is, `from`
+   * where it was (the battlefield for a change of control alone), `controller` who has it now.
+   */
+  | {
+      type: "controlled";
+      seat: PlaytestPlayer;
+      name: string;
+      from: GamePlace;
+      controller: PlaytestPlayer;
+    }
   | { type: "tapped"; seat: PlaytestPlayer; name: string; count: number; tapped: boolean }
   | { type: "untappedAll" }
   | { type: "counters"; seat: PlaytestPlayer; name: string; kind: string; count: number }

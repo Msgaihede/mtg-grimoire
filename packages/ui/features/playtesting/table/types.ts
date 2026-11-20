@@ -2,7 +2,7 @@
  * The board's own shapes — what the table's pieces hand each other, as distinct from the wire's
  * (`@/lib/ipc`'s `PlaytestView`, `PlaytestSeat` and friends, which the engine answers).
  */
-import type { GameCard, GamePlace } from "@/lib/ipc";
+import type { GameCard, GamePlace, PlaytestPlayer } from "@/lib/ipc";
 
 /** What the reader is pointing at: the inspect preview's card, and what T / G / E / H act on. */
 export interface Pointed {
@@ -32,4 +32,15 @@ export interface ZoneLook {
   zone: "library" | "graveyard" | "exile";
   mode: "look" | "scry" | "surveil" | "search" | "browse";
   count: number | "all";
+}
+
+/**
+ * A player a table's permanents can be put under the control of by hand — the sandbox's
+ * `control` (issue #1713) — with their name as a menu row says it inside a sentence: "the
+ * opponent", "Opponent 2", "you". The board lists, for each table, every player still in the
+ * game but the one whose table it is.
+ */
+export interface ControlSeat {
+  player: PlaytestPlayer;
+  name: string;
 }

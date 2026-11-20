@@ -189,17 +189,58 @@ describe("LibraryDialog", () => {
     const elves = within(screen.getByRole("group", { name: "Llanowar Elves" }));
     expect(elves.getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Hand",
-      "Battlefield",
+      "Their battlefield",
+      "Your battlefield",
       "Exile",
       "Top",
       "Bottom",
     ]);
-    await userEvent.click(elves.getByRole("button", { name: "Battlefield" }));
+    await userEvent.click(elves.getByRole("button", { name: "Their battlefield" }));
     expect(onAct).toHaveBeenLastCalledWith({
       type: "move",
       id: view.graveyard[1].id,
       to: "battlefield",
     });
+  });
+
+  // Issue #1713: a permanent card of theirs goes onto the reader's battlefield, under the
+  // reader's control — a reanimation by hand; a spell has no battlefield of the reader's to go to.
+  it("puts an opponent's permanent card onto the reader's battlefield under their control", async () => {
+    const onAct = vi.fn();
+    const view = tableView();
+    render(
+      <LibraryDialog
+        look={{ zone: "graveyard", mode: "browse", count: "all" }}
+        view={view}
+        opponent
+        onAct={onAct}
+        onClose={() => {}}
+      />,
+    );
+    const elves = within(screen.getByRole("group", { name: "Llanowar Elves" }));
+    await userEvent.click(elves.getByRole("button", { name: "Your battlefield" }));
+    expect(onAct).toHaveBeenLastCalledWith({
+      type: "control",
+      id: view.graveyard[1].id,
+      seat: "you",
+    });
+    const swords = within(screen.getByRole("group", { name: "Swords to Plowshares" }));
+    expect(swords.queryByRole("button", { name: "Your battlefield" })).toBeNull();
+    expect(swords.getByRole("button", { name: "Their battlefield" })).toBeInTheDocument();
+  });
+
+  it("keeps the reader's own graveyard one battlefield", () => {
+    render(
+      <LibraryDialog
+        look={{ zone: "graveyard", mode: "browse", count: "all" }}
+        view={tableView()}
+        onAct={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const elves = within(screen.getByRole("group", { name: "Llanowar Elves" }));
+    expect(elves.getByRole("button", { name: "Battlefield" })).toBeInTheDocument();
+    expect(elves.queryByRole("button", { name: "Your battlefield" })).toBeNull();
   });
 
   it("keeps an opponent's graveyard a look with the sandbox's moves not working", () => {
