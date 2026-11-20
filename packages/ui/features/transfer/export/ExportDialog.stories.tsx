@@ -1442,6 +1442,43 @@ export const ShutByDefault: Story = {
 };
 
 /**
+ * **The example** (issue #1701) — a few lines of made-up cards in the chosen format, drawn open
+ * under the field row while the decklist stays shut, so a reader can tell the formats apart
+ * before they open their own text.
+ *
+ * It is `formatExport` over `export/example.ts`'s pile with the reader's own format and fields,
+ * so it follows every box: Archidekt's `4x Example Card (set) 123 [Example category] *F*
+ * ^Buy,#0066ff^` loses its caret group the moment `Label` is unticked. Made-up names because an
+ * example has to show what the format *can* say — the pile here has no label at all — and a
+ * plainly invented card cannot be mistaken for a line of the reader's file.
+ */
+export const Example: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const example = await canvas.findByRole("figure", { name: "Example" });
+    await waitFor(async () => await expect(example).toBeVisible(), { timeout: FRAME_WAIT });
+
+    // Open while the decklist is shut, and none of the reader's cards in it.
+    await expect(canvas.getByRole("button", { name: /Show decklist/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await expect(example).toHaveTextContent(
+      "1 Example Commander 4 Example Card *F* 1 Another Card",
+    );
+    await expect(example).not.toHaveTextContent("Lightning Bolt");
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    await expect(example).toHaveTextContent(
+      "4x Example Card (set) 123 [Example category] *F* ^Buy,#0066ff^",
+    );
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Label" }));
+    await expect(example).not.toHaveTextContent("^Buy");
+  },
+};
+
+/**
  * Closed draws **no dialog at all** — not a scrim, not a panel, not an off-screen one.
  *
  * The body is passed to `Dialog` as an *element*, and an element React never puts in the tree

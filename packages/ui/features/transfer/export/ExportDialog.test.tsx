@@ -161,6 +161,37 @@ describe("ExportDialog", () => {
     );
   });
 
+  // Issue #1701: a few made-up lines in the chosen format, on screen with the decklist shut.
+  it("draws an example of the format, open, which follows the format and the fields", async () => {
+    const user = userEvent.setup();
+    render(<ExportDialog {...props} />);
+    const example = await screen.findByRole("figure", { name: "Example" });
+    // Open while the decklist is shut — and still not a `<pre>`, which is the decklist's.
+    expect(screen.getByRole("button", { name: /Show decklist/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(document.querySelector("pre")).toBeNull();
+    expect(example).toHaveTextContent("1 Example Commander 4 Example Card *F* 1 Another Card");
+    // Made-up cards, never the reader's.
+    expect(example).not.toHaveTextContent("Lightning Bolt");
+
+    await user.click(screen.getByRole("radio", { name: "Archidekt" }));
+    expect(example).toHaveTextContent(
+      "4x Example Card (set) 123 [Example category] *F* ^Buy,#0066ff^",
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Label" }));
+    expect(example).not.toHaveTextContent("^Buy");
+  });
+
+  it("draws the example from the surface's own pile", async () => {
+    render(<ExportDialog {...props} surface="collection" cards={[]} />);
+    // The collection opens on CSV, and its example carries a condition where a deck's has a pile.
+    expect(await screen.findByRole("figure", { name: "Example" })).toHaveTextContent(
+      "Quantity,Name,Set,Collector number,Finish,Condition 4,Example Card,set,123,foil,NM",
+    );
+  });
+
   it("redraws the preview when the format changes", async () => {
     const user = userEvent.setup();
     render(
@@ -416,7 +447,8 @@ describe("ExportDialog", () => {
       await user.click(labelBox());
       await user.click(colourBox);
       await showList(user);
-      expect(screen.getByText(/Label,Label colour/)).toBeInTheDocument();
+      // The decklist's header, not the example's (issue #1701), which follows the same boxes.
+      expect(document.querySelector("pre")).toHaveTextContent(/Label,Label colour/);
       expect(screen.getByText(/Keeper,#4aab08/)).toBeInTheDocument();
     });
 

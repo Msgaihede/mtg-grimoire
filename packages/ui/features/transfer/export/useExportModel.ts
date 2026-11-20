@@ -19,6 +19,7 @@ import type { TransferFieldId, TransferSurface } from "../fields";
 import type { ExportPrefs } from "../prefs";
 import type { TransferCard } from "../TransferCard";
 import { isInArena, notInArenaCopies } from "./arena";
+import { exampleText } from "./example";
 import {
   dropsInactive,
   formatExport,
@@ -160,6 +161,13 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
    * nobody wrote; an empty export is 0 rather than 1.
    */
   const lines = useMemo(() => (text === "" ? 0 : text.trimEnd().split("\n").length), [text]);
+  /**
+   * A few lines of made-up cards in this format, with these fields — issue #1701, and
+   * `example.ts` says why the cards are made up. Not the reader's text and not filtered by
+   * either row filter: it answers "what does a line of this format look like", which the
+   * format and the fields decide, while which cards reach the file is the count lines' question.
+   */
+  const example = useMemo(() => exampleText(surface, format, fields), [fields, format, surface]);
 
   return {
     format,
@@ -174,6 +182,7 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
     notInArena,
     heldBackInactive,
     lines,
+    example,
     chooseFormat,
     toggleField,
     toggleArenaOnly,

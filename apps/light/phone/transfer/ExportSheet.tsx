@@ -7,6 +7,7 @@ import {
   EXPORT_FORMAT_LABEL,
   ROW_EXPORT_FORMATS,
 } from "@grimoire/ui/features/transfer/formats";
+import { ExportExample } from "@grimoire/ui/features/transfer/export/ExportExample";
 import { MoreFormats } from "@grimoire/ui/features/transfer/export/MoreFormats";
 import { useExportModel } from "@grimoire/ui/features/transfer/export/useExportModel";
 import type { TransferCard } from "@grimoire/ui/features/transfer/TransferCard";
@@ -253,6 +254,10 @@ function Body({
             </div>
           </fieldset>
         )}
+
+        {/* The desktop dialog's example (issue #1701), the same component in the same place:
+            under the fields it follows, open, and above the filters it does not. */}
+        <ExportExample text={model.example} captionClassName="text-xs" />
 
         {format === "arena" && (
           <label className={CHECK_ROW}>
