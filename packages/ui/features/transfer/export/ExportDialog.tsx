@@ -109,6 +109,7 @@ import { TRANSFER_FIELDS } from "../fields";
 import type { TransferSurface } from "../fields";
 import type { TransferCard } from "../TransferCard";
 import { EXPORT_FORMATS, EXPORT_FORMAT_EXTENSION, EXPORT_FORMAT_LABEL } from "./format";
+import { ExportExample } from "./ExportExample";
 import { useExportModel } from "./useExportModel";
 
 /**
@@ -288,6 +289,7 @@ function Body({
     notInArena,
     heldBackInactive,
     lines,
+    example,
     chooseFormat,
     toggleField,
     toggleArenaOnly,
@@ -435,6 +437,12 @@ function Body({
           ))}
         </fieldset>
       )}
+
+      {/* The example — issue #1701. Under the field row because the format and the fields are
+          the whole of what it answers, and above the two filters because neither changes it:
+          they decide which cards reach the file, and the count lines under them say so. Drawn
+          open, unlike the decklist, because three lines cost the buttons nothing. */}
+      <ExportExample text={example} />
 
       {/* The Arena filter — issue #192. **Drawn only for `arena`**, which is the field row's own
           rule reached from the other side: a format offers what it has a channel for, and "leave

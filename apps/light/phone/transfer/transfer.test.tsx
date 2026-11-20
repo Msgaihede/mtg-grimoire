@@ -36,6 +36,7 @@ vi.mock("@grimoire/ui/lib/clipboard", () => ({
 }));
 
 import { exportFileName } from "@grimoire/ui/features/decks/deckExport";
+import { exampleText } from "@grimoire/ui/features/transfer/export/example";
 import { formatExport, isActivePile } from "@grimoire/ui/features/transfer/export/format";
 import { defaultFields } from "@grimoire/ui/features/transfer/fields";
 import type { ExportFormat } from "@grimoire/ui/features/transfer/formats";
@@ -257,6 +258,27 @@ describe("a deck's export, on the phone", () => {
     expect(caught.map((c) => c.name)).toEqual([name]);
     expect(await caught[0]?.blob.text()).toBe(await deckText("plain"));
     expect(within(sheet).getByRole("status")).toHaveTextContent(`Downloading ${name}.`);
+  });
+
+  // Issue #1701: the desktop dialog's example, the same writer over the same made-up pile.
+  it("draws the desktop's example of the format, and follows a change of format", async () => {
+    const user = userEvent.setup();
+    renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
+    await user.click(await screen.findByRole("button", { name: "Export this deck" }, SETTLE));
+    const sheet = await screen.findByRole("dialog", { name: /^Export “/ }, SETTLE);
+    // The lines themselves, under the figure's caption: one per line of the writer's text, and a
+    // blank line between two sections drawn as a no-break space.
+    const drawn = () =>
+      within(sheet)
+        .getByRole("figure", { name: "Example" })
+        .querySelector("samp")
+        ?.textContent?.replace(/\u00a0/g, "");
+    const lines = (format: ExportFormat) =>
+      exampleText("deck", format, defaultFields(format, "deck")).trimEnd();
+
+    expect(drawn()).toBe(lines("plain"));
+    await user.click(within(sheet).getByRole("radio", { name: "Archidekt" }));
+    expect(drawn()).toBe(lines("archidekt"));
   });
 
   // The first phone run, 2026-10-04: the button read `Download` over the system's save dialog.

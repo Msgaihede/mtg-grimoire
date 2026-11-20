@@ -108,8 +108,9 @@ export interface TransferCard {
   legalities: string | null;
 }
 
-/** Every field a surface does not have, in one object to spread. */
-const NOTHING = {
+/** Every field a surface does not have, in one object to spread. Exported for `export/example.ts`,
+ *  whose made-up rows are built the way these adapters build real ones. */
+export const NOTHING = {
   setCode: null, collectorNumber: null, finish: null, lang: null,
   categoryName: null, categoryKind: null, categoryActive: null,
   condition: null, tradelistQuantity: null, purchasePrice: null, purchaseCurrency: null,
