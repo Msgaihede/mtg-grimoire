@@ -328,6 +328,74 @@ The remaining 404s in a render check are the migration's own: `components/bundle
 The page-generated `api/components/Ribbon.md` outlived Ribbon's files — the page owns `api/`, so
 it was not removed by hand.
 
+## The 2026-11-20 run (bundle 0.71.1) — the skill's own artifact flow, from a cloud container
+
+The bundled skill (Claude Code 2.1.329) publishes to a Design System artifact itself:
+`artifact/SKILL.md` beside the claude.ai/design text, `artifact-publish.mjs` to plan and check the
+publish. This run used it, by Markus's choice, in place of the hand procedure above
+(`bundle-css.mjs`, `page-cards.mjs`, `assemble.mjs`, `render-check.mjs`), which was written for a
+converter that could not. **`.design-sync/artifact.json` now names the target** and is what a
+re-sync reads; the link is no longer only in this file. The run was made in a cloud session with
+no grade cache and no anchor in the artifact, so all 27 components were captured and graded.
+
+What the build needed that it had not before:
+
+- **[GENERAL] `cfg.extraFonts` listed Cinzel 400 and the app has not loaded that face for a long
+  time** (`packages/ui/index.css` imports `@fontsource/cinzel/500.css` and `600.css`). The bundle's
+  `fonts/fonts.css` therefore declared a 400 face the app never ships, default-weight `font-heading`
+  text used it, and every heading — the title bar's wordmark, SyncProgress' two headings, every
+  Dialog title — drew lighter and narrower than the app's (wordmark 130.1px against 132.5px), in
+  every design built from the bundle. The entry is `500.css` now. **`[FONT_MISSING]` cannot see
+  this**: it reports a face that is referenced and absent, never one that is shipped and wrong. It
+  was found by a pixel diff at the gutter offset, where the only differing pixels on 22 stories
+  were Cinzel text. `extraFonts` has to follow `index.css`'s `@fontsource` imports by hand.
+- **`cfg.storyImports.loaders: {".wav": "empty"}`.** The scanner's sounds
+  (`features/scanner/sounds/player.ts`) reach AppShell's story graph, the preview build has no
+  loader for `.wav`, and AppShell fell to the floor card with `! preview build failed`. `empty` is
+  enough: no card plays one. A new asset type on a story's graph needs its own line.
+- **`cfg.overrides.CardArt.cardMode: "column"`** — `[GRID_OVERFLOW]`: `FoilKinds` is wider than a
+  grid cell.
+- **`[TOKENS_MISSING]` grew by three, same class as `--dnd-*`**: `--table-x` (`PlaytestBoard`
+  writes it inline) and `--foil-tex-1`/`--foil-tex-2` (`FoilOverlay` writes them inline). Expected;
+  define nothing.
+- **`createContext` counts**: AppShell 8, ContextMenu **10** (7 at the last count — its story
+  compiles the menu stack from source, and the stack grew), Dialog 1, every other preview 0.
+- **Two owned previews changed.** `Dialog.tsx`'s stage lost `maxWidth: "100%"`: on the `?story=`
+  page it capped the stage at 912px, so the 880px panel drew 864 — which is the whole of the
+  `close` this file records for `Default` on 2026-10-17, and it grades `match` now.
+  `TooltipProvider.tsx`'s re-enacted act waits for `document.fonts.ready`: `OnFocus` opens with no
+  delay, measured the fallback face and sat 3px off centre once Geist swapped in.
+- **The three things the `CountPill` fix could not confirm without the converter all hold**: the
+  declaration build prints nothing, the roster resolves 27 components, and no `_preview/*.js`
+  compiles `features/decks/CountPill` from source. `FilterChips`' `CountPills` story (15th of 18,
+  past the cap) was probed directly: three `span[data-count-pill]`, pixel-identical to storybook.
+- **`react18-audit.mjs` is clean on the real `ds-bundle/_ds_bundle.js`** (291 modules), and the
+  real-press check was repeated with the converter's own bundle and stylesheet on React 18.3.1:
+  Dropdown, MultiDropdown and the shortcut map open visible and placed, a pile grip drags.
+
+Procedure, where it differs from the list above:
+
+- **In a Linux cloud session**: `export DS_CHROMIUM_PATH=/opt/pw-browsers/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell`
+  before validate, compare and the driver; never `playwright install`. Staged playwright was
+  1.65.1 and ran on that build.
+- **The art is copied for grading and must NOT be copied after the closing driver run.** The
+  artifact flow publishes only what the layout takes from `ds-bundle/` (`card-art/` is not part of
+  it — the artifact keeps the folder it already has), and `artifact-publish.mjs plan` refuses a
+  build with any file newer than the driver's verdict (`CHANGED_SINCE_VERDICT`). So: build, copy
+  art, capture and grade; then the driver alone, which carries every grade forward and captures
+  nothing; then plan.
+- **Grades this run**: 21 components `match` on every captured story. `close`, each for a reason
+  this file already gives: Dropdown `Multi` and `Picked Icon`; CardArt `Game Changer` and
+  `Game Changer Foil`; Figure `With As Of Title`; TooltipProvider `Interactive` and `On Focus`.
+  CardStack `Labelled And Short Of Copies` graded `match` — the capture landed after its play.
+  ContextMenu `No Stored Image` and `Add To Wishlist Folders` are timing-dependent the same way.
+- **Tail stories past the cap whose play changes a pressed state**, found by a probe and still
+  ungraded: ToggleChip `Colours Exact`, `Disclosures`, `Joined Or`, `Stack Printings`.
+- **[GENERAL] A primitive under ~30px cannot be judged from the sheet, and a pixel diff finds what
+  the eye misses.** Crop the storybook raw whole and the preview raw at (24,24) — (16,24) for
+  content centred in the root — to one size, upscale nearest-neighbour, and read that; then diff
+  at a threshold of ~40. Anything stretched to the root is 16px shorter in the preview: framing.
+
 ## Config decisions worth knowing
 
 - **Scope is deliberate**: the reusable primitives and the shell (no count here; see Re-sync
