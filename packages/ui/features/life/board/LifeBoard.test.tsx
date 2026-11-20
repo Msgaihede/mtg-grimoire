@@ -36,6 +36,18 @@ function mount(setup: LifeSetup = setupFromFormat("commander"), host?: DialogHos
   return { onLeave, unmount: view.unmount };
 }
 
+/** The turn of a seat's panel: its content's frame, turned to face whoever reads it. */
+const turnOf = (player: number) =>
+  (screen.getByRole("region", { name: `Player ${player}` }).firstElementChild as HTMLElement).style
+    .transform;
+
+const openCommanderDamage = (player: number) =>
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: new RegExp(`^Commander damage dealt to Player ${player},`),
+    }),
+  );
+
 /** A seat's total, read the way a screen reader reads it — off the number's own button. */
 const lifeOf = (player: number) =>
   screen
@@ -174,6 +186,59 @@ describe("LifeBoard", () => {
     act(() => backs[0]());
     expect(screen.getByRole("dialog", { name: "End this game?" })).toBeInTheDocument();
     expect(onLeave).not.toHaveBeenCalled();
+  });
+
+  it("turns every panel to face the player whose commander damage is open", () => {
+    mount();
+    const sideways = (deg: number) => `translate(-50%, -50%) rotate(${deg}deg)`;
+    // Four round the table, two to a side.
+    expect([1, 2, 3, 4].map(turnOf)).toEqual([90, 90, -90, -90].map(sideways));
+
+    openCommanderDamage(1);
+    // The far side's counts are upright to Player 1, who reads and presses all of them.
+    expect([1, 2, 3, 4].map(turnOf)).toEqual([90, 90, 90, 90].map(sideways));
+    fireEvent.click(
+      screen.getByRole("button", { name: "One more commander damage from Player 3" }),
+    );
+    expect(
+      screen.getByRole("button", { name: /^Player 3 has dealt 1 commander damage/ }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to life totals" }));
+    expect([1, 2, 3, 4].map(turnOf)).toEqual([90, 90, -90, -90].map(sideways));
+    openCommanderDamage(4);
+    expect([1, 2, 3, 4].map(turnOf)).toEqual([-90, -90, -90, -90].map(sideways));
+  });
+
+  it("opens the calculator on another commander's panel facing the player counting", () => {
+    vi.useFakeTimers();
+    mount();
+    openCommanderDamage(1);
+    const more = screen.getByRole("button", { name: "One more commander damage from Player 4" });
+    fireEvent.pointerDown(more, { clientX: 300, clientY: 700 });
+    act(() => vi.advanceTimersByTime(500));
+    const calculator = screen.getByRole("dialog", {
+      name: "Commander damage dealt, Player 4 to Player 1",
+    });
+    // Player 1's turn, not Player 4's.
+    expect(calculator.style.transform).toBe("translate(-50%, -50%) rotate(90deg)");
+  });
+
+  it("puts − and + under the number on a panel turned a quarter", () => {
+    // Four players' B table: one at the foot and the head, one down each long side.
+    mount({ ...setupFromFormat("commander"), layout: "B" });
+    const minus = (player: number) =>
+      screen.getByRole("button", { name: `One less commander damage from Player ${player}` });
+    openCommanderDamage(1);
+    expect([1, 2, 3, 4].map(turnOf)).toEqual(
+      [1, 2, 3, 4].map(() => "translate(-50%, -50%) rotate(0deg)"),
+    );
+    // The long sides turned a quarter, and are narrow for the − and + beside their numbers.
+    expect(minus(2).style.justifyContent).toBe("center");
+    expect(minus(4).style.justifyContent).toBe("center");
+    // The head turned a half: the same shape as it was laid out, its − and + where they were.
+    expect(minus(3).style.justifyContent).toBe("");
+    expect(minus(3).style.paddingLeft).toBe("6px");
   });
 
   it("picks up a saved game where it was left", async () => {

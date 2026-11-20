@@ -15,11 +15,14 @@ import { cn } from "@grimoire/ui/lib/utils";
  * it. It fills the safe area (padded by every `env()` inset, which the Android host's own padding
  * makes 0 there), and the board fills it.
  *
- * **Immersive full screen while the board is up** (the owner's request, 2026-11-20): the system
- * bars are put away from the press that brought the board up — a browser grants full screen only
- * during a press, so it is asked in the handler and not in an effect — and brought back when the
- * board goes, when the page is left, and on `pagehide`. `@grimoire/ui/lib/core/hostImmersive` is
- * where the hosts differ about how; this page never asks which it is on.
+ * **Immersive while the board is up** (the owner's request, 2026-11-20; issue #1716): the system
+ * bars are put away, the rotation the board came up in is held and the screen is kept on, from the
+ * press that brought the board up — a browser grants full screen only during a press, so it is
+ * asked in the handler and not in an effect — and all three are let go when the board goes, when
+ * the page is left, and on `pagehide`. The setup is never held: its Layout pictures are drawn in
+ * the window's shape, so the reader turns the phone there and the board keeps that shape.
+ * `@grimoire/ui/lib/core/hostImmersive` is where the hosts differ about how; this page never asks
+ * which it is on.
  *
  * **Back is the board's** (the owner's decision: Back goes back to the menu, with a confirmation,
  * so a game is never lost by accident). The board claims a Back step while it is up
@@ -38,8 +41,8 @@ export function LifePage() {
   const [returned, setReturned] = useState(false);
   const playing = game !== null;
 
-  // The bars come back however the board goes: unmounted with the page, or the page hidden for
-  // good. Turning them *on* is the press's, below.
+  // The bars, the rotation and the screen's sleep come back however the board goes: unmounted with
+  // the page, or the page hidden for good. Turning immersive *on* is the press's, below.
   useEffect(() => {
     if (!playing) return;
     const restore = () => setImmersive(false);

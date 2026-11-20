@@ -52,8 +52,10 @@ import { clearSavedGame, loadSavedGame, saveGame } from "../game/savedGame";
 import {
   HUB_RADIUS,
   PAD,
+  facingSeat,
   hubRoom,
   inSeatFrame,
+  quarterApart,
   seatBox,
   seatPlan,
   type SeatPlan,
@@ -348,10 +350,12 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
 
   const colors = seatColors(game);
   const common = plan ? commonSize(plan, W, H) : 0;
-  const editRect =
-    plan && view.edit
-      ? (plan.seats[view.edit.source ?? view.edit.seat] ?? plan.seats[view.edit.seat])
-      : null;
+  // While a seat's commander damage is open its player reads and counts every panel, so every
+  // panel faces them. The numbers keep the board's one size where a panel has the room for it.
+  const drawn = plan && view.cmdFor !== null ? facingSeat(plan, view.cmdFor) : plan;
+  // The calculator faces the player whose total it sets: for commander damage, the player it was
+  // dealt to, who is the one counting it — not the commander's own seat.
+  const editRect = plan && view.edit ? plan.seats[view.edit.seat] : null;
 
   return (
     <>
@@ -395,21 +399,25 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
               );
             })}
 
-            {plan.seats.map((rect, i) => (
-              <SeatPanel
-                key={i}
-                game={game}
-                view={view}
-                seat={i}
-                box={seatBox(rect, W, H)}
-                keep={hubRoom(rect, plan.hub, W, H)}
-                common={common}
-                colors={colors}
-                now={now}
-                reduced={reduced}
-                act={panelActions}
-              />
-            ))}
+            {plan.seats.map((own, i) => {
+              const rect = drawn?.seats[i] ?? own;
+              return (
+                <SeatPanel
+                  key={i}
+                  game={game}
+                  view={view}
+                  seat={i}
+                  box={seatBox(rect, W, H)}
+                  keep={hubRoom(rect, plan.hub, W, H)}
+                  common={common}
+                  glyphsUnder={quarterApart(rect.rot, own.rot)}
+                  colors={colors}
+                  now={now}
+                  reduced={reduced}
+                  act={panelActions}
+                />
+              );
+            })}
 
             {!reduced && (
               <canvas

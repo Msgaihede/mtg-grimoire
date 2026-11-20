@@ -38,8 +38,9 @@ const SIGN_KEYS = new Set<string>(["−", "+", "×", "÷", "(", ")", "="]);
 
 /**
  * The calculator, **turned to face whoever opened it** — a quarter or half turn round the table,
- * the same turn as their panel (an opponent who is not on the board has no panel, and theirs faces
- * the player). Five across: the digits as on any calculator, the four signs in a column beside
+ * the same turn as their panel. Commander damage is set by the player it was dealt to, who is
+ * counting it and whom every panel faces while it is open, so it faces them, whichever commander's
+ * panel was held. Five across: the digits as on any calculator, the four signs in a column beside
  * them, and delete, the brackets and = down the right-hand edge. What it does is all
  * `calculator.ts`'s; this draws its display.
  */

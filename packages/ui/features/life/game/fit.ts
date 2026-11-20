@@ -11,7 +11,7 @@
  * number has more characters than fit there — the reader compares totals across the table at a
  * glance, and a leader drawn larger than the rest reads as a different kind of number.
  */
-import { hubRoom, type HubRoom, type SeatPlan } from "./seating";
+import { HUB_SIDE_KEEP, hubRoom, type HubRoom, type SeatPlan } from "./seating";
 
 /** A character's width, in ems. */
 export const CHAR = 0.58;
@@ -21,6 +21,10 @@ export const INK_TOP = 0.125;
 export const INK_HIGH = 0.74;
 /** The air between the number's ink and the line under it, in px. */
 export const UNDER = 4;
+/** A panel's − and + discs (`LifeHalves`), and how far above the foot they sit when they are
+ *  under the number rather than beside it, in px. */
+const DISC = 52;
+const DISC_LIFT = 6;
 
 /**
  * How much a panel's furniture — its chips, its − and + — is scaled up. Nothing grows on a phone,
@@ -96,6 +100,10 @@ export interface NumberPlace {
   underLift: number;
   /** How far the − and + move down to stay level with one player's digits. */
   glyphDrop: number;
+  /** With `under`: how far above the panel's foot the − and + sit. */
+  glyphLift: number;
+  /** The widest the line under the number may run. */
+  lineWidth: number;
 }
 
 export interface NumberQuestion {
@@ -110,6 +118,9 @@ export interface NumberQuestion {
   solo: boolean;
   /** With `solo`: the band of commander chips above the total is drawn. */
   commanderBand: boolean;
+  /** The − and + are under the number, not beside it: a panel turned a quarter to face the seat
+   *  whose commander damage is open (`facingSeat`), narrower than any the tables are laid out for. */
+  under?: boolean;
 }
 
 /**
@@ -120,10 +131,39 @@ export interface NumberQuestion {
  * Commander game, the band of commander chips (one row along the top edge on its side, under the
  * menu button with room for the tax to drop to a second row upright: 59 and 149px of chips at
  * their phone size). Below is the line under the number, then the edge or the menu button.
+ *
+ * **With the − and + under it** the number has the panel's width, short of the menu button at
+ * either side, and sits centred above them.
  */
 export function placeNumber(q: NumberQuestion): NumberPlace {
   const { lw, lh, chars, keep } = q;
   const moved = underHigh(lw, lh);
+  if (q.under) {
+    const lift = Math.max(DISC_LIFT, keep.bottom);
+    const foot = lift + DISC * grown(lw, lh) + 4;
+    const top = Math.max(8, keep.top);
+    const across = lw - 2 * HUB_SIDE_KEEP;
+    const size = Math.floor(
+      Math.max(
+        24,
+        Math.min(
+          q.common,
+          Math.max(260, Math.min(lw, lh) * 0.5),
+          across / (CHAR * chars),
+          (lh - top - foot - moved - UNDER) / INK_HIGH,
+        ),
+      ),
+    );
+    const inkTop = top + (lh - top - foot - (INK_HIGH * size + UNDER + moved)) / 2;
+    return {
+      size,
+      top: round1(inkTop - INK_TOP * size),
+      underLift: round1(UNDER - (1 - INK_TOP - INK_HIGH) * size),
+      glyphDrop: 0,
+      glyphLift: lift,
+      lineWidth: Math.round(across),
+    };
+  }
   let size = Math.floor(
     Math.max(24, Math.min(q.common, numberFit(lw, lh, chars, keep.top, keep.bottom))),
   );
@@ -148,6 +188,8 @@ export function placeNumber(q: NumberQuestion): NumberPlace {
     top: round1(inkTop - INK_TOP * size),
     underLift: round1(UNDER - (1 - INK_TOP - INK_HIGH) * size),
     glyphDrop: q.solo ? Math.round(inkTop + (INK_HIGH * size) / 2 - lh / 2) : 0,
+    glyphLift: 0,
+    lineWidth: Math.round(lw - 150),
   };
 }
 

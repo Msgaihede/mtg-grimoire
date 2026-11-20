@@ -2077,6 +2077,167 @@ fn a_hand_card_with_cycling_is_not_offered_when_it_cannot_be_paid() {
     assert!(refused.contains("no ability"), "{refused}");
 }
 
+/// An unearth deck (issue #1714): Swamps and Dregscape Zombie, whose Unearth {B} is phase's own
+/// (`database/unearth.rs`, CR 702.84a) — an activated ability that works only from the graveyard.
+fn unearth_deck() -> Vec<CardFacts> {
+    let mut commander = card(
+        "Ayara, First of Locthwain",
+        Some("{B}{B}{B}"),
+        "Legendary Creature — Elf Noble",
+        "Whenever Ayara, First of Locthwain or another black creature you control enters, each opponent loses 1 life and you gain 1 life.\n{T}, Sacrifice another black creature: Draw a card.",
+        Some(("2", "3")),
+        1,
+    );
+    commander.commander = true;
+    let mut zombie = card(
+        "Dregscape Zombie",
+        Some("{1}{B}"),
+        "Creature — Zombie",
+        "Unearth {B} ({B}: Return this card from your graveyard to the battlefield. It gains haste. Exile it at the beginning of the next end step or if it would leave the battlefield. Unearth only as a sorcery.)",
+        Some(("2", "1")),
+        39,
+    );
+    zombie.keywords = vec!["Unearth".into()];
+    let mut deck = vec![
+        commander,
+        card(
+            "Swamp",
+            None,
+            "Basic Land — Swamp",
+            "({T}: Add {B}.)",
+            None,
+            60,
+        ),
+        zombie,
+    ];
+    for c in &mut deck {
+        c.colors = if c.mana_cost.is_some() {
+            vec!["B".into()]
+        } else {
+            vec![]
+        };
+        c.color_identity = vec!["B".into()];
+    }
+    deck
+}
+
+/// The unearth deck's game at the reader's first main phase, with a Dregscape Zombie put into
+/// the graveyard by hand — and its id there.
+fn unearthing() -> (Playtest, u64) {
+    let (mut game, _) = fish(&unearth_deck(), 7);
+    game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+    let zombie = in_hand(&mut game, "Dregscape Zombie");
+    let step = game
+        .act(A::Move {
+            id: zombie,
+            to: Place::Graveyard,
+        })
+        .expect("into the graveyard");
+    let id = find(&step.view.you.graveyard, "Dregscape Zombie")
+        .expect("in the graveyard")
+        .id;
+    (game, id)
+}
+
+#[test]
+fn a_graveyard_card_with_unearth_is_offered_returned_with_haste_and_exiled_at_the_end_step() {
+    let (offered, step, returned, attacked, next_turn) = engine(|| {
+        let (mut game, _) = unearthing();
+        put_down(&mut game, "Swamp");
+        let before = game.view();
+        let zombie = find(&before.you.graveyard, "Dregscape Zombie").unwrap();
+        let offered = (zombie.can_activate, zombie.gaps.clone());
+        let step = game
+            .act(A::Activate { id: zombie.id })
+            .expect("unearthed from the graveyard");
+        let returned = settle(&mut game);
+        let on_field = find(&returned.you.battlefield, "Dregscape Zombie")
+            .expect("on the battlefield")
+            .id;
+        // Haste: it attacks the turn it came back.
+        let asked = game.act(A::Pass).expect("to combat");
+        assert_eq!(asked.view.stage, Stage::Attack);
+        let attacked = game
+            .act(A::Attack {
+                attacks: vec![PlaytestAttackPair {
+                    attacker: on_field,
+                    target: None,
+                    player: None,
+                }],
+            })
+            .expect("attack");
+        let mut next_turn = game.act(A::EndTurn).expect("a turn cycle");
+        while next_turn.view.stage == Stage::Prompt {
+            next_turn = game.act(A::Auto).expect("the engine's answer");
+        }
+        (offered, step, returned, attacked, next_turn)
+    });
+    let (can_activate, gaps) = offered;
+    assert!(
+        can_activate,
+        "the graveyard card says one of its abilities can be activated"
+    );
+    assert!(gaps.is_empty(), "phase plays all of it: {gaps:?}");
+    assert!(
+        step.happened.iter().any(|h| matches!(
+            h,
+            H::Activated { seat: YOU, name } if name == "Dregscape Zombie"
+        )),
+        "{:?}",
+        step.happened
+    );
+
+    assert!(find(&returned.you.graveyard, "Dregscape Zombie").is_none());
+    let zombie = find(&returned.you.battlefield, "Dregscape Zombie").unwrap();
+    assert!(
+        zombie
+            .effects
+            .iter()
+            .any(|e| e.gained.iter().any(|k| k == "Haste")),
+        "it gains haste: {:?}",
+        zombie.effects
+    );
+    assert!(
+        returned
+            .you
+            .battlefield
+            .iter()
+            .filter(|c| c.name == "Swamp")
+            .all(|c| c.tapped),
+        "the {{B}} was paid"
+    );
+
+    assert_eq!(
+        attacked.view.opponents[0].life, 38,
+        "a hasty 2/1 hit the goldfish"
+    );
+
+    let view = &next_turn.view;
+    assert_eq!(view.stage, Stage::Main);
+    assert!(
+        find(&view.you.exile, "Dregscape Zombie").is_some(),
+        "exiled at the beginning of the end step"
+    );
+    assert!(find(&view.you.battlefield, "Dregscape Zombie").is_none());
+    assert!(find(&view.you.graveyard, "Dregscape Zombie").is_none());
+}
+
+#[test]
+fn a_graveyard_card_with_unearth_is_not_offered_when_it_cannot_be_paid() {
+    let (offered, refused, still) = engine(|| {
+        let (mut game, zombie) = unearthing();
+        let offered = find(&game.view().you.graveyard, "Dregscape Zombie")
+            .unwrap()
+            .can_activate;
+        let refused = game.act(A::Activate { id: zombie }).unwrap_err();
+        let still = find(&game.view().you.graveyard, "Dregscape Zombie").is_some();
+        (offered, refused, still)
+    });
+    assert!(!offered, "not offered without {{B}}");
+    assert!(refused.contains("no ability"), "{refused}");
+    assert!(still, "a refusal changes nothing");
+}
+
 /// A modal double-faced card of two faces, each `(name, cost, type line, text)`.
 fn modal(
     card_id: &str,

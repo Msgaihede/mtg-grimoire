@@ -178,8 +178,9 @@ struct Printing {
 }
 
 /// The reader's cards the rules offer more than a hand card's play for (`offers`): the hand
-/// cards they can foretell or activate an ability of (cycling), the graveyard and exile cards
-/// they can cast or play, and the permanents they can tap for mana.
+/// cards they can foretell, the hand, graveyard and exile cards they can activate an ability of
+/// (cycling; unearth, embalm, scavenge), the graveyard and exile cards they can cast or play, and
+/// the permanents they can tap for mana.
 #[derive(Default)]
 struct Offers {
     foretell: HashSet<ObjectId>,
@@ -1157,10 +1158,10 @@ impl Playtest {
             .find(|p| *p != self.you && self.people.contains(p))
     }
 
-    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card or
-    /// activating one of its abilities (cycling, issue #1431), casting a card from the graveyard
-    /// or exile, and tapping a permanent for mana. Nothing in a replay frame, or while the reader
-    /// does not have priority.
+    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card,
+    /// activating one of a hand card's abilities (cycling, issue #1431) or a graveyard card's
+    /// (unearth, issue #1714), casting a card from the graveyard or exile, and tapping a
+    /// permanent for mana. Nothing in a replay frame, or while the reader does not have priority.
     fn offers(&self, watching: bool) -> Offers {
         let mut offers = Offers::default();
         if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
@@ -1205,6 +1206,9 @@ impl Playtest {
                         }
                         Some(Zone::Graveyard | Zone::Exile) => {
                             c.castable = offers.cast.contains(&id);
+                            // Unearth, embalm, scavenge: abilities that work only from here
+                            // (issue #1714).
+                            c.can_activate = offers.activate.contains(&id);
                         }
                         Some(Zone::Battlefield) => {
                             c.can_tap_for_mana = offers.mana.contains(&id);

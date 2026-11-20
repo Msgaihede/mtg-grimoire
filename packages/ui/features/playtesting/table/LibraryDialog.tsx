@@ -31,8 +31,8 @@ import type { Pointed, ZoneLook } from "./types";
  *
  * **`disabled` holds the buttons while a move is with the engine** (issue #1590): the board
  * keeps the dialog mounted across the wait, so `moved` and the search's text survive it, and
- * greys every card's places, Cast and Shuffle — the cards drawn are the view before the move,
- * and their ids may no longer be where the buttons say. Done still closes it.
+ * greys every card's places, Cast, Activate and Shuffle — the cards drawn are the view before
+ * the move, and their ids may no longer be where the buttons say. Done still closes it.
  *
  * **`opponent` is a look at another player's zone** — an opponent's graveyard or exile, named as
  * theirs (`owner`). It offers what the reader's own does (issue #1521): with the sandbox's moves
@@ -46,6 +46,8 @@ import type { Pointed, ZoneLook } from "./types";
  * foretold card in exile, a flashback card in the graveyard — or an opponent's card an effect lets
  * the reader cast), whatever `readOnly` says — it is the rules' play, not a hand move. It closes
  * the dialog, since the cast may ask a question of its own. A foretold card says so under it.
+ * **A card with an ability the rules let the reader activate from here carries an Activate** the
+ * same way ({@link GameCard.canActivate}: unearth, embalm, scavenge — issue #1714).
  *
  * **A card rested on opens the board's inspect preview** (issue #1373): at 120 px a card's text
  * cannot be read, and the look is for reading it. Each card points itself at the board through
@@ -184,7 +186,7 @@ export function LibraryDialog({
                     {i === 0 ? "On top" : `${i + 1} from the top`}
                   </span>
                 )}
-                {(card.castable || places.length > 0) && (
+                {(card.castable || card.canActivate || places.length > 0) && (
                   <div className="flex flex-wrap gap-1">
                     {card.castable && (
                       <button
@@ -194,15 +196,22 @@ export function LibraryDialog({
                           onAct({ type: "play", id: card.id });
                           onClose();
                         }}
-                        className={cn(
-                          "h-6 rounded border border-accent px-1.5 text-[11px] text-accent",
-                          "transition-colors motion-reduce:transition-none hover:bg-accent hover:text-accent-fg",
-                          PRESS,
-                          FOCUS,
-                          HELD,
-                        )}
+                        className={RULES_BUTTON}
                       >
                         Cast
+                      </button>
+                    )}
+                    {card.canActivate && (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          onAct({ type: "activate", id: card.id });
+                          onClose();
+                        }}
+                        className={RULES_BUTTON}
+                      >
+                        Activate
                       </button>
                     )}
                     {places
@@ -262,6 +271,15 @@ export function LibraryDialog({
 
 /** A button held while a move is with the engine (`disabled`): greyed, and no hover or press. */
 const HELD = "disabled:pointer-events-none disabled:opacity-50";
+
+/** A card's play by the rules (Cast, Activate), gold where the hand's moves are grey. */
+const RULES_BUTTON = cn(
+  "h-6 rounded border border-accent px-1.5 text-[11px] text-accent",
+  "transition-colors motion-reduce:transition-none hover:bg-accent hover:text-accent-fg",
+  PRESS,
+  FOCUS,
+  HELD,
+);
 
 const FOOTER_BUTTON = cn(
   "inline-flex h-9 items-center rounded-full border bg-surface px-4 text-[13px]",

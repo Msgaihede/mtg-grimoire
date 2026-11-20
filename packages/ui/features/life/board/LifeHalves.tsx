@@ -13,6 +13,11 @@ import { cn } from "@/lib/utils";
  * flashes a faint disc under it, which is the only time a background shows — darker ink on a seat's
  * colour, the app's border colour on a dark panel. Both halves are real buttons, so a keyboard
  * steps a total one at a time with Enter or Space.
+ *
+ * They stand at the panel's two edges, level with the number — or, on a panel turned a quarter
+ * to face whoever is counting commander damage (`under`), at its foot, each in the middle of its
+ * half: such a panel is too narrow for the number between them, and the middle of each half is
+ * clear of the menu button wherever along the edge it sits.
  */
 const DISC_LIGHT = "group-active:bg-[color-mix(in_oklab,var(--color-accent-fg)_18%,transparent)]";
 const DISC_DARK = "group-active:bg-border";
@@ -29,6 +34,8 @@ export interface LifeHalvesProps {
   zoom?: number;
   /** An opponent tile's smaller glyphs, in its bottom corners when the tile is narrow. */
   tile?: "side" | "stacked";
+  /** The glyphs under the number, each in the middle of its half, this far above the foot. */
+  under?: number;
 }
 
 export function LifeHalves({
@@ -41,6 +48,7 @@ export function LifeHalves({
   drop = 0,
   zoom = 1,
   tile,
+  under,
 }: LifeHalvesProps) {
   const disc = tile ? 44 : 52;
   const glyph = tile ? 28 : 36;
@@ -52,7 +60,9 @@ export function LifeHalves({
           paddingBottom: tile === "stacked" ? 4 : 0,
           [side === "left" ? "paddingLeft" : "paddingRight"]: 2,
         }
-      : { [side === "left" ? "paddingLeft" : "paddingRight"]: 6, alignItems: "center" }),
+      : under !== undefined
+        ? { alignItems: "flex-end", justifyContent: "center", paddingBottom: under }
+        : { [side === "left" ? "paddingLeft" : "paddingRight"]: 6, alignItems: "center" }),
   });
   const look: CSSProperties = {
     width: disc,

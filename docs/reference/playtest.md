@@ -372,8 +372,9 @@ action: it is a rules action, so the sandbox's gate does not touch it.
 **`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
 from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
 reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a
-hand card the engine would foretell now, `canActivate` on one it would activate an ability of
-(cycling), `castable` on a graveyard or exile card it would cast now,
+hand card the engine would foretell now, `canActivate` on a hand, graveyard or exile card it
+would activate an ability of (cycling, unearth), `castable` on a graveyard or exile card it would
+cast now,
 `foretold` on a foretold card in exile — each read off the legal actions once per view, and never
 set in a replay frame. An opponent's face-down exiled cards are not in their seat's `exile` at all.
 
@@ -392,7 +393,14 @@ card's own abilities are taken the same way (issue #1431): cycling (CR 702.29a),
 channel — phase offers each as an `ActivateAbility` of the card in hand. `canActivate` is on each
 hand card the engine would activate now, read once per view like `canForetell`, and the hand
 card's menu offers Activate ability only then; Play never falls back to it, so a double-click
-never discards a card to its cycling.
+never discards a card to its cycling. **A graveyard card's abilities are taken the same way**
+(issue #1714): unearth (CR 702.84a), embalm, eternalize, scavenge, encore — phase synthesizes
+each as an `ActivateAbility` whose `activation_zone` is the graveyard (`database/unearth.rs` and
+its neighbours), so it is on the legal actions only while the card is there and its cost can be
+paid at sorcery speed. `canActivate` is on each graveyard or exile card the engine would activate
+now, and the graveyard's look-through dialog carries an Activate beside its Cast, sandbox or not.
+Unearth itself is all phase's: the card returns with haste, is exiled at the beginning of the next
+end step, and is exiled instead if it would leave the battlefield.
 
 **A cast can be taken back until it is on the stack.** `play`, `activate` and an answer to a board
 question each keep a checkpoint (`Pending`) while the engine asks the reader how to make the cast.
