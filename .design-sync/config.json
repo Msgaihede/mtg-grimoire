@@ -31,6 +31,9 @@
         "chrome-appshell--update-available"
       ]
     },
+    "CardArt": {
+      "cardMode": "column"
+    },
     "CardImage": {
       "skip": [
         "primitives-cardimage--swap-card"
@@ -107,7 +110,10 @@
       "/components/tooltip/useTooltip",
       "/features/decks/CardMarks",
       "/lib/dndManager"
-    ]
+    ],
+    "loaders": {
+      ".wav": "empty"
+    }
   },
   "titleMap": {
     "Contextmenu": "ContextMenu",
