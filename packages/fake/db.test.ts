@@ -12426,6 +12426,111 @@ describe("the plan's figures on the gallery's reads", () => {
   });
 });
 
+/**
+ * `deck_commander_identities`, the *Deck colors* widget's read: the command zone's identity per
+ * list, as WUBRG letters, `""` for a colourless commander and `null` for no commander at all.
+ *
+ * The partners are picked for their **stored** order — Tymna is `"BW"` and Thrasios `"GU"`, both
+ * Scryfall's alphabet — so a union that kept the corpus's order would answer `"BWGU"` here and
+ * be wrong in a way that looks plausible.
+ */
+describe("the command zone's colours", () => {
+  const TYMNA = CARDS.find((c) => c.name === "Tymna the Weaver")!;
+  const THRASIOS = CARDS.find((c) => c.name === "Thrasios, Triton Hero")!;
+  const KOZILEK = CARDS.find((c) => c.name === "Kozilek, Compleated")!;
+
+  it("files the starter world's two Commander decks under Kenrith's five colours", () => {
+    // Deck 2 has no plan; deck 4's plan keeps the same commander. Decks 1 and 3 have nothing in
+    // their Commander piles and are absent rather than present and empty.
+    expect(readHandlers(seed("starter")).deck_commander_identities()).toEqual([
+      { deckId: 2, identity: "WUBRG", theoryIdentity: null },
+      { deckId: 4, identity: "WUBRG", theoryIdentity: "WUBRG" },
+    ]);
+  });
+
+  it("unions partners in WUBRG order, and reads no pile but the command zone", () => {
+    const db = makeDeckDb({
+      // A Modern deck, on purpose: which formats have a command zone is TypeScript's question.
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: TYMNA.id, categoryKind: "commander" }),
+        deckCard({ id: 2, cardId: THRASIOS.id, categoryKind: "commander" }),
+        // Red in the main deck and an orphan in the command zone: neither says anything.
+        deckCard({ id: 3, cardId: BOLT.id, categoryKind: "main", quantity: 4 }),
+        deckCard({ id: 4, cardId: "gone", categoryKind: "commander" }),
+      ],
+    });
+    expect(readHandlers(db).deck_commander_identities()).toEqual([
+      { deckId: 1, identity: "WUBG", theoryIdentity: null },
+    ]);
+  });
+
+  it("answers a colourless commander as the empty string, NULL identity included", () => {
+    const blank: FakeCard = { ...KOZILEK, id: "no-identity", colorIdentity: null };
+    const db = makeDeckDb({
+      cards: [...CARDS, blank],
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: KOZILEK.id, categoryKind: "commander" }),
+        deckCard({ id: 2, deckId: 2, cardId: blank.id, categoryKind: "commander" }),
+      ],
+    });
+    expect(readHandlers(db).deck_commander_identities()).toEqual([
+      { deckId: 1, identity: "", theoryIdentity: null },
+      { deckId: 2, identity: "", theoryIdentity: null },
+    ]);
+  });
+
+  it("answers a plan's commander apart from the Actual list's", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        deckCard({ id: 1, cardId: THRASIOS.id, categoryKind: "commander", variant: "theory" }),
+      ],
+    });
+    const r = readHandlers(db);
+    expect(r.deck_commander_identities()).toEqual([
+      { deckId: 1, identity: null, theoryIdentity: "UG" },
+    ]);
+
+    // A different commander in the live list lands in its own half alone.
+    db.deckCards.push(deckCard({ id: 2, cardId: TYMNA.id, categoryKind: "commander" }));
+    expect(r.deck_commander_identities()).toEqual([
+      { deckId: 1, identity: "WB", theoryIdentity: "UG" },
+    ]);
+  });
+
+  it("ignores a switched-off command zone, and a deck with none is absent", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 }), deck({ id: 3 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: TYMNA.id, categoryKind: "commander" }),
+        // A main deck and a companion, and nothing in the command zone.
+        deckCard({ id: 2, deckId: 2, categoryKind: "main" }),
+        deckCard({ id: 3, deckId: 2, cardId: TYMNA.id, categoryKind: "companion" }),
+        deckCard({ id: 4, deckId: 3, cardId: THRASIOS.id, categoryKind: "commander" }),
+      ],
+    });
+    db.deckCategories.find((c) => c.id === categoryId(1, "commander"))!.isActive = false;
+    expect(readHandlers(db).deck_commander_identities()).toEqual([
+      { deckId: 3, identity: "UG", theoryIdentity: null },
+    ]);
+  });
+
+  it("answers nothing for an unsaved draft deck", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, draft: true }), deck({ id: 2 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: TYMNA.id, categoryKind: "commander" }),
+        deckCard({ id: 2, deckId: 2, cardId: TYMNA.id, categoryKind: "commander" }),
+      ],
+    });
+    expect(readHandlers(db).deck_commander_identities()).toEqual([
+      { deckId: 2, identity: "WB", theoryIdentity: null },
+    ]);
+  });
+});
+
 describe("missing to the wishlist", () => {
   /**
    * The one folder every test below sends to. Id `1` and not a big number on purpose: it is the

@@ -1259,6 +1259,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("deck_pip_costs");
     expect(deckRs).toContain("pub async fn deck_pip_costs(");
 
+    // The home page's Deck colors read, `deck_pip_costs`' shape: no arguments at all.
+    await ipc.deckCommanderIdentities();
+    expect(invoke).toHaveBeenCalledWith("deck_commander_identities");
+    expect(deckRs).toContain("pub async fn deck_commander_identities(");
+
     await ipc.deckBracketReads([4, 2]);
     expect(invoke).toHaveBeenCalledWith("deck_bracket_reads", { deckIds: [4, 2] });
     expect(deckRs).toContain("pub async fn deck_bracket_reads(");
@@ -6807,6 +6812,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // build behind it.
     ["PipCost", deckRs, "PipCost"],
     ["DeckPipCosts", deckRs, "DeckPipCosts"],
+    // The Deck colors widget's read beside the colour bar's. A renamed `theory_identity` reads
+    // `undefined`, which `!= null` takes for "no commander" and files the plan by its pips.
+    ["DeckCommanderIdentity", deckRs, "DeckCommanderIdentity"],
     ["BracketCardRow", deckRs, "BracketCardRow"],
     ["DeckBracketRead", deckRs, "DeckBracketRead"],
     // **The card-side combo read's four, added with the feature** (issue #359) — and four rows

@@ -2067,6 +2067,29 @@ export interface DeckPipCosts {
 }
 
 /**
+ * The colour identity of one deck's command zone, per list — {@link ipc.deckCommanderIdentities}'
+ * per-deck entry, which the home page's Deck colors widget files a Commander deck under.
+ *
+ * **Three answers per list, and the widget needs all three apart.** A string of WUBRG letters in
+ * that order (`"WU"`, the union of every commander there — partners and a background alike) is a
+ * command zone of those colours; `""` is a **colourless** commander, filed under colourless;
+ * `null` is a list with **no** commander at all, which is the one the widget falls back from to
+ * the deck's printed pips ({@link DeckPipCosts}). Reading `""` as falsy folds the second into the
+ * third.
+ *
+ * The pile is the **active** `commander` category; no format is asked, because which formats have
+ * a command zone is `format_specs.commanderRule`'s, this side's question. **A deck with no
+ * commander in either list is absent** rather than present with two `null`s, `DeckPipCosts`' rule.
+ */
+export interface DeckCommanderIdentity {
+  deckId: number;
+  /** The Actual (`live`) list's command zone. */
+  identity: string | null;
+  /** The theory list's, by the same rule — `null` on a deck whose plan names no commander. */
+  theoryIdentity: string | null;
+}
+
+/**
  * One card of a deck, as the bracket estimator needs it and no wider.
  *
  * `estimateBracket` (`features/decks/validation/bracket.ts`) reads exactly five fields off a
@@ -3033,6 +3056,15 @@ export const deckCommands = {
    * reads its plan in the editor and its live list on the tile — see {@link DeckPipCosts}.
    */
   deckPipCosts: () => invoke<DeckPipCosts[]>("deck_pip_costs"),
+  /**
+   * Every deck's command-zone colour identity at once, ordered by deck id — see
+   * {@link DeckCommanderIdentity} for what `""` and `null` each mean.
+   *
+   * **No argument**, {@link ipc.deckPipCosts}' reason: the Deck colors widget files every deck at
+   * once. Rust supplies the letters and nothing else; which decks are Commander decks, and what a
+   * deck with no commander is filed under, is the widget's to conclude.
+   */
+  deckCommanderIdentities: () => invoke<DeckCommanderIdentity[]>("deck_commander_identities"),
   /**
    * The bracket estimate's facts, for the decks the caller names.
    *

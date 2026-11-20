@@ -176,6 +176,7 @@ import type {
   DeckCard,
   DeckCategory,
   DeckCombo,
+  DeckCommanderIdentity,
   DeckCompletion,
   DeckCoverKind,
   DeckPipCosts,
@@ -11875,6 +11876,62 @@ export function readHandlers(db: FakeDb) {
           deckId,
           costs: folded(lists[LIVE]),
           theoryCosts: folded(lists[THEORY]),
+        }));
+    },
+
+    /**
+     * `deck::commander_identities` — every deck's command zone as colour letters, per list, for
+     * the home page's *Deck colors* widget.
+     *
+     * **The pile is an active `commander` category and nothing else, and no format is asked.**
+     * Which formats have a command zone is `format_specs.commanderRule`, a TypeScript question —
+     * {@link readHandlers.deck_bracket_reads}' reason for taking ids rather than filtering — so a
+     * Modern deck that filed a card under its Commander pile answers here like any other, and the
+     * widget decides whether to draw it. A switched-off pile counts toward nothing, as everywhere.
+     *
+     * **Three answers per list, and the middle one is the reason for the shape.** Letters are a
+     * command zone of those colours; `""` is a **colourless** commander — a deck that has a
+     * command zone and is filed under colourless; `null` is a list with no card in it at all,
+     * which is what the widget falls back from to {@link readHandlers.deck_pip_costs}. Folding
+     * `null` into `""` would file every commanderless deck as colourless. The crate gets the
+     * difference from `group_concat(coalesce(c.color_identity, ''), '')`: a NULL or empty
+     * identity still makes a row, and a list with no row stays `None`.
+     *
+     * **The union, in WUBRG order, and never the stored order.** Partners and a background are
+     * one identity (CR 903.4c), and `cards.color_identity` is Scryfall's alphabet — Kenrith is
+     * stored `"BGRUW"` — so the letters are re-read through {@link COLORS} exactly as the crate's
+     * `wubrg` does, and anything that is not one of the five is dropped. Two decks of one pairing
+     * file under one key whichever partner was added first.
+     *
+     * **An orphan contributes nothing** — the crate's `JOIN cards` is inner, {@link cardById}
+     * answering `null` is that join failing — and so does a row whose deck is a draft or is gone,
+     * the `JOIN decks … d.draft = 0`. A deck with nothing in either command zone is **absent**,
+     * {@link readHandlers.deck_pip_costs}' rule beside it, and the answer is ordered by deck id.
+     */
+    deck_commander_identities: (): DeckCommanderIdentity[] => {
+      const saved = new Set(savedDecks(db).map((d) => d.id));
+      // A list's letters, or `null` for a list whose command zone holds nothing — the crate's
+      // two `None`s, which a row only ever replaces.
+      const byDeck = new Map<number, Record<DeckVariant, Set<string> | null>>();
+      for (const dc of db.deckCards) {
+        if (!VARIANTS.includes(dc.variant) || !saved.has(dc.deckId)) continue;
+        const category = categoryById(db, dc.categoryId);
+        if (category === undefined || !category.isActive || category.kind !== "commander") continue;
+        const card = cardById(db, dc.cardId);
+        if (card === null) continue;
+        const lists = byDeck.get(dc.deckId) ?? { live: null, theory: null };
+        const letters = (lists[dc.variant] ??= new Set());
+        for (const letter of card.colorIdentity ?? "") letters.add(letter);
+        byDeck.set(dc.deckId, lists);
+      }
+      const wubrg = (letters: Set<string> | null) =>
+        letters === null ? null : COLORS.filter((c) => letters.has(c)).join("");
+      return [...byDeck]
+        .sort(([a], [b]) => a - b)
+        .map(([deckId, lists]) => ({
+          deckId,
+          identity: wubrg(lists[LIVE]),
+          theoryIdentity: wubrg(lists[THEORY]),
         }));
     },
 

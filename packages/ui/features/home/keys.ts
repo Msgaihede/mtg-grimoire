@@ -173,6 +173,26 @@ export const deckValuesKey = (marketplace: MarketplaceId): QueryKey => [
 ];
 
 /**
+ * Every deck's printed mana costs — `useDeckPips`' key **verbatim**, `deckListKey`'s reason: the
+ * Deck colors widget files a deck with no commander by the colours its tile's bar is drawn in, so
+ * the two read one answer, and a home page open beside a gallery pays for it once.
+ */
+export const deckPipCostsKey: QueryKey = ["decks", "pips"];
+
+/**
+ * Every deck's command-zone colour identity — `ipc.deckCommanderIdentities`, the Deck colors
+ * widget's read. Under `["decks"]`, so a commander added, swapped or switched off anywhere
+ * refreshes the sheet with no bridge.
+ */
+export const deckCommanderIdentitiesKey: QueryKey = ["decks", "commanderIdentities"];
+
+/**
+ * Every deck folder — `useDeckFolders`' key verbatim, so the folder whitelist and the gallery's
+ * tree are one read, and a folder renamed, moved or deleted there is renamed here.
+ */
+export const deckFoldersKey: QueryKey = ["decks", "folders"];
+
+/**
  * Where the activity feed is filed — the module doc's one exception to the root rule.
  *
  * Under `["activity", …]`, which nothing invalidates, and **carrying the limit**, because a limit

@@ -31,6 +31,7 @@ import {
 const EVERY_KIND: Record<WidgetKind, true> = {
   summary: true,
   decks: true,
+  deckColors: true,
   folders: true,
   collectionValue: true,
   valueHistory: true,
@@ -215,6 +216,19 @@ describe("WIDGETS", () => {
       decks: {
         picks: { scope: { ids: ["recent", "pinned", "archived"], dflt: undefined } },
         toggles: { art: true },
+        chip: "scope",
+      },
+      // A reader's colour sheet: names first, every deck in a row, combinations alphabetically as
+      // a hand-kept sheet lists them, every deck. The four switches that are the sheet's own face
+      // start on; archived decks are a subject to ask for.
+      deckColors: {
+        picks: {
+          face: { ids: ["name", "art"], dflt: undefined },
+          limit: { ids: ["all", "first"], dflt: undefined },
+          sort: { ids: ["alpha", "pie"], dflt: undefined },
+          scope: { ids: ["all", "chosen"], dflt: undefined },
+        },
+        toggles: { bracket: true, tags: true, names: true, empty: true, archived: false },
         chip: "scope",
       },
       folders: {
