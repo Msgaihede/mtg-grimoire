@@ -540,6 +540,9 @@ pub fn run() {
             // writes below.
             deck::deck_pip_costs,
             deck::deck_bracket_reads,
+            // The home page's Deck colors widget: every deck's command-zone identity at once,
+            // a gallery-wide read like the two above.
+            deck::deck_commander_identities,
             // The home page's deck tiles — every deck's value at one shop, in one read. A
             // third gallery-wide read, so it sits with the two above rather than with the
             // card writes below.

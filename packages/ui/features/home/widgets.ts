@@ -42,6 +42,7 @@ import type { HomeLayout } from "@/lib/ipc";
 export type WidgetKind =
   | "summary"
   | "decks"
+  | "deckColors"
   | "folders"
   | "collectionValue"
   | "valueHistory"
@@ -309,6 +310,73 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       },
     ],
     toggles: [{ key: "art", label: "Cover art" }],
+    chip: "scope",
+  },
+  /**
+   * Every colour combination and the decks that play it — a reader's colour-coverage sheet, kept
+   * for them (`deckColors.ts` has the rules). **Directly after `decks`**, the other card about the
+   * reader's decks, and not appended: round two's four are pinned as the catalogue's end.
+   *
+   * `face` is the reader's either-or — a deck drawn as its name or as its cover. `limit` is the
+   * request's alternative layout: one deck a combination, with a `+N` press that opens the rest in
+   * place. `sort` is the order *combinations* are listed in; the order of decks inside one is the
+   * reader's own arrangement, dragged or moved with Ctrl+arrow on the card, and needs no row here.
+   * `Alphabetical` leads because it is the order a reader's own sheet keeps; `Color pie` is the
+   * guilds-then-shards order every deckbuilding site lists them in.
+   *
+   * `scope` is the folder whitelist (`DeckColorsWidgetSettings` draws its checklist): some folders
+   * hold old or experimental decks a reader does not want counted. `archived` starts off,
+   * `WidgetToggle.dflt`'s reason — a deck put away is a subject to ask for. The other four start
+   * on: each is part of what the sheet shows, and `empty` especially — an empty combination is
+   * the sheet's point. Not in {@link DEFAULT_LAYOUT}, for every catalogue-only kind's reason.
+   */
+  deckColors: {
+    label: "Deck colors",
+    description: "Every color combination and the decks you have in it — empty ones too.",
+    def: [4, 4],
+    min: [2, 3],
+    max: [8, 12],
+    picks: [
+      {
+        key: "face",
+        label: "Show decks as",
+        options: [
+          { id: "name", label: "Name" },
+          { id: "art", label: "Cover art" },
+        ],
+      },
+      {
+        key: "limit",
+        label: "Decks per color",
+        options: [
+          { id: "all", label: "All" },
+          { id: "first", label: "First only" },
+        ],
+      },
+      {
+        key: "sort",
+        label: "Color order",
+        options: [
+          { id: "alpha", label: "Alphabetical" },
+          { id: "pie", label: "Color pie" },
+        ],
+      },
+      {
+        key: "scope",
+        label: "Which decks",
+        options: [
+          { id: "all", label: "All decks" },
+          { id: "chosen", label: "Chosen folders…" },
+        ],
+      },
+    ],
+    toggles: [
+      { key: "bracket", label: "Brackets" },
+      { key: "tags", label: "Tags" },
+      { key: "names", label: "Color names" },
+      { key: "empty", label: "Empty colors" },
+      { key: "archived", label: "Archived decks", dflt: false },
+    ],
     chip: "scope",
   },
   folders: {
@@ -676,8 +744,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   deckCompletion: {
     label: "Deck completion",
-    description:
-      "How complete your decks are, against your collection or their theory lists.",
+    description: "How complete your decks are, against your collection or their theory lists.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -797,8 +864,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   // the spec's to draw, so it has no rows here; the bounds are the table's `2..=12` by `2..=8`.
   custom: {
     label: "Custom widget",
-    description:
-      "A widget of your own, built from your data.",
+    description: "A widget of your own, built from your data.",
     def: [4, 3],
     min: [2, 2],
     max: [12, 8],

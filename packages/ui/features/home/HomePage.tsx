@@ -95,15 +95,7 @@ import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import {
-  CELL_MIN,
-  GAP,
-  cellFor,
-  columnsFor,
-  isStacked,
-  makeFit,
-  spanPx,
-} from "./fit";
+import { CELL_MIN, GAP, cellFor, columnsFor, isStacked, makeFit, spanPx } from "./fit";
 import {
   addWidget,
   bounded,
@@ -131,10 +123,8 @@ import { ActivityWidget } from "./widgets/ActivityWidget";
 import { ChangeNotesWidget } from "./widgets/ChangeNotesWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
 import { ComingSoonWidget } from "./widgets/ComingSoonWidget";
-import {
-  DeckCompletionWidget,
-  DeckCompletionWidgetSettings,
-} from "./widgets/DeckCompletionWidget";
+import { DeckCompletionWidget, DeckCompletionWidgetSettings } from "./widgets/DeckCompletionWidget";
+import { DeckColorsWidget, DeckColorsWidgetSettings } from "./widgets/DeckColorsWidget";
 import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
 import { DeckTodosWidget, DeckTodosWidgetSettings } from "./widgets/DeckTodosWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
@@ -167,8 +157,7 @@ export const HOME_WIDGET_ATTR = "data-home-widget";
 export const HOME_CANVAS_ATTR = "data-home-canvas";
 
 /** The sentence under the header while Customize is on — the design's, word for word. */
-export const CUSTOMIZE_HINT =
-  "Drag a widget to move it. Pull a corner to resize.";
+export const CUSTOMIZE_HINT = "Drag a widget to move it. Pull a corner to resize.";
 
 /**
  * The page's own header controls — Add widget, Reset and Customize share one box so the row reads
@@ -237,6 +226,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <SummaryWidget {...props} />;
     case "decks":
       return <DecksWidget {...props} />;
+    case "deckColors":
+      return <DeckColorsWidget {...props} />;
     case "folders":
       return <FoldersWidget {...props} />;
     case "collectionValue":
@@ -287,6 +278,9 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <SummaryWidgetSettings widget={widget} onConfig={onConfig} />;
     case "decks":
       return <DecksWidgetSettings widget={widget} onConfig={onConfig} />;
+    // The folder whitelist behind `Which decks → Chosen folders…`, and the order reset.
+    case "deckColors":
+      return <DeckColorsWidgetSettings widget={widget} onConfig={onConfig} />;
     case "folders":
       return <FoldersWidgetSettings widget={widget} onConfig={onConfig} />;
     case "newPrintings":
@@ -639,10 +633,7 @@ export function HomePage(): ReactElement {
     [layout, update],
   );
 
-  const remove = useCallback(
-    (id: string) => update(removeWidget(layout, id)),
-    [layout, update],
-  );
+  const remove = useCallback((id: string) => update(removeWidget(layout, id)), [layout, update]);
 
   /* ------------------------------------------------------------------ the catalogue ------- */
 
