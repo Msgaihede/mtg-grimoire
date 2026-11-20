@@ -30,6 +30,25 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.73.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.72.0...v0.73.0) (2026-11-20)
+
+
+### Features
+
+* **life:** hold the rotation and keep the screen on while the board is up ([8af277b](https://github.com/Msgaihede/mtg-grimoire/commit/8af277b9dc7b0f5be4b620512728e34a5069945f))
+* **life:** hold the rotation and keep the screen on while the board is up ([b8ab125](https://github.com/Msgaihede/mtg-grimoire/commit/b8ab1259e7392a2071c0d9030abd0215cb403669)), closes [#1716](https://github.com/Msgaihede/mtg-grimoire/issues/1716)
+* **playtesting:** put a card under any player's control by hand in the sandbox ([030d707](https://github.com/Msgaihede/mtg-grimoire/commit/030d70715dfb65e6e321baa29e08996eedc31125)), closes [#1713](https://github.com/Msgaihede/mtg-grimoire/issues/1713)
+* **playtesting:** take control of an opponent's cards in the sandbox, and cast their cards the rules allow ([5debaec](https://github.com/Msgaihede/mtg-grimoire/commit/5debaec319281b7249381247db4da63c0800f92e))
+
+
+### Bug Fixes
+
+* **life:** turn commander damage panels to face the player counting ([2536c88](https://github.com/Msgaihede/mtg-grimoire/commit/2536c886fa7eb2f8b87408f35c7d3c15c3129783))
+* **life:** turn commander damage panels to face the player counting ([8c5ccb4](https://github.com/Msgaihede/mtg-grimoire/commit/8c5ccb4549708e36dbaaf4299ff8bc5fe539f623)), closes [#1715](https://github.com/Msgaihede/mtg-grimoire/issues/1715)
+* **playtesting:** cast an opponent's card the rules let the reader cast ([f73d22d](https://github.com/Msgaihede/mtg-grimoire/commit/f73d22d5383fa5dcc525956c4f9485aa1103baa6)), closes [#1713](https://github.com/Msgaihede/mtg-grimoire/issues/1713)
+* **playtest:** offer a graveyard card's Unearth on the board ([4907a42](https://github.com/Msgaihede/mtg-grimoire/commit/4907a42fd554f043e752a7266373621cd3b1d6de))
+* **playtest:** offer a graveyard card's Unearth on the board ([d749619](https://github.com/Msgaihede/mtg-grimoire/commit/d749619890a46358569fa23cb50006146983dacd)), closes [#1714](https://github.com/Msgaihede/mtg-grimoire/issues/1714)
+
 ## [0.72.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.71.1...v0.72.0) (2026-11-20)
 
 
