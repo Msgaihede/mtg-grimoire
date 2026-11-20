@@ -1,8 +1,10 @@
 /**
  * The roulette's sound — a ball ticking round a wheel and a chime where it lands — synthesized on
  * the spot rather than played from a file: a pinch of filtered noise per tick, four sine bells for
- * the chime. Nothing to download, nothing to cache, and no setting: it plays only on a press of
- * *Pick who goes first*, which is a reader asking for exactly this.
+ * the chime. Nothing to download, nothing to cache, and no switch of its own: it plays only on a
+ * press of *Pick who goes first*, which is a reader asking for exactly this. **At the app's volume**
+ * (`@/lib/volume`, Settings › Sound): every voice goes through one gain set to it as the spin
+ * starts — a spin is under five seconds, so a level moved mid-spin is the next spin's.
  *
  * **The context is made lazily, on that press.** A browser (and Android's WebView) starts an
  * `AudioContext` made outside a user gesture suspended, and one made at mount would be a context
@@ -11,12 +13,24 @@
  * them all — a second spin, or the board leaving mid-spin.
  */
 
+import { appVolumeGain } from "@/lib/volume";
+
 type AudioContextCtor = typeof AudioContext;
 
 export class RouletteSound {
   private ctx: AudioContext | null = null;
   private clack: AudioBuffer | null = null;
   private voices: AudioScheduledSourceNode[] = [];
+  private out: GainNode | null = null;
+
+  /** The one node every voice plays into: the app's volume, then the speakers. */
+  private output(ctx: AudioContext): GainNode {
+    if (!this.out) {
+      this.out = ctx.createGain();
+      this.out.connect(ctx.destination);
+    }
+    return this.out;
+  }
 
   /** The context, made on first use; `null` where the page has no Web Audio. */
   context(): AudioContext | null {
@@ -39,6 +53,7 @@ export class RouletteSound {
     const ctx = this.context();
     if (!ctx) return null;
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    this.output(ctx).gain.value = appVolumeGain();
     return ctx.currentTime + 0.03;
   }
 
@@ -64,7 +79,7 @@ export class RouletteSound {
       level.gain.exponentialRampToValueAtTime(0.001, when + 0.035);
       noise.connect(band);
       band.connect(level);
-      level.connect(ctx.destination);
+      level.connect(this.output(ctx));
       noise.start(when);
 
       const knock = ctx.createOscillator();
@@ -75,7 +90,7 @@ export class RouletteSound {
       body.gain.setValueAtTime(0.16, when);
       body.gain.exponentialRampToValueAtTime(0.001, when + 0.045);
       knock.connect(body);
-      body.connect(ctx.destination);
+      body.connect(this.output(ctx));
       knock.start(when);
       knock.stop(when + 0.06);
       this.voices.push(noise, knock);
@@ -104,7 +119,7 @@ export class RouletteSound {
         ring.gain.exponentialRampToValueAtTime(0.2, at + 0.012);
         ring.gain.exponentialRampToValueAtTime(0.0008, at + 0.7);
         bell.connect(ring);
-        ring.connect(ctx.destination);
+        ring.connect(this.output(ctx));
         bell.start(at);
         bell.stop(at + 0.75);
         this.voices.push(bell);
