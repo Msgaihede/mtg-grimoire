@@ -848,6 +848,9 @@ const gcChip = (name = "2 Game Changers") => screen.findByRole("button", { name 
  *  the `Game Changers` chip went back to the ledger and took the row's second gate arm with it. */
 const CHIP_ROW = "Filter by label";
 
+/** The status region beside the filter box that counts what the filter left (issue #1706). */
+const FILTER_COUNT = "Cards shown";
+
 /**
  * Wait until `format_specs` has answered, for the deck under test.
  *
@@ -1969,6 +1972,43 @@ describe("DeckEditor", () => {
     expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
     expect(within(main).queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
     expect(within(main).getByText("4 cards")).toBeInTheDocument();
+  });
+
+  /**
+   * **The filter's total, beside the box** (issue #1706): how many cards the filter left on the
+   * desk, so `t:spacecraft` answers "how many Spacecraft" without counting by hand. One status
+   * region, standing and empty while nothing narrows, so the count is heard as it changes.
+   */
+  it("counts what the filter left, beside the box, and only while it narrows", async () => {
+    await open();
+    const region = screen.getByRole("status", { name: FILTER_COUNT });
+    expect(region).toBeEmptyDOMElement();
+
+    const box = screen.getByLabelText("Filter this deck");
+    await userEvent.type(box, "bolt");
+    expect(region).toHaveTextContent("Shown 4");
+
+    await userEvent.clear(box);
+    expect(region).toBeEmptyDOMElement();
+  });
+
+  /** The ledger's `Cards` grammar: the headline is what the size rule counts, and the dim `+n` is
+   *  every other copy the filter left on screen — a sideboard's, and a switched-off pile's too,
+   *  because the desk draws those, so the two figures add up to the headings under them. */
+  it("splits the filter's total as the ledger splits the deck's", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        bolt({ categoryKind: "side", quantity: 1 }),
+        bolt({ categoryKind: "maybe", quantity: 3, ownedQuantity: 0 }),
+        bear(),
+      ]),
+    );
+    await open();
+
+    await userEvent.type(screen.getByLabelText("Filter this deck"), "bolt");
+
+    expect(screen.getByRole("status", { name: FILTER_COUNT })).toHaveTextContent("Shown 4+4");
   });
 
   /**
