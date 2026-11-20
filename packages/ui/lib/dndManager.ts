@@ -6,6 +6,7 @@ import {
   PointerActivationConstraints,
   PointerSensor,
 } from "@dnd-kit/dom";
+import type { ActivationConstraints } from "@dnd-kit/abstract";
 import { NOT_A_DRAG } from "@/features/decks/dnd";
 import { installCardCountPreview } from "@/lib/dragPreview";
 
@@ -75,7 +76,9 @@ import { installCardCountPreview } from "@/lib/dragPreview";
  * makes the next one right by default. The library's text-input branch is not copied:
  * {@link NOT_A_DRAG} already refuses a press on any field.
  */
-export function pressCost(event: Pick<PointerEvent, "pointerType">) {
+export function pressCost(
+  event: Pick<PointerEvent, "pointerType">,
+): ActivationConstraints<PointerEvent> {
   return event.pointerType === "touch"
     ? [new PointerActivationConstraints.Delay({ value: 250, tolerance: 5 })]
     : [new PointerActivationConstraints.Distance({ value: 5 })];

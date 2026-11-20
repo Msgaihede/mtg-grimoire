@@ -73,7 +73,8 @@ export * from "../packages/ui/features/decks/DropIndicator";
 // `StackView` is the whole Stacks desk; `CardStack` one pile of it; `DeckCardFace` the stacked
 // card's face (no stories — exported for designs to mount); `CardMarks` the family of marks laid
 // on a card (`QuantityTag` is what `titleMap` sends its title to, `FilterChips → ToggleChip`'s
-// move); `CountPill` the pile heading's count; `GroupHeader` the pile heading itself.
+// move); `CountPill` the pile heading's count (`PileCountPill` here — see its line below);
+// `GroupHeader` the pile heading itself.
 // **`CardMarks` needs a shim line as well as this re-export**, for `FilterChips`' reason: no
 // export is named after the file, so rule 2 cannot recognise `./CardMarks` as a component module
 // and a story importing it would compile a second copy. `cfg.storyImports.shim` carries
@@ -82,7 +83,18 @@ export * from "../packages/ui/features/decks/views/StackView";
 export * from "../packages/ui/features/decks/CardStack";
 export * from "../packages/ui/features/decks/DeckCardFace";
 export * from "../packages/ui/features/decks/CardMarks";
-export * from "../packages/ui/features/decks/CountPill";
+// **Named, not `export *`, and the component under a name of its own** (2026-11-20). The Filter
+// bar redesign (2026-11-15) gave `FilterChips` a `CountPill` too, and two `export *` of one name
+// is an ambiguity: `tsc -p .design-sync/tsconfig.dts.json` stopped on TS2308 — which stops
+// `buildCmd` at its `&&` — and a bundle built anyway carried no `CountPill` at all, because an
+// ambiguous star export is dropped rather than picked. Markus's call: the filter bar's keeps
+// `CountPill`, since `FilterChips.stories.tsx` imports it by that name and the story-import shim
+// redirects by name; the pile heading's count is `PileCountPill` on the global.
+export {
+  CountPill as PileCountPill,
+  cardCountWords,
+  tokenCountWords,
+} from "../packages/ui/features/decks/CountPill";
 export * from "../packages/ui/features/decks/views/GroupHeader";
 export * from "../packages/ui/components/CardChin";
 

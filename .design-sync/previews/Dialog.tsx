@@ -111,7 +111,12 @@ function withStage(S: any, key: string, act?: Act) {
           position: "relative",
           width: STAGE.width,
           height: STAGE.height,
-          maxWidth: "100%",
+          // No `maxWidth: "100%"` (removed 2026-11-20). The `?story=` grading page keeps a 24px
+          // body gutter, so a stage capped to its parent was 912px there, the scrim's `sm:px-6`
+          // left 864, and a `w-[55rem]` (880) panel drew 16px narrow against the reference — a
+          // width the product card (padding zeroed, 960 wide) never draws. Uncapped, the stage is
+          // the declared viewport on both pages and the grading page shows it at the plain
+          // (24,24) gutter offset, its last 24px past the right and bottom edges.
           overflow: "hidden",
           transform: "translateZ(0)",
         }}
