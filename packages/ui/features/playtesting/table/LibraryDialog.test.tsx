@@ -251,6 +251,48 @@ describe("LibraryDialog", () => {
     expect(swords.queryAllByRole("button")).toEqual([]);
   });
 
+  // Issue #1714: unearth is an ability of the graveyard card, not a cast of it.
+  it("activates a graveyard card's ability by the rules, even as a look, and closes", async () => {
+    const zombie = gameCard("Dregscape Zombie", { canActivate: true });
+    const view = { ...tableView(), graveyard: [gameCard("Swords to Plowshares"), zombie] };
+    const onAct = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <LibraryDialog
+        look={{ zone: "graveyard", mode: "browse", count: "all" }}
+        view={view}
+        readOnly
+        onAct={onAct}
+        onClose={onClose}
+      />,
+    );
+    const card = within(screen.getByRole("group", { name: "Dregscape Zombie" }));
+    expect(card.getAllByRole("button").map((b) => b.textContent)).toEqual(["Activate"]);
+    await userEvent.click(card.getByRole("button", { name: "Activate" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "activate", id: zombie.id });
+    expect(onClose).toHaveBeenCalled();
+    // A card with nothing the rules let the reader activate from here has nothing to press.
+    const swords = within(screen.getByRole("group", { name: "Swords to Plowshares" }));
+    expect(swords.queryAllByRole("button")).toEqual([]);
+  });
+
+  it("puts a graveyard card's Activate before its places, and holds it with them", () => {
+    const zombie = gameCard("Dregscape Zombie", { canActivate: true });
+    const look: ZoneLook = { zone: "graveyard", mode: "browse", count: "all" };
+    const view = { ...tableView(), graveyard: [zombie] };
+    const { rerender } = render(
+      <LibraryDialog look={look} view={view} onAct={vi.fn()} onClose={() => {}} />,
+    );
+    const card = () => within(screen.getByRole("group", { name: "Dregscape Zombie" }));
+    expect(
+      card()
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Activate", "Hand", "Battlefield", "Exile", "Top", "Bottom"]);
+    rerender(<LibraryDialog look={look} view={view} disabled onAct={vi.fn()} onClose={() => {}} />);
+    expect(card().getByRole("button", { name: "Activate" })).toBeDisabled();
+  });
+
   // Issue #1373: a card drawn at 120 px is pointed at the board, whose preview is readable.
   describe("pointing at a card", () => {
     const face = (name: string) =>
