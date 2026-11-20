@@ -87,7 +87,8 @@ cards draw labelled placeholders. The images cover the seeded fixture's printing
 Draw the deck editor by mounting its parts rather than recreating them: `StackView` (the Stacks
 desk — piles in columns, the rail on the right), `CardStack` (one pile), `DeckCardFace` (a stacked
 card's face), `CardChin` (the rarity · set · number · finish · price foot), `GroupHeader` (a pile's
-heading), `QuantityTag` and `TheoryMatchMark` (the card's corner marks) and `CountPill`.
+heading), `QuantityTag` and `TheoryMatchMark` (the card's corner marks) and `PileCountPill` (a
+pile heading's count — plain `CountPill` is the filter bar's count badge, a different component).
 `StackView`, `CardStack`, `CardChin` and `QuantityTag` have cards of their own — read their
 `.prompt.md` and `.d.ts` before passing a prop; the rest ship on `window.MtgGrimoire` as the
 pieces those four are built from. The seeded fixtures the stories use ship too —

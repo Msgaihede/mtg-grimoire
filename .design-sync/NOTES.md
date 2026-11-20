@@ -357,13 +357,29 @@ it was not removed by hand.
   them** — which reverses its 2026-09-27 decline above. Asked for the deck editor, a design agent
   could only redraw it by hand, so the barrel's `Deck editor` section exports `StackView` (the
   Stacks desk), `CardStack`, `DeckCardFace`, `CardMarks` (`QuantityTag`, `TheoryMatchMark`, …),
-  `CountPill`, `GroupHeader` and `CardChin`. Four have cards — `StackView`, `CardStack`,
+  `CountPill` (as `PileCountPill` since 2026-11-20 — below), `GroupHeader` and `CardChin`. Four have cards — `StackView`, `CardStack`,
   `CardChin` and `QuantityTag`, which `titleMap` sends `CardMarks` to for `FilterChips`' reason
   (the family module has no component of its own name; six of its seven stories render
   `QuantityTag`). `StackView` is `single` on `Default` at `1280x720`: its meta decorator is a
   672px-tall box, and 1280 is four 224px pile columns plus the rail — what the app's own 1920
   window leaves the desk with the card search docked. `GridView`, `TableView`, `TextView` and
   `TokenPile` are still out: each is a desk of its own needing its own audit and viewport.
+- **The barrel had two `CountPill`s from 2026-11-15 to 2026-11-20, and the build said so only to
+  whoever ran `tsc`.** The Filter bar redesign added one to `FilterChips`; the deck editor's was
+  already exported. Two `export *` of one name is TS2308 in `tsconfig.dts.json` — `buildCmd` stops
+  at its `&&` — and an ambiguous star export is *dropped*, not picked: a bundle built from that
+  tree had no `CountPill` on the global at all. Markus's call (2026-11-20): the filter bar's keeps
+  `CountPill`, because `FilterChips.stories.tsx` imports it by that name through the
+  `/components/FilterChips` shim; the pile heading's count is exported as **`PileCountPill`**, by
+  name, with `cardCountWords` and `tokenCountWords` beside it (`entry.ts`, `conventions.md`).
+  **Not confirmed with the converter** — that fix was made in a cloud session with no `.ds-sync/`
+  — so at the next sync check three things: `tsc -p .design-sync/tsconfig.dts.json` prints nothing;
+  the roster still resolves every deck title (a named re-export, where every other line of the
+  barrel is `export *`); and no `_preview/*.js` reaches `features/decks/CountPill` from source,
+  since rule 2 matches on the file's basename and would hand that import the *filter bar's* pill.
+  The same sync fixed the other error that `tsc` was stopping on: `pressCost` in
+  `lib/dndManager.ts` returned two `@dnd-kit/dom` classes a declaration cannot name (TS4058,
+  TS4094) and now says `ActivationConstraints<PointerEvent>`.
 - **Two shim lines came with them, and one is a module the barrel had to start exporting.**
   `/features/decks/CardMarks` — no export is named after that file, so rule 2 would compile a
   second copy into every deck preview. `/lib/dndManager` — a module-level `new DragDropManager`
