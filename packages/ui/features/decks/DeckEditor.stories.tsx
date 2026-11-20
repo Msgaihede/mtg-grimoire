@@ -863,6 +863,10 @@ export const FilterAndStats: Story = {
     // The whole deck, not the four rows the filter left on screen.
     await expect(cards).toHaveTextContent(whole ?? "");
     await expect(curveCard()).toEqual(curve);
+    // **The four rows are counted beside the box instead** (issue #1706) — the desk's readout, in
+    // the ledger's grammar, so the narrowed total needs no counting by hand and the ledger above
+    // still says the deck.
+    await expect(canvas.getByRole("status", { name: "Cards shown" })).toHaveTextContent("Shown 4");
     // **The band can be put away now, and the old `Stats` toggle still may not come back.** This
     // read `queryByRole("button", { name: "Stats" })` is null — an assertion about the *toolbar*
     // control that was deleted on 2026-08-14, whose whole job was to hand a 280px aside's width

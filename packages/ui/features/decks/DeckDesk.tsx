@@ -17,8 +17,10 @@ import {
   ToggleChip,
 } from "@/components/FilterChips";
 import type { MenuItem } from "@/components/menu/types";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
 import { registerSelectAll } from "@/features/search/selectAllSurface";
+import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard, DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -33,6 +35,7 @@ import { DeckHeaderBar, type DeckHeaderBarProps } from "./DeckHeaderBar";
 import { isShort } from "./DeckStats";
 import { deckSlotOrder, deckWalkStops, type WalkTokenPile } from "./deckWalk";
 import { deckCardSlot, type DeckWrite, type DragPayload } from "./dnd";
+import { filterTally, filterTallyHint } from "./filterTally";
 import {
   buildGroups,
   DEFAULT_GROUP_BY,
@@ -592,6 +595,19 @@ export function DeckDesk({
     );
   }, [cards, needle, matching, activeLabelIds, gcFilter, missingFilter]);
 
+  /**
+   * How many cards the filter left on the desk (issue #1706), or `null` while nothing narrows —
+   * drawn beside the box as `Shown 19+6`. See {@link filterTally} for the spelling.
+   *
+   * **`shown === cards` is the gate, and it is the memo above's own**: that memo hands back the
+   * deck's array itself exactly when no filter is on, and a filter that happens to keep every row
+   * is still a new array — so the readout is drawn whenever a filter is, and the two cannot come
+   * to disagree about which that is. The ledger is not told: its figures are the whole deck's,
+   * and a keystroke here must not re-render it.
+   */
+  const tally = useMemo(() => (shown === cards ? null : filterTally(shown)), [shown, cards]);
+  const tip = useTooltip();
+
   const groups = useMemo(
     // No currency any more: the rows this groups arrived priced at the selected marketplace,
     // because that marketplace is in `useDeck`'s query key. A switch therefore changes
@@ -1144,6 +1160,40 @@ export function DeckDesk({
                 FOCUS,
               )}
             />
+            {/* What the filter left on the desk (issue #1706), in the ledger's `Cards` grammar —
+                `Shown 19+6`. **After the field and inside its box**, so the readout arriving with
+                the first letter takes its room from the field's right end and the text being
+                typed does not move; the box's `max-w` ceiling counts it too, so a wide window
+                does not push the field left either.
+
+                **One status region, mounted always and empty while nothing narrows**, so a screen
+                reader hears the count change as the filter does — a region that mounted with its
+                first answer would swallow that one. Empty, it is a zero-width flex item with no
+                margin, so it costs the toolbar nothing. The real space between the two words
+                keeps the text `Shown 19+6` for anything reading it; the flex gap is what draws. */}
+            <span
+              role="status"
+              // Named as `UndoNotice`'s and `Needs review`'s regions are, so it can be told from
+              // the editor's other live regions; what is announced is still its text.
+              aria-label="Cards shown"
+              className={cn(
+                "flex shrink-0 items-baseline gap-1.5 whitespace-nowrap",
+                tally && "ml-2.5",
+              )}
+              {...tip(tally && filterTallyHint(tally))}
+            >
+              {tally && (
+                <>
+                  <span className="text-[0.6875rem] text-dim">Shown</span>{" "}
+                  <span className="font-mono text-[0.8125rem] tabular-nums">
+                    {count(tally.sized)}
+                    {tally.restCopies > 0 && (
+                      <span className="text-dim">+{count(tally.restCopies)}</span>
+                    )}
+                  </span>
+                </>
+              )}
+            </span>
           </div>
         </div>
       )}
