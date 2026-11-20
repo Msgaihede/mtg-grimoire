@@ -396,6 +396,36 @@ Procedure, where it differs from the list above:
   content centred in the root — to one size, upscale nearest-neighbour, and read that; then diff
   at a threshold of ~40. Anything stretched to the root is 16px shorter in the preview: framing.
 
+**Published 2026-11-20 as artifact version 23** (`1795147163-0d85`), with
+`artifact-publish.mjs check` answering `CLEAN` (65 of 65 files as built). What that publish changed,
+for whoever syncs next:
+
+- **The page is now `"editing": "code"`** — read-only on claude.ai; the design system changes only
+  here and by `/design-sync`. Markus agreed to that, and to replacing the 32 files the hand-run
+  publishes had written (`README.md`, `bundle.js`/`bundle.css`, `tokens.*`, the 27 page cards).
+  The next run passes `plan --read-only` and needs no take-over code: those files now carry the
+  sync's record (`project/_ds_sync.json`), so the next sync is anchored and carries grades forward.
+- **The index's `libraries` is React 19.2.8 (`components/lib/react.js`)**, so the artifact's own
+  preview frames now run React 19. Canvases still supply React 18 and leave that file behind —
+  which is why the React 18 audit and the forwardRef rule stand.
+- **The page cards are the converter's now**, one cell per story, and **the hand-written cards
+  from `page-cards.mjs` are gone.** Those passed `cardArt: '../../card-art/'`; the converter's
+  pass nothing, so the provider finds the art from the bundle script's own address. Whether the
+  artifact's frame loads the bundle by URL (art draws) or inlines it (labelled placeholders) was
+  **not checked** — the page needs a signed-in browser. Open CardArt's card and look; if it draws
+  placeholders, the fix belongs in `preview-runtime.tsx`, not in a hand-edited card.
+  `bundle-css.mjs`, `page-cards.mjs`, `assemble.mjs` and `render-check.mjs` in `artifact/` are the
+  old hand procedure and are superseded; `react18-audit.mjs` is still current.
+- **Left in place, not from this build (279 files)**: `card-art/` (still served, and current),
+  the old per-group `components/<group>/<Name>/` docs, `docs/`, `assets/_preview/`,
+  `assets/_vendor/`, `_ds_bundle.css`, `fonts/` including the retired Cinzel 400 files,
+  `components/lib/react*.production.min.js` (18.3.1), `migration-map.json` and the migration
+  report. Three the page generated (`api/`, `manifest.json`) also stay; `api/components/Ribbon.md`
+  outlives Ribbon. They describe older builds; removing them is a decision for Markus, by hand.
+- **Cosmetic, from the pre-publish read**: the generated `README.md` component list and
+  `components/index.d.ts` cut descriptions at a fixed length (some mid-sentence), and the token
+  theme is named "light" though its values are the dark palette. Converter output; not fixed.
+
 ## Config decisions worth knowing
 
 - **Scope is deliberate**: the reusable primitives and the shell (no count here; see Re-sync
