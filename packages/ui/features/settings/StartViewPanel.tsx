@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { NAV } from "@/components/nav";
+import { editionHas, FULL_EDITION } from "@/lib/edition";
 import { sortOptions } from "@/lib/options";
 import type { ViewId } from "@/lib/store";
 import { useStartView } from "@/lib/useStartView";
@@ -43,7 +44,10 @@ const PICKER_ID = "start-view-picker";
  * read — `DropdownOption.icon` draws it in the list *and* on the closed trigger.
  */
 const OPTIONS: readonly DropdownOption[] = sortOptions(
-  NAV.filter((entry) => entry.id !== "shared"),
+  // **And minus the light app's own views** (`edition.ts`'s `LIGHT_ONLY_VIEWS`, the Life
+  // tracker). This panel is the full edition's alone — `LIGHT_SETTINGS` leaves `start-view` out —
+  // so the edition it asks is that one, by name: a row its rail never draws is not offerable.
+  NAV.filter((entry) => entry.id !== "shared" && editionHas(FULL_EDITION, entry.id)),
   (entry) => entry.label,
 ).map((entry) => ({
   value: entry.id,

@@ -289,6 +289,14 @@ belongs in the release note as one.
 exactly full, and a chord for it would have pushed Settings off `Ctrl+9` for a fourth renumbering,
 so `CHORD_NAV` leaves out `draft` by id, beside `shared`, and every existing chord stays where it was.
 
+### The Life tracker joined the light rail without a chord
+
+**Life (2026-11-20) sits between Trade and Playtesting in `NAV` and has no digit**, for Draft &
+Packs' reason: a chord for it would have moved Playtesting off `Ctrl+8` and Settings off `Ctrl+9`.
+`CHORD_NAV` leaves out `life` by id, and the binding is by index, so the exclusion holds in every
+edition — though only the light edition draws the row (`LIGHT_ONLY_VIEWS`,
+[life-tracker.md](life-tracker.md)). `nav.test.ts` pins Trade on `Ctrl+7` beside it.
+
 ## Undo and redo on the game boards
 
 **`Ctrl+Z` takes the last action back on the game board, against the goldfish or the AI; `Ctrl+Y`

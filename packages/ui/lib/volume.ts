@@ -8,8 +8,8 @@ import { create } from "zustand";
  * board's own slider under its speaker button (`features/playtesting/sound/volume`).
  *
  * **The app's volume is over every sound the page makes** — the scanner's beeps and jingles
- * (`features/scanner/sounds/player`) and the playtest board (`useTableSounds`), each multiplied by
- * it. A sound's own settings still apply under it: the scanner's switch says whether a scan beeps
+ * (`features/scanner/sounds/player`), the playtest board (`useTableSounds`) and the light app's
+ * life tracker roulette (`features/life/board/rouletteSound`), each multiplied by it. A sound's own settings still apply under it: the scanner's switch says whether a scan beeps
  * and the board's slider how loud the board is against the rest, and this is how loud the app is.
  * The computer's own volume, and the app's row in the Windows mixer (named by the desktop host's
  * `mixer`), are over all of it.

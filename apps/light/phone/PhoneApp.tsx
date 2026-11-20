@@ -19,6 +19,7 @@ import type { WallItem } from "./CardWall";
 import { CollectionPage } from "./pages/CollectionPage";
 import { DeckPage } from "./pages/DeckPage";
 import { DecksPage } from "./pages/DecksPage";
+import { LifePage } from "./pages/LifePage";
 import { ScannerPage } from "./pages/ScannerPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -89,7 +90,7 @@ const openCard = (place: Place) => (item: WallItem) => {
 /**
  * The page for a place.
  *
- * A `switch` over `LightView` with no `default`: an eighth view added to the edition is then a
+ * A `switch` over `LightView` with no `default`: a ninth view added to the edition is then a
  * compile error here rather than a blank page.
  */
 function Pages({
@@ -130,6 +131,10 @@ function Pages({
       // The list, or the trade the URL names: `/trade/5` is a place, so a reload and Back both
       // know where the reader was (`routes.ts`).
       return <TradePage tradeId={place.tradeId ?? null} />;
+    case "life":
+      // The setup, and the board over the whole screen once a game is up — page state, not a
+      // place: a reload lands on the setup, whose *Continue game* is the saved game.
+      return <LifePage />;
     case "settings":
       return <SettingsPage />;
   }

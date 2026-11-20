@@ -2218,7 +2218,7 @@ describe("the light edition", () => {
       .getAllByRole("button")
       .map((b) => b.textContent);
 
-  it("draws seven destinations and nothing else", () => {
+  it("draws eight destinations and nothing else", () => {
     renderLight();
     expect(railButtons()).toEqual([
       "Search",
@@ -2227,6 +2227,9 @@ describe("the light edition", () => {
       "Wishlist",
       "Scanner",
       "Trade",
+      // The light app's own view (`LIGHT_ONLY_VIEWS`): the full edition's rail above has no row
+      // for it.
+      "Life",
       "Settings",
       "Notifications",
       "Collapse",
@@ -2270,6 +2273,33 @@ describe("the light edition", () => {
     expect(useAppStore.getState().activeView).toBe("search");
     // The control for the `true` above: a chord this edition does draw is taken.
     expect(fireEvent.keyDown(document.body, { key: "2", ctrlKey: true })).toBe(false);
+  });
+
+  /**
+   * The Life tracker, the light app's own view, sits after Trade on this rail and on no digit —
+   * `CHORD_NAV` leaves it out by name, so `Ctrl+7` is still Trade and `Ctrl+8` still Playtesting,
+   * which this edition does not draw, so the press is inert rather than landing on Life.
+   */
+  it("gives Life no digit, and its row opens it", async () => {
+    const user = userEvent.setup();
+    renderLight();
+    act(() => useAppStore.getState().setActiveView("decks"));
+
+    await user.keyboard("{Control>}7{/Control}");
+    expect(useAppStore.getState().activeView).toBe("trade");
+    await user.keyboard("{Control>}8{/Control}");
+    expect(useAppStore.getState().activeView).toBe("trade");
+    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+      await user.keyboard(`{Control>}${digit}{/Control}`);
+      expect(useAppStore.getState().activeView).not.toBe("life");
+    }
+
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", {
+        name: "Life",
+      }),
+    );
+    expect(useAppStore.getState().activeView).toBe("life");
   });
 
   /**

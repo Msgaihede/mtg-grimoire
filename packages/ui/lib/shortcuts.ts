@@ -129,7 +129,9 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        * That is a reason no amount of room would change. **`draft` (Draft & Packs, 2026-10-29)
        * is the other**, for the opposite reason: it is always drawn, but it arrived with all
        * nine digits spoken for, and taking one would have renumbered Settings off `Ctrl+9`.
-       * `AppShell`'s `CHORD_NAV` leaves both out by name, so the digits did not move.
+       * `AppShell`'s `CHORD_NAV` leaves both out by name, so the digits did not move. **`life`
+       * (the Life tracker, 2026-11-20) is the third**, for `draft`'s reason; only the light
+       * edition draws it at all.
        *
        * ⚠️ **The run has been renumbered three times**, and each was a break in a binding
        * readers have in their fingers. Home's arrival at the top pushed every digit one row down
@@ -229,6 +231,9 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   shared: [],
   scanner: [],
   trade: [],
+  // The Life tracker (light app only) binds nothing: every count is a press on its own panel, and
+  // its menu is a press too — a board read from every side of a table has no keyboard.
+  life: [],
   /**
    * The game board, opened from the Playtesting page's setup — {@link BOARD}, which the goldfish
    * scope draws too.

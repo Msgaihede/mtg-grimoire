@@ -3,7 +3,17 @@ import { parsePlace, placeHref } from "./routes";
 
 describe("parsePlace", () => {
   it("reads a destination off the path", () => {
-    expect(parsePlace("/collection", "")).toEqual({ view: "collection", deckId: null, cardId: null });
+    expect(parsePlace("/collection", "")).toEqual({
+      view: "collection",
+      deckId: null,
+      cardId: null,
+    });
+  });
+
+  it("reads the Life tracker, a light app destination", () => {
+    expect(parsePlace("/life", "")).toEqual({ view: "life", deckId: null, cardId: null });
+    // No id under it: a game is page state, never a place.
+    expect(parsePlace("/life/3", "")).toEqual({ view: "life", deckId: null, cardId: null });
   });
 
   it("reads an open deck", () => {
@@ -139,6 +149,7 @@ describe("placeHref", () => {
       "/trade",
       "/trade/5",
       "/trade/5?card=x",
+      "/life",
     ]) {
       const [path, search = ""] = href.split("?");
       expect(placeHref(parsePlace(path, search && `?${search}`))).toBe(href);

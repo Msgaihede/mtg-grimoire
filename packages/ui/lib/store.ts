@@ -27,7 +27,7 @@ import type {
 import type { MarketplaceId } from "./marketplace";
 
 /**
- * The eleven top-level destinations in the sidebar.
+ * The twelve top-level destinations, eleven of them in the desktop app's sidebar.
  *
  * **`home` is first, and first is the whole of what makes it home.** It is the page the app opens
  * on — {@link AppState.activeView} starts here and `useStartView` is what may move it — and the
@@ -43,6 +43,10 @@ import type { MarketplaceId } from "./marketplace";
  * 2026-10-29) because the run of digits is nine long and every digit was already in a reader's
  * fingers — a row inserted before Settings would have renumbered it. `lib/shortcuts.ts`'s
  * `switchView` argues both.
+ *
+ * **`life` (the Life tracker, 2026-11-20) is the light app's alone** — `lib/edition.ts`'s
+ * `LIGHT_ONLY_VIEWS` keeps it out of the full edition, whose `views: null` would otherwise mean
+ * every member here — and it has no chord, for `draft`'s reason.
  */
 export type ViewId =
   | "home"
@@ -53,6 +57,7 @@ export type ViewId =
   | "shared"
   | "scanner"
   | "trade"
+  | "life"
   | "playtesting"
   | "draft"
   | "settings";

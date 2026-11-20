@@ -62,6 +62,17 @@ describe("useDesktopPlace", () => {
     expect(window.location.pathname).toBe("/wishlist");
   });
 
+  it("carries the Life tracker both ways, the light app's own view", () => {
+    window.history.replaceState(null, "", "/life");
+    renderHook(() => useDesktopPlace());
+    expect(useAppStore.getState().activeView).toBe("life");
+
+    act(() => useAppStore.getState().setActiveView("trade"));
+    expect(window.location.pathname).toBe("/trade");
+    act(() => useAppStore.getState().setActiveView("life"));
+    expect(window.location.pathname).toBe("/life");
+  });
+
   it("writes an opened deck back to the URL", () => {
     window.history.replaceState(null, "", "/decks");
     renderHook(() => useDesktopPlace());

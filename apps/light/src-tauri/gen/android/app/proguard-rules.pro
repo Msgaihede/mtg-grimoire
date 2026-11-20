@@ -19,3 +19,12 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# HAND-EDITED: the page's immersive bridge (`MainActivity.kt`'s `ImmersiveBridge`, added to the
+# WebView as `grimoireImmersive`). The WebView finds `setImmersive` by its name and its annotation
+# at run time, so a release build's R8 must neither rename nor drop it, nor strip the annotation.
+# `apps/light/host.test.ts` holds this rule.
+-keepattributes *Annotation*
+-keepclassmembers class com.mtggrimoire.app.MainActivity$ImmersiveBridge {
+    @android.webkit.JavascriptInterface public <methods>;
+}

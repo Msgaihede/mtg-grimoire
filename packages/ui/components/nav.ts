@@ -2,6 +2,7 @@ import {
   Camera,
   Handshake,
   Heart,
+  HeartPulse,
   House,
   PackageOpen,
   Receipt,
@@ -21,7 +22,7 @@ export interface NavEntry {
 }
 
 /**
- * The eleven destinations, in the order the column draws them — and the order is the point.
+ * The twelve destinations, in the order the column draws them — and the order is the point.
  *
  * Home first, then the way into the database, then the three lists the reader owns, then the
  * three things a reader *does* with them, then Settings. **Home is at the top because it is where
@@ -39,6 +40,11 @@ export interface NavEntry {
  * before Settings: the run of digits was full, and giving it one would have pushed Settings off
  * `Ctrl+9` — a renumbering of a binding readers already have. `AppShell`'s `CHORD_NAV` leaves it
  * out, as it leaves out `shared`.
+ *
+ * **`life` (the Life tracker, 2026-11-20) is the light app's alone, and the third row with no
+ * chord.** The full edition's `views: null` means every row here *but* `edition.ts`'s
+ * `LIGHT_ONLY_VIEWS`, so the desktop app's rail, chords, keyboard map and opening-view picker never
+ * meet it; the light app's rail and the phone's tab bar draw it after Trade.
  *
  * **This module is still the whole set, and `AppShell` is what hides a row.** Shared appears only
  * once a reader has opened a link (spec decision 6), and the filter lives at the shell rather
@@ -91,6 +97,15 @@ export const NAV: readonly NavEntry[] = [
   // a third when the Tagger row left: Playtesting reads `Ctrl+8` now, and the keyboard doc has the
   // whole record of why an insertion or a removal anywhere but the end renumbers.
   { id: "trade", label: "Trade", Icon: Receipt },
+  // The Life tracker (2026-11-20): life, commander damage and counters for a game at a real
+  // table. **The light app's alone** — `edition.ts`'s `LIGHT_ONLY_VIEWS` keeps it off the full
+  // edition's rail — and after Trade, so the phone's tab bar ends on it (the design canvas's
+  // order). `HeartPulse` because it is the life total, and Wishlist already wears the heart.
+  //
+  // ⚠️ **No chord**, for Draft & Packs' reason below: the run of nine digits is full, and a digit
+  // here would push Playtesting and Settings one along. `CHORD_NAV` leaves it out by name, and
+  // the full edition draws no row for it anyway.
+  { id: "life", label: "Life", Icon: HeartPulse },
   { id: "playtesting", label: "Playtesting", Icon: Swords },
   // Draft & Packs (2026-10-29): drafting against phase.rs's bots or a lobby's pod, and opening
   // boosters. `PackageOpen` because both halves begin by tearing a pack open. Desktop only — the
@@ -101,7 +116,7 @@ export const NAV: readonly NavEntry[] = [
   // like Shared, and `CHORD_NAV` filters it out by name — the digits do not move.
   { id: "draft", label: "Draft & Packs", Icon: PackageOpen },
   // `Ctrl+9` — Settings' chord from 2026-09-08 until Home pushed it off the end of the run, and
-  // again since the Tagger row left (issue #937): eleven rows, Shared and Draft & Packs without a
-  // digit, nine chords.
+  // again since the Tagger row left (issue #937): twelve rows, Shared, Life and Draft & Packs
+  // without a digit, nine chords.
   { id: "settings", label: "Settings", Icon: Settings },
 ];

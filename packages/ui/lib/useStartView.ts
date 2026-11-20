@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LIGHT_ONLY_VIEWS } from "./edition";
 import { ipc, ipcError } from "./ipc";
 import { notify } from "./notifications";
 import { useAppStore, type ViewId } from "./store";
@@ -50,14 +51,22 @@ const VIEW_IDS: Record<StartView, true> = {
   shared: true,
   scanner: true,
   trade: true,
+  life: true,
   playtesting: true,
   draft: true,
   settings: true,
 };
 
 /** The same set, for {@link isStartView}. A `Set` rather than `value in VIEW_IDS`, because `in`
- *  walks the prototype and would answer `true` for `"toString"` and `"constructor"`. */
-const KNOWN_VIEWS = new Set<string>(Object.keys(VIEW_IDS));
+ *  walks the prototype and would answer `true` for `"toString"` and `"constructor"`.
+ *
+ *  **Less the light app's own views** (`edition.ts`'s `LIGHT_ONLY_VIEWS` — the Life tracker): the
+ *  stored start view is the full edition's setting (a light install opens where its URL says), and
+ *  a word the desktop's rail draws no row for is a word nobody could have picked there. Read as no
+ *  view at all, it opens Home — the record above keeps the key, so the fence still holds. */
+const KNOWN_VIEWS = new Set<string>(
+  Object.keys(VIEW_IDS).filter((view) => !LIGHT_ONLY_VIEWS.includes(view as ViewId)),
+);
 
 /**
  * Is this stored word a view this build draws?

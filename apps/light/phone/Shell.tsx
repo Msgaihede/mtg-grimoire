@@ -147,8 +147,8 @@ function InboxBell({ open, onOpen }: { open: boolean; onOpen: () => void }) {
  * the tab the reader is on does.
  *
  * **Asked of the page rather than handed a ref**: each page owns its own scroller (a wall, a
- * list, the Scanner's two columns), and a ref threaded through seven pages to answer one press
- * would be seven places to forget it. A wall's virtualiser hears the scroll like any other.
+ * list, the Scanner's two columns), and a ref threaded through eight pages to answer one press
+ * would be eight places to forget it. A wall's virtualiser hears the scroll like any other.
  */
 export function scrollToTop(page: HTMLElement | null): void {
   if (page === null) return;
