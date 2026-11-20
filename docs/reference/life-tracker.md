@@ -99,6 +99,20 @@ none) at `LAYER.stage`, as Playtesting's board is — so the board is the window
 what seating is resolved against. This face lends no Back step, so the board's claims are nothing
 here and **browser Back just leaves the view**; the setup's Continue game brings the game back.
 
+**Commander damage faces the player counting it** (issue #1715). A swipe up a panel (or its shield
+chip) opens that seat's commander damage, and every other panel then shows what its commander has
+dealt them — numbers that player reads and presses, so `game/seating.ts`' `facingSeat` turns every
+other panel to the counted seat's turn: upright to them, − on their left and + on their right,
+whatever edge of the table its own player sits at. Only the turn changes; the boxes and the menu
+button stay put, and Back to life totals turns every panel back to its own player. The calculator a
+hold opens on one of those panels faces the counted seat too (`plan.seats[edit.seat]`). A panel
+turned a half keeps its shape and its layout. One turned a **quarter** (a B table's head, foot and
+long sides, and the three- and five-player A tables' foot against their sides) is the other way
+round, too narrow for its number between − and +: `LifeHalves`' `under` puts them at its foot, each
+in the middle of its half, and `placeNumber`'s `under` gives the number the panel's width short of
+`HUB_SIDE_KEEP` at either side — on such a panel the menu button can sit on a side edge, which
+`hubRoom` does not answer for. Facing one way changes nothing: every panel is upright already.
+
 ## 5. Immersive: the bars, the rotation and the screen
 
 The owner asked (2026-11-20) that the tracker fill an Android phone's screen properly; a reader
@@ -158,3 +172,6 @@ platform probe (`phone/fence.test.ts`):
 - The web road has not been driven in a phone's browser: full screen, the rotation lock or the wake
   lock. The suites (`hostImmersive.test.ts`) stand each API in for itself.
 - The tab bar's seven-tab figures are arithmetic from the classes (§2), not a measurement.
+- Commander damage facing the counted seat (§4) was seen in headless Chromium over the fake
+  (`mobile:dev`) at 390×844, 844×390 and 800×1280, three to six players, A and B; not on a
+  phone.
