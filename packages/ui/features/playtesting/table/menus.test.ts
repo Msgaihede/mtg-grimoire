@@ -248,6 +248,23 @@ describe("cardMenu", () => {
     expect(labels(on)).toEqual(["Cast", "Move to"]);
   });
 
+  it("offers Activate ability on a graveyard card the rules let the reader unearth, sandbox or not", () => {
+    // Issue #1714: unearth works from the graveyard, and the menu had no row that reached it.
+    const onAct = vi.fn();
+    const zombie = gameCard("Dregscape Zombie", { canActivate: true });
+    const menu = (sandbox: boolean, card = zombie) =>
+      cardMenu({ card, ids: [card.id], place: "graveyard", sandbox, onAct });
+    expect(labels(menu(false))).toEqual(["Activate ability"]);
+    act(menu(false), "Activate ability").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "activate", id: zombie.id });
+    expect(labels(menu(true))).toEqual(["Activate ability", "Move to"]);
+    // Not offered when the rules would refuse it.
+    expect(labels(menu(false, gameCard("Dregscape Zombie")))).toEqual([]);
+    // A card that can be both cast and activated from here offers both, Cast first.
+    const both = gameCard("Dregscape Zombie", { canActivate: true, castable: true });
+    expect(labels(menu(false, both))).toEqual(["Cast", "Activate ability"]);
+  });
+
   it("offers Tap for mana on a permanent the rules let tap for it, sandbox or not", () => {
     const onAct = vi.fn();
     const forest = gameCard("Forest", { canTapForMana: true });

@@ -96,8 +96,9 @@ export interface GameCard {
   foretold: boolean;
   /** The rules let the reader foretell this hand card now (their turn, {2} to pay). */
   canForetell: boolean;
-  /** The rules let the reader activate one of this hand card's abilities now (CR 602.1):
-   *  cycling, typecycling, channel — an `activate` of it (issue #1431). */
+  /** The rules let the reader activate one of this hand, graveyard or exile card's abilities
+   *  now (CR 602.1): cycling, typecycling, channel from the hand (issue #1431); unearth, embalm,
+   *  scavenge from the graveyard (issue #1714) — an `activate` of it. */
   canActivate: boolean;
   /** The rules let the reader cast or play this graveyard or exile card now (foretold,
    *  flashback). */

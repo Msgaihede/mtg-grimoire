@@ -14,8 +14,8 @@
  * (`play/sandbox.ts`). So each builder takes `sandbox` as the board works it out (on, that stage,
  * nothing with the engine) and, off, offers only what the rules do: a hand card's Play (and its
  * Foretell and Activate ability — cycling), a commander's Cast, a foretold or flashback card's
- * Cast, a permanent's Activate ability and its Tap for mana. A row the engine would only refuse
- * is not offered.
+ * Cast, a graveyard card's Activate ability (unearth, embalm, scavenge), a permanent's Activate
+ * ability and its Tap for mana. A row the engine would only refuse is not offered.
  */
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat, PlaytestView } from "@/lib/ipc";
@@ -56,9 +56,11 @@ function counted(card: GameCard, kind: string): number {
  * **`sandbox` off leaves only the rules' rows**: Play on a hand card (and Foretell and Activate
  * ability, {@link GameCard.canActivate}, when the rules offer them), Cast on a commander, and
  * Activate ability and Tap for mana ({@link GameCard.canTapForMana}) on a permanent — and on a
- * graveyard or exile card, or an opponent's permanent, nothing at all (an empty menu, which the
- * caller does not open). On, every hand move follows, on whichever seat's card it is: the engine
- * puts an opponent's card in its owner's zones.
+ * graveyard or exile card only its Cast ({@link GameCard.castable}) and Activate ability
+ * ({@link GameCard.canActivate}: unearth, issue #1714) when the rules offer them, and on an
+ * opponent's permanent nothing at all (an empty menu, which the caller does not open). On, every
+ * hand move follows, on whichever seat's card it is: the engine puts an opponent's card in its
+ * owner's zones.
  */
 export function cardMenu({
   card,
@@ -189,9 +191,14 @@ export function cardMenu({
     }
     default: {
       // A card the rules let the reader cast from here (foretold in exile, flashback in the
-      // graveyard) heads the menu with its Cast, sandbox or not.
-      const cast = action("cast", "Cast", () => onAct({ type: "play", id }));
-      if (!sandbox) return card.castable ? [cast] : [];
+      // graveyard) heads the menu with its Cast, and one with an ability that works from here
+      // (unearth, embalm, scavenge — issue #1714) with its Activate ability, sandbox or not.
+      const rules: MenuItem[] = [];
+      if (card.castable) rules.push(action("cast", "Cast", () => onAct({ type: "play", id })));
+      if (card.canActivate) {
+        rules.push(action("activate", "Activate ability", () => onAct({ type: "activate", id })));
+      }
+      if (!sandbox) return rules;
       // The graveyard and exile (and a library card, should one ever be pointed at): every other
       // place, the one it is in left out.
       const rows: MenuItem[] = [
@@ -205,7 +212,8 @@ export function cardMenu({
         action("bottom", "Bottom of library", move("libraryBottom")),
         ...commandRow,
       );
-      const head: MenuItem[] = card.castable ? [cast, { kind: "separator", id: "sepCast" }] : [];
+      const head: MenuItem[] =
+        rules.length > 0 ? [...rules, { kind: "separator", id: "sepCast" }] : [];
       return [...head, submenu("move", "Move to", rows)];
     }
   }
