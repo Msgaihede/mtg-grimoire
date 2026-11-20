@@ -26,7 +26,7 @@ want a subtree on different data.
 
 ### Styling idiom — Tailwind v4 utilities over a custom `@theme`
 
-Style your own layout with these utilities. They are real classes in `styles.css`; do not
+Style your own layout with these utilities. They are real classes in `components/bundle.css`; do not
 invent parallel names or hard-code hex values.
 
 | Family | Use | Names |
@@ -90,8 +90,8 @@ card's face), `CardChin` (the rarity · set · number · finish · price foot), 
 heading), `QuantityTag` and `TheoryMatchMark` (the card's corner marks) and `PileCountPill` (a
 pile heading's count — plain `CountPill` is the filter bar's count badge, a different component).
 `StackView`, `CardStack`, `CardChin` and `QuantityTag` have cards of their own — read their
-`.prompt.md` and `.d.ts` before passing a prop; the rest ship on `window.MtgGrimoire` as the
-pieces those four are built from. The seeded fixtures the stories use ship too —
+`README.md` and their props in `components/index.d.ts` before passing one; the rest ship on
+`window.MtgGrimoire` as the pieces those four are built from. The seeded fixtures the stories use ship too —
 `printing`, `deckCard`, `deckCategory` and `deckGroups` — so a deck built from them draws real
 cards.
 
@@ -134,9 +134,9 @@ function FormatPicker() {
 
 ### Where the truth is
 
-Read `styles.css` and the files it `@import`s before styling anything — that closure is the
-whole visual system. For any component, read its `.prompt.md` (variants and real usage) and
-`.d.ts` (the prop contract) in `components/<group>/<Name>/`.
+Read `components/bundle.css` and `tokens.css` before styling anything — together they are the
+whole visual system. For any component, read `components/<Name>/README.md` (variants and real
+usage) and its `<Name>Props` in `components/index.d.ts` (the prop contract).
 
 ### An idiomatic build
 
