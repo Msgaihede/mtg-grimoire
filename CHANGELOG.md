@@ -30,6 +30,34 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.72.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.71.1...v0.72.0) (2026-11-20)
+
+
+### Features
+
+* **decks:** count the cards a filter leaves on the desk ([0695cc2](https://github.com/Msgaihede/mtg-grimoire/commit/0695cc2a86a615ed7382dfe7c3cf6a6bac932538))
+* **decks:** count the cards a filter leaves on the desk ([b8dc914](https://github.com/Msgaihede/mtg-grimoire/commit/b8dc914b34fc2f3b3018647de514b44572899077)), closes [#1706](https://github.com/Msgaihede/mtg-grimoire/issues/1706)
+* **home:** a Deck colors widget — every color combination and your decks in it ([#1710](https://github.com/Msgaihede/mtg-grimoire/issues/1710)) ([d83e1a1](https://github.com/Msgaihede/mtg-grimoire/commit/d83e1a14edd368b69cc27850d41f6b11c70e3066))
+* **life:** a life tracker in the light app, on Android and the web ([f3042b4](https://github.com/Msgaihede/mtg-grimoire/commit/f3042b4d57ae45b3a229f2efc40253d614ad273d))
+* **life:** play the roulette at the app's volume ([54cc19f](https://github.com/Msgaihede/mtg-grimoire/commit/54cc19f99649d65830036c53b9100bff9dd1cd50))
+* **life:** the life tracker in the light app, on the phone and the desktop face ([e5d70a7](https://github.com/Msgaihede/mtg-grimoire/commit/e5d70a7535443a8b114f8892268a949e2e3368c9))
+* **life:** the life tracker's board ([757da7d](https://github.com/Msgaihede/mtg-grimoire/commit/757da7d29b49f7ba6c0b741a34ce60587fc8ac34))
+* **life:** the life tracker's shared setup vocabulary ([28a39f3](https://github.com/Msgaihede/mtg-grimoire/commit/28a39f3dac87bcb4414b62d1122455cb816c4c06))
+* **settings:** an app volume slider over every sound the app makes ([72876db](https://github.com/Msgaihede/mtg-grimoire/commit/72876db89740bd77ab7601f819b9e92e754711bc)), closes [#1703](https://github.com/Msgaihede/mtg-grimoire/issues/1703)
+* **settings:** app volume slider, and the app's name in the Windows volume mixer ([a691217](https://github.com/Msgaihede/mtg-grimoire/commit/a691217ca45e9e6829eca1e3810ca6ba2b668ba1))
+* **transfer:** move MTGO, Moxfield and TCGplayer behind a More formats dropdown ([#1704](https://github.com/Msgaihede/mtg-grimoire/issues/1704)) ([da01bfc](https://github.com/Msgaihede/mtg-grimoire/commit/da01bfc89507f0a91dea11f0ccc89a9dfe3b1c36)), closes [#1702](https://github.com/Msgaihede/mtg-grimoire/issues/1702)
+* **transfer:** show example lines of the chosen format in the export dialog ([#1705](https://github.com/Msgaihede/mtg-grimoire/issues/1705)) ([e8d1dc0](https://github.com/Msgaihede/mtg-grimoire/commit/e8d1dc0dec707fb2e62535b64ae295c68fdaec4f)), closes [#1701](https://github.com/Msgaihede/mtg-grimoire/issues/1701)
+
+
+### Bug Fixes
+
+* **design-sync:** ship the Cinzel face the app loads, and unsqueeze Dialog's stage ([8edbc78](https://github.com/Msgaihede/mtg-grimoire/commit/8edbc78d90e8354af515de032153eb171253b849))
+* **design-sync:** TooltipProvider's owned preview waits for the webfont ([8f7a2c2](https://github.com/Msgaihede/mtg-grimoire/commit/8f7a2c236cc7de308134b64cc5960957c51fbc2f))
+* **design-sync:** unblock the declaration build the next sync starts with ([8207ea1](https://github.com/Msgaihede/mtg-grimoire/commit/8207ea1ee715009702d4a5304d3c88ae6601d19f))
+* **desktop:** name the app's audio in the Windows volume mixer ([acc4a8a](https://github.com/Msgaihede/mtg-grimoire/commit/acc4a8a1c24c3576a37179667aa0c6658dca6ca2)), closes [#1703](https://github.com/Msgaihede/mtg-grimoire/issues/1703)
+* **ui:** forwardRef where the design system's bundle needs a ref on React 18 ([27f6445](https://github.com/Msgaihede/mtg-grimoire/commit/27f6445e1ebcae1aae5fa13009e364213302fc9a))
+* **ui:** make Dropdown open on the design system's React 18, and re-sync the design system ([6142252](https://github.com/Msgaihede/mtg-grimoire/commit/6142252a55144e51c7e279cdc05222ca0d1797e7))
+
 ## [0.71.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.71.0...v0.71.1) (2026-11-18)
 
 
