@@ -3,11 +3,12 @@ import { ChevronRight, Copy, Download } from "lucide-react";
 import { Dialog } from "@grimoire/ui/components/Dialog";
 import { TRANSFER_FIELDS, type TransferSurface } from "@grimoire/ui/features/transfer/fields";
 import {
-  EXPORT_FORMATS,
   EXPORT_FORMAT_EXTENSION,
   EXPORT_FORMAT_LABEL,
+  ROW_EXPORT_FORMATS,
 } from "@grimoire/ui/features/transfer/formats";
 import { ExportExample } from "@grimoire/ui/features/transfer/export/ExportExample";
+import { MoreFormats } from "@grimoire/ui/features/transfer/export/MoreFormats";
 import { useExportModel } from "@grimoire/ui/features/transfer/export/useExportModel";
 import type { TransferCard } from "@grimoire/ui/features/transfer/TransferCard";
 import { copyText } from "@grimoire/ui/lib/clipboard";
@@ -63,8 +64,9 @@ const ACTION = cn(
  * Arena and switched-off-pile filters, `formatExport` and the three count lines, for both faces,
  * so the file written here is byte for byte the file the desktop writes from the same cards and
  * the same choices (the golden suite's writers, unchanged). **What is the phone's own** is the
- * drawing — every control 44px, the formats as a wrapping row of chips — where the choices are
- * remembered (`usePhoneTransferPrefs`, per surface, opening on the desktop's own defaults), and
+ * drawing — every control 44px, the formats as a wrapping row of chips and More formats — where
+ * the choices are remembered (`usePhoneTransferPrefs`, per surface, opening on the desktop's own
+ * defaults), and
  * where the text goes: the host's clipboard through `@/lib/clipboard`, as the desktop dialog's
  * Copy goes (phase 5, step 5.4), and a file through `@/lib/core/files`'s `saveText` — the system's
  * save dialog on the Android host, a download in a browser (phase 4, step 4.3).
@@ -203,27 +205,35 @@ function Body({
           </div>
         )}
 
-        {/* The formats in `EXPORT_FORMATS`' own order — plain first, the desktop's deliberate
-            order — as chips that wrap. One Tab stop and the arrows choose (`radioKeys`). */}
-        <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
-          {EXPORT_FORMATS.map((f, i) => (
-            <button
-              key={f}
-              type="button"
-              role="radio"
-              aria-checked={format === f}
-              onClick={() => model.chooseFormat(f)}
-              {...radioKeys(EXPORT_FORMATS, format, model.chooseFormat, i)}
-              className={cn(
-                "h-11 shrink-0 rounded-md border px-3.5 text-sm",
-                format === f ? "border-accent text-accent" : "border-border text-dim",
-                PRESS_SOFT,
-                FOCUS,
-              )}
-            >
-              {EXPORT_FORMAT_LABEL[f]}
-            </button>
-          ))}
+        {/* The desktop's format picker in chips that wrap: the row's formats in `EXPORT_FORMATS`'
+            own order — plain first, the desktop's deliberate order — one Tab stop and the arrows
+            choose (`radioKeys`); then the shared **More formats** dropdown for the rest (issue
+            #1702), so both faces split the formats in the same place (`EXPORT_FORMAT_PLACE`). */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
+            {ROW_EXPORT_FORMATS.map((f, i) => (
+              <button
+                key={f}
+                type="button"
+                role="radio"
+                aria-checked={format === f}
+                onClick={() => model.chooseFormat(f)}
+                {...radioKeys(ROW_EXPORT_FORMATS, format, model.chooseFormat, i)}
+                className={cn(
+                  "h-11 shrink-0 rounded-md border px-3 text-sm",
+                  format === f ? "border-accent text-accent" : "border-border text-dim",
+                  PRESS_SOFT,
+                  FOCUS,
+                )}
+              >
+                {EXPORT_FORMAT_LABEL[f]}
+              </button>
+            ))}
+          </div>
+          {/* A full 44px, level with the chips. Their `px-3` (the desktop radios' own) is what
+              keeps the four on one line from a 360px screen up, with this one under them —
+              at `px-3.5` they measured 331.5px against the sheet's 328 and CSV wrapped alone. */}
+          <MoreFormats format={format} onChoose={model.chooseFormat} className="h-11 px-3" />
         </div>
 
         {model.available.length > 0 && (

@@ -41,6 +41,23 @@ async function expand(canvasElement: HTMLElement): Promise<void> {
 }
 
 /**
+ * The **More formats** trigger (issue #1702) — named `More formats`, or `More formats: MTGO`
+ * while it holds the export's format.
+ */
+function moreFormats(canvasElement: HTMLElement): HTMLElement {
+  return within(canvasElement).getByRole("button", { name: /^More formats/ });
+}
+
+/**
+ * Pick one of the formats behind **More formats**: open it and press the format's row. The panel
+ * is drawn inside the dialog rather than portalled, so the canvas finds it.
+ */
+async function pickMore(canvasElement: HTMLElement, label: string): Promise<void> {
+  await userEvent.click(moreFormats(canvasElement));
+  await userEvent.click(await within(canvasElement).findByRole("option", { name: label }));
+}
+
+/**
  * The pile being exported: printings out of the generated corpus rather than names typed here.
  *
  * Two in the pile, and with different set codes, because that is the smallest list that tells the
@@ -338,11 +355,12 @@ type Story = StoryObj<typeof meta>;
  * **Plain text**, which is what the dialog opens on — `quantity name`, and nothing about the
  * printing.
  *
- * The formats are drawn in `EXPORT_FORMATS`' own order and deliberately **not** through
+ * The row's formats are drawn in `EXPORT_FORMATS`' own order and deliberately **not** through
  * `sortOptions`: plain first is the one most readers want, the same kind of deliberate order the
  * app's option-list rule exempts a grade scale for. They are a `radiogroup`, because picking one
- * is picking *instead of* the others and the preview under them is a single answer. The row
- * **maps that array** rather than listing them, so this play counts the writers `format.ts` has.
+ * is picking *instead of* the others and the preview under them is a single answer. MTGO,
+ * Moxfield and TCGplayer sit behind **More formats** after the row (issue #1702) —
+ * `EXPORT_FORMAT_PLACE` says which half each writer is drawn in.
  */
 export const PlainText: Story = {
   play: async ({ canvasElement }) => {
@@ -357,14 +375,13 @@ export const PlainText: Story = {
     const formats = within(group).getAllByRole("radio");
     await expect(formats.map((r) => r.textContent)).toEqual([
       "Plain text",
-      "MTGO",
       "Arena",
-      "Moxfield",
       "Archidekt",
-      "TCGplayer",
       "CSV",
     ]);
     await expect(formats[0]).toHaveAttribute("aria-checked", "true");
+    // The other three are behind More formats — see {@link MoreFormatsOpen}.
+    await expect(moreFormats(canvasElement)).toHaveTextContent("More formats");
 
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
@@ -385,15 +402,16 @@ export const PlainText: Story = {
 export const Mtgo: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(
-      async () => await expect(canvas.getByRole("radio", { name: "MTGO" })).toBeVisible(),
-      { timeout: FRAME_WAIT },
-    );
+    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
 
-    await userEvent.click(canvas.getByRole("radio", { name: "MTGO" }));
-    await expect(canvas.getByRole("radio", { name: "MTGO" })).toHaveAttribute(
+    await pickMore(canvasElement, "MTGO");
+    // The trigger holds the format now, in the radios' gold, and no radio is checked.
+    await expect(moreFormats(canvasElement)).toHaveAccessibleName("More formats: MTGO");
+    await expect(canvas.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
       "aria-checked",
-      "true",
+      "false",
     );
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
@@ -418,13 +436,13 @@ export const Mtgo: Story = {
  */
 export const Moxfield: Story = {
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await waitFor(
-      async () => await expect(canvas.getByRole("radio", { name: "Moxfield" })).toBeVisible(),
-      { timeout: FRAME_WAIT },
-    );
+    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
 
-    await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    await pickMore(canvasElement, "Moxfield");
+    // The trigger holds the format, which is how a reader tells a pick here took.
+    await expect(moreFormats(canvasElement)).toHaveAccessibleName("More formats: Moxfield");
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
@@ -550,12 +568,11 @@ export const Tcgplayer: Story = {
   args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(
-      async () => await expect(canvas.getByRole("radio", { name: "TCGplayer" })).toBeVisible(),
-      { timeout: FRAME_WAIT },
-    );
+    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
 
-    await userEvent.click(canvas.getByRole("radio", { name: "TCGplayer" }));
+    await pickMore(canvasElement, "TCGplayer");
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "2 Lightning Bolt [2X2] 117 1 Sol Ring [C21] 263",
@@ -580,6 +597,34 @@ export const Tcgplayer: Story = {
     // outlives a story on a shared page, so a play that left it ticked would decide what the
     // next deck story on this page exports.
     await userEvent.click(inactive);
+  },
+};
+
+/**
+ * **More formats**, open — issue #1702. The formats a reader picks for one site (MTGO, Moxfield,
+ * TCGplayer) are kept off the radio row in the app's searchable dropdown, the same shell the set
+ * filter is built on, so the row stays four chips wide. Typing narrows the list; a pick is the
+ * export's format exactly as a radio press is, and the trigger then reads the format's name in
+ * the radios' gold. Left open, with `mox` typed, so the panel can be looked at.
+ */
+export const MoreFormatsOpen: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
+
+    await userEvent.click(moreFormats(canvasElement));
+    const listbox = await canvas.findByRole("listbox");
+    await expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "MTGO",
+      "Moxfield",
+      "TCGplayer",
+    ]);
+    await userEvent.type(canvas.getByRole("combobox", { name: "Search formats" }), "mox");
+    await expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Moxfield",
+    ]);
   },
 };
 
@@ -683,7 +728,7 @@ export const SwitchedOffPile: Story = {
     // The other half of `dropsInactive`, asserted rather than assumed from its twin: MTGO gives
     // the same sentence and draws no box either. A two-member set checked at one member is a set
     // nobody has checked — and these two are a hand-written `Set`, not something derived.
-    await userEvent.click(canvas.getByRole("radio", { name: "MTGO" }));
+    await pickMore(canvasElement, "MTGO");
     await expect(
       canvas.getByText("This format can't include inactive categories, so 6 cards are left out."),
     ).toBeVisible();
@@ -695,7 +740,7 @@ export const SwitchedOffPile: Story = {
     // Moxfield has somewhere to put the pile — and since #390 that is not enough on its own.
     // The box appears the moment the format stops answering for itself, opens **off**, and the
     // reader's own line is what stands in the format's place until it is ticked.
-    await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    await pickMore(canvasElement, "Moxfield");
     const inactive = canvas.getByRole("checkbox", { name: "Include inactive categories" });
     await expect(inactive).not.toBeChecked();
     await expect(
@@ -946,7 +991,7 @@ export const OnlyCardsArenaHas: Story = {
     ).toBeVisible();
 
     // Leaving the format takes the question with it, and nothing else's export is narrowed.
-    await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    await pickMore(canvasElement, "Moxfield");
     await expect(canvas.queryByRole("checkbox", { name: "Only cards on MTG Arena" })).toBeNull();
     await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
 

@@ -12,7 +12,7 @@ source does — re-count rather than trust this page.
 ## The seven formats
 
 `EXPORT_FORMATS` (`packages/ui/features/transfer/formats.ts`) — **counted**, 7 entries, in the order the
-export dialog's radio row draws them:
+export dialog's format picker draws them:
 
 | Format | Printing | Finish | Category | Sections | Read back? |
 | --- | --- | --- | --- | --- | --- |
@@ -23,6 +23,15 @@ export dialog's radio row draws them:
 | Archidekt | Set + number (lowercase) | `*F*`/`*E*` | `[Name]` bracket, `{noDeck}` | Reader's own category names | Yes |
 | TCGplayer | `[SET] number` | — (chosen in cart) | — | Flat, no headings at all | **No** |
 | CSV | Set + number columns | `Finish` column | `Category` column, `Category active` | One row per card, header row | **Yes, since Task 10** |
+
+**The picker is two halves** (issue #1702): `EXPORT_FORMAT_PLACE` puts Plain text, Arena, Archidekt
+and CSV on the radio row and MTGO, Moxfield and TCGplayer behind a **More formats** dropdown after it —
+the app's searchable `<Dropdown>` (the set filter's shell), drawn by `export/MoreFormats.tsx` on both
+faces. Each half keeps `EXPORT_FORMATS`' order. A pick in the dropdown is the export's format through
+the same `chooseFormat` a radio press calls; while it holds the format no radio is checked, the trigger
+reads the format's name in the radios' gold, and its accessible name is `More formats: <format>`.
+Re-picking the format already chosen does nothing, so it never resets the reader's fields. The place is
+a `Record`, so a new writer does not compile until it is given a half.
 
 **TCGplayer is the one write-only format now.** `decklists.test.ts`'s `READABLE` array excludes it
 by name — `parse.ts`'s bracket group is anchored to the end of the line, so `2 Lightning Bolt

@@ -59,6 +59,7 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
 Exporting transforms card lists into canonical formats via `format.ts`: `(cards, format, fields) => string`.
 
 - **Seven canonical formats**: `plain`, `mtgo`, `arena`, `moxfield`, `archidekt`, `tcgplayer`, and `csv`.
+  - Where each is drawn is `formats.ts`' `EXPORT_FORMAT_PLACE` (issue #1702): `row` is a radio, `more` is a row of the **More formats** dropdown (`export/MoreFormats.tsx`, the searchable `<Dropdown>`), which both faces draw after the radios. MTGO, Moxfield and TCGplayer are `more`. A new writer must be given a place; never draw a format list by hand on either face.
   - Canonical output: Uses LF and trailing newlines. An empty card list outputs an empty string `""`.
   - `tcgplayer`: Mass-entry cart format (flat list, exact printing `[SET] NUM`, no finish markers, retains inactive categories).
   - `archidekt`: Writes `{noDeck}` flags for inactive categories and sanitizes delimiters in pile names (replaces commas and brackets). Pile headings and brackets are both the `category` field's: with it off the file is flat (issue #1178), because a first-line heading reads back as a heading only with a bracket under it.

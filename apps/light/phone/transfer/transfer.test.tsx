@@ -233,7 +233,14 @@ describe("a deck's export, on the phone", () => {
     expect(await within(sheet).findByText("Copied.", undefined, SETTLE)).toBeInTheDocument();
     expect(copied.text).toBe(await deckText("plain"));
 
-    await user.click(within(sheet).getByRole("radio", { name: "Moxfield" }));
+    // Moxfield is behind More formats (issue #1702): the shared dropdown, after the chips.
+    await user.click(within(sheet).getByRole("button", { name: "More formats" }));
+    await user.click(await within(sheet).findByRole("option", { name: "Moxfield" }, SETTLE));
+    expect(within(sheet).getByRole("button", { name: "More formats: Moxfield" })).toBeVisible();
+    expect(within(sheet).getByRole("radio", { name: "Plain text" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     // A change to the text takes the claim about the clipboard down.
     expect(within(sheet).queryByText("Copied.")).toBeNull();
     await user.click(within(sheet).getByRole("button", { name: "Copy" }));
