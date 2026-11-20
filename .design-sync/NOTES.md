@@ -416,12 +416,15 @@ for whoever syncs next:
   placeholders, the fix belongs in `preview-runtime.tsx`, not in a hand-edited card.
   `bundle-css.mjs`, `page-cards.mjs`, `assemble.mjs` and `render-check.mjs` in `artifact/` are the
   old hand procedure and are superseded; `react18-audit.mjs` is still current.
-- **Left in place, not from this build (279 files)**: `card-art/` (still served, and current),
-  the old per-group `components/<group>/<Name>/` docs, `docs/`, `assets/_preview/`,
-  `assets/_vendor/`, `_ds_bundle.css`, `fonts/` including the retired Cinzel 400 files,
-  `components/lib/react*.production.min.js` (18.3.1), `migration-map.json` and the migration
-  report. Three the page generated (`api/`, `manifest.json`) also stay; `api/components/Ribbon.md`
-  outlives Ribbon. They describe older builds; removing them is a decision for Markus, by hand.
+- **The older files were removed the same day, at Markus's request** (artifact version 24, 182
+  files): the old per-group `components/<group>/<Name>/` docs, `docs/`, `assets/` (`_preview`,
+  `_vendor`, the migration report), `_ds_bundle.css`, `styles.css`, the React 18.3.1
+  `components/lib/react*.production.min.js`, and every font file but `mana` and `keyrune` (Geist
+  and Cinzel now ship inlined in `components/bundle.css`). **Kept**: this build's files,
+  `card-art/` (current, and only ever re-sent when it changes), the page's own generated `api/`
+  and `manifest.json` (`api/components/Ribbon.md` included — the page owns `api/`), and
+  `migration-map.json`, because the index's `source.map` still names it. The index's empty
+  `_preview`/`_vendor`/`notes` asset groups are the sync's to keep; nothing lists files in them.
 - **Cosmetic, from the pre-publish read**: the generated `README.md` component list and
   `components/index.d.ts` cut descriptions at a fixed length (some mid-sentence), and the token
   theme is named "light" though its values are the dark palette. Converter output; not fixed.
