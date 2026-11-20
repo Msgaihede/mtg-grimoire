@@ -1,8 +1,10 @@
 package com.mtggrimoire.app
 
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
@@ -21,7 +23,7 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
-    // **Immersive full screen, asked for by the page** (the Life tracker's board, 2026-11-20). The
+    // **Immersive, asked for by the page** (the Life tracker's board, 2026-11-20; issue #1716). The
     // browser's Fullscreen API is no road here: this WebView (wry 0.55.1) answers a
     // `requestFullscreen()` by hiding the custom view the moment it is shown, so the bars stay. The
     // page asks `window.grimoireImmersive.setImmersive(on)` instead, by feature detection
@@ -31,11 +33,23 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * The page's one way to put the system bars away, and nothing else: exactly one method, so the
-   * interface hands a page no other power. The WebView calls it on a thread of its own, and the
-   * window's insets controller is the UI thread's, hence the hop. Hidden, the bars come back for a
-   * moment on a swipe from the edge; the insets listener in `onCreate` then pads the content view
-   * by zero for them (it reads the bars' *visible* insets), the cutout still respected.
+   * The page's one way to turn the screen into a game's, and nothing else: exactly one method, so
+   * the interface hands a page no other power. On, it does three things, and off it undoes them:
+   *
+   * - **The system bars put away.** Hidden, they come back for a moment on a swipe from the edge;
+   *   the insets listener in `onCreate` then pads the content view by zero for them (it reads the
+   *   bars' *visible* insets), the cutout still respected.
+   * - **The rotation held** (issue #1716): `SCREEN_ORIENTATION_LOCKED` keeps the exact rotation the
+   *   screen is in — upside down included — so a phone lying on the table never turns the board
+   *   under the players. Off is `SCREEN_ORIENTATION_UNSPECIFIED`, the manifest's own (it declares
+   *   no `screenOrientation`; `host.test.ts` holds that). Android 16 ignores an app's rotation on a
+   *   large screen (600dp and up) for apps that target it, so a tablet still turns there.
+   * - **The screen kept on** (issue #1716): `FLAG_KEEP_SCREEN_ON` on the window, so the phone
+   *   neither dims nor locks between turns. It holds only while the window is shown, and asks no
+   *   permission.
+   *
+   * The WebView calls it on a thread of its own, and the window and the activity are the UI
+   * thread's, hence the hop.
    */
   inner class ImmersiveBridge {
     @JavascriptInterface
@@ -46,8 +60,12 @@ class MainActivity : TauriActivity() {
           controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
           controller.hide(WindowInsetsCompat.Type.systemBars())
+          requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+          window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
           controller.show(WindowInsetsCompat.Type.systemBars())
+          requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+          window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
       }
     }
