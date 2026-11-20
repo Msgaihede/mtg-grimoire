@@ -182,6 +182,10 @@ pub mod marketplace_feed;
 /// **The plain-text mirror** — the decks, the collection and the wishlist written to a folder a
 /// reader can open without the app. Its module doc says which half touches the filesystem.
 pub mod mirror;
+/// **This app's name and icon in the Windows volume mixer**, where WebView2's audio would say
+/// *Microsoft Edge WebView2* (issue #1703). `#[cfg(windows)]` inside, Core Audio over `windows`;
+/// everywhere else `mixer::start` is a no-op.
+pub mod mixer;
 pub mod nav;
 /// **The home page's New printings feed** — reprints of cards the reader's watched decks already
 /// hold, newest first. Two `SELECT`s over `deck_cards` and the corpus plus one `app_meta` row for

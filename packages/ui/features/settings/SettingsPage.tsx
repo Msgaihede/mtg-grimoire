@@ -19,6 +19,7 @@ import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { VersionPanel } from "@/features/settings/VersionPanel";
+import { VolumePanel } from "@/features/settings/VolumePanel";
 import {
   GROUPS,
   PANELS,
@@ -454,6 +455,11 @@ export function SettingsPage({ update }: { update: Update }) {
               dialogs already read, so a hook here would be a second reader of one cached answer and
               threading it down would buy a prop. */}
           {shown("labels") && <LabelsPanel />}
+
+          {/* **`Sound`'s one panel** (issue #1703): how loud the app is, over every sound it makes.
+              It reaches nothing at all — the level is `@/lib/volume`'s, kept on this device — so
+              nothing here is threaded down. */}
+          {shown("volume") && <VolumePanel />}
 
           {/* **`Scanner`'s one panel**: whether a scan beeps, and the prices its jingles start at.
               It reaches the backend itself, `StartViewPanel`'s rule — `useScanSoundSettings` is

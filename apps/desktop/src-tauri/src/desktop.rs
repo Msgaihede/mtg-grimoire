@@ -912,6 +912,15 @@ pub fn run() {
                 window::open_sized_to_monitor(&main);
                 camera::install(&main);
             }
+            // **The app's name in the Windows volume mixer** (issue #1703): every window's sound
+            // comes out of one WebView2 audio process, so one watcher for the process answers all
+            // of them, later windows included. A thread of its own; a no-op off Windows.
+            crate::mixer::start(
+                app.config()
+                    .product_name
+                    .as_deref()
+                    .unwrap_or("MTG Grimoire"),
+            );
 
             // Everything else happens on a thread of its own, and the window is already up to
             // wait for it. Tauri calls this closure from inside the event loop, on the window's

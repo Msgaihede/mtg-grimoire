@@ -210,6 +210,21 @@ windows-sys = { version = "0.61", features = [
 # features: the crate is a thin, feature-free wrapper over the COM bindings and there is nothing
 # narrower to ask for.
 webview2-com = "0.38"
+# Core Audio and the process table, for `mixer`: naming this app's WebView2 audio in the Windows
+# volume mixer (issue #1703). **The version `webview2-com` already pulls** — `Cargo.lock` holds
+# `windows` 0.61.3 and `windows-core` 0.61.2 through it — so this adds edges and no crate.
+# `windows-core` is named because `#[implement]` expands to paths in it. Measured against a
+# `--target x86_64-pc-windows-msvc` clippy: these five features and nothing narrower compile
+# (`StructuredStorage` and `Variant` are what `IMMDevice::Activate`'s parameter is made of).
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+windows-core = "0.61"
 
 [dev-dependencies]
 # **The core's test scaffolding, for this crate's tests and nothing else**: `schema::memory_pair`,

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { PlaytestAction, PlaytestHappened } from "@/lib/ipc";
+import { useAppVolume, volumeGain } from "@/lib/volume";
 import { atPress, cuesFor } from "./cues";
 import { useTableSoundsMuted } from "./muted";
 import { createTableSynth, type TableSynth } from "./synth";
-import { useTableSoundsVolume, volumeGain } from "./volume";
+import { useTableSoundsVolume } from "./volume";
 
 /** The one synth for every board: its audio context is made on the first sound, never before. */
 const shared = createTableSynth();
@@ -24,7 +25,8 @@ const shared = createTableSynth();
  * Nothing is made while muted.
  *
  * **The level is the synth's** (`setVolume`, from `./volume`): a sound already ringing follows
- * the slider, and a sound only waits for the level, never the other way round.
+ * the slider, and a sound only waits for the level, never the other way round. It is the board's
+ * own level times the app's (`@/lib/volume`, Settings › Sound), so either slider moves it.
  */
 export function useTableSounds(
   happened: readonly PlaytestHappened[],
@@ -33,11 +35,15 @@ export function useTableSounds(
 ): (action: PlaytestAction) => void {
   const muted = useTableSoundsMuted((s) => s.muted);
   const volume = useTableSoundsVolume((s) => s.volume);
+  const appVolume = useAppVolume((s) => s.volume);
   const pending = useRef<PlaytestAction | null>(null);
   /** The beat last heard: a strict-mode remount runs the effect again on the same one. */
   const heard = useRef<readonly PlaytestHappened[] | null>(null);
 
-  useEffect(() => synth.setVolume(volumeGain(volume)), [volume, synth]);
+  useEffect(
+    () => synth.setVolume(volumeGain(volume) * volumeGain(appVolume)),
+    [volume, appVolume, synth],
+  );
 
   useEffect(() => {
     if (muted) return;
