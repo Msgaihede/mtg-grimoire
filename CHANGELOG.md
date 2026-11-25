@@ -30,6 +30,39 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.74.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.73.0...v0.74.0) (2026-11-25)
+
+
+### Features
+
+* **core:** port deck validation, the bracket estimate and deck stats (MCP project E, part 1) ([#1738](https://github.com/Msgaihede/mtg-grimoire/issues/1738)) ([02e1f8d](https://github.com/Msgaihede/mtg-grimoire/commit/02e1f8d83a1117d867cf13eeded7bcd0388d3356))
+* **decks:** open the deck search on the commander's colour identity ([479102e](https://github.com/Msgaihede/mtg-grimoire/commit/479102e3b46f41b44ebbaac3d8f8623da84306af))
+* **decks:** open the deck search on the commander's colour identity ([178b24d](https://github.com/Msgaihede/mtg-grimoire/commit/178b24df30b866e3bf6bd00ad80b351434b9d8b0)), closes [#1725](https://github.com/Msgaihede/mtg-grimoire/issues/1725)
+* **life:** the board moves and answers the finger like the rest of the app ([385883d](https://github.com/Msgaihede/mtg-grimoire/commit/385883d583d423e815afae6f501e8ecae1b3a2b6))
+* **light:** pages, sheets and tabs that move like a phone's ([0acf30d](https://github.com/Msgaihede/mtg-grimoire/commit/0acf30d32e3be38f9dd7a95e5073e44f5b2650db))
+* **light:** pages, sheets and tabs that move like a phone's ([452297a](https://github.com/Msgaihede/mtg-grimoire/commit/452297a7e8c174bc22dccd8e2208104a880dd55e))
+* **mcp:** card knowledge for agents — combos, raw Scryfall records, related cards, tags, similar cards ([#1728](https://github.com/Msgaihede/mtg-grimoire/issues/1728)) ([a48e0b5](https://github.com/Msgaihede/mtg-grimoire/commit/a48e0b5b9d4f9419f21c5e07b2d7d58ce6527e7c))
+* **mcp:** deck tools and the review_deck / build_from_collection prompts (MCP project E, part 2) ([#1741](https://github.com/Msgaihede/mtg-grimoire/issues/1741)) ([d65092b](https://github.com/Msgaihede/mtg-grimoire/commit/d65092b2852054e1c60e51d01ddfbfdf0ad840f3))
+* **mcp:** rulings for agents — Scryfall's rulings file as a desktop feed, card_rulings (project D) ([#1739](https://github.com/Msgaihede/mtg-grimoire/issues/1739)) ([6a413aa](https://github.com/Msgaihede/mtg-grimoire/commit/6a413aa128d6a2ca86fa7efabec201aff4e43df1))
+* **mcp:** Scryfall syntax for agents — the query parser ported to Rust, golden-held (project C) ([#1740](https://github.com/Msgaihede/mtg-grimoire/issues/1740)) ([415e8d4](https://github.com/Msgaihede/mtg-grimoire/commit/415e8d415f707ee825da69327ec9479898a7cb15))
+* **mcp:** show_search — an agent's search on the app's Search page ([#1737](https://github.com/Msgaihede/mtg-grimoire/issues/1737)) ([161f6af](https://github.com/Msgaihede/mtg-grimoire/commit/161f6af6783fdcf410d5b2aa55855f6fea95092e))
+* **playtest:** add and take mana from the pool by hand in the sandbox ([5075c13](https://github.com/Msgaihede/mtg-grimoire/commit/5075c134ecc6dcf97495967069932800572c3c34))
+* **playtest:** add and take mana from the pool by hand in the sandbox ([414ff80](https://github.com/Msgaihede/mtg-grimoire/commit/414ff8009a0252732bc4e3a324217b329e03689e)), closes [#1723](https://github.com/Msgaihede/mtg-grimoire/issues/1723)
+* **playtest:** close the gaps with phase.rs's own board ([23e0e11](https://github.com/Msgaihede/mtg-grimoire/commit/23e0e1154344d7d7066be4d81f4b912ee9bac9c5))
+* **playtest:** phase.rs 0.132.0, and close the gaps with phase's own board ([e7a0766](https://github.com/Msgaihede/mtg-grimoire/commit/e7a076615da9a669aac253b63e2a34f3f2095201))
+* **playtest:** show the library's top card while a static lets the reader see it ([164c3d8](https://github.com/Msgaihede/mtg-grimoire/commit/164c3d85cf64c4dfa3c466900d0dde987e792653))
+* **playtest:** show the library's top card while a static lets the reader see it ([5a313bd](https://github.com/Msgaihede/mtg-grimoire/commit/5a313bdcf53b71c6d0930f01838c49a1c688de18)), closes [#1722](https://github.com/Msgaihede/mtg-grimoire/issues/1722)
+* **transfer:** right-aligned Presets dropdown with site export presets ([40f162b](https://github.com/Msgaihede/mtg-grimoire/commit/40f162bfb65a28b2f22d403745e90ad68a744d76))
+* **transfer:** right-aligned Presets dropdown with site export presets ([a31474f](https://github.com/Msgaihede/mtg-grimoire/commit/a31474f4e0f952db59559aef7c41851e246adb88)), closes [#1726](https://github.com/Msgaihede/mtg-grimoire/issues/1726)
+
+
+### Bug Fixes
+
+* **scanner:** pack opener stays responsive while confetti flies ([6078e7e](https://github.com/Msgaihede/mtg-grimoire/commit/6078e7e12b015e6638295f5bca9cecf575a68bd8))
+* **scanner:** pack opener stays responsive while confetti flies ([#1724](https://github.com/Msgaihede/mtg-grimoire/issues/1724)) ([8b121ed](https://github.com/Msgaihede/mtg-grimoire/commit/8b121eddafa68b9c27c489244b4ab9a15366b746))
+* **search:** take a two-sided printing's illustration from its front face ([1d24aef](https://github.com/Msgaihede/mtg-grimoire/commit/1d24aefdfe9178c22d2db9b7376d1b6ae99b5534))
+* **search:** take a two-sided printing's illustration from its front face ([e11f2c1](https://github.com/Msgaihede/mtg-grimoire/commit/e11f2c15969f159dde33e9ec1a8f16ff15f9830c)), closes [#1727](https://github.com/Msgaihede/mtg-grimoire/issues/1727)
+
 ## [0.73.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.72.0...v0.73.0) (2026-11-20)
 
 
