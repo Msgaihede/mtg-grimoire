@@ -41,21 +41,27 @@ async function expand(canvasElement: HTMLElement): Promise<void> {
 }
 
 /**
- * The **More formats** trigger (issue #1702) — named `More formats`, or `More formats: MTGO`
- * while it holds the export's format.
+ * The **Presets** trigger (issues #1702 and #1726) — named `Presets`, or `Presets: MTGO` while
+ * one is chosen.
  */
-function moreFormats(canvasElement: HTMLElement): HTMLElement {
-  return within(canvasElement).getByRole("button", { name: /^More formats/ });
+function presets(canvasElement: HTMLElement): HTMLElement {
+  return within(canvasElement).getByRole("button", { name: /^Presets/ });
 }
 
 /**
- * Pick one of the formats behind **More formats**: open it and press the format's row. The panel
- * is drawn inside the dialog rather than portalled, so the canvas finds it.
+ * Pick one of the **Presets**: open it and press the preset's row. The panel is drawn inside the
+ * dialog rather than portalled, so the canvas finds it. Matched from the start of the row's name,
+ * because the row carries the site as its hint too.
  */
-async function pickMore(canvasElement: HTMLElement, label: string): Promise<void> {
-  await userEvent.click(moreFormats(canvasElement));
-  await userEvent.click(await within(canvasElement).findByRole("option", { name: label }));
+async function pickPreset(canvasElement: HTMLElement, label: string): Promise<void> {
+  await userEvent.click(presets(canvasElement));
+  await userEvent.click(
+    await within(canvasElement).findByRole("option", { name: new RegExp(`^${label}`) }),
+  );
 }
+
+/** A row's name, without its site hint — the row's first text span. */
+const rowName = (row: HTMLElement) => row.querySelector("span")?.textContent ?? "";
 
 /**
  * The pile being exported: printings out of the generated corpus rather than names typed here.
@@ -359,8 +365,8 @@ type Story = StoryObj<typeof meta>;
  * `sortOptions`: plain first is the one most readers want, the same kind of deliberate order the
  * app's option-list rule exempts a grade scale for. They are a `radiogroup`, because picking one
  * is picking *instead of* the others and the preview under them is a single answer. MTGO,
- * Moxfield and TCGplayer sit behind **More formats** after the row (issue #1702) —
- * `EXPORT_FORMAT_PLACE` says which half each writer is drawn in.
+ * Moxfield and TCGplayer are reached through **Presets**, right-aligned after the row (issues
+ * #1702 and #1726) — `EXPORT_FORMAT_PLACE` says which half each writer is drawn in.
  */
 export const PlainText: Story = {
   play: async ({ canvasElement }) => {
@@ -380,8 +386,8 @@ export const PlainText: Story = {
       "CSV",
     ]);
     await expect(formats[0]).toHaveAttribute("aria-checked", "true");
-    // The other three are behind More formats — see {@link MoreFormatsOpen}.
-    await expect(moreFormats(canvasElement)).toHaveTextContent("More formats");
+    // The other three are site presets — see {@link PresetsOpen}.
+    await expect(presets(canvasElement)).toHaveTextContent("Presets");
 
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
@@ -402,13 +408,13 @@ export const PlainText: Story = {
 export const Mtgo: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+    await waitFor(async () => await expect(presets(canvasElement)).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
 
-    await pickMore(canvasElement, "MTGO");
-    // The trigger holds the format now, in the radios' gold, and no radio is checked.
-    await expect(moreFormats(canvasElement)).toHaveAccessibleName("More formats: MTGO");
+    await pickPreset(canvasElement, "MTGO");
+    // The trigger holds the preset now, in the radios' gold, and no radio is checked.
+    await expect(presets(canvasElement)).toHaveAccessibleName("Presets: MTGO");
     await expect(canvas.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
       "aria-checked",
       "false",
@@ -436,13 +442,13 @@ export const Mtgo: Story = {
  */
 export const Moxfield: Story = {
   play: async ({ canvasElement }) => {
-    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+    await waitFor(async () => await expect(presets(canvasElement)).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
 
-    await pickMore(canvasElement, "Moxfield");
-    // The trigger holds the format, which is how a reader tells a pick here took.
-    await expect(moreFormats(canvasElement)).toHaveAccessibleName("More formats: Moxfield");
+    await pickPreset(canvasElement, "Moxfield");
+    // The trigger holds the preset, which is how a reader tells a pick here took.
+    await expect(presets(canvasElement)).toHaveAccessibleName("Presets: Moxfield");
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
@@ -568,62 +574,59 @@ export const Tcgplayer: Story = {
   args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+    await waitFor(async () => await expect(presets(canvasElement)).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
 
-    await pickMore(canvasElement, "TCGplayer");
+    await pickPreset(canvasElement, "TCGplayer");
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "2 Lightning Bolt [2X2] 117 1 Sol Ring [C21] 263",
     );
 
-    // The reader's own answer, which this format is the best possible listener for. Off, the six
-    // Forests never reach the writer — see the count line {@link InactiveCategoriesLeftOut}
-    // asserts, and the description above for why that is the fix rather than a regression.
-    const inactive = canvas.getByRole("checkbox", { name: "Include inactive categories" });
-    await expect(inactive).not.toBeChecked();
-    await userEvent.click(inactive);
-
-    // The switched-off pile is in the cart with everything else, and nothing is said about
-    // omissions because nothing was omitted — by the format or by the reader.
-    await expect(preview(canvasElement)).toHaveTextContent("6 Forest [UNF] 239");
-    await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
-    await expect(canvas.queryByText(/inactive categories are left out/)).toBeNull();
+    // A preset is fully preset (issue #1726): no field box and no `Include inactive categories`
+    // box. The switched-off pile stays out of the cart, and the count line says so.
+    await expect(canvas.queryAllByRole("checkbox")).toEqual([]);
+    await expect(canvas.getByText("6 cards in inactive categories are left out.")).toBeVisible();
+    await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
     // Flat: not one of the section words the grouped formats write.
     await expect(preview(canvasElement).textContent).not.toMatch(/Deck|Maybeboard|Cuts/);
-
-    // Put it back, for {@link OnlyCardsArenaHas}'s reason: `exportPrefs` is `useAppStore`'s and
-    // outlives a story on a shared page, so a play that left it ticked would decide what the
-    // next deck story on this page exports.
-    await userEvent.click(inactive);
   },
 };
 
 /**
- * **More formats**, open — issue #1702. The formats a reader picks for one site (MTGO, Moxfield,
- * TCGplayer) are kept off the radio row in the app's searchable dropdown, the same shell the set
- * filter is built on, so the row stays four chips wide. Typing narrows the list; a pick is the
- * export's format exactly as a radio press is, and the trigger then reads the format's name in
- * the radios' gold. Left open, with `mox` typed, so the panel can be looked at.
+ * **Presets**, open — issue #1726, which renamed issue #1702's **More formats**. Each row is a
+ * site's whole export setting — format and fields decided, so no checkbox is drawn under one —
+ * with the site as the dim hint, in the app's searchable dropdown at the format row's far end.
+ * Typing narrows the list by name or site; a pick makes it the export's setting, and the trigger
+ * then reads the preset's name in the radios' gold. Left open, with `proxy` typed, so the panel
+ * can be looked at.
  */
-export const MoreFormatsOpen: Story = {
+export const PresetsOpen: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(async () => await expect(moreFormats(canvasElement)).toBeVisible(), {
+    await waitFor(async () => await expect(presets(canvasElement)).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
 
-    await userEvent.click(moreFormats(canvasElement));
+    await userEvent.click(presets(canvasElement));
     const listbox = await canvas.findByRole("listbox");
-    await expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "MTGO",
+    await expect(within(listbox).getAllByRole("option").map(rowName)).toEqual([
+      "Card Kingdom",
+      "Cardmarket",
+      "Mana Pool",
       "Moxfield",
+      "MTG Print",
+      "MTG Proxy",
+      "MTGO",
+      "Proxxied",
+      "Proxy Print",
       "TCGplayer",
     ]);
-    await userEvent.type(canvas.getByRole("combobox", { name: "Search formats" }), "mox");
-    await expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Moxfield",
+    await userEvent.type(canvas.getByRole("combobox", { name: "Search presets" }), "proxy");
+    await expect(within(listbox).getAllByRole("option").map(rowName)).toEqual([
+      "MTG Proxy",
+      "Proxy Print",
     ]);
   },
 };
@@ -728,7 +731,7 @@ export const SwitchedOffPile: Story = {
     // The other half of `dropsInactive`, asserted rather than assumed from its twin: MTGO gives
     // the same sentence and draws no box either. A two-member set checked at one member is a set
     // nobody has checked — and these two are a hand-written `Set`, not something derived.
-    await pickMore(canvasElement, "MTGO");
+    await pickPreset(canvasElement, "MTGO");
     await expect(
       canvas.getByText("This format can't include inactive categories, so 6 cards are left out."),
     ).toBeVisible();
@@ -737,10 +740,10 @@ export const SwitchedOffPile: Story = {
     ).toBeNull();
     await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
 
-    // Moxfield has somewhere to put the pile — and since #390 that is not enough on its own.
+    // Plain text has somewhere to put the pile — and since #390 that is not enough on its own.
     // The box appears the moment the format stops answering for itself, opens **off**, and the
     // reader's own line is what stands in the format's place until it is ticked.
-    await pickMore(canvasElement, "Moxfield");
+    await userEvent.click(canvas.getByRole("radio", { name: "Plain text" }));
     const inactive = canvas.getByRole("checkbox", { name: "Include inactive categories" });
     await expect(inactive).not.toBeChecked();
     await expect(
@@ -748,10 +751,10 @@ export const SwitchedOffPile: Story = {
     ).toBeVisible();
     await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
 
-    // Ticked, the format writes what it has always been able to write: the cut pile in its
-    // maybeboard, nothing left out, and both count lines gone.
+    // Ticked, the format writes what it has always been able to write: the cut pile with the
+    // rest, nothing left out, and both count lines gone.
     await userEvent.click(inactive);
-    await expect(preview(canvasElement)).toHaveTextContent("Maybeboard 6 Forest (UNF) 239");
+    await expect(preview(canvasElement)).toHaveTextContent("6 Forest");
     await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
     await expect(canvas.queryByText(/inactive categories are left out/)).toBeNull();
 
@@ -991,7 +994,7 @@ export const OnlyCardsArenaHas: Story = {
     ).toBeVisible();
 
     // Leaving the format takes the question with it, and nothing else's export is narrowed.
-    await pickMore(canvasElement, "Moxfield");
+    await pickPreset(canvasElement, "Moxfield");
     await expect(canvas.queryByRole("checkbox", { name: "Only cards on MTG Arena" })).toBeNull();
     await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
 

@@ -28,35 +28,31 @@ export const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
 };
 
 /**
- * Where the export format picker draws each format: on its row of radios, or behind the row's
- * **More formats** dropdown (issue #1702).
+ * Where the export format picker draws each format: on its row of radios, or only behind the
+ * **Presets** dropdown (issue #1702, and #1726 made the dropdown presets).
  *
- * The row keeps the formats most readers reach for; the dropdown holds the ones a reader picks
- * for one site, so the row stops being seven chips wide. Both faces read this (the desktop's
- * `ExportDialog`, the phone's `ExportSheet`), so a format moves between the two in one place.
+ * The row keeps the formats most readers tune by hand; the rest are the ones a reader picks for
+ * one site, so they are reached by that site's name — `export/presets.ts` — with the setting
+ * decided for them. Both faces read this (the desktop's `ExportDialog`, the phone's
+ * `ExportSheet`), so a format moves between the two in one place.
  *
  * **A `Record` rather than two lists**: a new writer added to {@link EXPORT_FORMATS} does not
- * compile until it is given a place, so it can never be written by `format.ts` and offered
- * nowhere.
+ * compile until it is given a place, and `presets.test.ts` holds that every `preset` format is
+ * some preset's — so a writer can never be written by `format.ts` and offered nowhere.
  */
-export const EXPORT_FORMAT_PLACE: Record<ExportFormat, "row" | "more"> = {
+export const EXPORT_FORMAT_PLACE: Record<ExportFormat, "row" | "preset"> = {
   plain: "row",
-  mtgo: "more",
+  mtgo: "preset",
   arena: "row",
-  moxfield: "more",
+  moxfield: "preset",
   archidekt: "row",
-  tcgplayer: "more",
+  tcgplayer: "preset",
   csv: "row",
 };
 
 /** The formats drawn as radios, in {@link EXPORT_FORMATS}' own order — plain first. */
 export const ROW_EXPORT_FORMATS: readonly ExportFormat[] = EXPORT_FORMATS.filter(
   (f) => EXPORT_FORMAT_PLACE[f] === "row",
-);
-
-/** The formats behind **More formats**, in {@link EXPORT_FORMATS}' own order. */
-export const MORE_EXPORT_FORMATS: readonly ExportFormat[] = EXPORT_FORMATS.filter(
-  (f) => EXPORT_FORMAT_PLACE[f] === "more",
 );
 
 export const EXPORT_FORMAT_EXTENSION: Record<ExportFormat, string> = {

@@ -111,7 +111,7 @@ import type { TransferCard } from "../TransferCard";
 import { ROW_EXPORT_FORMATS } from "../formats";
 import { EXPORT_FORMAT_EXTENSION, EXPORT_FORMAT_LABEL } from "./format";
 import { ExportExample } from "./ExportExample";
-import { MoreFormats } from "./MoreFormats";
+import { PresetPicker } from "./PresetPicker";
 import { useExportModel } from "./useExportModel";
 
 /**
@@ -284,6 +284,7 @@ function Body({
     fields,
     arenaOnly,
     includeInactive,
+    preset,
     available,
     offersInactive,
     text,
@@ -293,6 +294,7 @@ function Body({
     lines,
     example,
     chooseFormat,
+    choosePreset,
     toggleField,
     toggleArenaOnly,
     toggleIncludeInactive,
@@ -392,13 +394,15 @@ function Body({
       )}
 
       {/* The format picker: a radio group over the formats `EXPORT_FORMAT_PLACE` puts on the
-          row, then **More formats** for the rest (issue #1702) — every format `EXPORT_FORMATS`
-          names is in exactly one of the two, and that `Record` is what keeps a new writer from
-          being offered nowhere. The radios keep that array's own order and are **not** sorted
-          through `sortOptions`: plain first is the one most readers want, the same kind of
-          deliberate order `lib/options.ts` exempts a grade scale for. One Tab stop and the arrow
-          keys choose, which is `radioKeys`' and every radio group's in this app; the dropdown is
-          a stop of its own after the group, outside it, because a radiogroup holds radios. */}
+          row, then **Presets** at the row's far end (issues #1702 and #1726) — a site's whole
+          setting by the site's name, which is how the formats off the row are reached. The
+          radios keep `EXPORT_FORMATS`' own order and are **not** sorted through `sortOptions`:
+          plain first is the one most readers want, the same kind of deliberate order
+          `lib/options.ts` exempts a grade scale for. One Tab stop and the arrow keys choose,
+          which is `radioKeys`' and every radio group's in this app; the dropdown is a stop of its
+          own after the group, outside it, because a radiogroup holds radios. While a preset is
+          chosen no radio is checked — even one whose writer the preset uses: Card Kingdom is
+          plain text, but it is not the Plain text radio's setting. */}
       <div className="flex flex-wrap items-center gap-2">
         <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
           {ROW_EXPORT_FORMATS.map((f, i) => (
@@ -406,13 +410,13 @@ function Body({
               key={f}
               type="button"
               role="radio"
-              aria-checked={format === f}
+              aria-checked={preset === null && format === f}
               onClick={() => chooseFormat(f)}
               {...radioKeys(ROW_EXPORT_FORMATS, format, chooseFormat, i)}
               className={cn(
                 "h-8 shrink-0 rounded-md border px-3 text-sm",
                 "transition-colors duration-150 motion-reduce:transition-none",
-                format === f
+                preset === null && format === f
                   ? "border-accent text-accent"
                   : "border-border text-dim hover:border-accent hover:text-accent",
                 FOCUS,
@@ -422,8 +426,13 @@ function Body({
             </button>
           ))}
         </div>
-        {/* Level with the radios: their `h-8 px-3` over the dropdown's own `md` geometry. */}
-        <MoreFormats format={format} onChoose={chooseFormat} className="h-8 px-3" />
+        {/* Right-aligned, with whitespace between it and the radios (issue #1726): `ml-auto`
+            pushes it to the row's far end — on a line of its own too, once the row wraps — and
+            `pl-6` keeps a gap when the row is just wide enough. Level with the radios: their
+            `h-8 px-3` over the dropdown's own `md` geometry. */}
+        <div className="ml-auto pl-6">
+          <PresetPicker preset={preset} onChoose={choosePreset} className="h-8 px-3" />
+        </div>
       </div>
 
       {/* Only the fields this format and this surface share — `availableFields` is the whole of

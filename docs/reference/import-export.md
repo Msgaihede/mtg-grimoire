@@ -24,14 +24,37 @@ export dialog's format picker draws them:
 | TCGplayer | `[SET] number` | — (chosen in cart) | — | Flat, no headings at all | **No** |
 | CSV | Set + number columns | `Finish` column | `Category` column, `Category active` | One row per card, header row | **Yes, since Task 10** |
 
-**The picker is two halves** (issue #1702): `EXPORT_FORMAT_PLACE` puts Plain text, Arena, Archidekt
-and CSV on the radio row and MTGO, Moxfield and TCGplayer behind a **More formats** dropdown after it —
-the app's searchable `<Dropdown>` (the set filter's shell), drawn by `export/MoreFormats.tsx` on both
-faces. Each half keeps `EXPORT_FORMATS`' order. A pick in the dropdown is the export's format through
-the same `chooseFormat` a radio press calls; while it holds the format no radio is checked, the trigger
-reads the format's name in the radios' gold, and its accessible name is `More formats: <format>`.
-Re-picking the format already chosen does nothing, so it never resets the reader's fields. The place is
-a `Record`, so a new writer does not compile until it is given a half.
+**The picker is radios and presets** (issues #1702 and #1726): `EXPORT_FORMAT_PLACE` puts Plain text,
+Arena, Archidekt and CSV on the radio row; MTGO, Moxfield and TCGplayer are `preset`, reached only
+through the **Presets** dropdown — the app's searchable `<Dropdown>` (the set filter's shell), drawn by
+`export/PresetPicker.tsx` on both faces, pushed to the row's far end (`ml-auto pl-6`) with its panel
+opening leftwards (`align="end"`). The place is a `Record`, so a new writer does not compile until it
+is given a place, and `presets.test.ts` holds that every `preset` format is some preset's.
+
+**A preset is a site's whole setting, fully preset** (`export/presets.ts`): a canonical writer and a
+field set, chosen with `useExportModel`'s `choosePreset` and remembered as `ExportPrefs.preset`. While
+one is chosen the dialog draws **no checkbox** — no `Fields` row, no `Include inactive categories`, no
+Arena box — no radio is checked (even one whose writer the preset uses), the trigger reads the
+preset's name in the radios' gold, and its accessible name is `Presets: <preset>`. Every preset leaves
+switched-off piles out and the count line says what that held back. A radio press puts the preset down
+and re-derives the format's defaults; re-picking the preset already chosen does nothing. Rows are by
+label with the site as the dim hint, and the search matches either. The presets (2026-11-25):
+
+| Preset | Site | Writer and fields | Why |
+| --- | --- | --- | --- |
+| Card Kingdom | cardkingdom.com | plain, `1 Name` | Paste format undocumented; the safest shape |
+| Cardmarket | cardmarket.com | plain, `1 Name` | Paste format undocumented (the site refused the fetch) |
+| Mana Pool | manapool.com | TCGplayer, `1 Name [SET] 123` | Its mass entry documents `4 Plains [M20] 261` |
+| Moxfield | moxfield.com | Moxfield, set + number + finish | The writer's defaults, as the More formats row had |
+| MTG Print | mtgprint.net | plain, `1 Name` | "Arena format", no examples given |
+| MTG Proxy | mtgproxy.net | plain, `1 Name` | Documents `1 Card Name` for Arena/MTGO lists |
+| MTGO | Magic Online | MTGO | The writer's defaults |
+| Proxxied | proxxied.com | plain, `1 Name` | Paste format undocumented |
+| Proxy Print | proxyprint.taxiera.net | plain, `1 Name` | Paste format undocumented |
+| TCGplayer | tcgplayer.com | TCGplayer, set + number | The writer's defaults |
+
+A preset is a setting, never a writer of its own, so nothing here reaches the Rust mirror or the golden
+fence. A site later found to read `(SET) 123` moves to a pinning setting in `presets.ts` alone.
 
 **TCGplayer is the one write-only format now.** `decklists.test.ts`'s `READABLE` array excludes it
 by name — `parse.ts`'s bracket group is anchored to the end of the line, so `2 Lightning Bolt

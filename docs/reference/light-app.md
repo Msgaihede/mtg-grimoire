@@ -2299,7 +2299,8 @@ deck`, `Export this deck`) carry the meaning.
   said in the page's receipt line, where the deck's undo is offered as for any other write: over
   the fake, `deck_import_commit` files a step and `Undo` appeared.
 - **Export** is a bottom sheet (`ExportSheet.tsx`): the formats as 44px chips that wrap, with MTGO,
-  Moxfield and TCGplayer behind the shared 44px **More formats** dropdown after them (issue #1702), the
+  Moxfield and TCGplayer reached through the shared 44px **Presets** dropdown, right-aligned after them
+  (issues #1702 and #1726; a preset draws no checkbox), the
   fields this format and this surface share as 44px checkbox rows in two columns, the Arena and
   inactive-pile boxes where they apply, the desktop's three omission lines word for word, the text
   behind a `Show decklist (N lines)` disclosure that opens shut, and `Copy` / `Download` at the
