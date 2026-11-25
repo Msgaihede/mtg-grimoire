@@ -52,6 +52,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use engine::ai_support::{has_meaningful_priority_action, legal_actions};
+use engine::database::combo_table::ComboTable;
 use engine::game::combat::AttackTarget;
 use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
@@ -577,7 +578,9 @@ impl Playtest {
             ai_decks: theirs.collect(),
             ..DeckList::default()
         };
-        let payload = resolve_deck_list(&db, &list);
+        // The combo table only feeds phase's bracket estimate, which a game never reads: an
+        // empty (unmeasured) one, never phase's generated artifact.
+        let payload = resolve_deck_list(&db, &ComboTable::default(), &list);
         load_and_hydrate_decks(&mut state, &payload, Some(&db));
         state.all_card_names = db.card_names().into();
         install_card_db(&mut state, Arc::clone(&db));
