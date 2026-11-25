@@ -371,6 +371,7 @@ commands! {
         card_image_uri_inner(conn, &card_id, &variant)
     };
     read card_meld_parts in card(id: String) = |conn| meld_parts(conn, &id);
+    read card_raw in card(ids: Vec<String>) = |conn| raw_cards(conn, &ids);
     read card_printings in card(oracle_id: String, marketplace: Option<String>, limit: Option<i64>) = |conn| {
         let market = Marketplace::from_opt(marketplace.as_deref());
         list_printings(conn, &oracle_id, market, limit)
@@ -1266,6 +1267,7 @@ commands! {
     read oracle_tags_for_cards in tags::oracle(oracle_ids: Vec<String>) = |conn| {
         read_card_tags(conn, &oracle_ids).map_err(|e| format!("could not read the tags: {e}"))
     };
+    read card_oracle_tags in tags::oracle(card_id: String) = |conn| direct_tags(conn, &card_id);
     read oracle_tags_for_printings in tags::oracle(card_ids: Vec<String>) = |conn| {
         read_printing_tags(conn, &card_ids).map_err(|e| format!("could not read the tags: {e}"))
     };

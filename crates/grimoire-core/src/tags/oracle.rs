@@ -197,6 +197,41 @@ const BY_PRINTING_ID: &str = "SELECT c.id, t.slug
 pub async fn refresh_if_due(state: &Arc<State>) {
     super::refresh_if_due(&ORACLE, state).await
 }
+/// One tag a card holds, as a reader is shown it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TagLabel {
+    pub slug: String,
+    pub label: String,
+}
+
+/// The tags a printing's card is **directly** tagged with, ordered by label.
+///
+/// Not [`read_printing_tags`]: that reads the closure, which adds every ancestor of every tag
+/// and answers bare slugs. This reads `oracle_taggings` as the file gave it, with each tag's
+/// label. An unknown printing, a NULL `oracle_id` and an untagged card all answer `[]`.
+pub fn direct_tags(conn: &Connection, card_id: &str) -> Result<Vec<TagLabel>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.slug, t.label
+               FROM cards c
+               JOIN oracle_taggings g ON g.oracle_id = c.oracle_id
+               JOIN oracle_tags t ON t.slug = g.slug
+              WHERE c.id = ?1
+              ORDER BY t.label, t.slug",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([card_id], |r| {
+            Ok(TagLabel {
+                slug: r.get(0)?,
+                label: r.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1976,5 +2011,53 @@ mod tests {
 
         drop(state);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- a card's direct tags ---------------------------------------------------------
+
+    fn direct_fixture() -> Connection {
+        let conn = crate::schema::memory_pair();
+        for (id, oracle) in [("p1", Some("oid-1")), ("p2", Some("oid-2")), ("p3", None)] {
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
+                    layout, released_at, rarity, search_text, raw)
+                 VALUES (?1, ?2, ?1, 'xxx', ?1, 'en', 'normal', '2020-01-01', 'rare', ?1, X'00')",
+                params![id, oracle],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO oracle_tags (slug, label) VALUES
+                ('tutor','Tutor'), ('tutor-battle','Tutor, Battle'), ('ramp','Ramp');
+             INSERT INTO oracle_tag_parents (child_slug, parent_slug) VALUES ('tutor-battle','tutor');
+             INSERT INTO oracle_taggings (oracle_id, slug) VALUES
+                ('oid-1','tutor-battle'), ('oid-1','ramp');
+             INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES
+                ('oid-1','tutor-battle'), ('oid-1','tutor'), ('oid-1','ramp');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_card_s_direct_tags_come_with_labels_and_without_ancestors() {
+        let conn = direct_fixture();
+        let tag = |slug: &str, label: &str| TagLabel {
+            slug: slug.into(),
+            label: label.into(),
+        };
+        assert_eq!(
+            direct_tags(&conn, "p1").unwrap(),
+            vec![tag("ramp", "Ramp"), tag("tutor-battle", "Tutor, Battle")],
+            "the child only (no `tutor` ancestor), ordered by label"
+        );
+    }
+
+    #[test]
+    fn an_untagged_card_answers_no_tags() {
+        let conn = direct_fixture();
+        for id in ["p2", "p3", "unknown"] {
+            assert_eq!(direct_tags(&conn, id).unwrap(), vec![], "{id}");
+        }
     }
 }

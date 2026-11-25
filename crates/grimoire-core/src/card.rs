@@ -925,6 +925,51 @@ pub fn store_group_by(conn: &Connection, mode: &str) -> Result<(), String> {
         .map_err(|e| format!("could not save the printing grouping: {e}"))
 }
 
+/// The most printings [`raw_cards`] answers in one call: a record is a few kilobytes of JSON,
+/// and the reader of this is a model's context.
+pub const RAW_CARDS_MAX: usize = 20;
+
+/// One printing's whole Scryfall record, as stored.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RawRecord {
+    /// The printing id **that was asked about**, echoed verbatim.
+    pub id: String,
+    /// The `default_cards` line as Scryfall wrote it. `None` for an id the corpus lacks and for
+    /// a stored blob that will not inflate or will not parse: neither is worth failing the
+    /// other nineteen over.
+    pub scryfall: Option<serde_json::Value>,
+}
+
+/// The stored Scryfall record of each printing in `ids`, one entry per id, in the order asked.
+///
+/// At most [`RAW_CARDS_MAX`] ids; more is refused outright, never trimmed.
+pub fn raw_cards(conn: &Connection, ids: &[String]) -> Result<Vec<RawRecord>, String> {
+    if ids.len() > RAW_CARDS_MAX {
+        return Err(format!("At most {RAW_CARDS_MAX} cards at a time."));
+    }
+    let mut stmt = conn
+        .prepare("SELECT CAST(raw AS BLOB) FROM cards WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let stored: Option<Option<Vec<u8>>> = stmt
+            .query_row(params![id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let scryfall = stored
+            .flatten()
+            .as_deref()
+            .and_then(crate::card_row::raw_json)
+            .and_then(|json| serde_json::from_str(&json).ok());
+        out.push(RawRecord {
+            id: id.clone(),
+            scryfall,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::fixtures::*;
@@ -2759,6 +2804,56 @@ mod tests {
                      if u == "https://cards.scryfall.io/display/face0.webp?1"),
             "and the two answers are the same answer: {via_cache:?}"
         );
+    }
+
+    // ---- a printing's raw Scryfall record ---------------------------------------------
+
+    fn raw_row(conn: &Connection, id: &str, raw: &[u8]) {
+        insert_card_with_raw(conn, id, id, "normal", None, raw);
+    }
+
+    #[test]
+    fn a_raw_record_is_the_stored_scryfall_json() {
+        let conn = crate::schema::memory_pair();
+        raw_row(
+            &conn,
+            "a",
+            &crate::card_row::gzip_raw(r#"{"id":"a","name":"X","all_parts":[]}"#),
+        );
+        let got = raw_cards(&conn, &["a".to_owned()]).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "a");
+        assert_eq!(
+            got[0].scryfall,
+            Some(serde_json::json!({"id":"a","name":"X","all_parts":[]}))
+        );
+        let wire = serde_json::to_value(&got[0]).unwrap();
+        assert!(wire.get("scryfall").is_some() && wire.get("id").is_some());
+    }
+
+    #[test]
+    fn an_unknown_id_or_a_broken_blob_answers_none() {
+        let conn = crate::schema::memory_pair();
+        raw_row(&conn, "ok", &crate::card_row::gzip_raw(r#"{"id":"ok"}"#));
+        raw_row(&conn, "bad", &[0x1f, 0x8b, 0x08, 0x00, 0xff, 0xff]);
+        let ids: Vec<String> = ["missing", "ok", "bad"].map(String::from).to_vec();
+        let got = raw_cards(&conn, &ids).unwrap();
+        let order: Vec<&str> = got.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(order, ["missing", "ok", "bad"], "one per id, in order");
+        assert_eq!(got[0].scryfall, None);
+        assert_eq!(got[1].scryfall, Some(serde_json::json!({"id":"ok"})));
+        assert_eq!(got[2].scryfall, None);
+    }
+
+    #[test]
+    fn more_than_twenty_ids_are_refused() {
+        let conn = crate::schema::memory_pair();
+        let ids: Vec<String> = (0..21).map(|i| i.to_string()).collect();
+        assert_eq!(
+            raw_cards(&conn, &ids).unwrap_err(),
+            "At most 20 cards at a time."
+        );
+        assert!(raw_cards(&conn, &ids[..20]).is_ok());
     }
 }
 

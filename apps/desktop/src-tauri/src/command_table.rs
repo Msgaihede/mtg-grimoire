@@ -272,6 +272,15 @@ const TABLE_ONLY: &[(&str, &str)] = &[
         "combos the reader's whole collection holds or is one card away from, for the MCP \
      server's held_combos tool",
     ),
+    (
+        "card_raw",
+        "a printing's whole Scryfall record, for the MCP server's card_scryfall tool",
+    ),
+    (
+        "card_oracle_tags",
+        "a card's own oracle tags with labels, for the MCP server's get_card; the page reads \
+     the tag closure through oracle_tags_for_printings",
+    ),
 ];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
