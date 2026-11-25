@@ -5,8 +5,10 @@
  *
  * Each `*.golden.test.ts` beside this file builds named cases with the validation suites' own
  * fixture builders (`../validation/fixtures.ts`), runs the TypeScript over them and holds the
- * committed golden to the answers with `toMatchFileSnapshot` — so `pnpm exec vitest run -u <suite>`
- * rewrites a golden, and a TypeScript change that moves an answer is a red suite until it is
+ * committed golden to the answers with `toMatchFileSnapshot` — so
+ * `pnpm exec vitest run --project ui <suite> -u` rewrites a golden (the flag **after** the path:
+ * vitest's `-u` takes an optional value, so a path written right after it is read as that value
+ * and the whole suite runs), and a TypeScript change that moves an answer is a red suite until it is
  * regenerated **and ported**. The Rust suites read the same files (`crate::deck_golden`) and must
  * answer the same. A golden is never edited by hand: a Rust answer that disagrees is the Rust's
  * bug.

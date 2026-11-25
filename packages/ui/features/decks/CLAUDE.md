@@ -31,6 +31,7 @@ Pure TypeScript engine analyzing deck rules:
   - `singleton.ts`: Evaluates exceptions derived from oracle text rules (e.g. Relentless Rats, Seven Dwarves), never static card name lists.
   - `commanders.ts` & `companions.ts`: Enforces eligibility, partner combinations (Partner, Friends Forever, Choose a Background), color identity rules, and companion deck constraints.
   - `bracket.ts` (`estimateBracket`): Advisory Commander power floor calculation (ranks 2–4). Returns `BASE_FLOOR = 2`; never returns 1 or 5 (which represent player intent). Does not invalidate decks.
+- **The core holds a Rust port of this folder, `stats/`'s arithmetic, `deckBuckets.ts`, `openingHand.ts` and the parts of `lib/mana.ts` they read** (`crates/grimoire-core/src/deck_rules/`, `deck_stats/`), for hosts with no window. **A change to any of them regenerates its golden and is ported in the same commit**: the suites in `../golden/` write `../__golden__/*.json` from the TypeScript (`pnpm exec vitest run --project ui <suite> -u`, flag after the path) and the Rust reproduces them; a red Rust suite after a TypeScript change is the port owing the change, never a golden to edit. See [deck-builder.md](../../../../docs/reference/deck-builder.md#the-cores-port-held-to-this-by-goldens-2026-11-25).
 
 ---
 

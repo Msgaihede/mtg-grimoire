@@ -132,6 +132,12 @@ Reference: [integrations-store.md](../../docs/reference/integrations-store.md); 
 
 ---
 
+## 7f. Deck rules and deck stats (`src/deck_rules/`, `src/deck_stats/`)
+
+- **A port of the deck page's TypeScript, not a second design** (MCP project E, [the design](../../docs/superpowers/specs/2026-11-25-mcp-decks-design.md)): validation (`engine`, `singleton`, `commanders`, `companions`), the bracket floor (`bracket`) and the stats band's arithmetic (`mana`, `buckets`, `summary`, `types`, `odds`), one file per TypeScript file. They read the core's own `DeckCardRow`, `FormatSpecRow` and `DeckCombo` (the structs the page's types mirror) and answer `deck_check` and `deck_stats` (table commands no page calls, on `command_table::TABLE_ONLY`).
+- **The TypeScript is the behaviour of record**: `packages/ui/features/decks/__golden__/*.json` are written by it, and each module's golden test (`crate::deck_golden`) must reproduce them exactly. Change the behaviour here only by changing the TypeScript, regenerating the golden and porting it in the same commit; never edit a golden. `deck_rules::tests::the_goldens_cover_every_rule` fences coverage.
+- **No `regex`**: every expression is a hand-written matcher with tests; JavaScript's `Number`, `trim`, `\s` and ASCII `\b` are `deck_rules::{js_number, js_trim, is_js_space}` and the matchers that name them.
+
 ## 8. Build, Test, and Verification Commands
 
 Execute tests only at the end of feature implementation:

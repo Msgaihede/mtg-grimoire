@@ -194,7 +194,7 @@ deck on the real corpus.
 ### 6.2 The goldens (E1)
 
 `packages/ui/features/decks/__golden__/`, written by a new TypeScript suite
-(`packages/ui/features/decks/golden.test.ts`, regenerated with `pnpm vitest run -u` on that file,
+(`packages/ui/features/decks/golden/*.golden.test.ts`, regenerated with `pnpm exec vitest run --project ui <suite> -u`,
 as the widget catalogue's files are) and read by the Rust suites through `include_str!`:
 
 | File | Cases | Each case holds |

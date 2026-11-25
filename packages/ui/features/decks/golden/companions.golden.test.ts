@@ -8,7 +8,7 @@
  * cases add a synthetic text where a hand-written matcher (the `Companion —` line, `Changeling`,
  * the bare activated keywords) has an edge no printed card shows.
  *
- * `pnpm exec vitest run -u packages/ui/features/decks/golden/companions.golden.test.ts`
+ * `pnpm exec vitest run --project ui packages/ui/features/decks/golden/companions.golden.test.ts -u`
  * rewrites the file; never edit it by hand.
  */
 import { describe, expect, it } from "vitest";

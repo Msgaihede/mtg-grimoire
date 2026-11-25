@@ -10,9 +10,15 @@ live UI measurements and historical verification findings are in [decks-live-fin
 
 ## The Validation Layer
 
-Validation is executed entirely in TypeScript:
+Validation is decided in TypeScript on the page (the core's port, below, is held to it):
 - **Rust provides facts**: The backend returns `DeckCardRow` containing per-printing facts: `legalities`, `color_identity`, power/toughness, `ever_uncommon`, and `game_changer`.
 - **TypeScript draws conclusions**: `packages/ui/features/decks/engine.ts` evaluates deck size, copy limits, format legality, commander color identity, and banned/restricted status.
+
+### The core's port, held to this by goldens (2026-11-25)
+- The page decides everything in TypeScript, and nothing on the page changed. **`grimoire-core` holds a Rust port** of the same rules and arithmetic, for a host with no window — the MCP server's deck tools, and the remote tier after it: `deck_rules/` (`engine`, `singleton`, `commanders`, `companions`, `bracket`) and `deck_stats/` (`mana`, `buckets`, `summary`, `types`, `odds`), one file per TypeScript file, read through two table commands no page calls, `deck_check` and `deck_stats`.
+- **The TypeScript is the behaviour of record.** `packages/ui/features/decks/golden/*.golden.test.ts` build named cases with `validation/fixtures.ts`' builders and write `packages/ui/features/decks/__golden__/*.json` from the TypeScript's answers (`toMatchFileSnapshot`); each Rust module's golden test reads the same file and must answer the same, numbers exactly. A coverage fence on both sides (`coverage.golden.test.ts`, `deck_rules::tests::the_goldens_cover_every_rule`) fails when an issue code, a commander rule, a companion, a bracket reason or a combo letter has no case.
+- **A change to the ported TypeScript regenerates its golden and is ported in the same commit**: `pnpm exec vitest run --project ui <suite> -u` (the flag after the path), then make the Rust suite green again. A golden is never edited by hand.
+- No `regex` in the core: each expression is a hand-written matcher beside the constant it replaces, with tests. JavaScript's `Number`, `trim`, `\s` and ASCII `\b` are spelled out (`deck_rules::{js_number, js_trim, is_js_space}`).
 
 ### `validateDeck` vs `validateForMarks`
 1. **`validateDeck`**: Evaluates the whole deck for overall legality and format compliance.

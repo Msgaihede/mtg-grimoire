@@ -34,7 +34,124 @@ pub mod singleton;
 
 pub use issue::{Severity, ValidationIssue};
 
+use crate::deck::{get_deck, list_format_specs};
+use crate::sorting::Marketplace;
+use bracket::{bracket_warning, describe_reason, estimate_bracket, BracketEstimate};
+use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::Value;
+
+/// `deck_check`'s answer: what the deck page's validation panel and bracket readout say about one
+/// list of one deck, read in the core so a host with no window can say it too.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckCheck {
+    pub deck_id: i64,
+    pub variant: String,
+    pub format_key: String,
+    /// The format's display name, or `None` for a key `format_specs` does not carry.
+    pub format_name: Option<String>,
+    /// Whether the format is judged at all: `false` for a `validates`-off format (`unspecified`)
+    /// and for a key the seed does not carry. An unchecked deck has no `issues` and is **not
+    /// checked**, never "legal" — the panel's own words.
+    pub checked: bool,
+    /// [`engine::validate_deck`]: what is wrong with the deck — its active piles.
+    pub issues: Vec<ValidationIssue>,
+    /// [`engine::inactive_card_issues`]: what is wrong with the cards in switched-off piles, each
+    /// judged on its own facts (could it ever come in) — the other half of the page's card marks.
+    pub parked: Vec<ValidationIssue>,
+    /// The bracket readout, only where the format has a commander rule — the page's own condition
+    /// for drawing it.
+    pub bracket: Option<DeckBracket>,
+}
+
+/// The bracket readout for one list: the estimate, the bracket the reader set, and the sentence
+/// the page shows when the set bracket is below the floor.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckBracket {
+    pub estimate: BracketEstimate,
+    /// `decks.bracket`; `0` is Auto (no bracket set).
+    pub set: i64,
+    /// [`bracket::bracket_warning`] against `set`, or `None`.
+    pub warning: Option<String>,
+    /// Each of `estimate.reasons` as the page words it ([`bracket::describe_reason`]).
+    pub reasons: Vec<String>,
+    /// When Commander Spellbook's combo list was last downloaded (Unix seconds), or `None` when it
+    /// never was — so an empty `estimate.combos` can be told apart from a deck with no combos.
+    pub combos_downloaded_at: Option<i64>,
+}
+
+/// `deck_check`: one list of one deck judged as the deck page judges it — `None` for a deck that
+/// does not exist (or an unsaved draft, which `get_deck` does not answer).
+///
+/// The combos the bracket reads are matched over the **active** rows' printings, deduplicated and
+/// sorted, which is `useBracketReading`'s rule: a switched-off pile is not the deck.
+pub fn check_deck(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+) -> Result<Option<DeckCheck>, String> {
+    let Some(detail) = get_deck(conn, deck_id, variant, Marketplace::from_opt(None))? else {
+        return Ok(None);
+    };
+    let format_key = detail.deck.format_key.clone();
+    let spec = list_format_specs(conn)?
+        .into_iter()
+        .find(|spec| spec.key == format_key);
+    let Some(spec) = spec else {
+        return Ok(Some(DeckCheck {
+            deck_id,
+            variant: variant.to_owned(),
+            format_key,
+            format_name: None,
+            checked: false,
+            issues: Vec::new(),
+            parked: Vec::new(),
+            bracket: None,
+        }));
+    };
+    let cards = &detail.cards;
+    let bracket = match spec.commander_rule {
+        None => None,
+        Some(_) => {
+            let mut ids: Vec<String> = cards
+                .iter()
+                .filter(|c| c.category_active)
+                .map(|c| c.card_id.clone())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            let combos = crate::combos::match_combos(conn, &ids)?;
+            let now = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())?;
+            let estimate = estimate_bracket(cards, &combos);
+            let set = detail.deck.bracket;
+            Some(DeckBracket {
+                warning: bracket_warning(set, &estimate),
+                reasons: estimate.reasons.iter().map(describe_reason).collect(),
+                estimate,
+                set,
+                combos_downloaded_at: crate::combos::read_status(conn, now).fetched_at,
+            })
+        }
+    };
+    Ok(Some(DeckCheck {
+        deck_id,
+        variant: variant.to_owned(),
+        format_key,
+        format_name: Some(spec.display_name.clone()),
+        checked: spec.validates,
+        issues: engine::validate_deck(cards, &spec),
+        parked: if spec.validates {
+            engine::inactive_card_issues(cards, &spec)
+        } else {
+            Vec::new()
+        },
+        bracket,
+    }))
+}
 
 /// `faces` parsed as JavaScript's `JSON.parse` would, keeping it only when it is an array:
 /// `card_faces` verbatim. A blob that is not JSON, or JSON that is not an array, is no faces at
@@ -291,5 +408,103 @@ mod tests {
         assert_eq!(faces_of(Some("not json")).len(), 0);
         assert_eq!(faces_of(Some("{\"a\":1}")).len(), 0);
         assert_eq!(faces_of(Some("[{\"a\":1}, null, 3]")).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+    use crate::deck::fixtures::{input, kind_of, main_of, seeded};
+    use crate::deck::{add_card, create_deck, update_deck, DeckPatch};
+
+    fn deck(conn: &Connection, format: &str) -> i64 {
+        create_deck(conn, &input("Test", format)).unwrap().id
+    }
+
+    fn put(conn: &Connection, deck: i64, card: &str, pile: i64, quantity: i64) {
+        add_card(conn, deck, card, Some(pile), None, "live", None, quantity).unwrap();
+    }
+
+    fn codes(issues: &[ValidationIssue]) -> Vec<&'static str> {
+        issues.iter().map(|i| i.code).collect()
+    }
+
+    #[test]
+    fn a_deck_is_judged_as_the_page_judges_it() {
+        let conn = seeded();
+        let id = deck(&conn, "modern");
+        let main = main_of(&conn, id);
+        put(&conn, id, "bolt-m10", main, 4);
+        // Serra's blob has no `modern` key: a pool that does not name a card does not hold it.
+        put(&conn, id, "serra-8ed", main, 1);
+        let check = check_deck(&conn, id, "live").unwrap().unwrap();
+        assert!(check.checked);
+        assert_eq!(check.format_name.as_deref(), Some("Modern"));
+        assert_eq!(codes(&check.issues), ["deck-size", "not-legal"]);
+        assert!(check.parked.is_empty());
+        assert!(check.bracket.is_none(), "Modern has no commander rule");
+    }
+
+    #[test]
+    fn a_switched_off_pile_is_parked_not_judged_with_the_deck() {
+        let conn = seeded();
+        let id = deck(&conn, "modern");
+        put(&conn, id, "bolt-m10", main_of(&conn, id), 4);
+        put(&conn, id, "serra-8ed", kind_of(&conn, id, "maybe"), 1);
+        let check = check_deck(&conn, id, "live").unwrap().unwrap();
+        assert_eq!(codes(&check.issues), ["deck-size"]);
+        assert_eq!(codes(&check.parked), ["not-legal"]);
+    }
+
+    #[test]
+    fn an_unspecified_or_unknown_format_is_not_checked() {
+        let conn = seeded();
+        let id = deck(&conn, "unspecified");
+        put(&conn, id, "serra-8ed", main_of(&conn, id), 9);
+        let check = check_deck(&conn, id, "live").unwrap().unwrap();
+        assert!(!check.checked);
+        assert!(check.issues.is_empty() && check.parked.is_empty());
+
+        conn.execute("UPDATE decks SET format_key = 'gone' WHERE id = ?1", [id])
+            .unwrap();
+        let check = check_deck(&conn, id, "live").unwrap().unwrap();
+        assert!(!check.checked);
+        assert_eq!(check.format_key, "gone");
+        assert_eq!(check.format_name, None);
+    }
+
+    #[test]
+    fn a_commander_deck_has_a_bracket_floor_and_says_when_combos_were_never_downloaded() {
+        let conn = seeded();
+        let id = deck(&conn, "commander");
+        put(&conn, id, "bolt-m10", main_of(&conn, id), 1);
+        let check = check_deck(&conn, id, "live").unwrap().unwrap();
+        let bracket = check.bracket.expect("Commander has a commander rule");
+        assert_eq!(bracket.estimate.floor, bracket::BASE_FLOOR);
+        assert_eq!(bracket.set, 0);
+        assert_eq!(bracket.warning, None);
+        assert!(bracket.reasons.is_empty());
+        assert_eq!(bracket.combos_downloaded_at, None);
+
+        let patch = DeckPatch {
+            bracket: Some(1),
+            ..Default::default()
+        };
+        update_deck(&conn, id, &patch).unwrap();
+        let bracket = check_deck(&conn, id, "live")
+            .unwrap()
+            .unwrap()
+            .bracket
+            .unwrap();
+        assert_eq!(bracket.set, 1);
+        // Set below a floor no rule reached: nothing in the deck contradicts the reader's 1.
+        assert_eq!(bracket.warning, None);
+    }
+
+    #[test]
+    fn a_deck_that_does_not_exist_is_none() {
+        let conn = seeded();
+        assert!(check_deck(&conn, 999, "live").unwrap().is_none());
+        assert!(check_deck(&conn, 999, "nonsense").is_err());
     }
 }

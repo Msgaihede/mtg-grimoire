@@ -10,7 +10,7 @@
  * matcher. As in that suite, a combo's `bracketTag` is the case's input, not a claim about
  * Spellbook's classification.
  *
- * Regenerate with `pnpm exec vitest run -u` on this file; never by hand.
+ * Regenerate with `pnpm exec vitest run --project ui <this file> -u`; never by hand.
  */
 import { describe, expect, it } from "vitest";
 import type { DeckCombo } from "@/lib/ipc";

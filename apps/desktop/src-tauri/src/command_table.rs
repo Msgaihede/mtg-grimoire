@@ -292,6 +292,20 @@ const TABLE_ONLY: &[(&str, &str)] = &[
             "server's similar_cards tool"
         ),
     ),
+    (
+        "deck_check",
+        concat!(
+            "a deck's validation and bracket, ported from the page's TypeScript (which computes ",
+            "its own), for the MCP server's deck tools"
+        ),
+    ),
+    (
+        "deck_stats",
+        concat!(
+            "a deck's stats band, ported from the page's TypeScript (which computes its own), ",
+            "for the MCP server's deck tools"
+        ),
+    ),
 ];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
