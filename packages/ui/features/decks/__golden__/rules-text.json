@@ -1,0 +1,2241 @@
+{
+  "about": "Written by packages/ui/features/decks/golden/validation.golden.test.ts from copyException, unreadableCopyCount, isBasicLand and manaValueOf (Infinity spelled as a string); read by crates/grimoire-core/src/deck_rules/singleton.rs. Never edit by hand.",
+  "base": {
+    "promoTypes": null,
+    "id": 0,
+    "cardId": "c-Lightning Bolt",
+    "categoryId": 1,
+    "categoryName": "Main deck",
+    "categoryKind": "main",
+    "categoryActive": true,
+    "variant": "live",
+    "finish": null,
+    "labelId": null,
+    "labelName": null,
+    "labelColor": null,
+    "quantity": 1,
+    "name": "Lightning Bolt",
+    "setCode": "lea",
+    "setName": "Limited Edition Alpha",
+    "collectorNumber": "161",
+    "lang": "en",
+    "needsReview": null,
+    "oracleId": "o-Lightning Bolt",
+    "manaCost": "{R}",
+    "cmc": 1,
+    "typeLine": "Instant",
+    "oracleText": null,
+    "colors": "R",
+    "colorIdentity": "R",
+    "producedMana": "",
+    "legalities": "{\"modern\":\"legal\",\"vintage\":\"legal\",\"commander\":\"legal\",\"oathbreaker\":\"legal\",\"brawl\":\"legal\",\"paupercommander\":\"legal\",\"duel\":\"legal\",\"oldschool\":\"legal\",\"tlr\":\"legal\"}",
+    "power": null,
+    "toughness": null,
+    "layout": "normal",
+    "rarity": "common",
+    "faces": null,
+    "gameChanger": false,
+    "finishes": null,
+    "everUncommon": false,
+    "unitPrice": null,
+    "ownedQuantity": 0
+  },
+  "cases": [
+    {
+      "name": "000 null",
+      "cards": [],
+      "text": null,
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "001 \"\"",
+      "cards": [],
+      "text": "",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "002 \"A deck can have up to 12 cards named Goblin Trapfinder.\"",
+      "cards": [],
+      "text": "A deck can have up to 12 cards named Goblin Trapfinder.",
+      "copyException": 12,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "003 \"A deck can have up to thirty cards named Goblin Trapfinder.",
+      "cards": [],
+      "text": "A deck can have up to thirty cards named Goblin Trapfinder.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": "thirty",
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "004 \"A deck can have up to as many cards as you like.\"",
+      "cards": [],
+      "text": "A deck can have up to as many cards as you like.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "005 \"A deck can have up to SEVEN cards named Loud Dwarves.\"",
+      "cards": [],
+      "text": "A deck can have up to SEVEN cards named Loud Dwarves.",
+      "copyException": 7,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "006 \"A deck can have up to 07 cards named Padded Dwarves.\"",
+      "cards": [],
+      "text": "A deck can have up to 07 cards named Padded Dwarves.",
+      "copyException": 7,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "007 \"A deck can have up to 3rd cards named Ordinal.\"",
+      "cards": [],
+      "text": "A deck can have up to 3rd cards named Ordinal.",
+      "copyException": 3,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "008 \"A deck can have up to seven_ cards named Underscored.\"",
+      "cards": [],
+      "text": "A deck can have up to seven_ cards named Underscored.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": "seven_",
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "009 \"A deck can have up to  seven cards named Spaced.\"",
+      "cards": [],
+      "text": "A deck can have up to  seven cards named Spaced.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "010 \"a deck can have up to seven cards named Lower.\"",
+      "cards": [],
+      "text": "a deck can have up to seven cards named Lower.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "011 \"A deck can have up to seven cards named\"",
+      "cards": [],
+      "text": "A deck can have up to seven cards named",
+      "copyException": 7,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "012 \"A deck can have up to sevencards named Joined.\"",
+      "cards": [],
+      "text": "A deck can have up to sevencards named Joined.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "013 \"A deck can have up to thirty cards named X.\\nA deck can hav",
+      "cards": [],
+      "text": "A deck can have up to thirty cards named X.\nA deck can have up to seven cards named X.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": "thirty",
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "014 \"A deck can have up to as many. A deck can have up to nine c",
+      "cards": [],
+      "text": "A deck can have up to as many. A deck can have up to nine cards named Second.",
+      "copyException": 9,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "015 \"A deck can have any number of cards named X. A deck can hav",
+      "cards": [],
+      "text": "A deck can have any number of cards named X. A deck can have up to thirty cards named X.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "016 \"A deck can have up to twenty cards named Twenty.\"",
+      "cards": [],
+      "text": "A deck can have up to twenty cards named Twenty.",
+      "copyException": 20,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "017 \"A deck can have up to twentyone cards named Run Together.\"",
+      "cards": [],
+      "text": "A deck can have up to twentyone cards named Run Together.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": "twentyone",
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "018 \"A deck can have up to ninety-nine cards named Hyphen.\"",
+      "cards": [],
+      "text": "A deck can have up to ninety-nine cards named Hyphen.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "019 \"A deck can have up to 1e3 cards named Exponent.\"",
+      "cards": [],
+      "text": "A deck can have up to 1e3 cards named Exponent.",
+      "copyException": 1,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "020 \"A deck can have up to 0 cards named Nothing.\"",
+      "cards": [],
+      "text": "A deck can have up to 0 cards named Nothing.",
+      "copyException": 0,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "021 \"A deck can have up to 99999999999999999999999 cards named H",
+      "cards": [],
+      "text": "A deck can have up to 99999999999999999999999 cards named Huge.",
+      "copyException": 1e+23,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "022 \"A deck can have up to sevén cards named Accented.\"",
+      "cards": [],
+      "text": "A deck can have up to sevén cards named Accented.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "023 \"A deck can have up to ⅶ cards named Roman.\"",
+      "cards": [],
+      "text": "A deck can have up to ⅶ cards named Roman.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "024 \"A deck can have any number of cards named\"",
+      "cards": [],
+      "text": "A deck can have any number of cards named",
+      "copyException": "Infinity",
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "025 \"A deck can have any number of cards nam\"",
+      "cards": [],
+      "text": "A deck can have any number of cards nam",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "026 \"Basic Land — Island\"",
+      "cards": [],
+      "text": "Basic Land — Island",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "027 \"Basic Snow Land — Forest\"",
+      "cards": [],
+      "text": "Basic Snow Land — Forest",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "028 \"Basic Land\"",
+      "cards": [],
+      "text": "Basic Land",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "029 \"Land — Island\"",
+      "cards": [],
+      "text": "Land — Island",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "030 \"Legendary Land\"",
+      "cards": [],
+      "text": "Legendary Land",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "031 \"Snow Land — Forest\"",
+      "cards": [],
+      "text": "Snow Land — Forest",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "032 \"Basic Creature — Shapeshifter\"",
+      "cards": [],
+      "text": "Basic Creature — Shapeshifter",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "033 \"Creature — Human // Basic Land — Island\"",
+      "cards": [],
+      "text": "Creature — Human // Basic Land — Island",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "034 \"Basic Land — Island // Creature — Human\"",
+      "cards": [],
+      "text": "Basic Land — Island // Creature — Human",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "035 \"basic land\"",
+      "cards": [],
+      "text": "basic land",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "036 \"Land Basic\"",
+      "cards": [],
+      "text": "Land Basic",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "037 \"Basic // Land\"",
+      "cards": [],
+      "text": "Basic // Land",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "038 \"BasicLand\"",
+      "cards": [],
+      "text": "BasicLand",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "039 \"{2}{U}\"",
+      "cards": [],
+      "text": "{2}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "040 \"{0}\"",
+      "cards": [],
+      "text": "{0}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "041 \"{W}{U}{B}{R}{G}\"",
+      "cards": [],
+      "text": "{W}{U}{B}{R}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "042 \"{X}\"",
+      "cards": [],
+      "text": "{X}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "043 \"{x}\"",
+      "cards": [],
+      "text": "{x}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "044 \"{X}{R}{R}\"",
+      "cards": [],
+      "text": "{X}{R}{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "045 \"{Y}{Z}\"",
+      "cards": [],
+      "text": "{Y}{Z}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "046 \"{W/U}\"",
+      "cards": [],
+      "text": "{W/U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "047 \"{2/W}{2/W}\"",
+      "cards": [],
+      "text": "{2/W}{2/W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "048 \"{W/P}\"",
+      "cards": [],
+      "text": "{W/P}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "049 \"{2/W/P}\"",
+      "cards": [],
+      "text": "{2/W/P}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "050 \"{X/2}\"",
+      "cards": [],
+      "text": "{X/2}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "051 \"{C}{S}\"",
+      "cards": [],
+      "text": "{C}{S}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "052 \"{½}\"",
+      "cards": [],
+      "text": "{½}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0.5
+    },
+    {
+      "name": "053 \"{½/W}\"",
+      "cards": [],
+      "text": "{½/W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "054 \"{10}\"",
+      "cards": [],
+      "text": "{10}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 10
+    },
+    {
+      "name": "055 \"{}\"",
+      "cards": [],
+      "text": "{}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "056 \"{ }\"",
+      "cards": [],
+      "text": "{ }",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "057 \"{2\"",
+      "cards": [],
+      "text": "{2",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "058 \"{{2}\"",
+      "cards": [],
+      "text": "{{2}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "059 \"{2}}\"",
+      "cards": [],
+      "text": "{2}}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "060 \"{ 2}\"",
+      "cards": [],
+      "text": "{ 2}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "061 \"{ 2 }\"",
+      "cards": [],
+      "text": "{ 2 }",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "062 \"{0x10}\"",
+      "cards": [],
+      "text": "{0x10}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 16
+    },
+    {
+      "name": "063 \"{0X1F}\"",
+      "cards": [],
+      "text": "{0X1F}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 31
+    },
+    {
+      "name": "064 \"{0b101}\"",
+      "cards": [],
+      "text": "{0b101}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "065 \"{0o17}\"",
+      "cards": [],
+      "text": "{0o17}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 15
+    },
+    {
+      "name": "066 \"{0x}\"",
+      "cards": [],
+      "text": "{0x}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "067 \"{1e2}\"",
+      "cards": [],
+      "text": "{1e2}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 100
+    },
+    {
+      "name": "068 \"{1E+2}\"",
+      "cards": [],
+      "text": "{1E+2}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 100
+    },
+    {
+      "name": "069 \"{1e}\"",
+      "cards": [],
+      "text": "{1e}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "070 \"{e1}\"",
+      "cards": [],
+      "text": "{e1}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "071 \"{.5}\"",
+      "cards": [],
+      "text": "{.5}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0.5
+    },
+    {
+      "name": "072 \"{5.}\"",
+      "cards": [],
+      "text": "{5.}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "073 \"{+.5}\"",
+      "cards": [],
+      "text": "{+.5}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0.5
+    },
+    {
+      "name": "074 \"{.}\"",
+      "cards": [],
+      "text": "{.}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "075 \"{+}\"",
+      "cards": [],
+      "text": "{+}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "076 \"{-}\"",
+      "cards": [],
+      "text": "{-}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "077 \"{-1}\"",
+      "cards": [],
+      "text": "{-1}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": -1
+    },
+    {
+      "name": "078 \"{+3}\"",
+      "cards": [],
+      "text": "{+3}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "079 \"{00}\"",
+      "cards": [],
+      "text": "{00}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "080 \"{1.5}\"",
+      "cards": [],
+      "text": "{1.5}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1.5
+    },
+    {
+      "name": "081 \"{1_000}\"",
+      "cards": [],
+      "text": "{1_000}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "082 \"{1,000}\"",
+      "cards": [],
+      "text": "{1,000}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "083 \"{Infinity}\"",
+      "cards": [],
+      "text": "{Infinity}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "084 \"{-Infinity}\"",
+      "cards": [],
+      "text": "{-Infinity}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "085 \"{NaN}\"",
+      "cards": [],
+      "text": "{NaN}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "086 \"{inf}\"",
+      "cards": [],
+      "text": "{inf}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "087 \"{∞}\"",
+      "cards": [],
+      "text": "{∞}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "088 \"{H}\"",
+      "cards": [],
+      "text": "{H}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "089 \"{HW}\"",
+      "cards": [],
+      "text": "{HW}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "090 \"{//}\"",
+      "cards": [],
+      "text": "{//}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "091 \"{W/}\"",
+      "cards": [],
+      "text": "{W/}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "092 \"{2}{U} // {1}{G}\"",
+      "cards": [],
+      "text": "{2}{U} // {1}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "093 \"no symbols at all\"",
+      "cards": [],
+      "text": "no symbols at all",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "094 \"{T}: Add {C}{C}.\"",
+      "cards": [],
+      "text": "{T}: Add {C}{C}.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "095 \"({T}: Add {U}.)\"",
+      "cards": [],
+      "text": "({T}: Add {U}.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "096 \"Legendary Creature — Human Noble\"",
+      "cards": [],
+      "text": "Legendary Creature — Human Noble",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "097 \"{4}{W}\"",
+      "cards": [],
+      "text": "{4}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "098 \"+2: Create a 1/1 white Kor Soldier creature token.\\nNahiri,",
+      "cards": [],
+      "text": "+2: Create a 1/1 white Kor Soldier creature token.\nNahiri, the Lithomancer can be your commander.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "099 \"Legendary Planeswalker — Nahiri\"",
+      "cards": [],
+      "text": "Legendary Planeswalker — Nahiri",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "100 \"{3}{W}{W}\"",
+      "cards": [],
+      "text": "{3}{W}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "101 \"Exile target creature. Its controller gains life equal to i",
+      "cards": [],
+      "text": "Exile target creature. Its controller gains life equal to its power.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "102 \"Instant\"",
+      "cards": [],
+      "text": "Instant",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "103 \"{W}\"",
+      "cards": [],
+      "text": "{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "104 \"({T}: Add {C}.)\"",
+      "cards": [],
+      "text": "({T}: Add {C}.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "105 \"Legendary Creature — Human Warrior\"",
+      "cards": [],
+      "text": "Legendary Creature — Human Warrior",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "106 \"{2}{R}\"",
+      "cards": [],
+      "text": "{2}{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "107 \"Creature — Elf Druid\"",
+      "cards": [],
+      "text": "Creature — Elf Druid",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "108 \"{1}{G}\"",
+      "cards": [],
+      "text": "{1}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "109 \"({T}: Add {G}.)\"",
+      "cards": [],
+      "text": "({T}: Add {G}.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "110 \"Basic Land — Forest\"",
+      "cards": [],
+      "text": "Basic Land — Forest",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "111 \"{R}\"",
+      "cards": [],
+      "text": "{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "112 \"Legendary Creature — Dwarf Advisor\"",
+      "cards": [],
+      "text": "Legendary Creature — Dwarf Advisor",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "113 \"{2}{W}\"",
+      "cards": [],
+      "text": "{2}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "114 \"({T}: Add {W}.)\"",
+      "cards": [],
+      "text": "({T}: Add {W}.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "115 \"Basic Land — Plains\"",
+      "cards": [],
+      "text": "Basic Land — Plains",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "116 \"{3}{B}\"",
+      "cards": [],
+      "text": "{3}{B}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "117 \"Legendary Creature — Human Shaman\"",
+      "cards": [],
+      "text": "Legendary Creature — Human Shaman",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "118 \"{2}{B}{G}\"",
+      "cards": [],
+      "text": "{2}{B}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "119 \"Creature — Dinosaur\"",
+      "cards": [],
+      "text": "Creature — Dinosaur",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "120 \"{4}{G}{G}\"",
+      "cards": [],
+      "text": "{4}{G}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 6
+    },
+    {
+      "name": "121 \"Legendary Creature — Eldrazi\"",
+      "cards": [],
+      "text": "Legendary Creature — Eldrazi",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "122 \"Artifact\"",
+      "cards": [],
+      "text": "Artifact",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "123 \"{1}\"",
+      "cards": [],
+      "text": "{1}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "124 \"Flying\\nWhenever an opponent casts a spell, put a +1/+1 cou",
+      "cards": [],
+      "text": "Flying\nWhenever an opponent casts a spell, put a +1/+1 counter on Ishai.\nPartner (You can have two commanders if both have partner.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "125 \"Legendary Creature — Bird Monk\"",
+      "cards": [],
+      "text": "Legendary Creature — Bird Monk",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "126 \"{2}{W}{U}\"",
+      "cards": [],
+      "text": "{2}{W}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "127 \"Whenever you cast your first spell each turn, choose an opp",
+      "cards": [],
+      "text": "Whenever you cast your first spell each turn, choose an opponent at random.\nPartner (You can have two commanders if both have partner.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "128 \"Legendary Creature — Goblin Berserker\"",
+      "cards": [],
+      "text": "Legendary Creature — Goblin Berserker",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "129 \"{1}{B}{R}\"",
+      "cards": [],
+      "text": "{1}{B}{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "130 \"Basic Land — Mountain\"",
+      "cards": [],
+      "text": "Basic Land — Mountain",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": true,
+      "manaValueOf": 0
+    },
+    {
+      "name": "131 \"Relentless Rats gets +1/+1 for each other creature you cont",
+      "cards": [],
+      "text": "Relentless Rats gets +1/+1 for each other creature you control named Relentless Rats.\nA deck can have any number of cards named Relentless Rats.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "132 \"Dragon's Approach deals 3 damage to any target. Then if you",
+      "cards": [],
+      "text": "Dragon's Approach deals 3 damage to any target. Then if you have five or more cards named Dragon's Approach in your graveyard, you may exile them and search your library for a Dragon creature card, put it onto the battlefield, then shuffle.\nA deck can have any number of cards named Dragon's Approach.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "133 \"A deck can have any number of cards named Shadowborn Apostl",
+      "cards": [],
+      "text": "A deck can have any number of cards named Shadowborn Apostle.\nSacrifice six Shadowborn Apostles: Search your library for a Demon creature card, put it onto the battlefield, then shuffle.",
+      "copyException": "Infinity",
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "134 \"Seven Dwarves gets +1/+1 for each other creature you contro",
+      "cards": [],
+      "text": "Seven Dwarves gets +1/+1 for each other creature you control named Seven Dwarves.\nA deck can have up to seven cards named Seven Dwarves.",
+      "copyException": 7,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "135 \"Whenever a Ring-bearer you control causes a player to lose ",
+      "cards": [],
+      "text": "Whenever a Ring-bearer you control causes a player to lose life, put a +1/+1 counter on Nazgûl.\nA deck can have up to nine cards named Nazgûl.",
+      "copyException": 9,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "136 \"A deck can have up to 0 cards named Nothing At All.\"",
+      "cards": [],
+      "text": "A deck can have up to 0 cards named Nothing At All.",
+      "copyException": 0,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "137 \"A deck can have up to two cards named Twin Copy.\"",
+      "cards": [],
+      "text": "A deck can have up to two cards named Twin Copy.",
+      "copyException": 2,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "138 \"When Battalion Foot Soldier enters the battlefield, you may",
+      "cards": [],
+      "text": "When Battalion Foot Soldier enters the battlefield, you may search your library for any number of cards named Battalion Foot Soldier, reveal them, put them into your hand, then shuffle.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "139 \"({T}: Add {R} or {G}.)\"",
+      "cards": [],
+      "text": "({T}: Add {R} or {G}.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "140 \"Land — Mountain Forest\"",
+      "cards": [],
+      "text": "Land — Mountain Forest",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "141 \"Creature — Faerie // Sorcery — Adventure\"",
+      "cards": [],
+      "text": "Creature — Faerie // Sorcery — Adventure",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "142 \"{1}{U}\"",
+      "cards": [],
+      "text": "{1}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "143 \"Creature — Faerie\"",
+      "cards": [],
+      "text": "Creature — Faerie",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "144 \"Sorcery — Adventure\"",
+      "cards": [],
+      "text": "Sorcery — Adventure",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "145 \"{3}{U}\"",
+      "cards": [],
+      "text": "{3}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "146 \"{4}{G}\"",
+      "cards": [],
+      "text": "{4}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "147 \"{3}{G}\"",
+      "cards": [],
+      "text": "{3}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "148 \"{3}{½}\"",
+      "cards": [],
+      "text": "{3}{½}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3.5
+    },
+    {
+      "name": "149 \"{2}{½}{½}{½}\"",
+      "cards": [],
+      "text": "{2}{½}{½}{½}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3.5
+    },
+    {
+      "name": "150 \"{5}\"",
+      "cards": [],
+      "text": "{5}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "151 \"Legendary Creature — Human Wizard // Legendary Planeswalker",
+      "cards": [],
+      "text": "Legendary Creature — Human Wizard // Legendary Planeswalker — Jace",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "152 \"{T}: Draw a card, then discard a card.\"",
+      "cards": [],
+      "text": "{T}: Draw a card, then discard a card.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "153 \"Legendary Creature — Human Wizard\"",
+      "cards": [],
+      "text": "Legendary Creature — Human Wizard",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "154 \"+1: Up to one target creature gets -2/-0 until your next tu",
+      "cards": [],
+      "text": "+1: Up to one target creature gets -2/-0 until your next turn.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "155 \"Legendary Planeswalker — Jace\"",
+      "cards": [],
+      "text": "Legendary Planeswalker — Jace",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "156 \"{X}{X}{R}\"",
+      "cards": [],
+      "text": "{X}{X}{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "157 \"Creature — Bear\"",
+      "cards": [],
+      "text": "Creature — Bear",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "158 \"Legendary Artifact — Vehicle\"",
+      "cards": [],
+      "text": "Legendary Artifact — Vehicle",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "159 \"Legendary Artifact — Spacecraft\"",
+      "cards": [],
+      "text": "Legendary Artifact — Spacecraft",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "160 \"{3}\"",
+      "cards": [],
+      "text": "{3}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "161 \"Artifact — Vehicle\"",
+      "cards": [],
+      "text": "Artifact — Vehicle",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "162 \"+1: Look at the top two cards of your library. Put one of t",
+      "cards": [],
+      "text": "+1: Look at the top two cards of your library. Put one of them into your hand and the other on the bottom of your library.\n−1: Untap up to four target permanents.\n−10: You get an emblem with \"You may activate loyalty abilities of planeswalkers you control on any player's turn any time you could cast an instant.\"\nTeferi, Temporal Archmage can be your commander.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "163 \"Legendary Planeswalker — Teferi\"",
+      "cards": [],
+      "text": "Legendary Planeswalker — Teferi",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "164 \"{4}{U}{U}\"",
+      "cards": [],
+      "text": "{4}{U}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 6
+    },
+    {
+      "name": "165 \"+1: Draw a card. At the beginning of the next end step, unt",
+      "cards": [],
+      "text": "+1: Draw a card. At the beginning of the next end step, untap up to two lands.\n−3: Put target nonland permanent into its owner's library third from the top.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "166 \"{3}{W}{U}\"",
+      "cards": [],
+      "text": "{3}{W}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "167 \"As long as Grist, the Hunger Tide isn't on the battlefield,",
+      "cards": [],
+      "text": "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types.\n+1: Create a 1/1 black and green Insect creature token, then mill a card. If an Insect card was milled this way, put a loyalty counter on Grist and repeat this process.\n−2: You may sacrifice a creature. When you do, destroy target creature or planeswalker.\n−5: Each opponent loses life equal to the number of creature cards in your graveyard.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "168 \"Legendary Planeswalker — Grist\"",
+      "cards": [],
+      "text": "Legendary Planeswalker — Grist",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "169 \"{1}{B}{G}\"",
+      "cards": [],
+      "text": "{1}{B}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "170 \"As long as Curly Walker isn’t on the battlefield, it’s an E",
+      "cards": [],
+      "text": "As long as Curly Walker isn’t on the battlefield, it’s an Elemental creature in addition to its other types.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "171 \"AS LONG AS LOUD WALKER ISN'T ON THE BATTLEFIELD, IT'S A 1/1",
+      "cards": [],
+      "text": "AS LONG AS LOUD WALKER ISN'T ON THE BATTLEFIELD, IT'S A 1/1 INSECT CREATURE IN ADDITION TO ITS OTHER TYPES.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "172 \"As long as Stopped Walker isn't on the battlefield, it's a ",
+      "cards": [],
+      "text": "As long as Stopped Walker isn't on the battlefield, it's a 1/1 Insect. It's a creature in addition to its other types.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "173 \"As long as Broken Walker isn't on the battlefield, it's a 1",
+      "cards": [],
+      "text": "As long as Broken Walker isn't on the battlefield, it's a 1/1 Insect\ncreature in addition to its other types.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "174 \"As long as Glued Walker isn't on the battlefield, it's a 1/",
+      "cards": [],
+      "text": "As long as Glued Walker isn't on the battlefield, it's a 1/1 Insectcreature in addition to its other types.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "175 \"Unless Bare Walker isn't on the battlefield, it's a creatur",
+      "cards": [],
+      "text": "Unless Bare Walker isn't on the battlefield, it's a creature in addition to its other types",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "176 \"isn't on the battlefield, it's a thing. Then: isn't on the ",
+      "cards": [],
+      "text": "isn't on the battlefield, it's a thing. Then: isn't on the battlefield, it's a big creature in addition to its other types",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "177 \"Tight Walker isn't on the battlefield, it's ancreature in a",
+      "cards": [],
+      "text": "Tight Walker isn't on the battlefield, it's ancreature in addition to its other types",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "178 \"Commander creatures you own have \\\"At the beginning of your",
+      "cards": [],
+      "text": "Commander creatures you own have \"At the beginning of your end step, exile.\"",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "179 \"Legendary Enchantment — Background\"",
+      "cards": [],
+      "text": "Legendary Enchantment — Background",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "180 \"Legendary Creature — Elf\"",
+      "cards": [],
+      "text": "Legendary Creature — Elf",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "181 \"Planeswalker — Bob\"",
+      "cards": [],
+      "text": "Planeswalker — Bob",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "182 \"+2: Create two 0/1 black Thrull creature tokens.\\nTevesh Sz",
+      "cards": [],
+      "text": "+2: Create two 0/1 black Thrull creature tokens.\nTevesh Szat, Doom of Fools can be your commander.\nPartner",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "183 \"Legendary Planeswalker — Szat\"",
+      "cards": [],
+      "text": "Legendary Planeswalker — Szat",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "184 \"{4}{B}\"",
+      "cards": [],
+      "text": "{4}{B}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "185 \"−X: Jeska deals X damage to each of up to three targets.\\nJ",
+      "cards": [],
+      "text": "−X: Jeska deals X damage to each of up to three targets.\nJeska, Thrice Reborn can be your commander.\nPartner",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "186 \"Legendary Planeswalker — Jeska\"",
+      "cards": [],
+      "text": "Legendary Planeswalker — Jeska",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "187 \"Add {B}{B}{B}.\"",
+      "cards": [],
+      "text": "Add {B}{B}{B}.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "188 \"{B}\"",
+      "cards": [],
+      "text": "{B}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 1
+    },
+    {
+      "name": "189 \"Exile target creature. Its controller may search their libr",
+      "cards": [],
+      "text": "Exile target creature. Its controller may search their library for a basic land.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "190 \"Search your library for a card, put that card into your han",
+      "cards": [],
+      "text": "Search your library for a card, put that card into your hand, then shuffle.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "191 \"Sorcery\"",
+      "cards": [],
+      "text": "Sorcery",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "192 \"{1}{B}\"",
+      "cards": [],
+      "text": "{1}{B}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "193 \"{W}{U}\"",
+      "cards": [],
+      "text": "{W}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "194 \"Legendary Creature — Elf Rogue\"",
+      "cards": [],
+      "text": "Legendary Creature — Elf Rogue",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "195 \"{1}{G}{U}\"",
+      "cards": [],
+      "text": "{1}{G}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "196 \"{1}{W}{W}\"",
+      "cards": [],
+      "text": "{1}{W}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "197 \"Legendary Creature — Elf Druid\"",
+      "cards": [],
+      "text": "Legendary Creature — Elf Druid",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "198 \"{G}{G}\"",
+      "cards": [],
+      "text": "{G}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "199 \"Partner with Yannik, Scavenging Sentinel (When this creatur",
+      "cards": [],
+      "text": "Partner with Yannik, Scavenging Sentinel (When this creature enters, target player may put Yannik into their hand from their library, then shuffle.)\nMenace",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "200 \"Legendary Creature — Human Cleric\"",
+      "cards": [],
+      "text": "Legendary Creature — Human Cleric",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "201 \"{2}{B}\"",
+      "cards": [],
+      "text": "{2}{B}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "202 \"Partner with Nikara, Lair Scavenger\\nVigilance\"",
+      "cards": [],
+      "text": "Partner with Nikara, Lair Scavenger\nVigilance",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "203 \"Legendary Creature — Hyena Beast\"",
+      "cards": [],
+      "text": "Legendary Creature — Hyena Beast",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "204 \"{2}{G}{W}\"",
+      "cards": [],
+      "text": "{2}{G}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "205 \"Partner with Regna, the Redeemer (When this creature enters",
+      "cards": [],
+      "text": "Partner with Regna, the Redeemer (When this creature enters, target player may put Regna into their hand from their library, then shuffle.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "206 \"Legendary Creature — Demon\"",
+      "cards": [],
+      "text": "Legendary Creature — Demon",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "207 \"Legendary Creature — Cyclops Berserker\"",
+      "cards": [],
+      "text": "Legendary Creature — Cyclops Berserker",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "208 \"{4}{R}\"",
+      "cards": [],
+      "text": "{4}{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "209 \"Partner with Zndrsplt, Eye of Wisdom (When this creature en",
+      "cards": [],
+      "text": "Partner with Zndrsplt, Eye of Wisdom (When this creature enters, target player may put Zndrsplt into their hand from their library, then shuffle.)\nAt the beginning of combat on your turn, flip a coin until you lose a flip.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "210 \"Legendary Creature — Homunculus\"",
+      "cards": [],
+      "text": "Legendary Creature — Homunculus",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "211 \"{4}{U}\"",
+      "cards": [],
+      "text": "{4}{U}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "212 \"Partner with Okaun, Eye of Chaos (When this creature enters",
+      "cards": [],
+      "text": "Partner with Okaun, Eye of Chaos (When this creature enters, target player may put Okaun into their hand from their library, then shuffle.)\nWhenever a player wins a coin flip, draw a card.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "213 \"Partner with Regna, the Redeemer\\nVigilance\"",
+      "cards": [],
+      "text": "Partner with Regna, the Redeemer\nVigilance",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "214 \"When Wernog enters or leaves the battlefield, each opponent",
+      "cards": [],
+      "text": "When Wernog enters or leaves the battlefield, each opponent may investigate.\nPartner—Friends forever (You can have two commanders if both have this ability.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "215 \"Legendary Creature — Human\"",
+      "cards": [],
+      "text": "Legendary Creature — Human",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "216 \"{W}{B}\"",
+      "cards": [],
+      "text": "{W}{B}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "217 \"Haste\\nPartner—Friends forever (You can have two commanders",
+      "cards": [],
+      "text": "Haste\nPartner—Friends forever (You can have two commanders if both have this ability.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "218 \"{1}{R}{G}\"",
+      "cards": [],
+      "text": "{1}{R}{G}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 3
+    },
+    {
+      "name": "219 \"Menace\\nPartner—Character select (You can have two commande",
+      "cards": [],
+      "text": "Menace\nPartner—Character select (You can have two commanders if both have this ability.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "220 \"Legendary Creature — Mutant Ninja Rat\"",
+      "cards": [],
+      "text": "Legendary Creature — Mutant Ninja Rat",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "221 \"Haste\\nPartner—friends FOREVER  (reminder)\"",
+      "cards": [],
+      "text": "Haste\nPartner—friends FOREVER  (reminder)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "222 \"Flying\\nChoose a Background (You can have a Background as a",
+      "cards": [],
+      "text": "Flying\nChoose a Background (You can have a Background as a second commander.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "223 \"Legendary Creature — Elephant Angel\"",
+      "cards": [],
+      "text": "Legendary Creature — Elephant Angel",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "224 \"{3}{W}\"",
+      "cards": [],
+      "text": "{3}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 4
+    },
+    {
+      "name": "225 \"Commander creatures you own have \\\"Menace.\\\"\"",
+      "cards": [],
+      "text": "Commander creatures you own have \"Menace.\"",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "226 \"Rose Tyler gets +1/+1 for each time counter on it.\\nDoctor'",
+      "cards": [],
+      "text": "Rose Tyler gets +1/+1 for each time counter on it.\nDoctor's companion (You can have two commanders if the other is the Doctor.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "227 \"{1}{W}\"",
+      "cards": [],
+      "text": "{1}{W}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "228 \"Allons-y! — Whenever you attack, exile cards from the top o",
+      "cards": [],
+      "text": "Allons-y! — Whenever you attack, exile cards from the top of your library.",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "229 \"Legendary Creature — Time Lord Doctor\"",
+      "cards": [],
+      "text": "Legendary Creature — Time Lord Doctor",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "230 \"{3}{U}{R}\"",
+      "cards": [],
+      "text": "{3}{U}{R}",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 5
+    },
+    {
+      "name": "231 \"{T}: Add {G}.\\nDoctor's companion (You can have two command",
+      "cards": [],
+      "text": "{T}: Add {G}.\nDoctor's companion (You can have two commanders if the other is the Doctor.)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 2
+    },
+    {
+      "name": "232 \"Legendary Creature — Time Lord\"",
+      "cards": [],
+      "text": "Legendary Creature — Time Lord",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "233 \"Legendary Creature —  Time Lord  \\tDoctor \"",
+      "cards": [],
+      "text": "Legendary Creature —  Time Lord  \tDoctor ",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "234 \"Creature — Time Lord Doctor\"",
+      "cards": [],
+      "text": "Creature — Time Lord Doctor",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "235 \"Flying\\r\\nPartner\\r\\nVigilance\"",
+      "cards": [],
+      "text": "Flying\r\nPartner\r\nVigilance",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "236 \"Flying Partner\"",
+      "cards": [],
+      "text": "Flying Partner",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "237 \"Flying, Partner\"",
+      "cards": [],
+      "text": "Flying, Partner",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "238 \"Partners in crime\"",
+      "cards": [],
+      "text": "Partners in crime",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "239 \"Partner \\t(reminder)\"",
+      "cards": [],
+      "text": "Partner \t(reminder)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "240 \"Partner with  (no one)\"",
+      "cards": [],
+      "text": "Partner with  (no one)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "241 \"Menace\\nPartner with Yannik, Scavenging Sentinel \\t \\nVigil",
+      "cards": [],
+      "text": "Menace\nPartner with Yannik, Scavenging Sentinel \t \nVigilance",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "242 \"Partner with Yannik, Scavenging Sentinel\\r\\n\"",
+      "cards": [],
+      "text": "Partner with Yannik, Scavenging Sentinel\r\n",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    },
+    {
+      "name": "243 \"Partner—(reminder)\"",
+      "cards": [],
+      "text": "Partner—(reminder)",
+      "copyException": null,
+      "unreadableCopyCount": null,
+      "isBasicLand": false,
+      "manaValueOf": 0
+    }
+  ]
+}

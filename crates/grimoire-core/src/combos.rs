@@ -1405,6 +1405,7 @@ fn unix_now() -> i64 {
 ///
 /// Serialised `camelCase` to the shape `packages/ui/lib/ipc.ts` mirrors by hand.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
 #[serde(rename_all = "camelCase")]
 pub struct DeckCombo {
     pub id: String,

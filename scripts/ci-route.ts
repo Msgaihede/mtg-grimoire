@@ -282,10 +282,13 @@ export const ARMS = [
   // `the_lists_match_the_pages_own` reads `FORMATS`, `SEARCH_SORT_OPTIONS` and `RARITIES` out of
   // them (`include_str!`), so a format added to the page's picker is red in `rust` until the tool
   // learns it. The query-language golden joined with the parser's Rust port
-  // (`grimoire_core::query_language`'s tests, `include_str!`).
+  // (`grimoire_core::query_language`'s tests, `include_str!`), and the deck goldens hold the
+  // core's port of the deck page's validation, bracket and stats (`deck_rules`, `deck_stats`,
+  // `include_str!`) to the TypeScript that writes them.
   {
     match: [
       "packages/ui/features/transfer/__golden__/*",
+      "packages/ui/features/decks/__golden__/*",
       "packages/ui/lib/userTables.json",
       "packages/ui/lib/syncedTables.json",
       "packages/ui/features/home/generated/catalog.contract.json",

@@ -1,0 +1,5813 @@
+{
+  "about": "Written by packages/ui/features/decks/golden/bracket.golden.test.ts from validation/bracket.ts and read by crates/grimoire-core/src/deck_rules/bracket.rs; regenerate with vitest -u, never by hand.",
+  "base": {
+    "promoTypes": null,
+    "id": 0,
+    "cardId": "c-Lightning Bolt",
+    "categoryId": 1,
+    "categoryName": "Main deck",
+    "categoryKind": "main",
+    "categoryActive": true,
+    "variant": "live",
+    "finish": null,
+    "labelId": null,
+    "labelName": null,
+    "labelColor": null,
+    "quantity": 1,
+    "name": "Lightning Bolt",
+    "setCode": "lea",
+    "setName": "Limited Edition Alpha",
+    "collectorNumber": "161",
+    "lang": "en",
+    "needsReview": null,
+    "oracleId": "o-Lightning Bolt",
+    "manaCost": "{R}",
+    "cmc": 1,
+    "typeLine": "Instant",
+    "oracleText": null,
+    "colors": "R",
+    "colorIdentity": "R",
+    "producedMana": "",
+    "legalities": "{\"modern\":\"legal\",\"vintage\":\"legal\",\"commander\":\"legal\",\"oathbreaker\":\"legal\",\"brawl\":\"legal\",\"paupercommander\":\"legal\",\"duel\":\"legal\",\"oldschool\":\"legal\",\"tlr\":\"legal\"}",
+    "power": null,
+    "toughness": null,
+    "layout": "normal",
+    "rarity": "common",
+    "faces": null,
+    "gameChanger": false,
+    "finishes": null,
+    "everUncommon": false,
+    "unitPrice": null,
+    "ownedQuantity": 0
+  },
+  "cases": [
+    {
+      "name": "an empty deck",
+      "cards": [],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a deck that flags nothing",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Grizzly Bears",
+          "name": "Grizzly Bears",
+          "oracleId": "o-Grizzly Bears",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Creature — Bear",
+          "oracleText": "",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Rampant Growth",
+          "name": "Rampant Growth",
+          "oracleId": "o-Rampant Growth",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Sorcery",
+          "oracleText": "Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "tutors are no signal",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Demonic Tutor",
+          "name": "Demonic Tutor",
+          "oracleId": "o-Demonic Tutor",
+          "manaCost": "{1}{B}",
+          "cmc": 2,
+          "typeLine": "Sorcery",
+          "oracleText": "Search your library for a card, put that card into your hand, then shuffle.",
+          "colors": "B",
+          "colorIdentity": "B"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Vampiric Tutor",
+          "name": "Vampiric Tutor",
+          "oracleId": "o-Vampiric Tutor",
+          "manaCost": "{B}",
+          "oracleText": "Search your library for a card, then shuffle and put that card on top. You lose 2 life.",
+          "colors": "B",
+          "colorIdentity": "B"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Rampant Growth",
+          "name": "Rampant Growth",
+          "oracleId": "o-Rampant Growth",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Sorcery",
+          "oracleText": "Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a row whose game changer flag is unknown",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Gone Card",
+          "name": "Gone Card",
+          "oracleId": "o-Gone Card",
+          "gameChanger": null
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "one game changer",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Rhystic Study"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Rhystic Study"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 Game Changer: Rhystic Study"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "three game changers",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-The One Ring",
+          "name": "The One Ring",
+          "oracleId": "o-The One Ring",
+          "manaCost": "{4}",
+          "cmc": 4,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 3,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift",
+          "The One Ring"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift",
+              "The One Ring"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "3 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (3 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (3 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "four game changers",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-The One Ring",
+          "name": "The One Ring",
+          "oracleId": "o-The One Ring",
+          "manaCost": "{4}",
+          "cmc": 4,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Ancient Tomb",
+          "name": "Ancient Tomb",
+          "oracleId": "o-Ancient Tomb",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "{T}: Add {C}{C}. This land deals 2 damage to you.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 5,
+          "cardId": "c-Grizzly Bears",
+          "name": "Grizzly Bears",
+          "oracleId": "o-Grizzly Bears",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Creature — Bear",
+          "oracleText": "",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 6,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 4,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift",
+          "The One Ring",
+          "Ancient Tomb"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 4,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift",
+              "The One Ring",
+              "Ancient Tomb"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "five game changers name three and count the rest",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-The One Ring",
+          "name": "The One Ring",
+          "oracleId": "o-The One Ring",
+          "manaCost": "{4}",
+          "cmc": 4,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Ancient Tomb",
+          "name": "Ancient Tomb",
+          "oracleId": "o-Ancient Tomb",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "{T}: Add {C}{C}. This land deals 2 damage to you.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 5,
+          "cardId": "c-Demonic Tutor",
+          "name": "Demonic Tutor",
+          "oracleId": "o-Demonic Tutor",
+          "manaCost": "{1}{B}",
+          "cmc": 2,
+          "typeLine": "Sorcery",
+          "oracleText": "Search your library for a card, put that card into your hand, then shuffle.",
+          "colors": "B",
+          "colorIdentity": "B",
+          "rarity": "uncommon",
+          "gameChanger": true
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 5,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift",
+          "The One Ring",
+          "Ancient Tomb",
+          "Demonic Tutor"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 4,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift",
+              "The One Ring",
+              "Ancient Tomb",
+              "Demonic Tutor"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "5 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 2 more"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (5 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 2 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (5 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 2 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (5 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 2 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "every game changer in the fixtures",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-The One Ring",
+          "name": "The One Ring",
+          "oracleId": "o-The One Ring",
+          "manaCost": "{4}",
+          "cmc": 4,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Ancient Tomb",
+          "name": "Ancient Tomb",
+          "oracleId": "o-Ancient Tomb",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "{T}: Add {C}{C}. This land deals 2 damage to you.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 5,
+          "cardId": "c-Demonic Tutor",
+          "name": "Demonic Tutor",
+          "oracleId": "o-Demonic Tutor",
+          "manaCost": "{1}{B}",
+          "cmc": 2,
+          "typeLine": "Sorcery",
+          "oracleText": "Search your library for a card, put that card into your hand, then shuffle.",
+          "colors": "B",
+          "colorIdentity": "B",
+          "rarity": "uncommon",
+          "gameChanger": true
+        },
+        {
+          "id": 6,
+          "cardId": "c-Smothering Tithe",
+          "name": "Smothering Tithe",
+          "oracleId": "o-Smothering Tithe",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you create a Treasure token. (It's an artifact with \"{T}, Sacrifice this token: Add one mana of any color.\")",
+          "colors": "W",
+          "colorIdentity": "W",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 7,
+          "cardId": "c-Mox Diamond",
+          "name": "Mox Diamond",
+          "oracleId": "o-Mox Diamond",
+          "manaCost": "{0}",
+          "cmc": 0,
+          "typeLine": "Artifact",
+          "oracleText": "If this artifact would enter, you may discard a land card instead. If you do, put this artifact onto the battlefield. If you don't, put it into its owner's graveyard.\n{T}: Add one mana of any color.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "rare",
+          "gameChanger": true
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 7,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift",
+          "The One Ring",
+          "Ancient Tomb",
+          "Demonic Tutor",
+          "Smothering Tithe",
+          "Mox Diamond"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 4,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift",
+              "The One Ring",
+              "Ancient Tomb",
+              "Demonic Tutor",
+              "Smothering Tithe",
+              "Mox Diamond"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a game changer in two piles is one card",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Rhystic Study",
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Rhystic Study"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Rhystic Study"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 Game Changer: Rhystic Study"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a game changer on the switched-off maybeboard",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "categoryId": 5,
+          "categoryName": "Maybeboard",
+          "categoryKind": "maybe",
+          "categoryActive": false,
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a game changer on a switched-on maybeboard",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "categoryId": 5,
+          "categoryName": "Maybeboard",
+          "categoryKind": "maybe",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Rhystic Study"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Rhystic Study"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 Game Changer: Rhystic Study"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a game changer in a main pile switched off",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Cyclonic Rift",
+          "categoryActive": false,
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a name's first active row is the one read",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Rhystic Study",
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Armageddon",
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "colors": "W",
+          "colorIdentity": "W"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Armageddon"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Armageddon"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a switched-off first row gives way to an active one",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "categoryActive": false,
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Rhystic Study",
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-Time Warp",
+          "categoryActive": false,
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Time Warp",
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "colors": "U",
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Rhystic Study"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Rhystic Study"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 Game Changer: Rhystic Study"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (1 Game Changer: Rhystic Study). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "armageddon",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Grizzly Bears",
+          "name": "Grizzly Bears",
+          "oracleId": "o-Grizzly Bears",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Creature — Bear",
+          "oracleText": "",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Armageddon"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Armageddon"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "the four printed shapes of mass land denial",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Jokulhaups",
+          "name": "Jokulhaups",
+          "oracleId": "o-Jokulhaups",
+          "manaCost": "{4}{R}{R}",
+          "cmc": 6,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all artifacts, creatures, and lands. They can't be regenerated."
+        },
+        {
+          "id": 3,
+          "cardId": "c-Ruination",
+          "name": "Ruination",
+          "oracleId": "o-Ruination",
+          "manaCost": "{3}{R}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all nonbasic lands."
+        },
+        {
+          "id": 4,
+          "cardId": "c-Wildfire",
+          "name": "Wildfire",
+          "oracleId": "o-Wildfire",
+          "manaCost": "{4}{R}{R}",
+          "cmc": 6,
+          "typeLine": "Sorcery",
+          "oracleText": "Each player sacrifices four lands of their choice. Wildfire deals 4 damage to each creature."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Armageddon",
+          "Jokulhaups",
+          "Ruination",
+          "Wildfire"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon",
+              "Jokulhaups",
+              "Ruination",
+              "Wildfire"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Armageddon, Jokulhaups, Ruination and 1 more"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Armageddon, Jokulhaups, Ruination and 1 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Armageddon, Jokulhaups, Ruination and 1 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Armageddon, Jokulhaups, Ruination and 1 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "table-facing sacrifices",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Death Cloud",
+          "name": "Death Cloud",
+          "oracleId": "o-Death Cloud",
+          "manaCost": "{X}{B}{B}{B}",
+          "cmc": 3,
+          "typeLine": "Sorcery",
+          "oracleText": "Each player loses X life, discards X cards, sacrifices X creatures, then sacrifices X lands.",
+          "colors": "B",
+          "colorIdentity": "B"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Pox",
+          "name": "Pox",
+          "oracleId": "o-Pox",
+          "manaCost": "{B}{B}{B}",
+          "cmc": 3,
+          "typeLine": "Sorcery",
+          "oracleText": "Each player loses a third of their life, rounded up. Then each player discards a third of the cards in their hand, rounded up. Then each player sacrifices a third of the creatures they control, rounded up. Then each player sacrifices a third of the lands they control, rounded up.",
+          "colors": "B",
+          "colorIdentity": "B"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Death Cloud",
+          "Pox"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Death Cloud",
+              "Pox"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Death Cloud, Pox"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Death Cloud, Pox). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Death Cloud, Pox). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Death Cloud, Pox). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "denial with a remainder",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Keldon Firebombers",
+          "name": "Keldon Firebombers",
+          "oracleId": "o-Keldon Firebombers",
+          "manaCost": "{3}{R}",
+          "cmc": 4,
+          "typeLine": "Creature — Human Rebel",
+          "oracleText": "When this creature enters, each player sacrifices all lands they control except for three."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Keldon Firebombers"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Keldon Firebombers"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Keldon Firebombers"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Keldon Firebombers). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Keldon Firebombers). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Keldon Firebombers). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a sweeper that spares lands",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Scourglass",
+          "name": "Scourglass",
+          "oracleId": "o-Scourglass",
+          "manaCost": "{3}{W}{W}",
+          "cmc": 5,
+          "typeLine": "Artifact",
+          "oracleText": "{T}, Sacrifice this artifact: Destroy all permanents except for artifacts and lands. Activate only during your turn, before attackers are declared.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Wrath of God",
+          "name": "Wrath of God",
+          "oracleId": "o-Wrath of God",
+          "manaCost": "{2}{W}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all creatures. They can't be regenerated.",
+          "colors": "W",
+          "colorIdentity": "W"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "sacrificing your own lands is a cost",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lotus Field",
+          "name": "Lotus Field",
+          "oracleId": "o-Lotus Field",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "Hexproof\nThis land enters tapped.\nWhen this land enters, sacrifice two lands.\n{T}: Add three mana of any one color.",
+          "colors": null,
+          "colorIdentity": ""
+        },
+        {
+          "id": 2,
+          "cardId": "c-Lotus Vale",
+          "name": "Lotus Vale",
+          "oracleId": "o-Lotus Vale",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "If this land would enter, sacrifice two untapped lands instead. If you do, put this land onto the battlefield. If you don't, put it into its owner's graveyard.\n{T}: Add three mana of any one color.",
+          "colors": null,
+          "colorIdentity": ""
+        },
+        {
+          "id": 3,
+          "cardId": "c-Devastating Summons",
+          "name": "Devastating Summons",
+          "oracleId": "o-Devastating Summons",
+          "typeLine": "Sorcery",
+          "oracleText": "As an additional cost to cast this spell, sacrifice X lands.\nCreate two X/X red Elemental creature tokens."
+        },
+        {
+          "id": 4,
+          "cardId": "c-Zuran Orb",
+          "name": "Zuran Orb",
+          "oracleId": "o-Zuran Orb",
+          "manaCost": "{0}",
+          "cmc": 0,
+          "typeLine": "Artifact",
+          "oracleText": "Sacrifice a land: You gain 2 life.",
+          "colors": null,
+          "colorIdentity": ""
+        },
+        {
+          "id": 5,
+          "cardId": "c-Edge: kicker",
+          "name": "Edge: kicker",
+          "oracleId": "o-Edge: kicker",
+          "typeLine": "Sorcery",
+          "oracleText": "Kicker—Sacrifice two lands. (You may sacrifice two lands in addition to any other costs as you cast this spell.)\nCreate a 3/3 green Beast creature token. If this spell was kicked, destroy all creatures instead."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "destroy all and lands in two sentences",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Bontu's Last Reckoning",
+          "name": "Bontu's Last Reckoning",
+          "oracleId": "o-Bontu's Last Reckoning",
+          "manaCost": "{1}{B}{B}",
+          "cmc": 3,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all creatures. Lands you control don't untap during your next untap step.",
+          "colors": "B",
+          "colorIdentity": "B"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "islands and homelands are not lands",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Walk the Aeons",
+          "name": "Walk the Aeons",
+          "oracleId": "o-Walk the Aeons",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra turn after this one.\nBuyback—Sacrifice three Islands. (You may sacrifice three Islands in addition to any other costs as you cast this spell. If you do, put this card into your hand as it resolves.)",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Boil",
+          "name": "Boil",
+          "oracleId": "o-Boil",
+          "manaCost": "{3}{R}",
+          "cmc": 4,
+          "oracleText": "Destroy all Islands."
+        },
+        {
+          "id": 3,
+          "cardId": "c-Apocalypse Chime",
+          "name": "Apocalypse Chime",
+          "oracleId": "o-Apocalypse Chime",
+          "manaCost": "{2}",
+          "cmc": 2,
+          "typeLine": "Artifact",
+          "oracleText": "{2}, {T}, Sacrifice this artifact: Destroy all nontoken permanents with a name originally printed in the Homelands expansion. They can't be regenerated.",
+          "colors": null,
+          "colorIdentity": ""
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Walk the Aeons"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Walk the Aeons"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Walk the Aeons"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Walk the Aeons). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "highlands are not lands",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: highlands",
+          "name": "Edge: highlands",
+          "oracleId": "o-Edge: highlands",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all Highlands."
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: each highlands",
+          "name": "Edge: each highlands",
+          "oracleId": "o-Edge: each highlands",
+          "typeLine": "Sorcery",
+          "oracleText": "Each player sacrifices all Highlands they control."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "javascript's ascii word boundary",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: non-ascii before",
+          "name": "Edge: non-ascii before",
+          "oracleId": "o-Edge: non-ascii before",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all élands."
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: non-ascii after",
+          "name": "Edge: non-ascii after",
+          "oracleId": "o-Edge: non-ascii after",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all landsé."
+        },
+        {
+          "id": 3,
+          "cardId": "c-Edge: underscore before",
+          "name": "Edge: underscore before",
+          "oracleId": "o-Edge: underscore before",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all _lands."
+        },
+        {
+          "id": 4,
+          "cardId": "c-Edge: digit after",
+          "name": "Edge: digit after",
+          "oracleId": "o-Edge: digit after",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands2."
+        },
+        {
+          "id": 5,
+          "cardId": "c-Edge: dash after",
+          "name": "Edge: dash after",
+          "oracleId": "o-Edge: dash after",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands—now."
+        },
+        {
+          "id": 6,
+          "cardId": "c-Edge: landscape",
+          "name": "Edge: landscape",
+          "oracleId": "o-Edge: landscape",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all landscapes."
+        },
+        {
+          "id": 7,
+          "cardId": "c-Edge: uppercase",
+          "name": "Edge: uppercase",
+          "oracleId": "o-Edge: uppercase",
+          "typeLine": "Sorcery",
+          "oracleText": "DESTROY ALL LANDS!"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Edge: non-ascii before",
+          "Edge: non-ascii after",
+          "Edge: dash after",
+          "Edge: uppercase"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Edge: non-ascii before",
+              "Edge: non-ascii after",
+              "Edge: dash after",
+              "Edge: uppercase"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Edge: non-ascii before, Edge: non-ascii after, Edge: dash after and 1 more"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Edge: non-ascii before, Edge: non-ascii after, Edge: dash after and 1 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Edge: non-ascii before, Edge: non-ascii after, Edge: dash after and 1 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Edge: non-ascii before, Edge: non-ascii after, Edge: dash after and 1 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "an except decides by what comes first",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: lands before except",
+          "name": "Edge: lands before except",
+          "oracleId": "o-Edge: lands before except",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands except Islands."
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: except inside a word",
+          "name": "Edge: except inside a word",
+          "oracleId": "o-Edge: except inside a word",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all exceptional lands."
+        },
+        {
+          "id": 3,
+          "cardId": "c-Edge: lands on both sides",
+          "name": "Edge: lands on both sides",
+          "oracleId": "o-Edge: lands on both sides",
+          "typeLine": "Sorcery",
+          "oracleText": "Each player sacrifices lands except for lands they tapped."
+        },
+        {
+          "id": 4,
+          "cardId": "c-Edge: lands then exceptlands",
+          "name": "Edge: lands then exceptlands",
+          "oracleId": "o-Edge: lands then exceptlands",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all landsexcept lands."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Edge: lands before except",
+          "Edge: lands on both sides",
+          "Edge: lands then exceptlands"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Edge: lands before except",
+              "Edge: lands on both sides",
+              "Edge: lands then exceptlands"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Edge: lands before except, Edge: lands on both sides, Edge: lands then exceptlands"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Edge: lands before except, Edge: lands on both sides, Edge: lands then exceptlands). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Edge: lands before except, Edge: lands on both sides, Edge: lands then exceptlands). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Edge: lands before except, Edge: lands on both sides, Edge: lands then exceptlands). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "all lands is table-facing on its own",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: sacrifice all lands",
+          "name": "Edge: sacrifice all lands",
+          "oracleId": "o-Edge: sacrifice all lands",
+          "typeLine": "Sorcery",
+          "oracleText": "Sacrifice all lands you control."
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: each opponent",
+          "name": "Edge: each opponent",
+          "oracleId": "o-Edge: each opponent",
+          "typeLine": "Sorcery",
+          "oracleText": "Each opponent sacrifices two lands."
+        },
+        {
+          "id": 3,
+          "cardId": "c-Edge: sacrific stem",
+          "name": "Edge: sacrific stem",
+          "oracleId": "o-Edge: sacrific stem",
+          "typeLine": "Sorcery",
+          "oracleText": "Each player sacrificed lands this turn."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Edge: sacrifice all lands",
+          "Edge: each opponent",
+          "Edge: sacrific stem"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Edge: sacrifice all lands",
+              "Edge: each opponent",
+              "Edge: sacrific stem"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Edge: sacrifice all lands, Edge: each opponent, Edge: sacrific stem"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Edge: sacrifice all lands, Edge: each opponent, Edge: sacrific stem). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Edge: sacrifice all lands, Edge: each opponent, Edge: sacrific stem). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Edge: sacrifice all lands, Edge: each opponent, Edge: sacrific stem). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "one extra-turn card",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Grizzly Bears",
+          "name": "Grizzly Bears",
+          "oracleId": "o-Grizzly Bears",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Creature — Bear",
+          "oracleText": "",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Time Warp"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Time Warp"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Time Warp). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "two extra-turn cards",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "2 extra-turn cards: Time Warp, Nexus of Fate"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (2 extra-turn cards: Time Warp, Nexus of Fate). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "three extra-turn cards",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Temporal Manipulation",
+          "name": "Temporal Manipulation",
+          "oracleId": "o-Temporal Manipulation",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate",
+          "Temporal Manipulation"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 4,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate",
+              "Temporal Manipulation"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "four extra-turn cards name three and count the rest",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Temporal Manipulation",
+          "name": "Temporal Manipulation",
+          "oracleId": "o-Temporal Manipulation",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Capture of Jingzhou",
+          "name": "Capture of Jingzhou",
+          "oracleId": "o-Capture of Jingzhou",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate",
+          "Temporal Manipulation",
+          "Capture of Jingzhou"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 4,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate",
+              "Temporal Manipulation",
+              "Capture of Jingzhou"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "4 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation and 1 more"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (4 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation and 1 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (4 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation and 1 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (4 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation and 1 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "an extra-turn card in two piles is one card",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Time Warp",
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "2 extra-turn cards: Time Warp, Nexus of Fate"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (2 extra-turn cards: Time Warp, Nexus of Fate). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "an extra-turn card on the switched-off maybeboard",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "categoryId": 5,
+          "categoryName": "Maybeboard",
+          "categoryKind": "maybe",
+          "categoryActive": false,
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Grizzly Bears",
+          "name": "Grizzly Bears",
+          "oracleId": "o-Grizzly Bears",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Creature — Bear",
+          "oracleText": "",
+          "colors": "G",
+          "colorIdentity": "G"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "two extra turns on one card",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Stretch",
+          "name": "Time Stretch",
+          "oracleId": "o-Time Stretch",
+          "manaCost": "{8}{U}{U}",
+          "cmc": 10,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes two extra turns after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Stretch"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Time Stretch"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Time Stretch"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Time Stretch). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "cards that only deny extra turns",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Stranglehold",
+          "name": "Stranglehold",
+          "oracleId": "o-Stranglehold",
+          "manaCost": "{2}{R}{R}",
+          "cmc": 4,
+          "typeLine": "Enchantment",
+          "oracleText": "Your opponents can't search libraries.\nIf an opponent would begin an extra turn, that player skips that turn instead."
+        },
+        {
+          "id": 2,
+          "cardId": "c-Trouble in Pairs",
+          "name": "Trouble in Pairs",
+          "oracleId": "o-Trouble in Pairs",
+          "manaCost": "{2}{W}{W}",
+          "cmc": 4,
+          "typeLine": "Enchantment",
+          "oracleText": "If an opponent would begin an extra turn, that player skips that turn instead.\nWhenever an opponent attacks you with two or more creatures, draws their second card each turn, or casts their second spell each turn, you draw a card.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Gerrard's Hourglass Pendant",
+          "name": "Gerrard's Hourglass Pendant",
+          "oracleId": "o-Gerrard's Hourglass Pendant",
+          "manaCost": "{1}",
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Flash\nIf a player would begin an extra turn, that player skips that turn instead.\n{1}, {T}, Exile Gerrard's Hourglass Pendant: Return to the battlefield tapped all artifact, creature, enchantment, and land cards in your graveyard that were put there from anywhere this turn.",
+          "colors": null,
+          "colorIdentity": ""
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a card that denies and then takes an extra turn",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Ugin's Nexus",
+          "name": "Ugin's Nexus",
+          "oracleId": "o-Ugin's Nexus",
+          "manaCost": "{5}",
+          "cmc": 5,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "If a player would begin an extra turn, that player skips that turn instead.\nIf Ugin's Nexus would be put into a graveyard from the battlefield, instead exile it and take an extra turn after this one.",
+          "colors": null,
+          "colorIdentity": ""
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Ugin's Nexus"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Ugin's Nexus"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Ugin's Nexus"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Ugin's Nexus). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a denial is read inside one clause",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: denial split by a line",
+          "name": "Edge: denial split by a line",
+          "oracleId": "o-Edge: denial split by a line",
+          "typeLine": "Sorcery",
+          "oracleText": "If a player would begin an extra turn\nthat player skips that turn instead."
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: skip then instead",
+          "name": "Edge: skip then instead",
+          "oracleId": "o-Edge: skip then instead",
+          "typeLine": "Sorcery",
+          "oracleText": "That player skips that turn instead of taking an extra turn."
+        },
+        {
+          "id": 3,
+          "cardId": "c-Edge: turn instead of a skip",
+          "name": "Edge: turn instead of a skip",
+          "oracleId": "o-Edge: turn instead of a skip",
+          "typeLine": "Sorcery",
+          "oracleText": "If a player would skip a turn, that player takes an extra turn instead."
+        },
+        {
+          "id": 4,
+          "cardId": "c-Edge: skip before the turn",
+          "name": "Edge: skip before the turn",
+          "oracleId": "o-Edge: skip before the turn",
+          "typeLine": "Sorcery",
+          "oracleText": "A player who skips that turn takes an extra turn."
+        },
+        {
+          "id": 5,
+          "cardId": "c-Edge: no space",
+          "name": "Edge: no space",
+          "oracleId": "o-Edge: no space",
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extraturn."
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Edge: denial split by a line",
+          "Edge: turn instead of a skip",
+          "Edge: skip before the turn"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 4,
+            "cards": [
+              "Edge: denial split by a line",
+              "Edge: turn instead of a skip",
+              "Edge: skip before the turn"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "3 extra-turn cards: Edge: denial split by a line, Edge: turn instead of a skip, Edge: skip before the turn"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (3 extra-turn cards: Edge: denial split by a line, Edge: turn instead of a skip, Edge: skip before the turn). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (3 extra-turn cards: Edge: denial split by a line, Edge: turn instead of a skip, Edge: skip before the turn). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (3 extra-turn cards: Edge: denial split by a line, Edge: turn instead of a skip, Edge: skip before the turn). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "an mdfc whose text is on its faces",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Ravage // Ruin",
+          "name": "Ravage // Ruin",
+          "oracleId": "o-Ravage // Ruin",
+          "layout": "modal_dfc",
+          "faces": "[{\"name\":\"Ravage\",\"oracle_text\":\"Destroy all lands.\"},{\"name\":\"Ruin\",\"oracle_text\":\"Ruin enters tapped.\"}]"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Ravage // Ruin"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Ravage // Ruin"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Ravage // Ruin"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Ravage // Ruin). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Ravage // Ruin). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Ravage // Ruin). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a back face takes the extra turn",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Front // Back",
+          "name": "Front // Back",
+          "oracleId": "o-Front // Back",
+          "oracleText": "Draw a card.",
+          "layout": "transform",
+          "faces": "[{\"oracle_text\":\"Draw a card.\"},{\"oracle_text\":\"Take an extra turn after this one.\"}]"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Front // Back"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Front // Back"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Front // Back"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Front // Back). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "unreadable faces are no faces",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: not json",
+          "name": "Edge: not json",
+          "oracleId": "o-Edge: not json",
+          "typeLine": "Sorcery",
+          "faces": "{not json"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: empty string",
+          "name": "Edge: empty string",
+          "oracleId": "o-Edge: empty string",
+          "typeLine": "Sorcery",
+          "faces": ""
+        },
+        {
+          "id": 3,
+          "cardId": "c-Edge: an object",
+          "name": "Edge: an object",
+          "oracleId": "o-Edge: an object",
+          "typeLine": "Sorcery",
+          "faces": "{\"oracle_text\":\"Destroy all lands.\"}"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Edge: a string",
+          "name": "Edge: a string",
+          "oracleId": "o-Edge: a string",
+          "typeLine": "Sorcery",
+          "faces": "\"Destroy all lands.\""
+        },
+        {
+          "id": 5,
+          "cardId": "c-Edge: bad json but good text",
+          "name": "Edge: bad json but good text",
+          "oracleId": "o-Edge: bad json but good text",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "faces": "["
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Edge: bad json but good text"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Edge: bad json but good text"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Edge: bad json but good text"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Edge: bad json but good text). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Edge: bad json but good text). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Edge: bad json but good text). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "faces without a string oracle text add nothing",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: odd faces",
+          "name": "Edge: odd faces",
+          "oracleId": "o-Edge: odd faces",
+          "typeLine": "Sorcery",
+          "faces": "[null,3,\"Destroy all lands.\",[\"Destroy all lands.\"],{\"oracle_text\":7},{\"oracle_text\":null},{\"name\":\"No text\"}]"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "each face is its own line",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: split across faces",
+          "name": "Edge: split across faces",
+          "oracleId": "o-Edge: split across faces",
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all",
+          "faces": "[{\"oracle_text\":\"lands.\"}]"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: extra across faces",
+          "name": "Edge: extra across faces",
+          "oracleId": "o-Edge: extra across faces",
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra",
+          "faces": "[{\"oracle_text\":\"turn after this one.\"}]"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a repeated key in a face is its last value",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Edge: last is text",
+          "name": "Edge: last is text",
+          "oracleId": "o-Edge: last is text",
+          "typeLine": "Sorcery",
+          "faces": "[{\"oracle_text\": 5, \"oracle_text\": \"Take an extra turn after this one.\"}]"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Edge: last is a number",
+          "name": "Edge: last is a number",
+          "oracleId": "o-Edge: last is a number",
+          "typeLine": "Sorcery",
+          "faces": "[{\"oracle_text\": \"Destroy all lands.\", \"oracle_text\": 5}]"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Edge: last is text"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Edge: last is text"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Edge: last is text"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Edge: last is text). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "a combo tagged R",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "R",
+          "cards": [
+            "Thassa's Oracle",
+            "Demonic Consultation"
+          ],
+          "templateCount": 0,
+          "produces": "Win the game",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "R",
+            "cards": [
+              "Thassa's Oracle",
+              "Demonic Consultation"
+            ],
+            "templateCount": 0,
+            "produces": "Win the game",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Thassa's Oracle",
+              "Demonic Consultation"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "R",
+              "cards": [
+                "Thassa's Oracle",
+                "Demonic Consultation"
+              ],
+              "templateCount": 0,
+              "produces": "Win the game",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Thassa's Oracle + Demonic Consultation"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo tagged S",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "S",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "S",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 3,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "S",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo tagged P",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "P",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": null
+        }
+      ],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "P",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": null
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 3,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "P",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": null
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo tagged O",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "O",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "O",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 2,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "O",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo tagged C",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "C",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "C",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 2,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "C",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo tagged E raises nothing and is still listed",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "E",
+          "cards": [
+            "Squirrel Nest",
+            "Earthcraft"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "E",
+            "cards": [
+              "Squirrel Nest",
+              "Earthcraft"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo tagged B raises nothing and is still listed",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "B",
+          "cards": [
+            "Flash",
+            "Protean Hulk"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "B",
+            "cards": [
+              "Flash",
+              "Protean Hulk"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        []
+      ]
+    },
+    {
+      "name": "letters this build does not know raise nothing",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "Z",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-2",
+          "bracketTag": "r",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-3",
+          "bracketTag": "",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "Z",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-2",
+            "bracketTag": "r",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-3",
+            "bracketTag": "",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo that needs a template is only possible",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "R",
+          "cards": [
+            "Kiki-Jiki, Mirror Breaker"
+          ],
+          "templateCount": 1,
+          "produces": "Infinite creature tokens",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [
+          {
+            "id": "v-1",
+            "bracketTag": "R",
+            "cards": [
+              "Kiki-Jiki, Mirror Breaker"
+            ],
+            "templateCount": 1,
+            "produces": "Infinite creature tokens",
+            "popularity": 4200
+          }
+        ],
+        "reasons": []
+      },
+      "reasons": [],
+      "warnings": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a mixed combo list splits on a template count of zero",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "P",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-2",
+          "bracketTag": "R",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 2,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-3",
+          "bracketTag": "R",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": -1,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-4",
+          "bracketTag": "E",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "P",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-4",
+            "bracketTag": "E",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [
+          {
+            "id": "v-2",
+            "bracketTag": "R",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 2,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-3",
+            "bracketTag": "R",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": -1,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 3,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "P",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          3,
+          4,
+          5
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "several combos at the floor are several reasons",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "C",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-2",
+          "bracketTag": "R",
+          "cards": [
+            "Thassa's Oracle",
+            "Demonic Consultation"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-3",
+          "bracketTag": "O",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-4",
+          "bracketTag": "R",
+          "cards": [
+            "Dramatic Reversal",
+            "Isochron Scepter"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "C",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-2",
+            "bracketTag": "R",
+            "cards": [
+              "Thassa's Oracle",
+              "Demonic Consultation"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-3",
+            "bracketTag": "O",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-4",
+            "bracketTag": "R",
+            "cards": [
+              "Dramatic Reversal",
+              "Isochron Scepter"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Thassa's Oracle",
+              "Demonic Consultation"
+            ],
+            "combo": {
+              "id": "v-2",
+              "bracketTag": "R",
+              "cards": [
+                "Thassa's Oracle",
+                "Demonic Consultation"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          },
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Dramatic Reversal",
+              "Isochron Scepter"
+            ],
+            "combo": {
+              "id": "v-4",
+              "bracketTag": "R",
+              "cards": [
+                "Dramatic Reversal",
+                "Isochron Scepter"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Thassa's Oracle + Demonic Consultation",
+        "the combo Dramatic Reversal + Isochron Scepter"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          2,
+          3,
+          4,
+          5
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          2,
+          3,
+          4,
+          5
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo names all of its cards",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "R",
+          "cards": [
+            "Thassa's Oracle",
+            "Demonic Consultation",
+            "Lotus Petal",
+            "Brainstorm"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "R",
+            "cards": [
+              "Thassa's Oracle",
+              "Demonic Consultation",
+              "Lotus Petal",
+              "Brainstorm"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Thassa's Oracle",
+              "Demonic Consultation",
+              "Lotus Petal",
+              "Brainstorm"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "R",
+              "cards": [
+                "Thassa's Oracle",
+                "Demonic Consultation",
+                "Lotus Petal",
+                "Brainstorm"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Thassa's Oracle + Demonic Consultation + Lotus Petal + Brainstorm"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation + Lotus Petal + Brainstorm). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation + Lotus Petal + Brainstorm). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (the combo Thassa's Oracle + Demonic Consultation + Lotus Petal + Brainstorm). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a one-card combo",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "S",
+          "cards": [
+            "Kiki-Jiki, Mirror Breaker"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": null
+        }
+      ],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "S",
+            "cards": [
+              "Kiki-Jiki, Mirror Breaker"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": null
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 3,
+            "cards": [
+              "Kiki-Jiki, Mirror Breaker"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "S",
+              "cards": [
+                "Kiki-Jiki, Mirror Breaker"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": null
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Kiki-Jiki, Mirror Breaker"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (the combo Kiki-Jiki, Mirror Breaker). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (the combo Kiki-Jiki, Mirror Breaker). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo outranks the cards",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "R",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Rhystic Study"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "R",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "R",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "the cards outrank a combo",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "C",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [
+          "Armageddon"
+        ],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "C",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Armageddon"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a game changer and a combo tie at 3",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Smothering Tithe",
+          "name": "Smothering Tithe",
+          "oracleId": "o-Smothering Tithe",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you create a Treasure token. (It's an artifact with \"{T}, Sacrifice this token: Add one mana of any color.\")",
+          "colors": "W",
+          "colorIdentity": "W",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "P",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-2",
+          "bracketTag": "O",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Smothering Tithe"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "P",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-2",
+            "bracketTag": "O",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Smothering Tithe"
+            ]
+          },
+          {
+            "code": "combo",
+            "floor": 3,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "P",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "1 Game Changer: Smothering Tithe",
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (1 Game Changer: Smothering Tithe). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (1 Game Changer: Smothering Tithe). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          3,
+          4,
+          5
+        ],
+        [
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "an extra turn and a combo tie at 2",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "C",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp"
+        ],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "C",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 2,
+            "cards": [
+              "Time Warp"
+            ]
+          },
+          {
+            "code": "combo",
+            "floor": 2,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "C",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "1 extra-turn card: Time Warp",
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (1 extra-turn card: Time Warp). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a combo alone sets 2 with a reason",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Grizzly Bears",
+          "name": "Grizzly Bears",
+          "oracleId": "o-Grizzly Bears",
+          "manaCost": "{1}{G}",
+          "cmc": 2,
+          "typeLine": "Creature — Bear",
+          "oracleText": "",
+          "colors": "G",
+          "colorIdentity": "G"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "O",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 2,
+        "gameChangers": 0,
+        "gameChangerNames": [],
+        "massLandDenial": [],
+        "extraTurns": [],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "O",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "combo",
+            "floor": 2,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "O",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 2+ (the combo Basalt Monolith + Rings of Brighthearth). Mention it to your playgroup.",
+        null,
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          2,
+          3,
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "a game changer and mass land denial",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 1,
+        "gameChangerNames": [
+          "Rhystic Study"
+        ],
+        "massLandDenial": [
+          "Armageddon"
+        ],
+        "extraTurns": [],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "mass land denial: Armageddon"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (mass land denial: Armageddon). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "two game changers over an extra turn",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 3,
+        "gameChangers": 2,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 3,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "2 Game Changers: Rhystic Study, Cyclonic Rift"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 3+ (2 Game Changers: Rhystic Study, Cyclonic Rift). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 3+ (2 Game Changers: Rhystic Study, Cyclonic Rift). Mention it to your playgroup.",
+        null,
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "three extra turns over two game changers",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 5,
+          "cardId": "c-Temporal Manipulation",
+          "name": "Temporal Manipulation",
+          "oracleId": "o-Temporal Manipulation",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 2,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift"
+        ],
+        "massLandDenial": [],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate",
+          "Temporal Manipulation"
+        ],
+        "combos": [],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "extra-turns",
+            "floor": 4,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate",
+              "Temporal Manipulation"
+            ]
+          }
+        ]
+      },
+      "reasons": [
+        "3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": []
+    },
+    {
+      "name": "every rule at 4",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-The One Ring",
+          "name": "The One Ring",
+          "oracleId": "o-The One Ring",
+          "manaCost": "{4}",
+          "cmc": 4,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Ancient Tomb",
+          "name": "Ancient Tomb",
+          "oracleId": "o-Ancient Tomb",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "{T}: Add {C}{C}. This land deals 2 damage to you.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 5,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 6,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 7,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 8,
+          "cardId": "c-Temporal Manipulation",
+          "name": "Temporal Manipulation",
+          "oracleId": "o-Temporal Manipulation",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 9,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "R",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 4,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift",
+          "The One Ring",
+          "Ancient Tomb"
+        ],
+        "massLandDenial": [
+          "Armageddon"
+        ],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate",
+          "Temporal Manipulation"
+        ],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "R",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 4,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift",
+              "The One Ring",
+              "Ancient Tomb"
+            ]
+          },
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon"
+            ]
+          },
+          {
+            "code": "extra-turns",
+            "floor": 4,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate",
+              "Temporal Manipulation"
+            ]
+          },
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "R",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more",
+        "mass land denial: Armageddon",
+        "3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation",
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (4 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 1 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "never 5, whatever the deck holds",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Rhystic Study",
+          "name": "Rhystic Study",
+          "oracleId": "o-Rhystic Study",
+          "manaCost": "{2}{U}",
+          "cmc": 3,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+          "colors": "U",
+          "colorIdentity": "U",
+          "gameChanger": true
+        },
+        {
+          "id": 2,
+          "cardId": "c-Cyclonic Rift",
+          "name": "Cyclonic Rift",
+          "oracleId": "o-Cyclonic Rift",
+          "manaCost": "{1}{U}",
+          "cmc": 2,
+          "oracleText": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+          "colors": "U",
+          "colorIdentity": "U",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 3,
+          "cardId": "c-The One Ring",
+          "name": "The One Ring",
+          "oracleId": "o-The One Ring",
+          "manaCost": "{4}",
+          "cmc": 4,
+          "typeLine": "Legendary Artifact",
+          "oracleText": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 4,
+          "cardId": "c-Ancient Tomb",
+          "name": "Ancient Tomb",
+          "oracleId": "o-Ancient Tomb",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Land",
+          "oracleText": "{T}: Add {C}{C}. This land deals 2 damage to you.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 5,
+          "cardId": "c-Demonic Tutor",
+          "name": "Demonic Tutor",
+          "oracleId": "o-Demonic Tutor",
+          "manaCost": "{1}{B}",
+          "cmc": 2,
+          "typeLine": "Sorcery",
+          "oracleText": "Search your library for a card, put that card into your hand, then shuffle.",
+          "colors": "B",
+          "colorIdentity": "B",
+          "rarity": "uncommon",
+          "gameChanger": true
+        },
+        {
+          "id": 6,
+          "cardId": "c-Smothering Tithe",
+          "name": "Smothering Tithe",
+          "oracleId": "o-Smothering Tithe",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Enchantment",
+          "oracleText": "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you create a Treasure token. (It's an artifact with \"{T}, Sacrifice this token: Add one mana of any color.\")",
+          "colors": "W",
+          "colorIdentity": "W",
+          "rarity": "mythic",
+          "gameChanger": true
+        },
+        {
+          "id": 7,
+          "cardId": "c-Mox Diamond",
+          "name": "Mox Diamond",
+          "oracleId": "o-Mox Diamond",
+          "manaCost": "{0}",
+          "cmc": 0,
+          "typeLine": "Artifact",
+          "oracleText": "If this artifact would enter, you may discard a land card instead. If you do, put this artifact onto the battlefield. If you don't, put it into its owner's graveyard.\n{T}: Add one mana of any color.",
+          "colors": null,
+          "colorIdentity": "",
+          "rarity": "rare",
+          "gameChanger": true
+        },
+        {
+          "id": 8,
+          "cardId": "c-Armageddon",
+          "name": "Armageddon",
+          "oracleId": "o-Armageddon",
+          "manaCost": "{3}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all lands.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 9,
+          "cardId": "c-Jokulhaups",
+          "name": "Jokulhaups",
+          "oracleId": "o-Jokulhaups",
+          "manaCost": "{4}{R}{R}",
+          "cmc": 6,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all artifacts, creatures, and lands. They can't be regenerated."
+        },
+        {
+          "id": 10,
+          "cardId": "c-Time Warp",
+          "name": "Time Warp",
+          "oracleId": "o-Time Warp",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Target player takes an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 11,
+          "cardId": "c-Nexus of Fate",
+          "name": "Nexus of Fate",
+          "oracleId": "o-Nexus of Fate",
+          "manaCost": "{5}{U}{U}",
+          "cmc": 7,
+          "oracleText": "Take an extra turn after this one.\nIf Nexus of Fate would be put into a graveyard from anywhere, reveal Nexus of Fate and shuffle it into its owner's library instead.",
+          "colors": "U",
+          "colorIdentity": "U"
+        },
+        {
+          "id": 12,
+          "cardId": "c-Temporal Manipulation",
+          "name": "Temporal Manipulation",
+          "oracleId": "o-Temporal Manipulation",
+          "manaCost": "{3}{U}{U}",
+          "cmc": 5,
+          "typeLine": "Sorcery",
+          "oracleText": "Take an extra turn after this one.",
+          "colors": "U",
+          "colorIdentity": "U"
+        }
+      ],
+      "combos": [
+        {
+          "id": "v-1",
+          "bracketTag": "R",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        },
+        {
+          "id": "v-2",
+          "bracketTag": "R",
+          "cards": [
+            "Basalt Monolith",
+            "Rings of Brighthearth"
+          ],
+          "templateCount": 0,
+          "produces": "Infinite colorless mana",
+          "popularity": 4200
+        }
+      ],
+      "estimate": {
+        "floor": 4,
+        "gameChangers": 7,
+        "gameChangerNames": [
+          "Rhystic Study",
+          "Cyclonic Rift",
+          "The One Ring",
+          "Ancient Tomb",
+          "Demonic Tutor",
+          "Smothering Tithe",
+          "Mox Diamond"
+        ],
+        "massLandDenial": [
+          "Armageddon",
+          "Jokulhaups"
+        ],
+        "extraTurns": [
+          "Time Warp",
+          "Nexus of Fate",
+          "Temporal Manipulation"
+        ],
+        "combos": [
+          {
+            "id": "v-1",
+            "bracketTag": "R",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          },
+          {
+            "id": "v-2",
+            "bracketTag": "R",
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "templateCount": 0,
+            "produces": "Infinite colorless mana",
+            "popularity": 4200
+          }
+        ],
+        "possibleCombos": [],
+        "reasons": [
+          {
+            "code": "game-changers",
+            "floor": 4,
+            "cards": [
+              "Rhystic Study",
+              "Cyclonic Rift",
+              "The One Ring",
+              "Ancient Tomb",
+              "Demonic Tutor",
+              "Smothering Tithe",
+              "Mox Diamond"
+            ]
+          },
+          {
+            "code": "mass-land-denial",
+            "floor": 4,
+            "cards": [
+              "Armageddon",
+              "Jokulhaups"
+            ]
+          },
+          {
+            "code": "extra-turns",
+            "floor": 4,
+            "cards": [
+              "Time Warp",
+              "Nexus of Fate",
+              "Temporal Manipulation"
+            ]
+          },
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-1",
+              "bracketTag": "R",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          },
+          {
+            "code": "combo",
+            "floor": 4,
+            "cards": [
+              "Basalt Monolith",
+              "Rings of Brighthearth"
+            ],
+            "combo": {
+              "id": "v-2",
+              "bracketTag": "R",
+              "cards": [
+                "Basalt Monolith",
+                "Rings of Brighthearth"
+              ],
+              "templateCount": 0,
+              "produces": "Infinite colorless mana",
+              "popularity": 4200
+            }
+          }
+        ]
+      },
+      "reasons": [
+        "7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more",
+        "mass land denial: Armageddon, Jokulhaups",
+        "3 extra-turn cards: Time Warp, Nexus of Fate, Temporal Manipulation",
+        "the combo Basalt Monolith + Rings of Brighthearth",
+        "the combo Basalt Monolith + Rings of Brighthearth"
+      ],
+      "warnings": [
+        null,
+        "Set to bracket 1, but the cards suggest bracket 4+ (7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more). Mention it to your playgroup.",
+        "Set to bracket 2, but the cards suggest bracket 4+ (7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more). Mention it to your playgroup.",
+        "Set to bracket 3, but the cards suggest bracket 4+ (7 Game Changers: Rhystic Study, Cyclonic Rift, The One Ring and 4 more). Mention it to your playgroup.",
+        null,
+        null
+      ],
+      "comboBrackets": [
+        [
+          4,
+          5
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    }
+  ]
+}

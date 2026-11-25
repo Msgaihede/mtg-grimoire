@@ -1,0 +1,1328 @@
+{
+  "about": "Written by packages/ui/features/decks/golden/whole-deck.golden.test.ts from validateDeck and validateForMarks over decks with a companion; read by crates/grimoire-core/src/deck_rules/engine.rs. Never edit by hand.",
+  "base": {
+    "promoTypes": null,
+    "id": 0,
+    "cardId": "c-Lightning Bolt",
+    "categoryId": 1,
+    "categoryName": "Main deck",
+    "categoryKind": "main",
+    "categoryActive": true,
+    "variant": "live",
+    "finish": null,
+    "labelId": null,
+    "labelName": null,
+    "labelColor": null,
+    "quantity": 1,
+    "name": "Lightning Bolt",
+    "setCode": "lea",
+    "setName": "Limited Edition Alpha",
+    "collectorNumber": "161",
+    "lang": "en",
+    "needsReview": null,
+    "oracleId": "o-Lightning Bolt",
+    "manaCost": "{R}",
+    "cmc": 1,
+    "typeLine": "Instant",
+    "oracleText": null,
+    "colors": "R",
+    "colorIdentity": "R",
+    "producedMana": "",
+    "legalities": "{\"modern\":\"legal\",\"vintage\":\"legal\",\"commander\":\"legal\",\"oathbreaker\":\"legal\",\"brawl\":\"legal\",\"paupercommander\":\"legal\",\"duel\":\"legal\",\"oldschool\":\"legal\",\"tlr\":\"legal\"}",
+    "power": null,
+    "toughness": null,
+    "layout": "normal",
+    "rarity": "common",
+    "faces": null,
+    "gameChanger": false,
+    "finishes": null,
+    "everUncommon": false,
+    "unitPrice": null,
+    "ownedQuantity": 0
+  },
+  "specs": {
+    "modern": {
+      "key": "modern",
+      "displayName": "Modern",
+      "enabledInPicker": true,
+      "deckMin": 60,
+      "deckMax": null,
+      "maxCopies": 4,
+      "sideboardMax": 15,
+      "singleton": false,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 7,
+      "games": [
+        "paper",
+        "mtgo"
+      ],
+      "validates": true
+    },
+    "vintage": {
+      "key": "vintage",
+      "displayName": "Vintage",
+      "enabledInPicker": true,
+      "deckMin": 60,
+      "deckMax": null,
+      "maxCopies": 4,
+      "sideboardMax": 15,
+      "singleton": false,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 10,
+      "games": [
+        "paper",
+        "mtgo"
+      ],
+      "validates": true
+    },
+    "gladiator": {
+      "key": "gladiator",
+      "displayName": "Gladiator",
+      "enabledInPicker": true,
+      "deckMin": 100,
+      "deckMax": null,
+      "maxCopies": 1,
+      "sideboardMax": 0,
+      "singleton": true,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": false,
+      "sortOrder": 5,
+      "games": [
+        "arena"
+      ],
+      "validates": true
+    },
+    "commander": {
+      "key": "commander",
+      "displayName": "Commander",
+      "enabledInPicker": true,
+      "deckMin": 100,
+      "deckMax": 100,
+      "maxCopies": 1,
+      "sideboardMax": 0,
+      "singleton": true,
+      "requiresCommander": true,
+      "commanderRule": "edh",
+      "life": 40,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 12,
+      "games": [
+        "paper"
+      ],
+      "validates": true
+    },
+    "oathbreaker": {
+      "key": "oathbreaker",
+      "displayName": "Oathbreaker",
+      "enabledInPicker": true,
+      "deckMin": 60,
+      "deckMax": 60,
+      "maxCopies": 1,
+      "sideboardMax": 0,
+      "singleton": true,
+      "requiresCommander": true,
+      "commanderRule": "oathbreaker",
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 13,
+      "games": [
+        "paper"
+      ],
+      "validates": true
+    },
+    "brawl": {
+      "key": "brawl",
+      "displayName": "Brawl",
+      "enabledInPicker": true,
+      "deckMin": 100,
+      "deckMax": 100,
+      "maxCopies": 1,
+      "sideboardMax": 0,
+      "singleton": true,
+      "requiresCommander": true,
+      "commanderRule": "brawl",
+      "life": 25,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 15,
+      "games": [
+        "arena"
+      ],
+      "validates": true
+    },
+    "paupercommander": {
+      "key": "paupercommander",
+      "displayName": "Pauper Commander",
+      "enabledInPicker": true,
+      "deckMin": 100,
+      "deckMax": 100,
+      "maxCopies": 1,
+      "sideboardMax": 0,
+      "singleton": true,
+      "requiresCommander": true,
+      "commanderRule": "pdh",
+      "life": 30,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 18,
+      "games": [
+        "paper"
+      ],
+      "validates": true
+    },
+    "duel": {
+      "key": "duel",
+      "displayName": "Duel Commander",
+      "enabledInPicker": true,
+      "deckMin": 100,
+      "deckMax": 100,
+      "maxCopies": 1,
+      "sideboardMax": 0,
+      "singleton": true,
+      "requiresCommander": true,
+      "commanderRule": "duel",
+      "life": 20,
+      "restrictedSemantic": "banned_as_commander",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 19,
+      "games": [
+        "paper"
+      ],
+      "validates": true
+    },
+    "oldschool": {
+      "key": "oldschool",
+      "displayName": "Old School",
+      "enabledInPicker": true,
+      "deckMin": 60,
+      "deckMax": null,
+      "maxCopies": 4,
+      "sideboardMax": 15,
+      "singleton": false,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": true,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 20,
+      "games": [
+        "paper"
+      ],
+      "validates": true
+    },
+    "tlr": {
+      "key": "tlr",
+      "displayName": "Tiny Leaders: Reborn",
+      "enabledInPicker": true,
+      "deckMin": 50,
+      "deckMax": 50,
+      "maxCopies": 1,
+      "sideboardMax": 10,
+      "singleton": true,
+      "requiresCommander": true,
+      "commanderRule": "tlr",
+      "life": 20,
+      "restrictedSemantic": "banned_as_commander",
+      "hasLegalityData": true,
+      "maxManaValue": 3,
+      "allowsCompanion": true,
+      "sortOrder": 23,
+      "games": [
+        "paper"
+      ],
+      "validates": true
+    },
+    "casual": {
+      "key": "casual",
+      "displayName": "Casual",
+      "enabledInPicker": true,
+      "deckMin": 0,
+      "deckMax": null,
+      "maxCopies": null,
+      "sideboardMax": null,
+      "singleton": false,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": false,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 24,
+      "games": [
+        "paper",
+        "arena",
+        "mtgo"
+      ],
+      "validates": true
+    },
+    "limited": {
+      "key": "limited",
+      "displayName": "Limited",
+      "enabledInPicker": true,
+      "deckMin": 40,
+      "deckMax": null,
+      "maxCopies": null,
+      "sideboardMax": null,
+      "singleton": false,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": false,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 25,
+      "games": [
+        "paper",
+        "arena",
+        "mtgo"
+      ],
+      "validates": true
+    },
+    "unspecified": {
+      "key": "unspecified",
+      "displayName": "Unspecified",
+      "enabledInPicker": true,
+      "deckMin": 0,
+      "deckMax": null,
+      "maxCopies": null,
+      "sideboardMax": null,
+      "singleton": false,
+      "requiresCommander": false,
+      "commanderRule": null,
+      "life": 20,
+      "restrictedSemantic": "max_one",
+      "hasLegalityData": false,
+      "maxManaValue": null,
+      "allowsCompanion": true,
+      "sortOrder": 26,
+      "games": [
+        "paper",
+        "arena",
+        "mtgo"
+      ],
+      "validates": false
+    }
+  },
+  "cases": [
+    {
+      "name": "a Lurrus deck that keeps its condition",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "quantity": 4
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 56,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [],
+      "marks": []
+    },
+    {
+      "name": "a Lurrus deck that breaks it, with fourteen Bolts in the sideboard beside it",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Serra Angel",
+          "quantity": 2,
+          "name": "Serra Angel",
+          "oracleId": "o-Serra Angel",
+          "manaCost": "{3}{W}{W}",
+          "cmc": 5,
+          "typeLine": "Creature — Angel",
+          "oracleText": "Flying, vigilance",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 3,
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "quantity": 14
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 58,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "copy-limit",
+          "message": "Modern decks allow up to 4 copies of Lightning Bolt; you have 14.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or less; Serra Angel does not.",
+          "cardIds": [
+            "c-Serra Angel"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "copy-limit",
+          "message": "Modern decks allow up to 4 copies of Lightning Bolt; you have 14.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ],
+          "rowIds": [
+            3
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or less; Serra Angel does not.",
+          "cardIds": [
+            "c-Serra Angel"
+          ],
+          "rowIds": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a companion takes the sixteenth sideboard slot",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "categoryId": 2,
+          "categoryName": "Sideboard",
+          "categoryKind": "side",
+          "quantity": 15
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 60,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "sideboard-size",
+          "message": "Sideboards are capped at 15 cards; you have 16."
+        },
+        {
+          "severity": "error",
+          "code": "copy-limit",
+          "message": "Modern decks allow up to 4 copies of Lightning Bolt; you have 15.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "sideboard-size",
+          "message": "Sideboards are capped at 15 cards; you have 16."
+        },
+        {
+          "severity": "error",
+          "code": "copy-limit",
+          "message": "Modern decks allow up to 4 copies of Lightning Bolt; you have 15.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ],
+          "rowIds": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Lurrus as companion and four in the main deck is five copies",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "quantity": 4,
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 56,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "copy-limit",
+          "message": "Modern decks allow up to 4 copies of Lurrus of the Dream-Den; you have 5.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or less; Lurrus of the Dream-Den does not.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "copy-limit",
+          "message": "Modern decks allow up to 4 copies of Lurrus of the Dream-Den; you have 5.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ],
+          "rowIds": [
+            1,
+            2
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or less; Lurrus of the Dream-Den does not.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ],
+          "rowIds": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Yorion short of twenty over the minimum",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Yorion, Sky Nomad",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Yorion, Sky Nomad",
+          "oracleId": "o-Yorion, Sky Nomad",
+          "manaCost": "{3}{W/U}{W/U}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Bird Serpent",
+          "oracleText": "Companion — Your starting deck contains at least twenty cards more than the minimum deck size. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "UW",
+          "colorIdentity": "UW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 70,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Yorion, Sky Nomad needs at least 80 cards in your deck, twenty more than Modern's minimum of 60; you have 70."
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Yorion, Sky Nomad needs at least 80 cards in your deck, twenty more than Modern's minimum of 60; you have 70."
+        }
+      ]
+    },
+    {
+      "name": "Yorion at eighty cards",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Yorion, Sky Nomad",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Yorion, Sky Nomad",
+          "oracleId": "o-Yorion, Sky Nomad",
+          "manaCost": "{3}{W/U}{W/U}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Bird Serpent",
+          "oracleText": "Companion — Your starting deck contains at least twenty cards more than the minimum deck size. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "UW",
+          "colorIdentity": "UW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 80,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [],
+      "marks": []
+    },
+    {
+      "name": "two companions",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Yorion, Sky Nomad",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Yorion, Sky Nomad",
+          "oracleId": "o-Yorion, Sky Nomad",
+          "manaCost": "{3}{W/U}{W/U}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Bird Serpent",
+          "oracleText": "Companion — Your starting deck contains at least twenty cards more than the minimum deck size. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "UW",
+          "colorIdentity": "UW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 80,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "companion-count",
+          "message": "Modern decks have one companion; you have 2."
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "companion-count",
+          "message": "Modern decks have one companion; you have 2."
+        }
+      ]
+    },
+    {
+      "name": "Gladiator has no companions",
+      "spec": "gladiator",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 100,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "not-legal",
+          "message": "Lurrus of the Dream-Den isn't legal in Gladiator.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "not-legal",
+          "message": "Island isn't legal in Gladiator.",
+          "cardIds": [
+            "c-Island"
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-zone",
+          "message": "Gladiator has no sideboard, so it has no companions.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "not-legal",
+          "message": "Lurrus of the Dream-Den isn't legal in Gladiator.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ],
+          "rowIds": [
+            1
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "not-legal",
+          "message": "Island isn't legal in Gladiator.",
+          "cardIds": [
+            "c-Island"
+          ],
+          "rowIds": [
+            2
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-zone",
+          "message": "Gladiator has no sideboard, so it has no companions.",
+          "cardIds": [
+            "c-Lurrus of the Dream-Den"
+          ],
+          "rowIds": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a commander deck's companion inside the identity",
+      "spec": "commander",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Kenrith, the Returned King",
+          "categoryId": 3,
+          "categoryName": "Commander",
+          "categoryKind": "commander",
+          "name": "Kenrith, the Returned King",
+          "oracleId": "o-Kenrith, the Returned King",
+          "manaCost": "{4}{W}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Human Noble",
+          "colors": "W",
+          "colorIdentity": "BGRUW",
+          "power": "5",
+          "toughness": "5"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Jegantha, the Wellspring",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Jegantha, the Wellspring",
+          "oracleId": "o-Jegantha, the Wellspring",
+          "manaCost": "{4}{R/G}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Elemental Elk",
+          "oracleText": "Companion — No card in your starting deck has more than one of the same mana symbol in its mana cost. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "GR",
+          "colorIdentity": "BGRUW"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 99,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [],
+      "marks": []
+    },
+    {
+      "name": "a commander deck's companion outside a narrower identity",
+      "spec": "commander",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Teysa Karlov",
+          "categoryId": 3,
+          "categoryName": "Commander",
+          "categoryKind": "commander",
+          "name": "Teysa Karlov",
+          "oracleId": "o-Teysa Karlov",
+          "manaCost": "{2}{W}{B}",
+          "cmc": 4,
+          "typeLine": "Legendary Creature — Human Advisor",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Yorion, Sky Nomad",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Yorion, Sky Nomad",
+          "oracleId": "o-Yorion, Sky Nomad",
+          "manaCost": "{3}{W/U}{W/U}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Bird Serpent",
+          "oracleText": "Companion — Your starting deck contains at least twenty cards more than the minimum deck size. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "UW",
+          "colorIdentity": "UW"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Wrath of God",
+          "name": "Wrath of God",
+          "oracleId": "o-Wrath of God",
+          "manaCost": "{2}{W}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all creatures. They can't be regenerated.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 98,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "color-identity",
+          "message": "Island's color identity (U) is outside your commander's (WB).",
+          "cardIds": [
+            "c-Island"
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Yorion, Sky Nomad needs at least 120 cards in your deck, twenty more than Commander's minimum of 100; you have 100."
+        },
+        {
+          "severity": "error",
+          "code": "color-identity",
+          "message": "Yorion, Sky Nomad's color identity (WU) is outside your commander's (WB).",
+          "cardIds": [
+            "c-Yorion, Sky Nomad"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "color-identity",
+          "message": "Island's color identity (U) is outside your commander's (WB).",
+          "cardIds": [
+            "c-Island"
+          ],
+          "rowIds": [
+            4
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Yorion, Sky Nomad needs at least 120 cards in your deck, twenty more than Commander's minimum of 100; you have 100."
+        },
+        {
+          "severity": "error",
+          "code": "color-identity",
+          "message": "Yorion, Sky Nomad's color identity (WU) is outside your commander's (WB).",
+          "cardIds": [
+            "c-Yorion, Sky Nomad"
+          ],
+          "rowIds": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a switched-off companion pile counts toward nothing",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "categoryActive": false,
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Serra Angel",
+          "name": "Serra Angel",
+          "oracleId": "o-Serra Angel",
+          "manaCost": "{3}{W}{W}",
+          "cmc": 5,
+          "typeLine": "Creature — Angel",
+          "oracleText": "Flying, vigilance",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 59,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [],
+      "marks": []
+    },
+    {
+      "name": "a switched-on Maybeboard is in Lurrus's starting deck",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Serra Angel",
+          "categoryId": 5,
+          "categoryName": "Maybeboard",
+          "categoryKind": "maybe",
+          "name": "Serra Angel",
+          "oracleId": "o-Serra Angel",
+          "manaCost": "{3}{W}{W}",
+          "cmc": 5,
+          "typeLine": "Creature — Angel",
+          "oracleText": "Flying, vigilance",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 3,
+          "cardId": "c-Island",
+          "quantity": 59,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or less; Serra Angel does not.",
+          "cardIds": [
+            "c-Serra Angel"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or less; Serra Angel does not.",
+          "cardIds": [
+            "c-Serra Angel"
+          ],
+          "rowIds": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a Jegantha deck with a repeated symbol and a banned card",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Jegantha, the Wellspring",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Jegantha, the Wellspring",
+          "oracleId": "o-Jegantha, the Wellspring",
+          "manaCost": "{4}{R/G}",
+          "cmc": 5,
+          "typeLine": "Legendary Creature — Elemental Elk",
+          "oracleText": "Companion — No card in your starting deck has more than one of the same mana symbol in its mana cost. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "GR",
+          "colorIdentity": "BGRUW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Wrath of God",
+          "name": "Wrath of God",
+          "oracleId": "o-Wrath of God",
+          "manaCost": "{2}{W}{W}",
+          "cmc": 4,
+          "typeLine": "Sorcery",
+          "oracleText": "Destroy all creatures. They can't be regenerated.",
+          "colors": "W",
+          "colorIdentity": "W"
+        },
+        {
+          "id": 3,
+          "legalities": "{\"modern\":\"banned\",\"vintage\":\"legal\",\"commander\":\"legal\"}"
+        },
+        {
+          "id": 4,
+          "cardId": "c-Island",
+          "quantity": 58,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "banned",
+          "message": "Lightning Bolt is banned in Modern.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Jegantha, the Wellspring needs no mana cost in your deck to repeat a mana symbol; Wrath of God repeats one.",
+          "cardIds": [
+            "c-Wrath of God"
+          ]
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "banned",
+          "message": "Lightning Bolt is banned in Modern.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ],
+          "rowIds": [
+            3
+          ]
+        },
+        {
+          "severity": "error",
+          "code": "companion-condition",
+          "message": "Jegantha, the Wellspring needs no mana cost in your deck to repeat a mana symbol; Wrath of God repeats one.",
+          "cardIds": [
+            "c-Wrath of God"
+          ],
+          "rowIds": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "an under-sized deck with a companion and a parked banned card",
+      "spec": "modern",
+      "cards": [
+        {
+          "id": 1,
+          "cardId": "c-Lurrus of the Dream-Den",
+          "categoryId": 4,
+          "categoryName": "Companion",
+          "categoryKind": "companion",
+          "name": "Lurrus of the Dream-Den",
+          "oracleId": "o-Lurrus of the Dream-Den",
+          "manaCost": "{1}{W/B}{W/B}",
+          "cmc": 3,
+          "typeLine": "Legendary Creature — Cat Nightmare",
+          "oracleText": "Companion — Each permanent card in your starting deck has mana value 2 or less. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)",
+          "colors": "BW",
+          "colorIdentity": "BW"
+        },
+        {
+          "id": 2,
+          "cardId": "c-Island",
+          "quantity": 40,
+          "name": "Island",
+          "oracleId": "o-Island",
+          "manaCost": null,
+          "cmc": 0,
+          "typeLine": "Basic Land — Island",
+          "oracleText": "({T}: Add {U}.)",
+          "colors": null,
+          "colorIdentity": "U"
+        },
+        {
+          "id": 3,
+          "categoryId": 5,
+          "categoryName": "Maybeboard",
+          "categoryKind": "maybe",
+          "categoryActive": false,
+          "legalities": "{\"modern\":\"banned\",\"vintage\":\"legal\",\"commander\":\"legal\"}"
+        }
+      ],
+      "deck": [
+        {
+          "severity": "error",
+          "code": "deck-size",
+          "message": "Modern decks need at least 60 cards; you have 40."
+        }
+      ],
+      "marks": [
+        {
+          "severity": "error",
+          "code": "deck-size",
+          "message": "Modern decks need at least 60 cards; you have 40."
+        },
+        {
+          "severity": "error",
+          "code": "banned",
+          "message": "Lightning Bolt is banned in Modern.",
+          "cardIds": [
+            "c-Lightning Bolt"
+          ],
+          "rowIds": [
+            3
+          ]
+        }
+      ]
+    }
+  ]
+}

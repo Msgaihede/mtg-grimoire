@@ -223,3 +223,7 @@ tokio = { version = "1", features = ["macros", "net", "rt", "sync", "test-util"]
 # and `commands`' tests of a session with them built in. A test dependency only: this crate
 # carries no file of its own — a host says what its binary carries (`ScannerState::carry`).
 card-neural = { path = "../card-neural", features = ["bundled"] }
+# The deck goldens (`deck_golden`) are JSON numbers the TypeScript wrote shortest-round-trip;
+# serde_json's default float parser is not correctly rounded for every 17-digit one, so a test
+# build reads them with the exact parser. A feature of the same crate, for tests only.
+serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }

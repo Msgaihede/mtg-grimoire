@@ -763,6 +763,15 @@ commands! {
         )
     };
 
+    // deck_rules — the deck page's validation and bracket, ported (no page calls these).
+    read deck_check in deck_rules(deck_id: i64, variant: String) = |conn| check_deck(conn, deck_id, &variant);
+
+    // deck_stats — the deck page's stats band, ported (no page calls this).
+    read deck_stats in deck_stats(deck_id: i64, variant: String, marketplace: Option<String>) = |conn| {
+        let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+        read_stats(conn, deck_id, &variant, marketplace)
+    };
+
     // deck_theory
     read deck_theory_diff in deck_theory(deck_id: i64, marketplace: Option<String>) = |conn| {
         let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());

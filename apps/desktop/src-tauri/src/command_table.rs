@@ -297,6 +297,20 @@ const TABLE_ONLY: &[(&str, &str)] = &[
         ),
     ),
     (
+        "deck_check",
+        concat!(
+            "a deck's validation and bracket, ported from the page's TypeScript (which computes ",
+            "its own), for the MCP server's deck tools"
+        ),
+    ),
+    (
+        "deck_stats",
+        concat!(
+            "a deck's stats band, ported from the page's TypeScript (which computes its own), ",
+            "for the MCP server's deck tools"
+        ),
+    ),
+    (
         "rulings_for_cards",
         concat!(
             "a card's Scryfall rulings, for the MCP server's card_rulings tool and get_card's ",

@@ -1,0 +1,5423 @@
+{
+  "about": "Written by packages/ui/features/decks/golden/stats.golden.test.ts from the string readers of mana.ts, deckBuckets.ts and typeBreakdownCounts.ts; read by crates/grimoire-core/src/deck_stats/. Never edited by hand.",
+  "base": {
+    "promoTypes": null,
+    "id": 0,
+    "cardId": "c-Lightning Bolt",
+    "categoryId": 1,
+    "categoryName": "Main deck",
+    "categoryKind": "main",
+    "categoryActive": true,
+    "variant": "live",
+    "finish": null,
+    "labelId": null,
+    "labelName": null,
+    "labelColor": null,
+    "quantity": 1,
+    "name": "Lightning Bolt",
+    "setCode": "lea",
+    "setName": "Limited Edition Alpha",
+    "collectorNumber": "161",
+    "lang": "en",
+    "needsReview": null,
+    "oracleId": "o-Lightning Bolt",
+    "manaCost": "{R}",
+    "cmc": 1,
+    "typeLine": "Instant",
+    "oracleText": null,
+    "colors": "R",
+    "colorIdentity": "R",
+    "producedMana": "",
+    "legalities": "{\"modern\":\"legal\",\"vintage\":\"legal\",\"commander\":\"legal\",\"oathbreaker\":\"legal\",\"brawl\":\"legal\",\"paupercommander\":\"legal\",\"duel\":\"legal\",\"oldschool\":\"legal\",\"tlr\":\"legal\"}",
+    "power": null,
+    "toughness": null,
+    "layout": "normal",
+    "rarity": "common",
+    "faces": null,
+    "gameChanger": false,
+    "finishes": null,
+    "everUncommon": false,
+    "unitPrice": null,
+    "ownedQuantity": 0
+  },
+  "cases": [
+    {
+      "name": "\"{1}\"",
+      "cards": [],
+      "input": "{1}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{1}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Sorcery\"",
+      "cards": [],
+      "input": "Sorcery",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Sorcery",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Sorcery",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"\"",
+      "cards": [],
+      "input": "",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{3}\"",
+      "cards": [],
+      "input": "{3}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{3}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{15}\"",
+      "cards": [],
+      "input": "{15}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{15}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{8}\"",
+      "cards": [],
+      "input": "{8}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{8}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "null",
+      "cards": [],
+      "input": null,
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": null
+    },
+    {
+      "name": "\"Basic Land — Island\"",
+      "cards": [],
+      "input": "Basic Land — Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land — Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Island"
+      ]
+    },
+    {
+      "name": "\"{U}{U}\"",
+      "cards": [],
+      "input": "{U}{U}",
+      "countPips": {
+        "W": 0,
+        "U": 2,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U"
+      ],
+      "front": "{U}{U}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{½}\"",
+      "cards": [],
+      "input": "{½}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{½}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{2/B}{2/B}{2/B}\"",
+      "cards": [],
+      "input": "{2/B}{2/B}{2/B}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 3,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "{2/B}{2/B}{2/B}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{1000000}\"",
+      "cards": [],
+      "input": "{1000000}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{1000000}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Artifact\"",
+      "cards": [],
+      "input": "Legendary Artifact",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Legendary Artifact",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Artifact",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{2}{½}\"",
+      "cards": [],
+      "input": "{2}{½}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{2}{½}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{0}\"",
+      "cards": [],
+      "input": "{0}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{0}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{7}{½}\"",
+      "cards": [],
+      "input": "{7}{½}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{7}{½}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{X}{B}{B}{B}\"",
+      "cards": [],
+      "input": "{X}{B}{B}{B}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 3,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "{X}{B}{B}{B}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{Y}\"",
+      "cards": [],
+      "input": "{Y}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{Y}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Instant\"",
+      "cards": [],
+      "input": "Instant",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Instant",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Instant",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{x}{R}\"",
+      "cards": [],
+      "input": "{x}{R}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [
+        "R"
+      ],
+      "front": "{x}{R}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{X}{X}{G}\"",
+      "cards": [],
+      "input": "{X}{X}{G}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 1,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [
+        "G"
+      ],
+      "front": "{X}{X}{G}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{X}{R} // {1}{U}\"",
+      "cards": [],
+      "input": "{X}{R} // {1}{U}",
+      "countPips": {
+        "W": 0,
+        "U": 1,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [
+        "U",
+        "R"
+      ],
+      "front": "{X}{R} ",
+      "back": " {1}{U}",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{X}\"",
+      "cards": [],
+      "input": "{X}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [],
+      "front": "{X}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Land\"",
+      "cards": [],
+      "input": "Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{{X}}\"",
+      "cards": [],
+      "input": "{{X}}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{{X}}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Goblin Scout\"",
+      "cards": [],
+      "input": "Creature — Goblin Scout",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Creature — Goblin Scout",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Goblin",
+        "Scout"
+      ]
+    },
+    {
+      "name": "\"Artifact Creature — Construct\"",
+      "cards": [],
+      "input": "Artifact Creature — Construct",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Artifact Creature — Construct",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Construct"
+      ]
+    },
+    {
+      "name": "\"{5}\"",
+      "cards": [],
+      "input": "{5}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{5}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Beast\"",
+      "cards": [],
+      "input": "Creature — Beast",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B",
+        "C"
+      ],
+      "front": "Creature — Beast",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Beast"
+      ]
+    },
+    {
+      "name": "\"Creature — Jellyfish Hydra Beast\"",
+      "cards": [],
+      "input": "Creature — Jellyfish Hydra Beast",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B",
+        "C"
+      ],
+      "front": "Creature — Jellyfish Hydra Beast",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Jellyfish",
+        "Hydra",
+        "Beast"
+      ]
+    },
+    {
+      "name": "\"Creature — Lhurgoyf\"",
+      "cards": [],
+      "input": "Creature — Lhurgoyf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Lhurgoyf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Lhurgoyf"
+      ]
+    },
+    {
+      "name": "\"{7}\"",
+      "cards": [],
+      "input": "{7}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{7}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Sorcery // Land\"",
+      "cards": [],
+      "input": "Sorcery // Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Sorcery ",
+      "back": " Land",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Sorcery",
+      "isMdfcLand": true,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Human Wizard // Creature — Human Insect\"",
+      "cards": [],
+      "input": "Creature — Human Wizard // Creature — Human Insect",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Human Wizard ",
+      "back": " Creature — Human Insect",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Wizard",
+        "//",
+        "Creature",
+        "—",
+        "Human",
+        "Insect"
+      ]
+    },
+    {
+      "name": "\"Instant // Creature — God\"",
+      "cards": [],
+      "input": "Instant // Creature — God",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Instant ",
+      "back": " Creature — God",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Instant",
+      "isMdfcLand": false,
+      "subtypes": [
+        "God"
+      ]
+    },
+    {
+      "name": "\"{R}\"",
+      "cards": [],
+      "input": "{R}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "R"
+      ],
+      "front": "{R}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Land Creature — Forest Dryad\"",
+      "cards": [],
+      "input": "Land Creature — Forest Dryad",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Land Creature — Forest Dryad",
+      "back": "",
+      "isLand": true,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest",
+        "Dryad"
+      ]
+    },
+    {
+      "name": "\"{1}{B}{B}\"",
+      "cards": [],
+      "input": "{1}{B}{B}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 2,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "{1}{B}{B}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{3}{C}{G}\"",
+      "cards": [],
+      "input": "{3}{C}{G}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 1,
+        "C": 1
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "{3}{C}{G}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Artifact\"",
+      "cards": [],
+      "input": "Artifact",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Artifact",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Artifact",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{U}\"",
+      "cards": [],
+      "input": "{U}",
+      "countPips": {
+        "W": 0,
+        "U": 1,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U"
+      ],
+      "front": "{U}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{R}{W}\"",
+      "cards": [],
+      "input": "{R}{W}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "R"
+      ],
+      "front": "{R}{W}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{R/W}\"",
+      "cards": [],
+      "input": "{R/W}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "R"
+      ],
+      "front": "{R/W}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W/U/P}\"",
+      "cards": [],
+      "input": "{W/U/P}",
+      "countPips": {
+        "W": 1,
+        "U": 1,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U"
+      ],
+      "front": "{W/U/P}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{G/P}{G/P}\"",
+      "cards": [],
+      "input": "{G/P}{G/P}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 2,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G"
+      ],
+      "front": "{G/P}{G/P}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{1}{C}{C}\"",
+      "cards": [],
+      "input": "{1}{C}{C}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 2
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "{1}{C}{C}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{1}{R} // {1}{U}\"",
+      "cards": [],
+      "input": "{1}{R} // {1}{U}",
+      "countPips": {
+        "W": 0,
+        "U": 1,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U",
+        "R"
+      ],
+      "front": "{1}{R} ",
+      "back": " {1}{U}",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{2}{X}{Y}{Z}{S}{E}{T}{Q}\"",
+      "cards": [],
+      "input": "{2}{X}{Y}{Z}{S}{E}{T}{Q}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [],
+      "front": "{2}{X}{Y}{Z}{S}{E}{T}{Q}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{100}{1000000}\"",
+      "cards": [],
+      "input": "{100}{1000000}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{100}{1000000}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{x}{r}{w/u}\"",
+      "cards": [],
+      "input": "{x}{r}{w/u}",
+      "countPips": {
+        "W": 1,
+        "U": 1,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [],
+      "front": "{x}{r}{w/u}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{ W }{w}\"",
+      "cards": [],
+      "input": "{ W }{w}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{ W }{w}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{2}\"",
+      "cards": [],
+      "input": "{2}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{2}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W}{U}\"",
+      "cards": [],
+      "input": "{W}{U}",
+      "countPips": {
+        "W": 1,
+        "U": 1,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U"
+      ],
+      "front": "{W}{U}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"WU\"",
+      "cards": [],
+      "input": "WU",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U"
+      ],
+      "front": "WU",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"C\"",
+      "cards": [],
+      "input": "C",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "C",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Basic Land — Mountain\"",
+      "cards": [],
+      "input": "Basic Land — Mountain",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land — Mountain",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Mountain"
+      ]
+    },
+    {
+      "name": "\"U\"",
+      "cards": [],
+      "input": "U",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U"
+      ],
+      "front": "U",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W}\"",
+      "cards": [],
+      "input": "{W}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{W}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"W\"",
+      "cards": [],
+      "input": "W",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "W",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W}{U}{B}{R}{G}\"",
+      "cards": [],
+      "input": "{W}{U}{B}{R}{G}",
+      "countPips": {
+        "W": 1,
+        "U": 1,
+        "B": 1,
+        "R": 1,
+        "G": 1,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G"
+      ],
+      "front": "{W}{U}{B}{R}{G}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"WUBRG\"",
+      "cards": [],
+      "input": "WUBRG",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G"
+      ],
+      "front": "WUBRG",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"C2\"",
+      "cards": [],
+      "input": "C2",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "C2",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"UU\"",
+      "cards": [],
+      "input": "UU",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U"
+      ],
+      "front": "UU",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"wu\"",
+      "cards": [],
+      "input": "wu",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "wu",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"WUBRGC2\"",
+      "cards": [],
+      "input": "WUBRGC2",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G",
+        "C"
+      ],
+      "front": "WUBRGC2",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"2\"",
+      "cards": [],
+      "input": "2",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "2",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Eldrazi\"",
+      "cards": [],
+      "input": "Creature — Eldrazi",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Eldrazi",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Eldrazi"
+      ]
+    },
+    {
+      "name": "\"{G}\"",
+      "cards": [],
+      "input": "{G}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 1,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G"
+      ],
+      "front": "{G}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W}{R}\"",
+      "cards": [],
+      "input": "{W}{R}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 1,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "R"
+      ],
+      "front": "{W}{R}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Enchantment Land\"",
+      "cards": [],
+      "input": "Legendary Enchantment Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Legendary Enchantment Land",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Enchantment",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Artifact Land\"",
+      "cards": [],
+      "input": "Artifact Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Artifact Land",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Artifact",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Land Creature — Dryad\"",
+      "cards": [],
+      "input": "Land Creature — Dryad",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Land Creature — Dryad",
+      "back": "",
+      "isLand": true,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Dryad"
+      ]
+    },
+    {
+      "name": "\"Creature — Kor Cleric // Land\"",
+      "cards": [],
+      "input": "Creature — Kor Cleric // Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Kor Cleric ",
+      "back": " Land",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": true,
+      "subtypes": [
+        "Kor",
+        "Cleric",
+        "//",
+        "Land"
+      ]
+    },
+    {
+      "name": "\"Land // Land\"",
+      "cards": [],
+      "input": "Land // Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land ",
+      "back": " Land",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Enchantment // Legendary Land\"",
+      "cards": [],
+      "input": "Legendary Enchantment // Legendary Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Legendary Enchantment ",
+      "back": " Legendary Land",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Enchantment",
+      "isMdfcLand": true,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Creature — God // Legendary Planeswalker\"",
+      "cards": [],
+      "input": "Legendary Creature — God // Legendary Planeswalker",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Legendary Creature — God ",
+      "back": " Legendary Planeswalker",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "God",
+        "//",
+        "Legendary",
+        "Planeswalker"
+      ]
+    },
+    {
+      "name": "\"{G}{U}\"",
+      "cards": [],
+      "input": "{G}{U}",
+      "countPips": {
+        "W": 0,
+        "U": 1,
+        "B": 0,
+        "R": 0,
+        "G": 1,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U",
+        "G"
+      ],
+      "front": "{G}{U}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Creature — Merfolk Wizard\"",
+      "cards": [],
+      "input": "Legendary Creature — Merfolk Wizard",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Legendary Creature — Merfolk Wizard",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Merfolk",
+        "Wizard"
+      ]
+    },
+    {
+      "name": "\"{1}{W}{B}\"",
+      "cards": [],
+      "input": "{1}{W}{B}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 1,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "B"
+      ],
+      "front": "{1}{W}{B}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Creature — Human Cleric\"",
+      "cards": [],
+      "input": "Legendary Creature — Human Cleric",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Legendary Creature — Human Cleric",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Cleric"
+      ]
+    },
+    {
+      "name": "\"Basic Land — Swamp\"",
+      "cards": [],
+      "input": "Basic Land — Swamp",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land — Swamp",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Swamp"
+      ]
+    },
+    {
+      "name": "\"Creature — Bear\"",
+      "cards": [],
+      "input": "Creature — Bear",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B",
+        "C"
+      ],
+      "front": "Creature — Bear",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Bear"
+      ]
+    },
+    {
+      "name": "\"Scheme\"",
+      "cards": [],
+      "input": "Scheme",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Scheme",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Battle — Siege\"",
+      "cards": [],
+      "input": "Battle — Siege",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Battle — Siege",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Battle",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Siege"
+      ]
+    },
+    {
+      "name": "\"Creature — Elf Druid\"",
+      "cards": [],
+      "input": "Creature — Elf Druid",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Elf Druid",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "Druid"
+      ]
+    },
+    {
+      "name": "\"Legendary Planeswalker — Ajani\"",
+      "cards": [],
+      "input": "Legendary Planeswalker — Ajani",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Legendary Planeswalker — Ajani",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Planeswalker",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Ajani"
+      ]
+    },
+    {
+      "name": "\"Artifact Creature — Thopter\"",
+      "cards": [],
+      "input": "Artifact Creature — Thopter",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Artifact Creature — Thopter",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Thopter"
+      ]
+    },
+    {
+      "name": "\"Enchantment — Aura\"",
+      "cards": [],
+      "input": "Enchantment — Aura",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Enchantment — Aura",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Enchantment",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Aura"
+      ]
+    },
+    {
+      "name": "\"Token Creature — Goblin\"",
+      "cards": [],
+      "input": "Token Creature — Goblin",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Token Creature — Goblin",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Goblin"
+      ]
+    },
+    {
+      "name": "\"creature — elf\"",
+      "cards": [],
+      "input": "creature — elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "creature — elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "elf"
+      ]
+    },
+    {
+      "name": "\"Legendary Enchantment Land — Urza's\"",
+      "cards": [],
+      "input": "Legendary Enchantment Land — Urza's",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U"
+      ],
+      "front": "Legendary Enchantment Land — Urza's",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Enchantment",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Urza's"
+      ]
+    },
+    {
+      "name": "\"Creature — Human Wizard\"",
+      "cards": [],
+      "input": "Creature — Human Wizard",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Human Wizard",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Wizard"
+      ]
+    },
+    {
+      "name": "\"Creature — Human Soldier\"",
+      "cards": [],
+      "input": "Creature — Human Soldier",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Human Soldier",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Soldier"
+      ]
+    },
+    {
+      "name": "\"Sorcery // Creature — Zombie Horror\"",
+      "cards": [],
+      "input": "Sorcery // Creature — Zombie Horror",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Sorcery ",
+      "back": " Creature — Zombie Horror",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Sorcery",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Zombie",
+        "Horror"
+      ]
+    },
+    {
+      "name": "\"Kindred Sorcery — Elf\"",
+      "cards": [],
+      "input": "Kindred Sorcery — Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Kindred Sorcery — Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Sorcery",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Land — Island Mountain\"",
+      "cards": [],
+      "input": "Land — Island Mountain",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Island Mountain",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Island",
+        "Mountain"
+      ]
+    },
+    {
+      "name": "\"Basic Snow Land — Island\"",
+      "cards": [],
+      "input": "Basic Snow Land — Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Snow Land — Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Island"
+      ]
+    },
+    {
+      "name": "\"Land — Mountain Island\"",
+      "cards": [],
+      "input": "Land — Mountain Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Mountain Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Mountain",
+        "Island"
+      ]
+    },
+    {
+      "name": "\"Land — Forest Plains Island\"",
+      "cards": [],
+      "input": "Land — Forest Plains Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Forest Plains Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest",
+        "Plains",
+        "Island"
+      ]
+    },
+    {
+      "name": "\"Basic Land - Forest\"",
+      "cards": [],
+      "input": "Basic Land - Forest",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land - Forest",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest"
+      ]
+    },
+    {
+      "name": "\"Creature - Human Wizard\"",
+      "cards": [],
+      "input": "Creature - Human Wizard",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature - Human Wizard",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Wizard"
+      ]
+    },
+    {
+      "name": "\"Basic Land — Forest\"",
+      "cards": [],
+      "input": "Basic Land — Forest",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land — Forest",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest"
+      ]
+    },
+    {
+      "name": "\"Basic Land\"",
+      "cards": [],
+      "input": "Basic Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Basic Land — Plains\"",
+      "cards": [],
+      "input": "Basic Land — Plains",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land — Plains",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Plains"
+      ]
+    },
+    {
+      "name": "\"Land — Plains Island\"",
+      "cards": [],
+      "input": "Land — Plains Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Plains Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Plains",
+        "Island"
+      ]
+    },
+    {
+      "name": "\"Land — Forest Island\"",
+      "cards": [],
+      "input": "Land — Forest Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Forest Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest",
+        "Island"
+      ]
+    },
+    {
+      "name": "\"Land — Plains Island Swamp\"",
+      "cards": [],
+      "input": "Land — Plains Island Swamp",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Plains Island Swamp",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Plains",
+        "Island",
+        "Swamp"
+      ]
+    },
+    {
+      "name": "\"Creature — Goblin\"",
+      "cards": [],
+      "input": "Creature — Goblin",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Creature — Goblin",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Goblin"
+      ]
+    },
+    {
+      "name": "\"Creature — Elf\"",
+      "cards": [],
+      "input": "Creature — Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"{X}{G}{G}\"",
+      "cards": [],
+      "input": "{X}{G}{G}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 2,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [
+        "G"
+      ],
+      "front": "{X}{G}{G}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Hydra\"",
+      "cards": [],
+      "input": "Creature — Hydra",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Hydra",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Hydra"
+      ]
+    },
+    {
+      "name": "\"Legendary Creature — Time Lord Doctor\"",
+      "cards": [],
+      "input": "Legendary Creature — Time Lord Doctor",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Legendary Creature — Time Lord Doctor",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time Lord",
+        "Doctor"
+      ]
+    },
+    {
+      "name": "\"Creature — Time Lordling Time Lord\"",
+      "cards": [],
+      "input": "Creature — Time Lordling Time Lord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time Lordling Time Lord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time Lord",
+        "ling",
+        "Time",
+        "Lord"
+      ]
+    },
+    {
+      "name": "\"Creature — Doctor Time Lord\"",
+      "cards": [],
+      "input": "Creature — Doctor Time Lord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Doctor Time Lord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time Lord",
+        "Doctor"
+      ]
+    },
+    {
+      "name": "\"Creature — Time  Lord\"",
+      "cards": [],
+      "input": "Creature — Time  Lord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time  Lord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time",
+        "Lord"
+      ]
+    },
+    {
+      "name": "\"Artifact Creature — Assembly-Worker\"",
+      "cards": [],
+      "input": "Artifact Creature — Assembly-Worker",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Artifact Creature — Assembly-Worker",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Assembly-Worker"
+      ]
+    },
+    {
+      "name": "\"Creature —Elf\"",
+      "cards": [],
+      "input": "Creature —Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature —Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Creature—Elf Warrior\"",
+      "cards": [],
+      "input": "Creature—Elf Warrior",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature—Elf Warrior",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "Warrior"
+      ]
+    },
+    {
+      "name": "\"Creature – Elf Shaman\"",
+      "cards": [],
+      "input": "Creature – Elf Shaman",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature – Elf Shaman",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature - Human  Wizard\"",
+      "cards": [],
+      "input": "Creature - Human  Wizard",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature - Human  Wizard",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Wizard"
+      ]
+    },
+    {
+      "name": "\"Creature-Goblin\"",
+      "cards": [],
+      "input": "Creature-Goblin",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Creature-Goblin",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Human Human\"",
+      "cards": [],
+      "input": "Creature — Human Human",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Human Human",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Human"
+      ]
+    },
+    {
+      "name": "\"Creature — \"",
+      "cards": [],
+      "input": "Creature — ",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — ",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Elf\\nWarrior — Druid\"",
+      "cards": [],
+      "input": "Creature — Elf\nWarrior — Druid",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Elf\nWarrior — Druid",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Druid"
+      ]
+    },
+    {
+      "name": "\"Creature — Elf Warrior\"",
+      "cards": [],
+      "input": "Creature — Elf Warrior",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Elf Warrior",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Elf — Druid\"",
+      "cards": [],
+      "input": "Creature — Elf — Druid",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Elf — Druid",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "—",
+        "Druid"
+      ]
+    },
+    {
+      "name": "\"Creature — Human Monk\"",
+      "cards": [],
+      "input": "Creature — Human Monk",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Human Monk",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Human",
+        "Monk"
+      ]
+    },
+    {
+      "name": "\"Creature — Elves elf Elf Assembly-Worker Assembly AssemblyA Ab aB a_b a'b a-b a.b 10 2 Kor Kithkin\"",
+      "cards": [],
+      "input": "Creature — Elves elf Elf Assembly-Worker Assembly AssemblyA Ab aB a_b a'b a-b a.b 10 2 Kor Kithkin",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "B",
+        "C"
+      ],
+      "front": "Creature — Elves elf Elf Assembly-Worker Assembly AssemblyA Ab aB a_b a'b a-b a.b 10 2 Kor Kithkin",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elves",
+        "elf",
+        "Elf",
+        "Assembly-Worker",
+        "Assembly",
+        "AssemblyA",
+        "Ab",
+        "aB",
+        "a_b",
+        "a'b",
+        "a-b",
+        "a.b",
+        "10",
+        "2",
+        "Kor",
+        "Kithkin"
+      ]
+    },
+    {
+      "name": "\"Creature — Shapeshifter\"",
+      "cards": [],
+      "input": "Creature — Shapeshifter",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Shapeshifter",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Shapeshifter"
+      ]
+    },
+    {
+      "name": "\"{4}\"",
+      "cards": [],
+      "input": "{4}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{4}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Legendary Enchantment Creature — God\"",
+      "cards": [],
+      "input": "Legendary Enchantment Creature — God",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G",
+        "C"
+      ],
+      "front": "Legendary Enchantment Creature — God",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "God"
+      ]
+    },
+    {
+      "name": "\"Summon — Elf\"",
+      "cards": [],
+      "input": "Summon — Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Summon — Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Eaturecray — Igpay\"",
+      "cards": [],
+      "input": "Eaturecray — Igpay",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Eaturecray — Igpay",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Igpay"
+      ]
+    },
+    {
+      "name": "\"Creature\"",
+      "cards": [],
+      "input": "Creature",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Land — Island  Mountain\"",
+      "cards": [],
+      "input": "Land — Island  Mountain",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Island  Mountain",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Island",
+        "Mountain"
+      ]
+    },
+    {
+      "name": "\"Land —Forest\"",
+      "cards": [],
+      "input": "Land —Forest",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land —Forest",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest"
+      ]
+    },
+    {
+      "name": "\"Basic Land — Island Mountain\"",
+      "cards": [],
+      "input": "Basic Land — Island Mountain",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Basic Land — Island Mountain",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Island",
+        "Mountain"
+      ]
+    },
+    {
+      "name": "\"Land — Plains Plains\"",
+      "cards": [],
+      "input": "Land — Plains Plains",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — Plains Plains",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Plains",
+        "Plains"
+      ]
+    },
+    {
+      "name": "\"Land — Urza's Power-Plant\"",
+      "cards": [],
+      "input": "Land — Urza's Power-Plant",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "U"
+      ],
+      "front": "Land — Urza's Power-Plant",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Urza's",
+        "Power-Plant"
+      ]
+    },
+    {
+      "name": "\"Land — Gate\"",
+      "cards": [],
+      "input": "Land — Gate",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G"
+      ],
+      "front": "Land — Gate",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Gate"
+      ]
+    },
+    {
+      "name": "\"Snow Land — Forest Island\"",
+      "cards": [],
+      "input": "Snow Land — Forest Island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Snow Land — Forest Island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Forest",
+        "Island"
+      ]
+    },
+    {
+      "name": "\"Land — island\"",
+      "cards": [],
+      "input": "Land — island",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land — island",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "island"
+      ]
+    },
+    {
+      "name": "\"Land – Swamp\"",
+      "cards": [],
+      "input": "Land – Swamp",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land – Swamp",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\" \"",
+      "cards": [],
+      "input": " ",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": " ",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{X}{X}\"",
+      "cards": [],
+      "input": "{X}{X}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": true,
+      "producedKeys": [],
+      "front": "{X}{X}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{2/W}\"",
+      "cards": [],
+      "input": "{2/W}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{2/W}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{B/G/P}\"",
+      "cards": [],
+      "input": "{B/G/P}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 1,
+        "R": 0,
+        "G": 1,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B",
+        "G"
+      ],
+      "front": "{B/G/P}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{1}{W/B}{W/B}\"",
+      "cards": [],
+      "input": "{1}{W/B}{W/B}",
+      "countPips": {
+        "W": 2,
+        "U": 0,
+        "B": 2,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "B"
+      ],
+      "front": "{1}{W/B}{W/B}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{HW}\"",
+      "cards": [],
+      "input": "{HW}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{HW}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{∞}\"",
+      "cards": [],
+      "input": "{∞}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{∞}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{}\"",
+      "cards": [],
+      "input": "{}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{\"",
+      "cards": [],
+      "input": "{",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"}{\"",
+      "cards": [],
+      "input": "}{",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "}{",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{{W}}\"",
+      "cards": [],
+      "input": "{{W}}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{{W}}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W\"",
+      "cards": [],
+      "input": "{W",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{W",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"W}\"",
+      "cards": [],
+      "input": "W}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "W}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W}{\"",
+      "cards": [],
+      "input": "{W}{",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{W}{",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W}text{U}\"",
+      "cards": [],
+      "input": "{W}text{U}",
+      "countPips": {
+        "W": 1,
+        "U": 1,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U"
+      ],
+      "front": "{W}text{U}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{T}: Add {G}.\"",
+      "cards": [],
+      "input": "{T}: Add {G}.",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 1,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "G"
+      ],
+      "front": "{T}: Add {G}.",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{c}\"",
+      "cards": [],
+      "input": "{c}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 1
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{c}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{P}\"",
+      "cards": [],
+      "input": "{P}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{P}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{W/}\"",
+      "cards": [],
+      "input": "{W/}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{W/}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{/W}\"",
+      "cards": [],
+      "input": "{/W}",
+      "countPips": {
+        "W": 1,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "{/W}",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"{//}\"",
+      "cards": [],
+      "input": "{//}",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "{",
+      "back": "}",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"WUBRGC\"",
+      "cards": [],
+      "input": "WUBRGC",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G",
+        "C"
+      ],
+      "front": "WUBRGC",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"GRBUW\"",
+      "cards": [],
+      "input": "GRBUW",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G"
+      ],
+      "front": "GRBUW",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"CC\"",
+      "cards": [],
+      "input": "CC",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "CC",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"c\"",
+      "cards": [],
+      "input": "c",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "c",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"WUBRG2C\"",
+      "cards": [],
+      "input": "WUBRG2C",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G",
+        "C"
+      ],
+      "front": "WUBRG2C",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"éW\"",
+      "cards": [],
+      "input": "éW",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W"
+      ],
+      "front": "éW",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Elf // Sorcery\"",
+      "cards": [],
+      "input": "Creature — Elf // Sorcery",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Elf ",
+      "back": " Sorcery",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "//",
+        "Sorcery"
+      ]
+    },
+    {
+      "name": "\"Sorcery // Creature — Elf\"",
+      "cards": [],
+      "input": "Sorcery // Creature — Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Sorcery ",
+      "back": " Creature — Elf",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Sorcery",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Land // Creature — Elemental\"",
+      "cards": [],
+      "input": "Land // Creature — Elemental",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Land ",
+      "back": " Creature — Elemental",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elemental"
+      ]
+    },
+    {
+      "name": "\"A // B // C\"",
+      "cards": [],
+      "input": "A // B // C",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B",
+        "C"
+      ],
+      "front": "A ",
+      "back": " B // C",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"//\"",
+      "cards": [],
+      "input": "//",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"// Land\"",
+      "cards": [],
+      "input": "// Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "",
+      "back": " Land",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": true,
+      "subtypes": []
+    },
+    {
+      "name": "\"Land //\"",
+      "cards": [],
+      "input": "Land //",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land ",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Land/Land\"",
+      "cards": [],
+      "input": "Land/Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Land/Land",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature – Elf\"",
+      "cards": [],
+      "input": "Creature – Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature – Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature - Elf\"",
+      "cards": [],
+      "input": "Creature - Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature - Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Creature -Elf\"",
+      "cards": [],
+      "input": "Creature -Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature -Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature- Elf\"",
+      "cards": [],
+      "input": "Creature- Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature- Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature-Elf\"",
+      "cards": [],
+      "input": "Creature-Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature-Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature— Elf\"",
+      "cards": [],
+      "input": "Creature— Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature— Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Creature—Elf\"",
+      "cards": [],
+      "input": "Creature—Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature—Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"  Creature  —  Elf  Warrior  \"",
+      "cards": [],
+      "input": "  Creature  —  Elf  Warrior  ",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "  Creature  —  Elf  Warrior  ",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "Warrior"
+      ]
+    },
+    {
+      "name": "\"Creature \\t—\\t Elf\\tWarrior\"",
+      "cards": [],
+      "input": "Creature \t—\t Elf\tWarrior",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature \t—\t Elf\tWarrior",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "Warrior"
+      ]
+    },
+    {
+      "name": "\"Creature —\\nElf\"",
+      "cards": [],
+      "input": "Creature —\nElf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature —\nElf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Creature -\\nElf\"",
+      "cards": [],
+      "input": "Creature -\nElf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature -\nElf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Creature — Elf\\nWarrior\"",
+      "cards": [],
+      "input": "Creature — Elf\nWarrior",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Elf\nWarrior",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Elf\\rWarrior — Druid\"",
+      "cards": [],
+      "input": "Creature — Elf\rWarrior — Druid",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Elf\rWarrior — Druid",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Druid"
+      ]
+    },
+    {
+      "name": "\"Creature — Elf Warrior\"",
+      "cards": [],
+      "input": "Creature — Elf Warrior",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "W",
+        "C"
+      ],
+      "front": "Creature — Elf Warrior",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature - Elf - Druid\"",
+      "cards": [],
+      "input": "Creature - Elf - Druid",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature - Elf - Druid",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf",
+        "-",
+        "Druid"
+      ]
+    },
+    {
+      "name": "\"— Elf\"",
+      "cards": [],
+      "input": "— Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "— Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"- Elf\"",
+      "cards": [],
+      "input": "- Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "- Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\" - Elf\"",
+      "cards": [],
+      "input": " - Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": " - Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"Creature —\"",
+      "cards": [],
+      "input": "Creature —",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature —",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Creature — Time Lord\"",
+      "cards": [],
+      "input": "Creature — Time Lord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time Lord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time Lord"
+      ]
+    },
+    {
+      "name": "\"Creature — Time Lord Doctor\"",
+      "cards": [],
+      "input": "Creature — Time Lord Doctor",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time Lord Doctor",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time Lord",
+        "Doctor"
+      ]
+    },
+    {
+      "name": "\"Creature — Time Lordling\"",
+      "cards": [],
+      "input": "Creature — Time Lordling",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time Lordling",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time",
+        "Lordling"
+      ]
+    },
+    {
+      "name": "\"Creature — TimeLord\"",
+      "cards": [],
+      "input": "Creature — TimeLord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — TimeLord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "TimeLord"
+      ]
+    },
+    {
+      "name": "\"Creature — Time Lord Time Lord\"",
+      "cards": [],
+      "input": "Creature — Time Lord Time Lord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time Lord Time Lord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time Lord",
+        "Time",
+        "Lord"
+      ]
+    },
+    {
+      "name": "\"Creature — Time Lord\"",
+      "cards": [],
+      "input": "Creature — Time Lord",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — Time Lord",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Time",
+        "Lord"
+      ]
+    },
+    {
+      "name": "\"Creature — ﻿Elf\"",
+      "cards": [],
+      "input": "Creature — ﻿Elf",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Creature — ﻿Elf",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elf"
+      ]
+    },
+    {
+      "name": "\"LAND\"",
+      "cards": [],
+      "input": "LAND",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "LAND",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"land\"",
+      "cards": [],
+      "input": "land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "land",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Lands\"",
+      "cards": [],
+      "input": "Lands",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Lands",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Land",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Landfall Instant\"",
+      "cards": [],
+      "input": "Landfall Instant",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Landfall Instant",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Instant",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Planeswalker Creature\"",
+      "cards": [],
+      "input": "Planeswalker Creature",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Planeswalker Creature",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Instant Creature\"",
+      "cards": [],
+      "input": "Instant Creature",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Instant Creature",
+      "back": "",
+      "isLand": false,
+      "isCreature": true,
+      "typeBucket": "Creature",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Enchantment Artifact\"",
+      "cards": [],
+      "input": "Enchantment Artifact",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Enchantment Artifact",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Artifact",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Battle Land\"",
+      "cards": [],
+      "input": "Battle Land",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "B"
+      ],
+      "front": "Battle Land",
+      "back": "",
+      "isLand": true,
+      "isCreature": false,
+      "typeBucket": "Battle",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Plane — Dominaria\"",
+      "cards": [],
+      "input": "Plane — Dominaria",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Plane — Dominaria",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Dominaria"
+      ]
+    },
+    {
+      "name": "\"Vanguard\"",
+      "cards": [],
+      "input": "Vanguard",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Vanguard",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Conspiracy\"",
+      "cards": [],
+      "input": "Conspiracy",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [
+        "C"
+      ],
+      "front": "Conspiracy",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Dungeon\"",
+      "cards": [],
+      "input": "Dungeon",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Dungeon",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": []
+    },
+    {
+      "name": "\"Emblem — Elspeth\"",
+      "cards": [],
+      "input": "Emblem — Elspeth",
+      "countPips": {
+        "W": 0,
+        "U": 0,
+        "B": 0,
+        "R": 0,
+        "G": 0,
+        "C": 0
+      },
+      "hasVariableCost": false,
+      "producedKeys": [],
+      "front": "Emblem — Elspeth",
+      "back": "",
+      "isLand": false,
+      "isCreature": false,
+      "typeBucket": "Other",
+      "isMdfcLand": false,
+      "subtypes": [
+        "Elspeth"
+      ]
+    }
+  ]
+}

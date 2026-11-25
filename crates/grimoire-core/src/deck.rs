@@ -6398,7 +6398,12 @@ pub fn set_card_finish(
 ///   so the LEFT JOIN answers NULL rather than dropping the line — [`crate::collection`]'s
 ///   `FROM` discipline, for its reason.
 /// * **The availability numbers**, computed at read time and stored on no row.
-#[derive(Debug, Serialize)]
+///
+/// `Deserialize` in tests only: the deck goldens (`packages/ui/features/decks/__golden__/`) are
+/// written by the TypeScript engine in the camelCase shape this serialises to, and
+/// [`crate::deck_golden`] reads their cards back into this struct.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 #[serde(rename_all = "camelCase")]
 pub struct DeckCardRow {
     pub id: i64,
@@ -6579,8 +6584,10 @@ pub struct DeckDetail {
     pub labels: Vec<DeckLabelRow>,
 }
 
-/// One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
-#[derive(Debug, Serialize)]
+/// One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole, and
+/// to its Rust port ([`crate::deck_rules`]), which reads the same cells.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 #[serde(rename_all = "camelCase")]
 pub struct FormatSpecRow {
     pub key: String,
