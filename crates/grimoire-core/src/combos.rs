@@ -1995,6 +1995,7 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
 /// which is [`match_combos`]' documented rule and holds here for its reason: the caller tells
 /// those two apart from [`ComboStatus::fetched_at`], and a reader shown "this card is in no
 /// combos" when the truth is "we have no combos at all" has been told something false.
+#[allow(clippy::too_many_arguments)]
 pub fn card_combos(
     conn: &Connection,
     oracle_id: &str,
