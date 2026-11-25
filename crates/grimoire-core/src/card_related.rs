@@ -51,6 +51,8 @@ pub fn related_cards(conn: &Connection, id: &str) -> Result<Vec<RelatedCard>, St
     };
 
     let mut out = Vec::new();
+    // Cards `all_parts` already answered, so a marker never answers one a second time.
+    let mut named: Vec<String> = Vec::new();
     let mut resolve = conn
         .prepare("SELECT layout, oracle_id, type_line FROM cards WHERE id = ?1")
         .map_err(|e| e.to_string())?;
@@ -91,6 +93,7 @@ pub fn related_cards(conn: &Connection, id: &str) -> Result<Vec<RelatedCard>, St
             _ => continue,
         };
         let resolved = target.is_some();
+        named.extend(target.iter().filter_map(|t| t.1.clone()));
         out.push(RelatedCard {
             relation: relation.to_owned(),
             name,
@@ -107,6 +110,9 @@ pub fn related_cards(conn: &Connection, id: &str) -> Result<Vec<RelatedCard>, St
             continue;
         }
         for p in marker_printings(conn, marker.helpers)? {
+            if named.contains(&p.oracle_id) {
+                continue;
+            }
             out.push(RelatedCard {
                 relation: "helper".to_owned(),
                 name: p.name,
@@ -267,6 +273,21 @@ mod tests {
         assert_eq!(got[0].relation, "helper");
         assert_eq!(got[0].name, "The Monarch");
         assert_eq!(got[0].card_id.as_deref(), Some("mon"));
+    }
+
+    #[test]
+    fn a_helper_all_parts_already_names_is_answered_once() {
+        let conn = crate::schema::memory_pair();
+        // The part is one printing of the Monarch; the marker finds the newest, another id.
+        let raw = json!({
+            "oracle_text": "When this enters, you become the monarch.",
+            "all_parts": [part("mon-old", "The Monarch", "combo_piece", "Card")],
+        });
+        card(&conn, "k", "o-k", "King", "normal", "Creature", &raw);
+        plain(&conn, "mon-old", "o-mon", "The Monarch", "token", "Card");
+        plain(&conn, "mon-new", "o-mon", "The Monarch", "token", "Card");
+        let got = related_cards(&conn, "k").unwrap();
+        assert_eq!(pairs(&got), [("comboPiece", "The Monarch")]);
     }
 
     #[test]
