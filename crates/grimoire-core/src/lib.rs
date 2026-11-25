@@ -92,6 +92,8 @@ pub mod deck;
 pub mod deck_apply;
 pub mod deck_audit;
 pub mod deck_completion;
+/// Owned cards that fit a deck — format, colour identity, not already in it (MCP project E).
+pub mod deck_fits;
 #[cfg(test)]
 mod deck_golden;
 pub mod deck_meta;

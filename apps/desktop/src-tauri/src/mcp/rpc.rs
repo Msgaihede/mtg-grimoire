@@ -53,11 +53,16 @@ const INSTRUCTIONS: &str = concat!(
     "concluding there is nothing. ",
     "show_search puts a search on the app's Search page and brings its window forward: offer it ",
     "in chat first and call it only after the user says yes. ",
+    "For a deck: get_deck (what it is, its cards, or decklist text), check_deck (what the app's ",
+    "validation finds wrong, and in Commander the bracket floor: a floor, never the deck's ",
+    "bracket), deck_stats, deck_shortfall (what it lacks and where the user owns copies), ",
+    "owned_for_deck (owned cards that fit) and draw_odds; a switched-off pile is not the deck, and ",
+    "a change is the user's to make in the app. ",
     "The one thing these tools write is the user's custom home-page widgets (widget_create, ",
     "widget_update, widget_delete). ",
-    "Five prompts explain the work: search_cards, scryfall_syntax, graphql_discovery, ",
-    "create_widget and card_interactions; read_guide answers any of them by name, so read the one ",
-    "that fits before a task of its kind."
+    "Seven prompts explain the work: search_cards, scryfall_syntax, graphql_discovery, ",
+    "create_widget, card_interactions, review_deck and build_from_collection; read_guide answers ",
+    "any of them by name, so read the one that fits before a task of its kind."
 );
 
 /// What [`handle`] made of a request body.
@@ -285,6 +290,12 @@ mod tests {
             "card_rulings",
             "format_rules",
             "show_search",
+            "get_deck",
+            "check_deck",
+            "deck_stats",
+            "deck_shortfall",
+            "owned_for_deck",
+            "draw_odds",
         ] {
             assert!(INSTRUCTIONS.contains(tool), "the instructions omit {tool}");
         }

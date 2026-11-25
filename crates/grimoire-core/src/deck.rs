@@ -6399,11 +6399,10 @@ pub fn set_card_finish(
 ///   `FROM` discipline, for its reason.
 /// * **The availability numbers**, computed at read time and stored on no row.
 ///
-/// `Deserialize` in tests only: the deck goldens (`packages/ui/features/decks/__golden__/`) are
-/// written by the TypeScript engine in the camelCase shape this serialises to, and
-/// [`crate::deck_golden`] reads their cards back into this struct.
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
+/// `Deserialize` reads the shape this serialises to back: the deck goldens
+/// (`packages/ui/features/decks/__golden__/`, [`crate::deck_golden`]) and a host that received
+/// `deck_get` as JSON (the MCP server's decklist text) both rebuild rows from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckCardRow {
     pub id: i64,

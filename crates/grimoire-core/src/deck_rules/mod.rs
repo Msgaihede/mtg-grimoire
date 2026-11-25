@@ -63,6 +63,62 @@ pub struct DeckCheck {
     /// The bracket readout, only where the format has a commander rule — the page's own condition
     /// for drawing it.
     pub bracket: Option<DeckBracket>,
+    /// The colours the deck may play — [`deck_identity`].
+    pub identity: Option<DeckIdentity>,
+}
+
+/// A deck's colour identity and where it was read from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckIdentity {
+    /// WUBRG letters in that order; `""` is colourless, which admits only colourless cards.
+    pub letters: String,
+    /// `"commanders"`: the command zone's identity (CR 903.4), the one every other card must fit
+    /// inside. `"cards"`: the union of the active cards' identities, for a deck with no commander
+    /// to read one from — what the deck plays now, not a rule.
+    pub from: &'static str,
+}
+
+/// The colours a deck may play: under a commander rule with a commander in the active command
+/// zone, that zone's identity ([`commanders::commander_identity`], the planeswalkers' under
+/// Oathbreaker); otherwise the union of the active cards' identities. `None` for a deck with no
+/// active card whose identity is known (an empty deck, or nothing but orphans), which has no
+/// identity rather than a colourless one.
+pub fn deck_identity(
+    cards: &[crate::deck::DeckCardRow],
+    spec: Option<&crate::deck::FormatSpecRow>,
+) -> Option<DeckIdentity> {
+    let active: Vec<&crate::deck::DeckCardRow> =
+        cards.iter().filter(|c| c.category_active).collect();
+    if let Some(spec) = spec.filter(|s| s.commander_rule.is_some()) {
+        let zone: Vec<&crate::deck::DeckCardRow> = active
+            .iter()
+            .copied()
+            .filter(|c| c.category_kind == "commander")
+            .collect();
+        if let Some(identity) = commanders::commander_identity(&zone, spec) {
+            return Some(DeckIdentity {
+                letters: identity.letters(),
+                from: "commanders",
+            });
+        }
+    }
+    let known: Vec<&&crate::deck::DeckCardRow> = active
+        .iter()
+        .filter(|c| c.color_identity.is_some())
+        .collect();
+    if known.is_empty() {
+        return None;
+    }
+    let union = known
+        .into_iter()
+        .fold(commanders::Identity::default(), |u, c| {
+            u.union(commanders::identity_of(c))
+        });
+    Some(DeckIdentity {
+        letters: union.letters(),
+        from: "cards",
+    })
 }
 
 /// The bracket readout for one list: the estimate, the bracket the reader set, and the sentence
@@ -109,6 +165,7 @@ pub fn check_deck(
             issues: Vec::new(),
             parked: Vec::new(),
             bracket: None,
+            identity: deck_identity(&detail.cards, None),
         }));
     };
     let cards = &detail.cards;
@@ -150,6 +207,7 @@ pub fn check_deck(
             Vec::new()
         },
         bracket,
+        identity: deck_identity(cards, Some(&spec)),
     }))
 }
 
@@ -506,5 +564,59 @@ mod check_tests {
         let conn = seeded();
         assert!(check_deck(&conn, 999, "live").unwrap().is_none());
         assert!(check_deck(&conn, 999, "nonsense").is_err());
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use crate::deck_golden::load;
+
+    #[test]
+    fn a_deck_s_identity_is_its_commanders_else_its_cards() {
+        let golden = load(include_str!(
+            "../../../../packages/ui/features/decks/__golden__/validation.json"
+        ));
+        let edh = golden.spec(&Value::from("commander"));
+        let modern = golden.spec(&Value::from("modern"));
+        let card = |over: Value| golden.card(&over);
+        let commander = card(serde_json::json!({
+            "id": 1, "categoryKind": "commander", "colorIdentity": "WG"
+        }));
+        let red = card(serde_json::json!({ "id": 2, "colorIdentity": "R" }));
+        let blue_parked = card(serde_json::json!({
+            "id": 3, "colorIdentity": "U", "categoryActive": false
+        }));
+        let both = [commander.clone(), red.clone(), blue_parked.clone()];
+        assert_eq!(
+            deck_identity(&both, Some(&edh)),
+            Some(DeckIdentity {
+                letters: "WG".to_owned(),
+                from: "commanders"
+            })
+        );
+        // No commander rule: the active cards' union, the parked blue card out.
+        assert_eq!(
+            deck_identity(&both, Some(&modern)),
+            Some(DeckIdentity {
+                letters: "WRG".to_owned(),
+                from: "cards"
+            })
+        );
+        assert_eq!(
+            deck_identity(std::slice::from_ref(&red), Some(&edh))
+                .unwrap()
+                .from,
+            "cards"
+        );
+        assert_eq!(deck_identity(&[blue_parked], Some(&modern)), None);
+        let colourless =
+            card(serde_json::json!({ "id": 4, "categoryKind": "commander", "colorIdentity": "" }));
+        assert_eq!(
+            deck_identity(&[colourless, red], Some(&edh))
+                .unwrap()
+                .letters,
+            ""
+        );
     }
 }

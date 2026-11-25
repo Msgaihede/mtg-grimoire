@@ -194,7 +194,7 @@ fn condition_of(raw: &str) -> Option<String> {
 }
 
 /// `fromDeckCard`. A deck has piles and labels, and no purchase history at all.
-fn from_deck_card(row: &crate::deck::DeckCardRow) -> Card {
+pub(crate) fn from_deck_card(row: &crate::deck::DeckCardRow) -> Card {
     Card {
         name: row.name.clone(),
         quantity: row.quantity,

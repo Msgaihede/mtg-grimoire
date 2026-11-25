@@ -763,6 +763,11 @@ commands! {
         )
     };
 
+    // deck_fits — owned cards a deck could play (no page calls this).
+    read deck_owned_fits in deck_fits(deck_id: i64, variant: String, words: Vec<String>, oracle_tags: Vec<String>, types: Vec<String>, mana_values: Vec<u8>, limit: i64, offset: i64) = |conn| {
+        owned_fits(conn, deck_id, &variant, &words, &oracle_tags, &types, &mana_values, limit, offset)
+    };
+
     // deck_rules — the deck page's validation and bracket, ported (no page calls these).
     read deck_check in deck_rules(deck_id: i64, variant: String) = |conn| check_deck(conn, deck_id, &variant);
 
@@ -770,6 +775,10 @@ commands! {
     read deck_stats in deck_stats(deck_id: i64, variant: String, marketplace: Option<String>) = |conn| {
         let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
         read_stats(conn, deck_id, &variant, marketplace)
+    };
+    read deck_draw_odds in deck_stats(deck_id: i64, variant: String, cards: Vec<String>, pile: Option<String>, card_type: Option<String>, want: i64, mode: OddsMode, hand: i64, turns: i64, on_the_play: bool) = |conn| {
+        let what = DrawWhat { cards: &cards, pile: pile.as_deref(), card_type: card_type.as_deref() };
+        draw_odds(conn, deck_id, &variant, what, want, mode, hand, turns, on_the_play)
     };
 
     // deck_theory
@@ -2545,6 +2554,18 @@ mod tests {
             // `blocking`. A ticket that is still good and a copy that is really there, so
             // each reaches the write it decides on.
             "bulk_undo" => json!({ "undoId": seeded.undo }),
+            // An enum argument (`mode`) the made-up ones cannot spell, and a question the body
+            // answers rather than refuses: a selector and a hand in bounds, on the seeded deck.
+            "deck_draw_odds" => json!({
+                "deckId": seeded.deck,
+                "variant": "live",
+                "cards": ["Lightning Bolt"],
+                "want": 1,
+                "mode": "atLeast",
+                "hand": 7,
+                "turns": 2,
+                "onThePlay": true,
+            }),
             // An add that lands and a live removal, so the `owned` arm and its refresh run.
             "deck_apply" => json!({
                 "deckId": seeded.deck,
