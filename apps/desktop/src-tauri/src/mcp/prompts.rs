@@ -59,9 +59,9 @@ const PROMPTS: [Prompt; 4] = [
         name: "card_interactions",
         title: "How cards fit together",
         description: concat!(
-            "Which tool answers what a card does, its combos, what it brings with it, cards that ",
-            "do the same job, its raw Scryfall facts and a format's rules — and what each source ",
-            "can and cannot tell."
+            "Which tool answers what a card does, its rulings, its combos, what it brings with ",
+            "it, cards that do the same job, its raw Scryfall facts and a format's rules — and ",
+            "what each source can and cannot tell."
         ),
         argument: (
             "question",

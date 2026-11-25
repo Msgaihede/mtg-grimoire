@@ -35,6 +35,7 @@ construction).
 
 - [Scryfall and the price feeds](#scryfall-and-the-price-feeds)
 - [Scryfall's Tagger datasets](#scryfalls-tagger-datasets)
+- [Scryfall's rulings file](#scryfalls-rulings-file)
 - [Commander Spellbook's combo feed](#commander-spellbooks-combo-feed)
 - [The ECB's exchange rate](#the-ecbs-exchange-rate)
 - [The scanner's files, from nowhere but the app](#the-scanners-files-from-nowhere-but-the-app)
@@ -70,6 +71,17 @@ blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and
 stamps were the previous day when checked on 2026-08-20. The week is
 `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
 taxonomy up to seven days behind Scryfall is the design working, not a stale download.
+
+## Scryfall's rulings file
+
+**Scryfall's rulings bulk file (`/bulk-data/rulings`) is a fourth Scryfall download, and the
+desktop's alone** (project D, the owner's decision 2026-11-25): the local MCP server is its one
+reader, so the light app's hosts never fetch it. ~5.5 MB gzipped JSONL, 80 928 rulings over 20 387
+cards (measured 2026-11-25), fetched weekly at launch through the same `scryfall::Client` — one
+`/bulk-data/rulings` check a week, a 304 most weeks — and never one request per card: no
+`/cards/{id}/rulings` call is made anywhere. Like the tag files it is regenerated daily and the week
+is this app's choice (`rulings::REFRESH_INTERVAL_SECS`). A failure keeps the rulings already stored.
+[data-and-sync.md](../reference/data-and-sync.md) has the tables (corpus schema 10).
 
 ## Commander Spellbook's combo feed
 
