@@ -37,12 +37,7 @@ describe("searchColorDefault", () => {
       typeLine: "Legendary Creature — Merfolk Wizard",
       colorIdentity: "GU",
     });
-    expect(searchColorDefault([tymna, thrasios], spec("commander"))).toEqual([
-      "W",
-      "U",
-      "B",
-      "G",
-    ]);
+    expect(searchColorDefault([tymna, thrasios], spec("commander"))).toEqual(["W", "U", "B", "G"]);
   });
 
   it("answers the colourless-only chip for a colourless commander", () => {
