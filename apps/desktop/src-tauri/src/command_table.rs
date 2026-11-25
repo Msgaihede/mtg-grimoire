@@ -287,7 +287,10 @@ const TABLE_ONLY: &[(&str, &str)] = &[
     ),
     (
         "cards_similar",
-        "cards that do what a card does, ranked by shared oracle tags, for the MCP server's      similar_cards tool",
+        concat!(
+            "cards that do what a card does, ranked by shared oracle tags, for the MCP ",
+            "server's similar_cards tool"
+        ),
     ),
 ];
 
