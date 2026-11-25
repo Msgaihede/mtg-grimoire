@@ -1,6 +1,6 @@
 # MCP server: show a search in the app (project B of the MCP improvements)
 
-Date: 2026-11-25. Status: draft, for the owner's approval.
+Date: 2026-11-25. Status: approved by the owner, 2026-11-25.
 
 The second of five designs for the local MCP server (`apps/desktop/src-tauri/src/mcp/`, reference:
 `docs/reference/local-mcp-server.md`). The programme, and the decisions that bind every project, are
