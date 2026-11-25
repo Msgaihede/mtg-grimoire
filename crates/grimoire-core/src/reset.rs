@@ -541,20 +541,20 @@ const SYNCING: &str = "a card update is running — clear the cache once it has 
 
 /// Refused when a feed is downloading into `data/tmp/`, in the reader's words.
 ///
-/// One sentence for all five feeds rather than one per feed: the reader did not necessarily
+/// One sentence for all six feeds rather than one per feed: the reader did not necessarily
 /// start any of them — every one of them can run at launch without a press — and what they
 /// need to know is that the press will work in a minute, not which file was in the way.
 const DOWNLOADING: &str =
-    "a price, tag or combo download is running — clear the cache once it has finished";
+    "a price, tag, combo or rulings download is running — clear the cache once it has finished";
 
 /// Why [`cache_clear`] must not run right now, or `None` when it may.
 ///
 /// **Every download that lands in `data/tmp/` has a second phase that reopens the file**, and a
 /// sweep between the two phases fails the job. The corpus sync is `syncing`; the two price
-/// feeds, the two Tagger datasets and the combo feed are each module's own refresh claim, held
-/// from before the download until the temp file is deleted — which is exactly the span a sweep
-/// must not land in. The sync is asked first only because its sentence is the more specific
-/// one when both are true.
+/// feeds, the two Tagger datasets, the combo feed and the rulings are each module's own refresh
+/// claim, held from before the download until the temp file is deleted — which is exactly the
+/// span a sweep must not land in. The sync is asked first only because its sentence is the more
+/// specific one when both are true.
 pub fn cache_clear_refusal(syncing: bool) -> Option<&'static str> {
     if syncing {
         return Some(SYNCING);
@@ -562,6 +562,7 @@ pub fn cache_clear_refusal(syncing: bool) -> Option<&'static str> {
     if crate::marketplace_feed::any_refresh_running()
         || crate::tags::any_refresh_running()
         || crate::combos::any_refresh_running()
+        || crate::rulings::any_refresh_running()
     {
         return Some(DOWNLOADING);
     }
@@ -1109,6 +1110,10 @@ mod tests {
         }
         {
             let _tags = crate::tags::hold_refresh_for_test("reset-test-tags");
+            assert_eq!(cache_clear_refusal(false), Some(DOWNLOADING));
+        }
+        {
+            let _rulings = crate::rulings::hold_refresh_for_test("reset-test-rulings");
             assert_eq!(cache_clear_refusal(false), Some(DOWNLOADING));
         }
     }

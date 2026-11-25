@@ -559,6 +559,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   been its only statement that was not about folders. **v25 sweeps it**, in the same
   `execute_batch` that drops `deck_allocations` and `decks.is_built`, because that rung is what
   answers the question the switch was asking — the decks *are* where the cards are now.
+- **Corpus schema 10 is Scryfall's rulings** (2026-11-25, project D of the MCP improvements,
+  [the design](../superpowers/specs/2026-11-25-mcp-rulings-design.md)): `rulings` (`oracle_id`,
+  `seq`, `source`, `published_at`, `comment`; `WITHOUT ROWID`, primary key `(oracle_id, seq)` and
+  no other index) and the one-row `ruling_meta` watermark (`etag`, `updated_at`, `ingested_at`,
+  `checked_at`, `ruling_count`, `card_count`) — `oracle_tag_meta`'s shape and its
+  `checked_at`/`ingested_at` split. **The rung asks `sqlite_master` for the two names** where the
+  column rungs ask `PRAGMA table_info`, fires when either is missing, and runs the same
+  `CREATE TABLE IF NOT EXISTS` literal the v0 build runs (`RULING_TABLES_SQL`), so a built corpus
+  and a climbed one store one text; nothing is backfilled, and a corpus with no `ruling_meta` row
+  is a feed never fetched, so the next launch fetches it. `grimoire_core::rulings` is the feed:
+  the desktop alone spawns it at launch (the owner's decision — its one reader is the local MCP
+  server), weekly, through the one Scryfall client; a push sink stages the file into
+  `rulings_staging` 2 000 rows to a transaction, drops a ruling the file repeats word for word for
+  one card, keeps the file's order as `seq` (which is date order), refuses a file with no rulings or
+  more bad lines than good, and swaps by rename with the watermark in one transaction. Measured
+  2026-11-25 over that day's file: 5 508 481 bytes gzipped, 80 928 rulings over 20 387 oracle ids
+  (median 3 a card, most 32), 43 exact repeats, 22.4 MB stored and 0.03 ms for one card's rulings.
+  `oracle_id` is a soft reference, like every other reference to `cards`.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
   (`USER_SCHEMA_VERSION` on the reader's file — this page stops spelling out which number two
@@ -579,7 +597,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   search box's `ft:`, `wm:`, `loy:`, `frame:`, `stamp:`, `b:` and a dozen `is:` values read —
   described in [search-syntax.md](search-syntax.md), and **corpus schema 9** is `combos.requires`
   (2026-11-24), the feed's template names, which widens the combo-shape probe so schema 2's
-  rebuild fires again — described in [commander-brackets.md](commander-brackets.md).) This page names that rung rather than parking
+  rebuild fires again — described in [commander-brackets.md](commander-brackets.md), and **corpus
+  schema 10** is the rulings feed's `rulings` and `ruling_meta` (2026-11-25), the first corpus rung
+  that adds tables rather than columns — the bullet below.) This page names that rung rather than parking
   the head number beside it, for the reason the next two sentences give about the other half of
   the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
   one from the other: a user version says what has been done to rows that exist nowhere else, a

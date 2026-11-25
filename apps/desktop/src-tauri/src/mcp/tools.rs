@@ -243,8 +243,9 @@ pub fn list() -> Vec<Value> {
              it brings with it (related: tokens, emblems, meld parts, combo pieces; at most 25, \
              with relatedTotal giving the full count when there are more; comboPiece is \
              Scryfall's word for cards that refer to each other, not a Spellbook combo, which \
-             card_combos answers) and how many Commander Spellbook combos name it. Prices are \
-             in the reader's marketplace.",
+             card_combos answers), how many Commander Spellbook combos name it, and how many \
+             rulings it has (rulingCount, with rulingData; card_rulings answers their text). \
+             Prices are in the reader's marketplace.",
             json!({ "cardId": card_id }),
             &["cardId"],
             &read,
@@ -381,6 +382,27 @@ pub fn list() -> Vec<Value> {
                 "fields": {
                     "type": "array", "items": { "type": "string" },
                     "description": "Top-level Scryfall field names to answer, e.g. [\"keywords\", \"layout\"].",
+                },
+            }),
+            &["cardIds"],
+            &read,
+        ),
+        tool(
+            "card_rulings",
+            "A card's rulings",
+            "The rulings of up to 10 printings, from Scryfall's rulings file: what Wizards of \
+             the Coast has ruled about how each card works (source wotc, as Gatherer publishes \
+             them) and a few notes of Scryfall's own (source scryfall), each dated, oldest first. \
+             Printings of one card share its rulings. A ruling can predate a later rules change, \
+             so prefer the newer of two that disagree. Many cards have none, and rulings is then \
+             empty. Answers rulingData: when the rulings list was downloaded; when it never was, \
+             a note says so and an empty list means nothing. An id the database lacks is named \
+             in missing.",
+            json!({
+                "cardIds": {
+                    "type": "array", "items": { "type": "string" },
+                    "minItems": 1, "maxItems": MAX_RULING_CARDS,
+                    "description": "Printing ids, from find_cards.",
                 },
             }),
             &["cardIds"],
@@ -656,6 +678,7 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "get_combo" => get_combo(state, &args).await,
         "held_combos" => held_combos(state, &args).await,
         "card_scryfall" => card_scryfall(state, &args).await,
+        "card_rulings" => card_rulings(state, &args).await,
         "find_tags" => find_tags(state, &args).await,
         "similar_cards" => similar_cards(state, &args).await,
         "format_rules" => format_rules(state, &args).await,
@@ -1129,8 +1152,94 @@ async fn get_card(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
                 with_combo_data(&mut card, &status, Vec::new());
             }
         }
+        // The count and not the text, which `card_rulings` answers (spec §6.5): a card can have
+        // thirty rulings, and most questions about a card need none of them.
+        if let Ok(found) = run(state, "rulings_for_cards", json!({ "oracleIds": [oracle] })).await {
+            let count = found
+                .get(0)
+                .map(|asked| rows(asked, "rulings").len())
+                .unwrap_or(0);
+            card["rulingCount"] = json!(count);
+            if let Ok(status) = run(state, "rulings_status", json!({})).await {
+                with_ruling_data(&mut card, &status);
+            }
+        }
     }
     Ok(card)
+}
+
+/// The most printings `card_rulings` answers in one call: an interaction question names two or
+/// three cards, and a card's rulings run to thirty.
+const MAX_RULING_CARDS: usize = 10;
+
+/// `card_rulings`: each printing's card, then the rulings of every card at once (spec §6.4).
+async fn card_rulings(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let mut ids = args.texts("cardIds")?;
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(id.clone()));
+    if !(1..=MAX_RULING_CARDS).contains(&ids.len()) {
+        return Err(format!(
+            "cardIds must hold from 1 to {MAX_RULING_CARDS} printing ids."
+        ));
+    }
+    let mut asked: Vec<(String, Value, Value)> = Vec::new();
+    let mut missing = Vec::new();
+    for id in ids {
+        let detail = run(
+            state,
+            "card_detail",
+            json!({ "id": id, "marketplace": null }),
+        )
+        .await?;
+        if detail.is_null() {
+            missing.push(id);
+            continue;
+        }
+        let name = detail.get("name").cloned().unwrap_or(Value::Null);
+        let oracle = detail.get("oracleId").cloned().unwrap_or(Value::Null);
+        asked.push((id, name, oracle));
+    }
+    let oracle_ids: Vec<&str> = asked.iter().filter_map(|(_, _, o)| o.as_str()).collect();
+    let found = if oracle_ids.is_empty() {
+        Value::Array(Vec::new())
+    } else {
+        run(
+            state,
+            "rulings_for_cards",
+            json!({ "oracleIds": oracle_ids }),
+        )
+        .await?
+    };
+    let mut by_oracle: Map<String, Value> = Map::new();
+    for card in found.as_array().into_iter().flatten() {
+        if let Some(oracle) = card.get("oracleId").and_then(Value::as_str) {
+            let rulings: Vec<Value> = rows(card, "rulings")
+                .iter()
+                .map(|r| {
+                    json!({
+                        "publishedAt": r.get("publishedAt"),
+                        "source": r.get("source"),
+                        "text": r.get("comment"),
+                    })
+                })
+                .collect();
+            by_oracle.insert(oracle.to_owned(), json!(rulings));
+        }
+    }
+    let cards: Vec<Value> = asked
+        .into_iter()
+        .map(|(id, name, oracle)| {
+            let rulings = oracle
+                .as_str()
+                .and_then(|o| by_oracle.get(o).cloned())
+                .unwrap_or_else(|| json!([]));
+            json!({ "cardId": id, "name": name, "oracleId": oracle, "rulings": rulings })
+        })
+        .collect();
+    let mut answer = json!({ "cards": cards, "missing": missing });
+    let status = run(state, "rulings_status", json!({})).await?;
+    with_ruling_data(&mut answer, &status);
+    Ok(answer)
 }
 
 /// The top-level Scryfall fields `card_scryfall` leaves out unless asked for by name.
@@ -1605,14 +1714,22 @@ fn combo_data(status: &Value) -> Value {
     json!({ "downloadedAt": status.get("fetchedAt").cloned().unwrap_or(Value::Null) })
 }
 
+/// The "never downloaded" note's last sentence for a feed Settings can fetch: the combos, whose
+/// *Refresh combos* is in Settings → local cache.
+const FETCH_AT_LAUNCH_OR_IN_SETTINGS: &str =
+    "The app fetches it weekly when it starts, and Settings can fetch it now.";
+
+/// The same for a feed Settings has no button for: the oracle tags and the rulings.
+const FETCH_AT_LAUNCH: &str = "The app fetches it weekly when it starts.";
+
 /// Put `comboData` on an answer, with the sentence that says so when nothing was downloaded.
 fn with_combo_data(answer: &mut Value, status: &Value, notes: Vec<String>) {
     with_feed_data(
         answer,
         "comboData",
         combo_data(status),
-        "combo list",
-        "no combos",
+        ("combo list", "no combos"),
+        FETCH_AT_LAUNCH_OR_IN_SETTINGS,
         notes,
     );
 }
@@ -1628,21 +1745,39 @@ fn with_tag_data(answer: &mut Value, status: &Value) {
         answer,
         "tagData",
         tag_data(status),
-        "oracle tag list",
-        "no tags",
+        ("oracle tag list", "no tags"),
+        FETCH_AT_LAUNCH,
+        Vec::new(),
+    );
+}
+
+/// `rulingData`: when the rulings file was last downloaded (Unix seconds, null if never).
+fn ruling_data(status: &Value) -> Value {
+    json!({ "downloadedAt": status.get("ingestedAt").cloned().unwrap_or(Value::Null) })
+}
+
+/// Put `rulingData` on an answer, as [`with_combo_data`] puts `comboData`. Only the desktop
+/// fetches the file, at launch; Settings has no button for it.
+fn with_ruling_data(answer: &mut Value, status: &Value) {
+    with_feed_data(
+        answer,
+        "rulingData",
+        ruling_data(status),
+        ("rulings list", "no rulings"),
+        FETCH_AT_LAUNCH,
         Vec::new(),
     );
 }
 
 /// Put a downloaded feed's `{ downloadedAt }` on an answer under `key`. When nothing was ever
-/// downloaded the answer also carries `note`, one sentence saying the `list` is missing, so an
-/// empty answer does not read as `nothing`, and where to fetch it; `notes` are joined after it.
+/// downloaded the answer also carries `note`: the `list` is missing, so an empty answer does not
+/// read as `nothing`, then `fetch`, where it comes from; `notes` are joined after it.
 fn with_feed_data(
     answer: &mut Value,
     key: &str,
     data: Value,
-    list: &str,
-    nothing: &str,
+    (list, nothing): (&str, &str),
+    fetch: &str,
     mut notes: Vec<String>,
 ) {
     if data["downloadedAt"].is_null() {
@@ -1651,11 +1786,11 @@ fn with_feed_data(
             format!(
                 concat!(
                     "The {list} has not been downloaded yet, so an empty answer does not mean ",
-                    "there are {nothing}. The app fetches it weekly when it starts, and ",
-                    "Settings can fetch it now."
+                    "there are {nothing}. {fetch}"
                 ),
                 list = list,
-                nothing = nothing
+                nothing = nothing,
+                fetch = fetch
             ),
         );
     }
@@ -2652,10 +2787,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 27);
+        assert_eq!(names.len(), 28);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 27, "names are unique");
+        assert_eq!(names.len(), 28, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -3754,6 +3889,7 @@ mod tests {
             tag(c, "ramp", "Ramp", &["o-p-a"]);
             tag(c, "draw", "Card advantage", &["o-p-a"]);
             tags_downloaded(c);
+            rulings_downloaded(c);
         });
         let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
         assert_eq!(
@@ -3786,6 +3922,7 @@ mod tests {
             tag(c, "ramp", "Ramp", &["o-other"]);
             tags_downloaded(c);
             downloaded(c);
+            rulings_downloaded(c);
         });
         let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
         assert_eq!(got["tags"], json!([]));
@@ -3808,7 +3945,9 @@ mod tests {
         assert!(got["tagData"]["downloadedAt"].is_null(), "{got}");
         let note = got["note"].as_str().unwrap();
         assert!(
-            note.contains("tag list") && note.contains("combo list"),
+            note.contains("tag list")
+                && note.contains("combo list")
+                && note.contains("rulings list"),
             "{got}"
         );
         assert!(!note.contains("  "), "{note}");
@@ -3819,7 +3958,11 @@ mod tests {
         assert_eq!(found["tags"], json!([]));
         assert!(found["tagData"]["downloadedAt"].is_null(), "{found}");
         let note = found["note"].as_str().unwrap();
-        assert!(note.contains("Settings"), "{found}");
+        assert!(note.contains("weekly when it starts"), "{found}");
+        assert!(
+            !note.contains("Settings"),
+            "Settings has no button for the tag list: {found}"
+        );
         assert!(!note.contains("  "), "{note}");
     }
 
@@ -4257,5 +4400,152 @@ mod tests {
         seed(&state, downloaded);
         let why = refused(&state, "get_combo", json!({ "comboId": "nope" })).await;
         assert!(!why.contains("Settings"), "{why}");
+    }
+
+    // ---- rulings (project D) ------------------------------------------------------------
+
+    /// A ruling stored as the feed stores it.
+    fn ruling(c: &rusqlite::Connection, oracle: &str, seq: i64, date: &str, text: &str) {
+        c.execute(
+            "INSERT INTO rulings (oracle_id, seq, source, published_at, comment)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                oracle,
+                seq,
+                if seq == 9 { "scryfall" } else { "wotc" },
+                date,
+                text
+            ],
+        )
+        .unwrap();
+    }
+
+    fn rulings_downloaded(c: &rusqlite::Connection) {
+        c.execute(
+            "INSERT INTO ruling_meta
+                 (id, ingested_at, checked_at, ruling_count, card_count)
+             VALUES (1, 1700000400, 1700000500, 3, 2)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn card_rulings_answers_each_card_s_rulings_oldest_first() {
+        let state = state("card-rulings");
+        seed(&state, |c| {
+            raw_card(c, "p-a", "Card A", &json!({}));
+            raw_card(c, "p-b", "Card B", &json!({}));
+            raw_card(c, "p-none", "Card None", &json!({}));
+            ruling(c, "o-p-a", 0, "2004-10-04", "The first.");
+            ruling(c, "o-p-a", 9, "2023-05-01", "A note of Scryfall's.");
+            ruling(c, "o-p-b", 0, "2017-04-18", "Card B's one ruling.");
+            rulings_downloaded(c);
+        });
+        let got = done(
+            &state,
+            "card_rulings",
+            json!({ "cardIds": ["p-b", "p-a", "p-none", "nope", "p-a"] }),
+        )
+        .await;
+        let names: Vec<&str> = got["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["Card B", "Card A", "Card None"],
+            "in the order asked, once each"
+        );
+        assert_eq!(got["cards"][0]["cardId"], "p-b");
+        assert_eq!(got["cards"][0]["oracleId"], "o-p-b");
+        assert_eq!(
+            got["cards"][1]["rulings"],
+            json!([
+                { "publishedAt": "2004-10-04", "source": "wotc", "text": "The first." },
+                { "publishedAt": "2023-05-01", "source": "scryfall", "text": "A note of Scryfall's." },
+            ])
+        );
+        assert_eq!(
+            got["cards"][2]["rulings"],
+            json!([]),
+            "a card can have none"
+        );
+        assert_eq!(got["missing"], json!(["nope"]));
+        assert_eq!(got["rulingData"]["downloadedAt"], 1_700_000_400);
+        assert!(got.get("note").is_none(), "{got}");
+    }
+
+    #[tokio::test]
+    async fn card_rulings_with_no_list_says_the_list_is_missing() {
+        let state = state("card-rulings-no-list");
+        seed(&state, |c| raw_card(c, "p-a", "Card A", &json!({})));
+        let got = done(&state, "card_rulings", json!({ "cardIds": ["p-a"] })).await;
+        assert_eq!(got["cards"][0]["rulings"], json!([]));
+        assert!(got["rulingData"]["downloadedAt"].is_null(), "{got}");
+        let note = got["note"].as_str().unwrap();
+        assert!(
+            note.contains("rulings list has not been downloaded") && note.contains("no rulings"),
+            "{note}"
+        );
+        assert!(
+            !note.contains("Settings"),
+            "Settings has no rulings button: {note}"
+        );
+        assert!(!note.contains("  "), "{note}");
+
+        let only_missing = done(&state, "card_rulings", json!({ "cardIds": ["nope"] })).await;
+        assert_eq!(only_missing["cards"], json!([]));
+        assert_eq!(only_missing["missing"], json!(["nope"]));
+    }
+
+    #[tokio::test]
+    async fn card_rulings_takes_one_to_ten_ids() {
+        let state = state("card-rulings-bounds");
+        for args in [
+            json!({}),
+            json!({ "cardIds": [] }),
+            json!({ "cardIds": ["", " "] }),
+        ] {
+            let why = refused(&state, "card_rulings", args).await;
+            assert!(why.contains("from 1 to 10"), "{why}");
+        }
+        let eleven: Vec<String> = (0..11).map(|i| format!("p-{i}")).collect();
+        let why = refused(&state, "card_rulings", json!({ "cardIds": eleven })).await;
+        assert!(why.contains("from 1 to 10"), "{why}");
+        let why = refused(&state, "card_rulings", json!({ "cardIds": "p-a" })).await;
+        assert!(why.contains("list of strings"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn get_card_counts_the_rulings_and_says_when_the_list_is_missing() {
+        let state = state("get-card-rulings");
+        seed(&state, |c| {
+            raw_card(c, "p-a", "Card A", &json!({}));
+            ruling(c, "o-p-a", 0, "2004-10-04", "The first.");
+            ruling(c, "o-p-a", 1, "2010-01-01", "The second.");
+        });
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["rulingCount"], 2);
+        assert!(got["rulingData"]["downloadedAt"].is_null(), "{got}");
+        assert!(
+            got["note"].as_str().unwrap().contains("rulings list"),
+            "{got}"
+        );
+
+        seed(&state, rulings_downloaded);
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["rulingCount"], 2);
+        assert_eq!(got["rulingData"]["downloadedAt"], 1_700_000_400);
+        assert!(
+            !got["note"].as_str().unwrap_or_default().contains("rulings"),
+            "{got}"
+        );
+        assert!(
+            got.get("rulings").is_none(),
+            "the text is card_rulings' to answer: {got}"
+        );
     }
 }

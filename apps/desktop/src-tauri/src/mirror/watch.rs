@@ -1043,6 +1043,8 @@ mod tests {
             "art_tag_illustrations",
             "art_tag_parents",
             "art_tag_meta",
+            "rulings",
+            "ruling_meta",
         ] {
             assert_eq!(
                 surface_of(table),
@@ -1177,6 +1179,12 @@ mod tests {
                 // change no file shows. It is `WITHOUT ROWID` and could not reach the hook anyway,
                 // which is not a decision; this is.
                 "price_snapshots",
+                // Scryfall's rulings feed (corpus schema 10): rewritten wholesale by a weekly
+                // refresh, never edited by the reader, and quoted by no mirrored file — the
+                // combo tables' reason. `WITHOUT ROWID`, so the hook could not see `rulings`
+                // anyway; this row is the decision.
+                "ruling_meta",
+                "rulings",
                 // The Scanner's history (user schema v65): a record of what the tray put away,
                 // which no mirrored file quotes. Rowid tables the hook sees, so `surface_of`
                 // says `None` for them in an arm of its own; an Add's cards are mirrored as the

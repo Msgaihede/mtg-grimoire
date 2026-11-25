@@ -310,6 +310,17 @@ const TABLE_ONLY: &[(&str, &str)] = &[
             "for the MCP server's deck tools"
         ),
     ),
+    (
+        "rulings_for_cards",
+        concat!(
+            "a card's Scryfall rulings, for the MCP server's card_rulings tool and get_card's ",
+            "count; no page reads rulings (the owner's decision, 2026-11-25)"
+        ),
+    ),
+    (
+        "rulings_status",
+        "when the rulings file was downloaded, for the MCP server's rulingData",
+    ),
 ];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the

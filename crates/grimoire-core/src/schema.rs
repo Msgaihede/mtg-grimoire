@@ -759,6 +759,17 @@ pub const USER_SCHEMA_VERSION: i64 = 69;
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
 ///
+/// **10 (2026-11-25) is the rulings feed's two tables, `rulings` and `ruling_meta`** — Scryfall's
+/// rulings bulk file ([`crate::rulings`]), which the desktop fetches weekly and the local MCP
+/// server's `card_rulings` answers an agent from. **The first corpus rung that adds tables rather
+/// than columns**, so its gate asks `sqlite_master` for the two names ([`rulings_are_owed`]) where
+/// the column rungs ask `PRAGMA table_info`, and its statement is the one [`create_corpus_schema`]
+/// runs ([`RULING_TABLES_SQL`], `IF NOT EXISTS` so it builds only what is missing). Nothing is
+/// backfilled — only the feed has the rows — and a corpus with no `ruling_meta` row is a feed
+/// never fetched, so the next launch fetches it. Gated on the shape, never on this number, for
+/// the paragraph at the foot of this doc: every converted database and every fresh install
+/// arrives here stamped 10 with neither table.
+///
 /// **9 (2026-11-24) is `combos.requires`** — the names of the feed's `requires[]` templates
 /// ("a creature with flying"), which were read for their count and thrown away, and which the
 /// local MCP server's card-knowledge tools hand to an agent. **It has no rung function of its
@@ -923,7 +934,7 @@ pub const USER_SCHEMA_VERSION: i64 = 69;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 9;
+pub const CORPUS_SCHEMA_VERSION: i64 = 10;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1111,6 +1122,8 @@ pub const TABLES: &[(&str, Side)] = &[
     ("oracle_tag_parents", Side::Corpus),
     ("oracle_taggings", Side::Corpus),
     ("oracle_tags", Side::Corpus),
+    ("ruling_meta", Side::Corpus),
+    ("rulings", Side::Corpus),
     ("sets", Side::Corpus),
     ("sync_meta", Side::Corpus),
 ];
@@ -5589,6 +5602,56 @@ fn create_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> 
     conn.execute_batch(&on_schema(schema, COMBO_INDEXES_SQL))
 }
 
+/// Corpus schema 10: Scryfall's rulings and the feed's watermark ([`crate::rulings`]).
+///
+/// **One literal for both ways a corpus arrives at head**, which is the combo tables' rule with
+/// one difference: `IF NOT EXISTS`, because the rung that runs it ([`add_ruling_tables`]) fires
+/// when *either* table is missing and must leave the other alone. SQLite drops the clause from
+/// the text it stores, so a built corpus and a climbed one store one text
+/// (`the_corpus_schema_is_byte_identical_to_what_the_ladder_builds`).
+///
+/// **`WITHOUT ROWID`, keyed on `(oracle_id, seq)`, and no other index**: the one read is every
+/// ruling of a card, which is a prefix of that key, and answered in `seq` order. Measured
+/// 2026-11-25 over that day's file (80 885 rows once its 43 exact repeats were dropped): 22.4 MB
+/// against 26.4 MB as a rowid table with the same key, and 0.03 ms a card either way.
+const RULING_TABLES_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS {schema}.rulings (
+                 -- A soft reference to `cards.oracle_id`, like every other: a ruling for a card
+                 -- this corpus lacks is stored and simply never asked for.
+                 oracle_id    TEXT NOT NULL,
+                 -- This ruling's place among the card's, in the file's order — which is date
+                 -- order in every file measured, so it is also the order a reader is answered.
+                 seq          INTEGER NOT NULL,
+                 -- `wotc` (Wizards' own) or `scryfall` (Scryfall's note), as the file says.
+                 source       TEXT NOT NULL,
+                 -- `YYYY-MM-DD`, as the file says.
+                 published_at TEXT NOT NULL,
+                 comment      TEXT NOT NULL,
+                 PRIMARY KEY (oracle_id, seq)
+             ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS {schema}.ruling_meta (
+                 -- One row, ever — `oracle_tag_meta`'s shape and every one of its reasons.
+                 id           INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- Replayed as `If-None-Match` while rows exist. NULL when none was sent.
+                 etag         TEXT,
+                 -- Scryfall's `updated_at` for the file, verbatim.
+                 updated_at   TEXT,
+                 -- Unix seconds: when the rows were built, and when Scryfall was last asked. A
+                 -- 304 moves only the second.
+                 ingested_at  INTEGER NOT NULL,
+                 checked_at   INTEGER NOT NULL,
+                 ruling_count INTEGER NOT NULL,
+                 card_count   INTEGER NOT NULL
+             );
+"#;
+
+/// Build the rulings tables in `schema` where they are missing — [`create_corpus_schema`]'s and
+/// [`add_ruling_tables`]' one statement.
+fn create_ruling_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(schema, RULING_TABLES_SQL))
+}
+
 /// Create the corpus in `schema` — its tables, its indexes, the search index and the format
 /// rules the ladder seeds.
 ///
@@ -5609,6 +5672,7 @@ fn create_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> 
 pub fn create_corpus_schema(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(schema, CORPUS_SCHEMA_SQL))?;
     create_combo_tables(conn, schema)?;
+    create_ruling_tables(conn, schema)?;
     create_fts_in(conn, schema)?;
     // Unqualified, and correct unqualified: `format_specs` exists in exactly one attached
     // database and DML resolves into it — the same reason no command changed. It is also
@@ -8896,6 +8960,14 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         if set_blocks_are_owed(conn, CORPUS)? {
             add_set_blocks(conn, CORPUS)?;
         }
+        // Corpus schema 10, the shape gate an eighth time and the first that adds tables
+        // rather than columns. Under a version gate the symptom is quieter than any above: no
+        // ingest fails, the rulings feed's first refresh raises `no such table: ruling_meta`
+        // into `error_log` every launch, and every agent is told the rulings were never
+        // downloaded.
+        if rulings_are_owed(conn, CORPUS)? {
+            add_ruling_tables(conn, CORPUS)?;
+        }
         // Not a rung — no shape moves and no version is owed — but a data repair asked on
         // every launch for the rungs' own reason: a version gate would skip every converted
         // database and every fresh install. See [`fill_face_illustrations`] (issue #1727).
@@ -9332,6 +9404,41 @@ fn add_set_blocks(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The two tables corpus schema 10 adds — the rulings and their watermark, in that order.
+const RULING_TABLE_NAMES: [&str; 2] = ["rulings", "ruling_meta"];
+
+/// Whether corpus schema 10 is owed in `schema`: either of [`RULING_TABLE_NAMES`] is missing.
+///
+/// **Asked of `sqlite_master` by name**, which is the right probe here and the wrong one for the
+/// column rungs above: those tables exist and the question is a column, which only `PRAGMA
+/// table_info` answers stably; this question is whether a table is there at all. **Either, not
+/// both**, so a corpus holding one of the pair (a hand-edited file — the rung runs inside
+/// [`migrate_corpus`]'s transaction and cannot leave half) is still owed the other.
+fn rulings_are_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    for table in RULING_TABLE_NAMES {
+        let there: bool = conn.query_row(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM {schema}.sqlite_master
+                                WHERE type = 'table' AND name = ?1)"
+            ),
+            [table],
+            |r| r.get(0),
+        )?;
+        if !there {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Corpus schema 10: build whichever of the rulings tables is missing. **No backfill, because
+/// none is possible** — only the feed has the rows — and none is needed: a corpus with no
+/// `ruling_meta` row is a feed never fetched, which [`crate::rulings::due_at_launch`] answers
+/// `true` for, so the next launch fetches the file.
+fn add_ruling_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    create_ruling_tables(conn, schema)
 }
 
 /// Give a printing whose picture Scryfall keeps on its faces the front face's
@@ -10126,6 +10233,43 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(CORPUS, COMBO_INDEXES_SQL))
 }
 
+/// `rulings` again, `_staging` and empty — [`COMBO_STAGING_SQL`]'s rule: a rename makes what is
+/// declared here the live table, so this literal and [`RULING_TABLES_SQL`] move together, and
+/// `the_ruling_staging_table_matches_the_live_one` compares the two column by column.
+///
+/// No `ruling_meta_staging`: the watermark is one row written *with* the swap. No index replay
+/// either: the table's only index is its primary key, which the rename carries.
+const RULING_STAGING_SQL: &str = "
+    DROP TABLE IF EXISTS {schema}.rulings_staging;
+    CREATE TABLE {schema}.rulings_staging (
+        oracle_id    TEXT NOT NULL,
+        seq          INTEGER NOT NULL,
+        source       TEXT NOT NULL,
+        published_at TEXT NOT NULL,
+        comment      TEXT NOT NULL,
+        PRIMARY KEY (oracle_id, seq)
+    ) WITHOUT ROWID;";
+
+/// Create an empty `rulings_staging`, dropping one an interrupted run left behind.
+/// [`create_oracle_tag_staging`]'s contract: no reader sees a half-built list of rulings.
+pub fn create_ruling_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(CORPUS, RULING_STAGING_SQL))
+}
+
+/// Drop `rulings_staging`. What a refused or failed run leaves owing.
+pub fn drop_ruling_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!("DROP TABLE IF EXISTS {CORPUS}.rulings_staging;"))
+}
+
+/// Promote `rulings_staging` over `rulings`. **The caller supplies the transaction**, for
+/// [`swap_oracle_tag_staging`]'s reason: the `ruling_meta` row commits with the rows.
+pub fn swap_ruling_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS {CORPUS}.rulings;
+         ALTER TABLE {CORPUS}.rulings_staging RENAME TO rulings;"
+    ))
+}
+
 /// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
 /// reconciler tests need the same deck-shaped fixture, and a second hand-rolled copy of
 /// it is a second thing to keep true. `#[cfg(test)]` still bounds all of it to test builds.
@@ -10405,6 +10549,8 @@ pub(crate) mod tests {
         // literal's tail names `block_code` before `block`, as the rung splices them.
         add_print_facts(&ladder, "main").unwrap();
         add_set_blocks(&ladder, "main").unwrap();
+        // Corpus schema 10's, the two tables it adds. Take it away and both go red as missing.
+        add_ruling_tables(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -10539,6 +10685,9 @@ pub(crate) mod tests {
         // The user rungs above the frozen ladder, so "the migrated schema" means every table
         // at head rather than every table as of the split.
         migrate_user(&conn).unwrap();
+        // And the one corpus rung that adds tables rather than columns (corpus schema 10), for
+        // the same reason: the frozen ladder will never build them.
+        add_ruling_tables(&conn, "main").unwrap();
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -23951,7 +24100,7 @@ pub(crate) mod tests {
             .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, CORPUS_SCHEMA_VERSION);
-        assert_eq!(version, 9, "head is corpus schema 9");
+        assert!(version >= 9, "head is corpus schema 9 or later");
 
         migrate_corpus(&conn).unwrap();
 
@@ -23961,6 +24110,178 @@ pub(crate) mod tests {
         );
         // Twice is once.
         migrate_corpus(&conn).unwrap();
+    }
+
+    // ---- corpus schema 10: rulings ---------------------------------------------------
+
+    /// Whether `table` is a table in the corpus.
+    fn corpus_has_table(conn: &Connection, table: &str) -> bool {
+        conn.query_row(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM {CORPUS}.sqlite_master
+                                WHERE type = 'table' AND name = ?1)"
+            ),
+            [table],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn corpus_version(conn: &Connection) -> i64 {
+        conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// A pair whose corpus has **neither rulings table**, stamped `version`, with one card in
+    /// `cards` — the state of a corpus at schema 9 (`version` 9) and of every converted database
+    /// and fresh install on the day corpus schema 10 ships (`version` 10, `split::finish`'s
+    /// stamp over a file the frozen ladder built).
+    fn corpus_without_rulings(version: i64) -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.rulings;
+             DROP TABLE {CORPUS}.ruling_meta;
+             INSERT INTO {CORPUS}.cards (id, oracle_id, name, set_code, set_name,
+                                         collector_number, lang, layout, raw)
+                  VALUES ('bolt', 'o-bolt', 'Lightning Bolt', 'lea', 'Alpha', '161', 'en',
+                          'normal', x'00');
+             PRAGMA {CORPUS}.user_version = {version};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// The counterweight: a fresh corpus is built with both tables and owes nothing.
+    #[test]
+    fn a_fresh_corpus_has_the_ruling_tables_and_owes_nothing() {
+        let conn = memory_pair();
+        for table in RULING_TABLE_NAMES {
+            assert!(corpus_has_table(&conn, table), "{table} at head");
+        }
+        assert!(!rulings_are_owed(&conn, CORPUS).unwrap());
+        migrate_corpus(&conn).unwrap();
+        assert_eq!(corpus_version(&conn), CORPUS_SCHEMA_VERSION);
+    }
+
+    /// **The upgrade**: a schema 9 corpus climbs to 10 with both tables, empty, and nothing else
+    /// moves. Twice is once — the gate asks the shape, and the shape is satisfied.
+    #[test]
+    fn a_corpus_without_the_ruling_tables_gets_them() {
+        let conn = corpus_without_rulings(9);
+        for table in RULING_TABLE_NAMES {
+            assert!(
+                !corpus_has_table(&conn, table),
+                "the fixture must start without {table} or it tests nothing"
+            );
+        }
+
+        migrate_corpus(&conn).unwrap();
+
+        assert_eq!(corpus_version(&conn), 10);
+        for table in RULING_TABLE_NAMES {
+            assert!(corpus_has_table(&conn, table), "{table} after the climb");
+            let rows: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {CORPUS}.{table}"), [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(rows, 0, "no backfill: only the feed has the rulings");
+        }
+        let name: String = conn
+            .query_row("SELECT name FROM cards WHERE id = 'bolt'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "Lightning Bolt", "the rung moves no other row");
+        assert!(!rulings_are_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+        assert_eq!(corpus_version(&conn), 10);
+    }
+
+    /// **The population a version gate would miss**: head's number over a corpus with neither
+    /// table. The gate is the shape, so both arrive anyway.
+    #[test]
+    fn a_corpus_stamped_at_head_without_the_ruling_tables_still_gets_them() {
+        let conn = corpus_without_rulings(CORPUS_SCHEMA_VERSION);
+        assert_eq!(corpus_version(&conn), CORPUS_SCHEMA_VERSION);
+
+        migrate_corpus(&conn).unwrap();
+
+        for table in RULING_TABLE_NAMES {
+            assert!(
+                corpus_has_table(&conn, table),
+                "the number said head and the shape did not: {table}"
+            );
+        }
+    }
+
+    /// Either table is owed on its own: a corpus holding `rulings` (with a row) and no
+    /// `ruling_meta` gets the watermark and keeps the row.
+    #[test]
+    fn a_corpus_missing_only_ruling_meta_gets_it() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "INSERT INTO {CORPUS}.rulings (oracle_id, seq, source, published_at, comment)
+                  VALUES ('o-bolt', 0, 'wotc', '2004-10-04', 'A ruling.');
+             DROP TABLE {CORPUS}.ruling_meta;"
+        ))
+        .unwrap();
+        assert!(rulings_are_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(corpus_has_table(&conn, "ruling_meta"));
+        let kept: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {CORPUS}.rulings"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, 1, "the table that was there is left alone");
+    }
+
+    /// The staging twin is the live table column for column, since a rename makes it the live
+    /// table.
+    #[test]
+    fn the_ruling_staging_table_matches_the_live_one() {
+        let conn = memory_pair();
+        create_ruling_staging(&conn).unwrap();
+        let want = table_shape(&conn, "rulings");
+        assert!(!want.is_empty(), "rulings must exist at head");
+        assert_eq!(table_shape(&conn, "rulings_staging"), want);
+    }
+
+    /// A swap leaves the staged rows live, keyed: the primary key travels with the rename, so a
+    /// second row at the same `(oracle_id, seq)` is refused, and no staging table is left.
+    #[test]
+    fn a_ruling_swap_keeps_the_rows_and_the_key() {
+        let conn = memory_pair();
+        create_ruling_staging(&conn).unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO {CORPUS}.rulings_staging (oracle_id, seq, source, published_at, comment)
+                  VALUES ('o-bolt', 0, 'wotc', '2004-10-04', 'A ruling.');"
+        ))
+        .unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        swap_ruling_staging(&tx).unwrap();
+        tx.commit().unwrap();
+
+        assert!(!corpus_has_table(&conn, "rulings_staging"));
+        let comment: String = conn
+            .query_row(
+                &format!("SELECT comment FROM {CORPUS}.rulings WHERE oracle_id = 'o-bolt'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(comment, "A ruling.");
+        let again = conn.execute(
+            &format!(
+                "INSERT INTO {CORPUS}.rulings (oracle_id, seq, source, published_at, comment)
+                      VALUES ('o-bolt', 0, 'wotc', '2004-10-04', 'Again.')"
+            ),
+            [],
+        );
+        assert!(again.is_err(), "the key came with the rename");
+        drop_ruling_staging(&conn).unwrap();
     }
 
     // ---- v19: a deck card names a finish ---------------------------------------------
