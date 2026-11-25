@@ -30,15 +30,15 @@ over the integrations store. It is not this.
 
 ## 2. The tools
 
-Every tool but the read graph's three (and `widget_create`'s checks before its write) is a translation onto `grimoire_core::commands::dispatch`,
+Every tool but the read graph's three, `read_guide` (which answers a prompt's text) and `widget_create`'s checks before its write is a translation onto `grimoire_core::commands::dispatch`,
 the table the light app's hosts answer through; those three are `crates/grimoire-graph`'s doors,
 over the same read connection. Nothing in `mcp/tools.rs` reads or writes SQL of its own; a refusal is the
 core's own sentence, handed to the agent as a tool result with `isError: true`.
 
 | Tool                | Calls                                                                  | Answers                                                                                                                                                                                                                                                                                                                         |
 | ------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `find_cards`        | `search_cards` (paper printings; one per card unless `allPrintings`)   | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price                                                                                                                                                                                                                                          |
-| `get_card`          | `card_detail`, `card_holdings`                                         | Oracle text, finishes, legalities, prices per finish, and what the reader owns of the card                                                                                                                                                                                                                                      |
+| `find_cards` | `search_cards` (paper printings; one per card unless `allPrintings`) | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price. A `filters` object takes the Search page's filter bar: `format`, `colors` (`colorsExact`), `types`, `rarities`, `sets`, `manaValues` (`manaX`), `owned`, `priceMin`/`priceMax` (in the reader's marketplace currency), `oracleTags` and `gameChanger`, with or without a name `query` |
+| `get_card` | `card_detail`, `card_holdings`, `card_raw`, `card_oracle_tags`, `card_related`, `combos_for_card`, and the two lists' status commands | Oracle text, finishes, legalities, prices per finish, and what the reader owns of the card; its `faces`, its direct oracle `tags` (with `tagData`: when the tag list was downloaded), what it brings with it (`related`: tokens, emblems, meld parts, combo pieces) and how many Spellbook combos name it (`comboCount`, with `comboData`) |
 | `search_collection` | `collection_list`                                                      | Entries by name words and folder: printing, finish, condition, language, quantity, folder                                                                                                                                                                                                                                       |
 | `search_wishlist`   | `wishlist_list`, `wishlist_folder_list`                                | Wishes by name words and folder, with whether a wish is for any printing                                                                                                                                                                                                                                                        |
 | `list_folders`      | `collection_folder_list` / `wishlist_folder_list` / `deck_folder_list` | Folder ids, names and parents; a collection folder's `kind` (only `user` takes an add)                                                                                                                                                                                                                                          |
@@ -47,6 +47,14 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | `graph_schema`      | `grimoire_graph::Graph::sdl`                                           | The read graph's whole schema (SDL): everything above and the home page's figures, as one read-only GraphQL schema with a description on every field — what a model writes a home widget's data query against ([graphql.md](graphql.md))                                                                                        |
 | `graph_validate`    | `Graph::validate`                                                      | Whether a GraphQL query is valid, and every problem with its line and column, without running it                                                                                                                                                                                                                                |
 | `graph_query`       | `Graph::run`                                                           | The query's answer as a widget gets it: `data`, `errors` (a failed field is `null` beside the rest) and `extensions.invalidatedBy`                                                                                                                                                                                              |
+| `card_combos` | `combos_for_card` (`produces`, `search`, `cardCount`, `ownedOnly`) | Commander Spellbook combos that name a card, each short (`comboId`, cards, what it produces, bracket, templates needed, popularity), with `total`, `matching`, `ownedTotal`, `sizes` and `comboData` |
+| `get_combo` | `combo_get` | One combo whole: cards, steps, prerequisites, templates, mana needed, what it produces and Spellbook's `url` |
+| `held_combos` | `combos_in_collection` / `combos_near` | The combos a deck holds whole (read by its active piles) and, by default, the ones it is one card short of, with the missing card; with no `deckId`, the same over the whole collection (`format` and `identity` narrow the missing card) |
+| `card_scryfall` | `card_raw` | The whole Scryfall record of up to 20 printings in Scryfall's own format (`keywords`, `layout`, `produced_mana`, `card_faces`...), minus image and shop links unless `fields` names them; `missing` names an id the database lacks |
+| `find_tags` | `card_oracle_tags` | Scryfall's community oracle tags whose name matches words, with their slugs (what `find_cards` takes in `filters.oracleTags`) and how many cards hold each |
+| `similar_cards` | `cards_similar` | Cards that do what a card does, ranked by the oracle tags they share (a rare tag weighs more), narrowed by `format` and `identity`; each row names its newest printing, type, cost, score and the shared tags that weigh most |
+| `format_rules` | the core's format table | Each format's deck size, copies allowed, sideboard, singleton, commander, starting life, companion, mana value cap, what restricted means, whether the app checks decks in it (`validates`) and whether it has legality data (`searchable`) |
+| `read_guide` | `prompts::get` | The text of one of the server's prompts by name, for a client that lists tools but shows its user no prompts |
 | `widget_vocabulary` | the committed `catalog.prompt.md` (and `catalog.contract.json`)        | The widget catalogue as a model writes from it: the spec format, every component and its props, the actions and functions, and the app's rules — with `includeContract`, the same as JSON Schema                                                                                                                                |
 | `widget_check`      | `Graph::validate`, the contract check                                  | Whether a query, a spec or both would be stored, and every problem by element — `widget_create`'s checks, storing nothing                                                                                                                                                                                                       |
 | `widget_preview`    | `Graph::run`                                                           | The state a spec is drawn over: the answer's data at the root, `/ui` and `/settings` seeded from the spec (`settings` laid over), the query asked with the variables its settings fill (`variables`), beside the graph's errors and the spec's problems — the page's `widgetState` and `queryVariables`, held to shared goldens |
@@ -55,6 +63,17 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | `widget_create`     | `Graph::validate`, then `custom_widget_create`                         | A custom widget stored, once its query passed the read graph and its spec the widget catalogue's contract (below); the stored widget as the table answers it                                                                                                                                                                    |
 | `widget_update`     | the same checks, then `custom_widget_update`                           | A widget changed: only the fields given, a query or spec given checked first; the stored widget                                                                                                                                                                                                                                 |
 | `widget_delete`     | `custom_widget_delete`                                                 | A widget deleted; the home page takes its placed copies off when it next reads the list                                                                                                                                                                                                                                         |
+
+**The card knowledge tools** (`card_combos` to `read_guide`) answer how cards work together. Their
+core commands (`combo_get`, `combos_near`, `combos_in_collection`, `card_raw`, `card_related`,
+`card_oracle_tags`, `cards_similar`) live in `grimoire-core` on `command_table::TABLE_ONLY`, so the
+light app's hosts answer them too, and `combos_for_card` gained a `produces` filter. **The combo list is
+Commander Spellbook's and holds Commander-legal combos only**; the oracle tags are Scryfall's. Each list
+is downloaded on its own, so an answer whose list is missing says so in a note (`comboData`, `tagData`)
+rather than answering "none". Schema 9 added `combos.requires` (the templates a combo needs, "a creature
+with..."), so the combo tables rebuild and download again at the first launch after it. **Every answer
+that is an object is also its `structuredContent`** (`rpc::done_result`; MCP allows nothing else there),
+beside the text block older clients read; an array answer and a refusal carry the text alone.
 
 **No tool writes the reader's collection, wishlist or decks** (the owner's decision, 2026-10-31,
 which retired the issue's three adds, `add_to_collection`, `add_to_wishlist` and
@@ -89,7 +108,7 @@ query, the spec and the state agree; then `widget_create`. `widget_preview`'s st
 `packages/ui/features/home/generated/__golden__/widget-state.json`, so a preview is what the page
 draws.
 
-**Three MCP prompts — the server's skills** (`prompts/list`, `prompts/get`; the `prompts`
+**Four MCP prompts — the server's skills** (`prompts/list`, `prompts/get`; the `prompts`
 capability; `mcp/prompts.rs`, the owner's decision 2026-10-31 to ship them as prompts rather than
 files a reader installs). Each is a Markdown file beside the code, `mcp/prompts/*.md`, compiled in,
 with one optional argument for the user's own words:
@@ -99,14 +118,16 @@ with one optional argument for the user's own words:
 | `search_cards`      | `request`  | Which tool answers which question (all cards, the collection, the wishlist), and the read graph's structured filters (`searchCards`, `collectionEntries`, `wishlistEntries`) for anything beyond a name |
 | `create_widget`     | `idea`     | The steps to write, check, preview and store a custom widget, closing with the whole widget catalogue (`catalog.prompt.md`)                                                                             |
 | `graphql_discovery` | `question` | A map of the graph's root fields, how its schema reads (nullability, ids, money, timestamps, filters, depth), and how to find, check and run a query                                                    |
+| `card_interactions` | `question` | Which tool answers what a card does, its combos, cards that do the same job, what it brings with it, its Scryfall record and a format's rules, and what each source can and cannot tell (Commander-legal combos only, templates, a list not yet downloaded) |
 
 Every fenced `graphql` example in them is held to the graph (`every_example_query_is_valid`), so a
-renamed field fails the build rather than an agent. The server's `instructions` name the three.
+renamed field fails the build rather than an agent. The server's `instructions` name the four (a test holds them to every tool and prompt), and `read_guide`
+answers any of them by name for a client that shows its user no prompts.
 
 **Every write tells every window.** `crate::changes` emits `db:changed` only while a second window
 is open, because the window that pressed already knows. An agent's write has no such window, so each
-write tool emits `db:changed` itself after its commit, naming the tables it can touch
-(`tools::COLLECTION_TABLES`, `WISHLIST_TABLES`, `DECK_TABLES`, `CUSTOM_WIDGET_TABLES`, held to the
+widget write tool emits `db:changed` itself after its commit, naming the tables it can touch
+(`tools::CUSTOM_WIDGET_TABLES`, held to the
 schema's user tables by a test). An open Collection page refreshes under the agent's add.
 
 ## 3. Who can reach it
@@ -277,8 +298,11 @@ curl -s http://127.0.0.1:39147/mcp -H "Authorization: Bearer <token>" -H "Conten
   (`http::tests::a_client_is_answered_over_a_real_socket`: handshake, notification, tool list, a
   call, then `401`, `405`, `400` and `503`). The server has not yet been driven by Claude Desktop,
   Claude Code or Cursor against a built app.
-- **No resources or prompts**, only tools. A deck as a resource, or a "build me a deck from my
-  collection" prompt, would be additions on the same endpoint.
-- **No deck creation, no edits, no removals** — the issue named adds; a custom widget is
-  created and never changed or deleted here (the page's dialog does that). Each would be one more
-  translation in `tools.rs` over a command already in the table.
+- **No resources**, only tools and prompts. A deck as a resource would be an addition on the same
+  endpoint.
+- **No deck creation, no edits, no removals** — the owner retired the adds; a custom widget is the
+  one thing created, updated and deleted here. Each would be one more translation in `tools.rs` over a
+  command already in the table.
+- **Card knowledge is not whole.** Still to do, as the later projects of the card knowledge plan:
+  rulings (project D), Scryfall search syntax in the tools (project C), opening a search in the app
+  (project B), and deck statistics, validation, the bracket and the other deck tools (project E).
