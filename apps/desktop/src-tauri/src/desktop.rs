@@ -466,6 +466,7 @@ pub fn run() {
             // Claude Desktop's one-click install: the server as an MCP Bundle, opened or saved.
             mcp::claude_desktop::mcp_claude_desktop_install,
             mcp::claude_desktop::mcp_claude_desktop_save,
+            mcp::show::mcp_search_shown,
             // The review list (issue #1396, the PR 3 plan §3.5): the intents this device's policy
             // parks, Apply and Decline, and the per-kind switches — each the core's command of the
             // same name on a worker, through the sync lane.
@@ -1518,6 +1519,7 @@ fn init_state(
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         mirror_pass: Mutex::new(()),
         changes,
+        show_search: Arc::new(mcp::show::ShowSearch::detached()),
     })
 }
 

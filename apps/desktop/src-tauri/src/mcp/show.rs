@@ -4,8 +4,14 @@
 //! the whole of the search and nothing is silently dropped.
 
 use super::filters::CheckedFilters;
+use crate::sync::AppState;
 use grimoire_core::tags::query::TagRef;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::oneshot;
 
 /// The formats the page's picker offers (`FORMATS` in `useCardSearch.ts`).
 pub const PICKER_FORMATS: [&str; 7] = [
@@ -130,9 +136,304 @@ pub(super) fn handoff(
     }
 }
 
+/// The event the Search page listens for on its own window.
+pub const SEARCH_SHOW_EVENT: &str = "search:show";
+
+/// How long `show_search` waits for the page to say what it shows.
+pub const WAIT: Duration = Duration::from_secs(5);
+
+/// What the Search page says it shows once it has run a hand-off.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchShownReport {
+    pub total: u64,
+    pub total_is_capped: bool,
+    pub keywords: Vec<String>,
+    pub words: String,
+    pub unknown_tags: Vec<String>,
+    pub failure: Option<String>,
+}
+
+/// Which window got the search, and whether Windows let it come to the front.
+pub struct Shown {
+    pub label: String,
+    pub came_forward: bool,
+}
+
+/// The app's windows, as `show_search` needs them. `show` may block; it is called on the blocking
+/// pool.
+pub trait SearchWindows: Send + Sync + 'static {
+    fn show(&self, handoff: &SearchHandoff) -> Result<Shown, String>;
+}
+
+/// How a waiting call ended, other than by timing out.
+pub enum Outcome {
+    Reported(SearchShownReport),
+    Replaced,
+}
+
+struct Detached;
+
+impl SearchWindows for Detached {
+    fn show(&self, _: &SearchHandoff) -> Result<Shown, String> {
+        Err("No app window can show a search here.".to_owned())
+    }
+}
+
+type Waiting = Option<(u64, oneshot::Sender<Outcome>)>;
+
+/// The one hand-off waiting for its page's answer.
+pub struct ShowSearch {
+    windows: Arc<dyn SearchWindows>,
+    wait: Duration,
+    next_id: AtomicU64,
+    waiting: Mutex<Waiting>,
+}
+
+impl ShowSearch {
+    pub fn new(windows: Arc<dyn SearchWindows>, wait: Duration) -> Self {
+        Self {
+            windows,
+            wait,
+            next_id: AtomicU64::new(1),
+            waiting: Mutex::new(None),
+        }
+    }
+
+    /// A `ShowSearch` whose windows refuse every search.
+    pub fn detached() -> Self {
+        Self::new(Arc::new(Detached), WAIT)
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Waiting> {
+        self.waiting.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Sends the search to a window and waits for the page's report.
+    pub async fn show(&self, mut handoff: SearchHandoff) -> Result<Value, String> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        handoff.id = id;
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut slot = self.slot();
+            if let Some((_, earlier)) = slot.take() {
+                let _ = earlier.send(Outcome::Replaced);
+            }
+            *slot = Some((id, tx));
+        }
+        let windows = self.windows.clone();
+        let sent = tauri::async_runtime::spawn_blocking(move || windows.show(&handoff))
+            .await
+            .map_err(|e| format!("The window could not be reached: {e}"))
+            .and_then(|r| r);
+        let shown = match sent {
+            Ok(shown) => shown,
+            Err(why) => {
+                self.clear(id);
+                return Err(why);
+            }
+        };
+        let outcome = match tokio::time::timeout(self.wait, rx).await {
+            Ok(Ok(outcome)) => Some(outcome),
+            Ok(Err(_)) => None,
+            Err(_) => {
+                self.clear(id);
+                None
+            }
+        };
+        Ok(answer(&shown, outcome))
+    }
+
+    /// Empties the slot if it still holds `id`'s sender.
+    fn clear(&self, id: u64) {
+        let mut slot = self.slot();
+        if slot.as_ref().is_some_and(|(waiting, _)| *waiting == id) {
+            *slot = None;
+        }
+    }
+
+    /// The page's answer for `id`; false when no call is waiting on that id.
+    pub fn report(&self, id: u64, report: SearchShownReport) -> bool {
+        let mut slot = self.slot();
+        if slot.as_ref().is_some_and(|(waiting, _)| *waiting == id) {
+            if let Some((_, tx)) = slot.take() {
+                return tx.send(Outcome::Reported(report)).is_ok();
+            }
+        }
+        false
+    }
+}
+
+/// The tool's answer, and the notes the agent should pass to the user. Pure.
+pub fn answer(shown: &Shown, outcome: Option<Outcome>) -> Value {
+    let mut notes: Vec<String> = Vec::new();
+    let mut out = Map::new();
+    match outcome {
+        Some(Outcome::Reported(r)) => {
+            if let Some(failure) = &r.failure {
+                notes.push(failure.clone());
+            } else if r.total == 0 {
+                let mut s = "The Search page shows no cards.".to_owned();
+                if r.words.contains(':') {
+                    s.push_str(&format!(
+                        " It searched \"{}\" as plain words, so a term there was not read as a keyword.",
+                        r.words
+                    ));
+                }
+                notes.push(s);
+            }
+            out.insert("shown".into(), json!(true));
+            out.insert("cameForward".into(), json!(shown.came_forward));
+            out.insert("total".into(), json!(r.total));
+            out.insert("totalIsCapped".into(), json!(r.total_is_capped));
+            out.insert("keywords".into(), json!(r.keywords));
+            out.insert("words".into(), json!(r.words));
+            out.insert("unknownTags".into(), json!(r.unknown_tags));
+        }
+        Some(Outcome::Replaced) => {
+            notes.push("A later search replaced this one.".to_owned());
+            out.insert("shown".into(), json!(false));
+            out.insert("cameForward".into(), json!(shown.came_forward));
+        }
+        None => {
+            notes.push(
+                "The app was sent the search, but its window did not say what it shows within 5 seconds; ask the user whether it appeared."
+                    .to_owned(),
+            );
+            out.insert("shown".into(), Value::Null);
+            out.insert("cameForward".into(), json!(shown.came_forward));
+        }
+    }
+    if !shown.came_forward {
+        notes.push(
+            "Windows kept the app behind the window in front, and its taskbar button is flashing: tell the user to click it."
+                .to_owned(),
+        );
+    }
+    if !notes.is_empty() {
+        out.insert("note".into(), json!(notes.join(" ")));
+    }
+    Value::Object(out)
+}
+
+/// The Search page's answer to a `search:show`.
+#[tauri::command]
+pub fn mcp_search_shown(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: u64,
+    report: SearchShownReport,
+) {
+    state.show_search.report(id, report);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::testing::FakeWindows;
+
+    fn blank() -> SearchHandoff {
+        handoff(None, &CheckedFilters::default(), None, None)
+    }
+
+    fn report(total: u64, words: &str) -> SearchShownReport {
+        SearchShownReport {
+            total,
+            words: words.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pages_report_is_the_answer() {
+        let fake = Arc::new(FakeWindows::forward(true));
+        let show = Arc::new(ShowSearch::new(fake.clone(), Duration::from_secs(2)));
+        let call = tokio::spawn({
+            let show = show.clone();
+            async move { show.show(blank()).await }
+        });
+        let id = fake.wait_for_one().await.id;
+        assert!(show.report(id, report(143, "")));
+        let got = call.await.unwrap().unwrap();
+        assert_eq!(got["shown"], true);
+        assert_eq!(got["cameForward"], true);
+        assert_eq!(got["total"], 143);
+        assert!(got.get("note").is_none());
+        assert!(
+            !show.report(id, report(1, "")),
+            "a second report for a spent id is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_that_never_answers_is_sent_and_unanswered() {
+        let fake = Arc::new(FakeWindows::forward(true));
+        let show = ShowSearch::new(fake, Duration::from_millis(50));
+        let got = show.show(blank()).await.unwrap();
+        assert_eq!(got["shown"], Value::Null);
+        assert!(got["note"].as_str().unwrap().contains("did not say"));
+    }
+
+    #[tokio::test]
+    async fn a_later_search_replaces_the_one_waiting() {
+        let fake = Arc::new(FakeWindows::forward(true));
+        let show = Arc::new(ShowSearch::new(fake.clone(), Duration::from_secs(2)));
+        let first = tokio::spawn({
+            let show = show.clone();
+            async move { show.show(blank()).await }
+        });
+        let first_id = fake.wait_for_one().await.id;
+        let second = tokio::spawn({
+            let show = show.clone();
+            async move { show.show(blank()).await }
+        });
+        let got = first.await.unwrap().unwrap();
+        assert_eq!(got["shown"], false);
+        assert!(got["note"].as_str().unwrap().contains("replaced"));
+        let second_id = fake.wait_for(2).await.id;
+        assert_ne!(first_id, second_id);
+        assert!(!show.report(first_id, report(9, "")));
+        assert!(show.report(second_id, report(3, "")));
+        assert_eq!(second.await.unwrap().unwrap()["total"], 3);
+    }
+
+    #[test]
+    fn the_notes_say_what_the_agent_should_tell_the_user() {
+        let behind = Shown {
+            label: "main".into(),
+            came_forward: false,
+        };
+        let got = answer(&behind, Some(Outcome::Reported(report(5, ""))));
+        assert_eq!(got["cameForward"], false);
+        assert!(got["note"].as_str().unwrap().contains("taskbar"));
+        let front = Shown {
+            label: "main".into(),
+            came_forward: true,
+        };
+        let empty = answer(&front, Some(Outcome::Reported(report(0, "cube:vintage"))));
+        let note = empty["note"].as_str().unwrap();
+        assert!(
+            note.contains("no cards") && note.contains("cube:vintage"),
+            "{note}"
+        );
+        let failed = SearchShownReport {
+            failure: Some("The tag list could not be read.".into()),
+            ..report(0, "")
+        };
+        assert!(answer(&front, Some(Outcome::Reported(failed)))["note"]
+            .as_str()
+            .unwrap()
+            .contains("could not be read"));
+        assert!(!answer(&front, None)["note"]
+            .as_str()
+            .unwrap()
+            .contains("  "));
+    }
+
+    #[tokio::test]
+    async fn a_refusing_window_is_the_tools_refusal() {
+        let why = ShowSearch::detached().show(blank()).await.err().unwrap();
+        assert!(why.contains("No app window"), "{why}");
+    }
 
     /// The text between `start` and the next `]`.
     fn list_after<'a>(src: &'a str, start: &str) -> &'a str {
