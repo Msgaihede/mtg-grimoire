@@ -94,6 +94,9 @@ describe("optionLabel", () => {
       pick: null,
       keyword: null,
       damage: null,
+      shown: [],
+      distribute: null,
+      nameEntry: false,
     };
     expect(pickableCards(prompt)).toEqual(new Map([[7, 1]]));
   });
@@ -127,6 +130,109 @@ describe("optionLabel", () => {
       { kind: "CastChoice" },
     );
     expect(label).toEqual({ text: "Stomp", hint: "Cast adventure" });
+  });
+});
+
+describe("answers told apart by their kind", () => {
+  const card = (name: string, text: string | null = null) => ({
+    id: name.length,
+    name,
+    cardId: null,
+    text,
+    cause: null,
+  });
+  const text = (over: Partial<PlaytestOption>, kind = "Answer", keyword: string | null = null) =>
+    optionLabel(option(over), { kind, keyword }).text;
+
+  it("says a yes or a no by what it does", () => {
+    expect(text({ kind: "ChooseExert", yes: true }, "ExertChoice")).toBe("Exert");
+    expect(text({ kind: "ChooseExert", yes: false }, "ExertChoice")).toBe("Don’t exert");
+    expect(text({ kind: "ChooseUntap", yes: true })).toBe("Untap");
+    expect(text({ kind: "ChooseUntap", yes: false })).toBe("Leave tapped");
+    expect(text({ kind: "ChooseAdventureFace", yes: true })).toBe("Cast the creature");
+    expect(text({ kind: "ChooseAdventureFace", yes: false })).toBe("Cast the adventure");
+    expect(text({ kind: "ChoosePlayDraw", yes: false })).toBe("Draw first");
+    expect(text({ kind: "ChooseTopOrBottom", yes: true })).toBe("On top");
+    expect(text({ kind: "PayUnlessCost", yes: false })).toBe("Don’t pay");
+    // A plain may stays a yes or a no.
+    expect(text({ kind: "DecideOptionalEffect", yes: true })).toBe("Yes");
+  });
+
+  it("pays an optional cost by its keyword, or declines it", () => {
+    const cost = { kind: "DecideOptionalCost" };
+    expect(text({ ...cost, yes: true }, "OptionalCostChoice", "Kicker")).toBe("Pay kicker");
+    expect(text({ ...cost, yes: true }, "OptionalCostChoice")).toBe("Pay");
+    expect(text({ ...cost, yes: false }, "OptionalCostChoice", "Kicker")).toBe("Don’t pay");
+    // A choice between costs keeps the cost's own words.
+    expect(text({ ...cost, number: 1, label: "Discard a card" }, "OptionalCostChoice")).toBe(
+      "Discard a card",
+    );
+  });
+
+  it("names a modal face, a cast's variant and modes by their words, never their number", () => {
+    expect(text({ kind: "ChooseModalFace", yes: true, label: "Clearwater Pathway" })).toBe(
+      "Clearwater Pathway",
+    );
+    expect(text({ kind: "ChooseModalFace", yes: false, label: "Murkwater Pathway" })).toBe(
+      "Murkwater Pathway",
+    );
+    expect(
+      text({ kind: "ChooseCastingVariant", number: 1, label: "Warp" }, "CastingVariantChoice"),
+    ).toBe("Warp");
+    expect(
+      text(
+        { kind: "SelectModes", number: 0, label: "Counter target spell + Draw a card" },
+        "ModeChoice",
+      ),
+    ).toBe("Counter target spell + Draw a card");
+    expect(text({ kind: "SelectModes", number: 1 }, "ModeChoice")).toBe("Mode 2");
+  });
+
+  it("says a pile with its count, its cards beside", () => {
+    const pile = option({
+      kind: "ChoosePile",
+      label: "A",
+      cards: [card("Opt"), card("Island")],
+    });
+    expect(optionLabel(pile, { kind: "SeparatePilesChoice" })).toEqual({
+      text: "Pile A (2 cards)",
+      hint: "Opt, Island",
+    });
+    expect(text({ kind: "ChoosePile", label: "B", cards: [card("Forest")] })).toBe(
+      "Pile B (1 card)",
+    );
+    expect(promptTitle("SeparatePilesChoice")).toBe("Choose a pile");
+  });
+
+  it("says a Room's door and what is done to it, and a dungeon by its printed name", () => {
+    expect(text({ kind: "UnlockRoomDoor", label: "Left" })).toBe("Unlock the left door");
+    expect(text({ kind: "ChooseRoomDoor", label: "Right Lock" })).toBe("Lock the right door");
+    expect(text({ kind: "ChooseRoomDoor", label: "Unlock Left" })).toBe("Unlock the left door");
+    expect(text({ kind: "ChooseDungeon", label: "TombOfAnnihilation" })).toBe(
+      "Tomb of Annihilation",
+    );
+    expect(text({ kind: "ChooseDungeon", label: "NewDungeon" })).toBe("New Dungeon");
+  });
+
+  it("names a player an answer chooses", () => {
+    expect(text({ kind: "ChooseClashOpponent", players: ["opponent"] })).toBe("Opponent");
+    expect(
+      optionLabel(option({ kind: "ChooseGiftRecipient", players: ["opponent3"] }), { kind: "X" }, 3)
+        .text,
+    ).toBe("Opponent 3");
+  });
+
+  it("says a permanent's ability by its own words, its card beside", () => {
+    const relic = card("Relic of Progenitus", "Exile target player's graveyard.");
+    const ability = option({ kind: "ActivateAbility", number: 0, cards: [relic] });
+    expect(optionLabel(ability, { kind: "Priority" })).toEqual({
+      text: "Exile target player's graveyard.",
+      hint: "Relic of Progenitus",
+    });
+    expect(optionLabel(ability, { kind: "AbilityChoice" })).toEqual({
+      text: "Exile target player's graveyard.",
+      hint: "Activate ability",
+    });
   });
 });
 
@@ -292,6 +398,9 @@ describe("pickableCards", () => {
       pick: null,
       keyword: null,
       damage: null,
+      shown: [],
+      distribute: null,
+      nameEntry: false,
       options: [
         option({ index: 0, cards: [a] }),
         option({ index: 1, cards: [a, b] }),
@@ -316,6 +425,9 @@ describe("pickableCards", () => {
       pick: null,
       keyword: null,
       damage: null,
+      shown: [],
+      distribute: null,
+      nameEntry: false,
       options: [option({ index: 0, kind: "ChooseReplacement", cards: [effect] })],
     });
     expect(picks.size).toBe(0);

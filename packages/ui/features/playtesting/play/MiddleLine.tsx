@@ -1,5 +1,5 @@
 import { useState, type JSX, type MouseEvent } from "react";
-import { OctagonPause } from "lucide-react";
+import { Moon, OctagonPause, Sun } from "lucide-react";
 import type { GameCard, GameSeat, PlaytestStackItem, PlaytestStop, PlaytestView } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -28,6 +28,10 @@ import { trackerOf } from "./tracker";
  * **The last thing that happened is here too** (the log's newest line, or the engine's refusal),
  * where the eye already is between the two tables. A refusal is said in full text colour and
  * stays until the next action.
+ *
+ * **Two of the game's facts sit quietly after the switches** (`TurnFacts`): day or night, once a
+ * daybound or nightbound card has made it one (CR 731), and on the reader's own turn the lands
+ * they may still play (CR 305.2).
  */
 export function MiddleLine({
   view,
@@ -57,6 +61,7 @@ export function MiddleLine({
       <StopsButton stops={view.stops} many={view.opponents.length > 1} onStops={onStops} />
       {/* A lobby game has no sandbox (issue #1419): the host refuses it, so no switch. */}
       {!view.lobby && <SandboxButton on={view.sandbox} onSandbox={onSandbox} />}
+      <TurnFacts view={view} />
       {combat !== null && (
         <span className="flex-none text-xs whitespace-nowrap text-mana-r">{combat}</span>
       )}
@@ -113,6 +118,40 @@ export function TurnTracker({ view }: { view: PlaytestView }): JSX.Element {
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * Day or night and the lands left to play, dim text after the switches — see {@link MiddleLine}.
+ * Nothing at all while it is neither day nor night and the turn is not the reader's.
+ */
+export function TurnFacts({
+  view,
+}: {
+  view: Pick<PlaytestView, "dayNight" | "landsLeft">;
+}): JSX.Element | null {
+  const { dayNight, landsLeft } = view;
+  if (dayNight === null && landsLeft === null) return null;
+  return (
+    <span className="flex flex-none items-center gap-2 text-[11px]/5 whitespace-nowrap text-dim">
+      {dayNight !== null && (
+        <span data-day-night={dayNight} className="inline-flex items-center gap-1">
+          {dayNight === "day" ? (
+            <Sun className="size-3" aria-hidden="true" />
+          ) : (
+            <Moon className="size-3" aria-hidden="true" />
+          )}
+          {dayNight === "day" ? "Day" : "Night"}
+        </span>
+      )}
+      {landsLeft !== null && (
+        <span data-lands-left={landsLeft}>
+          {landsLeft === 0
+            ? "No lands left to play"
+            : `${landsLeft} ${landsLeft === 1 ? "land" : "lands"} to play`}
+        </span>
+      )}
+    </span>
   );
 }
 

@@ -122,6 +122,19 @@ pub struct PlaytestView {
     pub lobby: bool,
     /// In `Stage::Waiting`, the person the game waits on; `None` at every other stage.
     pub deciding: Option<PlaytestPlayer>,
+    /// Day or night (CR 731), once a daybound or nightbound card has made it one; `None` before.
+    pub day_night: Option<PlaytestDayNight>,
+    /// On the reader's own turn, the lands they may still play this turn (CR 305.2) — 1 for
+    /// the turn's land drop not yet made, more with an Azusa. `None` on another player's turn.
+    pub lands_left: Option<u32>,
+}
+
+/// It is day or night (CR 731).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestDayNight {
+    Day,
+    Night,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,7 +189,9 @@ pub struct PlaytestSeat {
     pub out: bool,
     pub life: i32,
     pub poison: u32,
-    /// The reader's hand; empty for the opponent.
+    /// The reader's hand. For an opponent, the cards of their hand the reader may see — revealed
+    /// (Telepathy, "reveal your hand"), or known since the reader last saw them (Thoughtseize,
+    /// Peek), as phase's own projection for the reader's seat says — and `hand_count` all of them.
     pub hand: Vec<GameCard>,
     pub hand_count: u32,
     pub battlefield: Vec<GameCard>,
@@ -193,13 +208,14 @@ pub struct PlaytestSeat {
     /// The reader's library, **top first**, for the library menu's look and search; empty for the
     /// opponent.
     pub library_cards: Vec<GameCard>,
-    /// The top of this seat's library while the reader may see it, drawn face up on the pile
-    /// (issue #1722): the reader's own under a "you may look at the top card of your library any
-    /// time" static (CR 701.20e — Vizier of the Menagerie, Courser of Kruphix), or any seat's
-    /// played with the top card revealed (CR 400.2 — Future Sight, Magus of the Future). phase's
-    /// statics decide (`MayLookAtTopOfLibrary`, `RevealTopOfLibrary`); `None` otherwise, and for
-    /// an empty library.
+    /// The top card of this seat's library when the reader may see it (CR 401.5, issue #1722):
+    /// revealed to everyone (Courser of Kruphix, "play with the top card of your library revealed"), or the
+    /// reader's own that they may look at any time (Future Sight, Bolas's Citadel). `castable`
+    /// and `can_activate` say what the rules let the reader do with it there. `None` while it is
+    /// hidden, as phase's own projection for the reader's seat has it.
     pub library_top: Option<GameCard>,
+    /// `library_top` is revealed to every player, rather than looked at by the reader alone.
+    pub library_top_revealed: bool,
     /// What this seat's untapped permanents could make right now (phase's `max_mana_yield`).
     pub mana_open: u32,
     /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
@@ -213,6 +229,39 @@ pub struct PlaytestSeat {
     /// view's `commander_damage_lethal` — the board's "dead on your turn 5", and `None` again once
     /// neither holds. Always `None` for a player who can lose.
     pub dead_on: Option<u32>,
+    /// Energy counters (CR 122.1, 107.14).
+    pub energy: u32,
+    /// Experience counters (CR 122.1).
+    pub experience: u32,
+    /// Rad counters (CR 122.1).
+    pub rad: u32,
+    /// Ticket counters (CR 122.1).
+    pub tickets: u32,
+    /// Speed (CR 702.179), once this player has any; `None` before.
+    pub speed: Option<u8>,
+    /// This player is the monarch (CR 724).
+    pub monarch: bool,
+    /// This player has the initiative (CR 725).
+    pub initiative: bool,
+    /// This player has the city's blessing (CR 702.131).
+    pub city_blessing: bool,
+    /// How many times the Ring has tempted this player (CR 701.54); 0 for never.
+    pub ring: u8,
+    /// The dungeon this player is in, and the room their venture marker is on (CR 309).
+    pub dungeon: Option<PlaytestDungeon>,
+    /// The ids of the permanents on the battlefield attached to this player — a Curse, an Aura
+    /// that enchants a player (CR 303.4).
+    pub enchanted_by: Vec<u64>,
+}
+
+/// A player's place in a dungeon (CR 309): its name and the room the venture marker is on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestDungeon {
+    pub name: String,
+    pub room: String,
+    /// The room's words, as the dungeon prints them.
+    pub room_text: String,
 }
 
 /// An emblem (CR 114): neither a card nor a permanent, it cannot be removed, and its abilities
@@ -346,6 +395,47 @@ pub struct PlaytestPrompt {
     /// creatures blocking it (`AssignCombatDamage`, CR 510.1c; issue #1448), which `options`
     /// cannot list (the engine offers only its own split). `assignDamage` answers it.
     pub damage: Option<PlaytestDamage>,
+    /// Cards the question shows the reader without asking for them: the card they looked at
+    /// ("look at the top card of your library; you may reveal it"), a cascade's or a discover's
+    /// hit, a pile to choose (Fact or Fiction).
+    pub shown: Vec<PlaytestCardRef>,
+    /// Present when the question is how to divide an amount — damage, counters — among targets
+    /// (`DistributeAmong`, CR 601.2d), which `options` cannot list (the engine offers an even
+    /// split and one more). `distribute` answers it.
+    pub distribute: Option<PlaytestDistribute>,
+    /// The question is to name something — a card, a creature type — and any legal word may be
+    /// answered, not only the options listed (`name`).
+    pub name_entry: bool,
+}
+
+/// An amount to divide among targets as the reader chooses (CR 601.2d).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestDistribute {
+    /// The amount to divide: all of it is divided.
+    pub total: u32,
+    /// What is divided, as the engine names it: `Damage`, `Counters`, `Life`…
+    pub unit: String,
+    pub targets: Vec<PlaytestDistributeTarget>,
+}
+
+/// One target an amount is divided among, and the least it may be given — 1 for a division made
+/// as the spell is cast (CR 601.2d), 0 for one made as it resolves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestDistributeTarget {
+    pub card: Option<PlaytestCardRef>,
+    pub player: Option<PlaytestPlayer>,
+    pub min: u32,
+}
+
+/// So much of a divided amount to one target (`Distribute`): a card by `id`, or a `player`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestShare {
+    pub id: Option<u64>,
+    pub player: Option<PlaytestPlayer>,
+    pub amount: u32,
 }
 
 /// An attacking creature's combat damage, to divide as its controller chooses among the creatures
@@ -406,6 +496,10 @@ pub struct PlaytestPick {
     /// Where the cards lie, when they all lie in one place — the graveyard a cast is offered
     /// from (issue #1329). `None` for cards from several places, or from the stack.
     pub zone: Option<Place>,
+    /// An `Order` pick that splits the cards between the top and the bottom of a library: the
+    /// first `split` picked go on top, in the order picked, and the rest on the bottom, in the
+    /// order picked. `None` for any other pick.
+    pub split: Option<u32>,
 }
 
 /// What picking a card does, so the page can say it.
@@ -435,6 +529,13 @@ pub enum PlaytestPickPurpose {
     Sacrifice,
     /// The picked card is cast — "you may cast a spell from among them" (issue #1329).
     Cast,
+    /// Every card is picked, and the order picked is the order they are put — on the bottom of
+    /// a library "in any order", or split between its top and bottom (`split`).
+    Order,
+    /// The picked cards pay a cost: sacrificed, discarded, exiled, tapped or returned.
+    Pay,
+    /// The picked cards are one pile, the rest the other (CR 700.3 — Fact or Fiction).
+    Pile,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
@@ -624,6 +725,16 @@ pub enum PlaytestAction {
     AssignDamage {
         blockers: Vec<PlaytestDamageShare>,
         excess: u32,
+    },
+    /// Answer the prompt's `distribute`: so much to each target. The amounts add up to its
+    /// whole `total`.
+    Distribute {
+        shares: Vec<PlaytestShare>,
+    },
+    /// Answer a naming prompt (`name_entry`) with a word of the reader's own: a card's name, a
+    /// creature type. Refused when the rules would not take it.
+    Name {
+        text: String,
     },
     /// Let the engine's AI answer the prompt for the reader.
     Auto,
@@ -832,6 +943,46 @@ pub enum PlaytestHappened {
         delta: i32,
         floating: u32,
     },
+    /// Cards revealed to every player (CR 701.20): a reveal from a hand or a library, a cascade's
+    /// cards, a revealed tutor's find. `names` are the cards', in the order revealed; `seat` is
+    /// whose they are.
+    Revealed {
+        seat: PlaytestPlayer,
+        names: Vec<String>,
+    },
+    /// A spell countered (CR 701.6): `seat` is its controller's, `name` the spell's (`None` for
+    /// an opponent's face-down spell), `by` the card whose spell or ability countered it.
+    Countered {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+        by: Option<String>,
+    },
+    /// A coin flipped (CR 705): whether `seat` won the flip.
+    Flipped {
+        seat: PlaytestPlayer,
+        won: bool,
+    },
+    /// A die rolled (CR 706): its sides and the face it came up on (`None` for the planar die).
+    Rolled {
+        seat: PlaytestPlayer,
+        sides: u32,
+        result: Option<u32>,
+    },
+    /// A player named a card or a word for an effect (Pithing Needle, Cavern of Souls).
+    Named {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A player became the monarch, took the initiative, got the city's blessing or was tempted
+    /// by the Ring.
+    Became {
+        seat: PlaytestPlayer,
+        what: PlaytestDesignation,
+    },
+    /// It became day or night (CR 731).
+    DayNight {
+        now: PlaytestDayNight,
+    },
     /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
     /// or the question had only one answer and the session took it (`sole_answer`).
     Chose {
@@ -845,6 +996,16 @@ pub enum PlaytestHappened {
     GameOver {
         winner: Option<PlaytestPlayer>,
     },
+}
+
+/// A designation a player takes (`Became`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestDesignation {
+    Monarch,
+    Initiative,
+    CityBlessing,
+    RingTempted,
 }
 
 /// An action's answer: the table after it, and everything that happened on the way.

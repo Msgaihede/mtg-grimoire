@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CardEffect } from "@/lib/ipc";
-import { effectChip, effectLabel, effectLine } from "./effects";
+import { cardStates, effectChip, effectLabel, effectLine } from "./effects";
+import { gameCard } from "./fixtures";
 
 function effect(over: Partial<CardEffect>): CardEffect {
   return {
@@ -70,5 +71,39 @@ describe("effectChip and effectLine", () => {
     expect(effectLine(dies, "Bloodghast")).toBe(
       "+Dies trigger from Clavileño, First of the Blessed: “When Bloodghast dies, draw a card.”",
     );
+  });
+});
+
+describe("cardStates", () => {
+  it("is nothing for a permanent as it comes", () => {
+    expect(cardStates(gameCard("Grizzly Bears"))).toEqual([]);
+  });
+
+  it("writes each of the rules' marks short for a chip and in full, in the table's order", () => {
+    const states = cardStates(
+      gameCard("Grizzly Bears", {
+        faceDown: true,
+        phasedOut: true,
+        damage: 3,
+        sick: true,
+        classLevel: 2,
+        marks: ["goaded", "ringBearer"],
+        chosen: ["Elf", "Green"],
+      }),
+    );
+    expect(states.map((s) => [s.chip, s.line, s.tone])).toEqual([
+      ["Face down", "face down", "plain"],
+      ["Phased out", "phased out", "dim"],
+      ["3 dmg", "3 damage marked", "danger"],
+      ["Sick", "summoning sick", "dim"],
+      ["Level 2", "level 2", "plain"],
+      ["Goaded", "goaded", "plain"],
+      ["Ring-bearer", "ring-bearer", "plain"],
+      ["Chosen: Elf, Green", "chosen: Elf, Green", "plain"],
+    ]);
+  });
+
+  it("leaves a face-down card the reader may not see to its card back", () => {
+    expect(cardStates(gameCard("", { faceDown: true, cardId: null }))).toEqual([]);
   });
 });

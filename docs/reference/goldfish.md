@@ -41,8 +41,11 @@ phase's other crates (a server, an LLM opponent and a draft) are not linked. It 
 and on `wasm32-unknown-unknown` in the spike: `choose_action(&GameState, PlayerId, &AiConfig, &mut
 impl Rng)` takes the same state the board plays on.
 
-Pinned by `rev` in `crates/grimoire-play/Cargo.toml` (`935f404a`, phase 0.122.0, 2026-11-10; it was
-`b8d3b82c`, phase 0.107.0, from 2026-10-12 — the move fixed Syphon Flesh's Zombies, issue #1523).
+Pinned by `rev` in `crates/grimoire-play/Cargo.toml` (`6fa05268`, phase 0.132.0, 2026-11-25; it was
+`935f404a`, phase 0.122.0, from 2026-11-10, and before that `b8d3b82c`, phase 0.107.0, from
+2026-10-12 — that move fixed Syphon Flesh's Zombies, issue #1523). 0.132.0's `resolve_deck_list`
+takes a combo table for its bracket estimate, which a game never reads: the session passes an
+empty one (`ComboTable::default()`).
 **Move it by a commit that runs the whole gate.** phase changes daily, and `grimoire-play`'s tests
 are what show that a move kept the board playing.
 

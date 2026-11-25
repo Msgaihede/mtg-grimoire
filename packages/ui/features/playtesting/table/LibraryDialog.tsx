@@ -8,6 +8,7 @@ import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { pointerAt } from "./Inspect";
 import type { Pointed, ZoneLook } from "./types";
+import { CASTABLE_RING, CardBack, isHidden } from "./ZonePile";
 
 /**
  * A zone turned face up: the library's top cards (look at, scry, surveil), the whole library
@@ -47,7 +48,13 @@ import type { Pointed, ZoneLook } from "./types";
  * the reader cast), whatever `readOnly` says — it is the rules' play, not a hand move. It closes
  * the dialog, since the cast may ask a question of its own. A foretold card says so under it.
  * **A card with an ability the rules let the reader activate from here carries an Activate** the
- * same way ({@link GameCard.canActivate}: unearth, embalm, scavenge — issue #1714).
+ * same way ({@link GameCard.canActivate}: unearth, embalm, scavenge — issue #1714). Either card
+ * wears the playable ring (`ZonePile`'s `CASTABLE_RING`), as it does on the board.
+ *
+ * **A card the reader may not look at is a back** (`isHidden`: face down in exile, CR 708 — an
+ * opponent's foretold or hideaway card), counted with the rest, named only as "A face-down card"
+ * and never previewed. One the reader may look at (their own, CR 708.5) comes with its name and
+ * is drawn face up, "Face down" under it (or "Foretold", which says as much).
  *
  * **A card rested on opens the board's inspect preview** (issue #1373): at 120 px a card's text
  * cannot be read, and the look is for reading it. Each card points itself at the board through
@@ -148,95 +155,112 @@ export function LibraryDialog({
           <p className="m-0 text-sm text-dim">{emptyLine(look, all.length, needle !== "")}</p>
         ) : (
           <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,120px)] gap-x-3 gap-y-4 p-0">
-            {cards.map((card, i) => (
-              <li
-                key={card.id}
-                role="group"
-                aria-label={card.name}
-                className="flex flex-col gap-1.5"
-              >
-                <div
-                  data-point={card.id}
-                  onMouseEnter={(e) =>
-                    onPoint?.({
-                      card,
-                      ids: [card.id],
-                      place: look.zone === "library" ? "libraryTop" : look.zone,
-                      line: `${card.name} · ${placeLine(look, opponent, searching ? null : i)}`,
-                      at: pointerAt(e),
-                    })
-                  }
-                  onMouseLeave={() => onUnpoint?.()}
+            {cards.map((card, i) => {
+              const hidden = isHidden(card);
+              return (
+                <li
+                  key={card.id}
+                  role="group"
+                  aria-label={hidden ? "A face-down card" : card.name}
+                  className="flex flex-col gap-1.5"
                 >
-                  {card.cardId !== null ? (
-                    <CardImage
-                      src={cardImageUrl(card.cardId, 0, "grid")}
-                      alt={card.name}
-                      className="block h-[168px] w-[120px] rounded-md"
-                    />
-                  ) : (
-                    <span className="flex h-[168px] w-[120px] items-center justify-center rounded-md border border-border bg-surface p-2 text-center text-xs">
-                      {card.name}
+                  <div
+                    data-point={hidden ? undefined : card.id}
+                    onMouseEnter={(e) => {
+                      if (hidden) return;
+                      onPoint?.({
+                        card,
+                        ids: [card.id],
+                        place: look.zone === "library" ? "libraryTop" : look.zone,
+                        line: `${card.name} · ${placeLine(look, opponent, searching ? null : i)}`,
+                        at: pointerAt(e),
+                      });
+                    }}
+                    onMouseLeave={() => onUnpoint?.()}
+                    className={cn(
+                      "rounded-md",
+                      !hidden && (card.castable || card.canActivate) && CASTABLE_RING,
+                    )}
+                  >
+                    {hidden ? (
+                      <span className="block h-[168px] w-[120px]">
+                        <CardBack mark={48} className="rounded-md" />
+                      </span>
+                    ) : card.cardId !== null ? (
+                      <CardImage
+                        src={cardImageUrl(card.cardId, 0, "grid")}
+                        alt={card.name}
+                        className="block h-[168px] w-[120px] rounded-md"
+                      />
+                    ) : (
+                      <span className="flex h-[168px] w-[120px] items-center justify-center rounded-md border border-border bg-surface p-2 text-center text-xs">
+                        {card.name}
+                      </span>
+                    )}
+                  </div>
+                  {card.faceDown && !hidden && !card.foretold && (
+                    <span className="font-mono text-[11px] text-dim">Face down</span>
+                  )}
+                  {card.foretold && (
+                    <span className="font-mono text-[11px] text-dim">Foretold</span>
+                  )}
+                  {look.zone === "library" && !searching && (
+                    <span className="font-mono text-[11px] text-dim">
+                      {i === 0 ? "On top" : `${i + 1} from the top`}
                     </span>
                   )}
-                </div>
-                {card.foretold && <span className="font-mono text-[11px] text-dim">Foretold</span>}
-                {look.zone === "library" && !searching && (
-                  <span className="font-mono text-[11px] text-dim">
-                    {i === 0 ? "On top" : `${i + 1} from the top`}
-                  </span>
-                )}
-                {(card.castable || card.canActivate || places.length > 0) && (
-                  <div className="flex flex-wrap gap-1">
-                    {card.castable && (
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => {
-                          onAct({ type: "play", id: card.id });
-                          onClose();
-                        }}
-                        className={RULES_BUTTON}
-                      >
-                        Cast
-                      </button>
-                    )}
-                    {card.canActivate && (
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => {
-                          onAct({ type: "activate", id: card.id });
-                          onClose();
-                        }}
-                        className={RULES_BUTTON}
-                      >
-                        Activate
-                      </button>
-                    )}
-                    {places
-                      .filter(([to]) => to !== "yours" || isPermanentCard(card))
-                      .map(([to, label]) => (
+                  {(card.castable || card.canActivate || places.length > 0) && (
+                    <div className="flex flex-wrap gap-1">
+                      {card.castable && (
                         <button
-                          key={to}
                           type="button"
                           disabled={disabled}
-                          onClick={() => send(card, to)}
-                          className={cn(
-                            "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
-                            "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
-                            PRESS,
-                            FOCUS,
-                            HELD,
-                          )}
+                          onClick={() => {
+                            onAct({ type: "play", id: card.id });
+                            onClose();
+                          }}
+                          className={RULES_BUTTON}
                         >
-                          {label}
+                          Cast
                         </button>
-                      ))}
-                  </div>
-                )}
-              </li>
-            ))}
+                      )}
+                      {card.canActivate && (
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => {
+                            onAct({ type: "activate", id: card.id });
+                            onClose();
+                          }}
+                          className={RULES_BUTTON}
+                        >
+                          Activate
+                        </button>
+                      )}
+                      {places
+                        .filter(([to]) => to !== "yours" || isPermanentCard(card))
+                        .map(([to, label]) => (
+                          <button
+                            key={to}
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => send(card, to)}
+                            className={cn(
+                              "h-6 rounded border border-border px-1.5 text-[11px] text-dim",
+                              "transition-colors motion-reduce:transition-none hover:border-accent hover:text-text",
+                              PRESS,
+                              FOCUS,
+                              HELD,
+                            )}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

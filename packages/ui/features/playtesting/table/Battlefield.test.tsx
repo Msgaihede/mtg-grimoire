@@ -27,6 +27,13 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     tax: 0,
     attachedTo: null,
     foretold: false,
+    faceDown: false,
+    damage: 0,
+    sick: false,
+    phasedOut: false,
+    classLevel: null,
+    chosen: [],
+    marks: [],
     canForetell: false,
     canActivate: false,
     castable: false,
@@ -366,7 +373,12 @@ describe("Battlefield", () => {
 
   it("activates an Equipment's ability from its edge under the creature", async () => {
     const bear = creature("Grizzly Bears");
-    const sword = card("Bonesplitter", { lane: "other", isLand: false, attachedTo: bear.id });
+    const sword = card("Bonesplitter", {
+      lane: "other",
+      isLand: false,
+      attachedTo: bear.id,
+      canActivate: true,
+    });
     const onActivate = vi.fn();
     setup([bear, sword], { sandbox: false, onActivate });
     fireEvent.contextMenu(
@@ -433,13 +445,16 @@ describe("Battlefield", () => {
 
 describe("Battlefield with the sandbox off", () => {
   it("taps nothing on a click, and its menu is the rules' one row", async () => {
-    const ring = card("Sol Ring", { lane: "other", isLand: false });
+    const ring = card("Sol Ring", { lane: "other", isLand: false, canActivate: true });
     const onActivate = vi.fn();
     const { onAct } = setup([ring], { sandbox: false, onActivate });
     const button = screen.getByRole("button", { name: "Sol Ring" });
     fireEvent.click(button);
     fireEvent.click(button, { shiftKey: true });
     expect(onAct).not.toHaveBeenCalled();
+    // With nothing else to do, a click on a card the rules let the reader activate activates it.
+    expect(onActivate).toHaveBeenCalledTimes(2);
+    onActivate.mockClear();
 
     fireEvent.contextMenu(button);
     await screen.findByRole("menu");
@@ -524,5 +539,105 @@ describe("tableCardWidth", () => {
       width.mockRestore();
       height.mockRestore();
     }
+  });
+});
+
+describe("Battlefield's rules marks (phase parity)", () => {
+  it("chips the damage, sickness, level, marks and choice on a permanent, and names them", () => {
+    setup([
+      creature("Elvish Warden", {
+        damage: 2,
+        sick: true,
+        classLevel: 2,
+        marks: ["goaded"],
+        chosen: ["Elf"],
+      }),
+    ]);
+    expect(screen.getByText("2 dmg")).toHaveClass("text-destructive");
+    expect(screen.getByText("Sick")).toHaveClass("text-dim");
+    expect(screen.getByText("Level 2")).toBeInTheDocument();
+    expect(screen.getByText("Goaded")).toBeInTheDocument();
+    expect(screen.getByText("Chosen: Elf")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Elvish Warden, 2 damage marked, summoning sick, level 2, goaded, chosen: Elf",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("draws nothing more for a permanent as it comes", () => {
+    setup([creature("Grizzly Bears")]);
+    expect(document.querySelector("[data-state]")).toBeNull();
+    expect(document.querySelector("[data-phased-out]")).toBeNull();
+  });
+
+  it("draws an opponent's face-down permanent as a card back, named for what it is", () => {
+    const { onPoint } = setup(
+      [creature("", { cardId: null, faceDown: true, power: 2, toughness: 2 })],
+      { readOnly: true, flipped: true },
+    );
+    const back = screen.getByRole("button", { name: "Face-down card" });
+    expect(back.querySelector("[data-face-down]")).not.toBeNull();
+    expect(document.querySelector('[data-state="faceDown"]')).toBeNull();
+    fireEvent.mouseEnter(back);
+    expect(onPoint).toHaveBeenCalledWith(expect.objectContaining({ line: "Face-down card" }));
+  });
+
+  it("shows the reader's own face-down permanent and marks it face down", () => {
+    setup([creature("Den Protector", { faceDown: true })]);
+    const own = screen.getByRole("button", { name: "Den Protector, face down" });
+    expect(own.querySelector("[data-face-down]")).toBeNull();
+    expect(screen.getByText("Face down")).toBeInTheDocument();
+  });
+
+  it("fades a phased-out permanent, says so, and keeps it out of its twin's pile", () => {
+    setup([card("Forest", { phasedOut: true }), card("Forest")]);
+    const out = screen.getByRole("button", { name: "Forest, phased out" });
+    expect(out.closest("[data-phased-out]")).toHaveClass("opacity-40");
+    expect(screen.getByRole("button", { name: "Forest" })).toBeInTheDocument();
+  });
+
+  it("never piles a creature with damage on it with its undamaged twin", () => {
+    setup([creature("Grizzly Bears", { damage: 1 }), creature("Grizzly Bears")]);
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+  });
+});
+
+describe("Battlefield's activatable permanents", () => {
+  it("activates an opponent's permanent the rules let the reader activate, by a click and its menu", async () => {
+    const shrine = card("Volrath's Dungeon", { lane: "other", isLand: false, canActivate: true });
+    const onActivate = vi.fn();
+    const { onAct } = setup([shrine], { readOnly: true, sandbox: false, onActivate });
+    const button = screen.getByRole("button", { name: "Volrath's Dungeon" });
+    expect(button).toHaveAttribute("data-activatable");
+    fireEvent.click(button);
+    expect(onActivate).toHaveBeenCalledWith(shrine.id);
+    expect(onAct).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(button);
+    await screen.findByRole("menu");
+    expect(menuRows()).toEqual(["Activate ability"]);
+  });
+
+  it("activates the reader's own on a click that has nothing else to do", () => {
+    const blade = card("Grim Blade", { lane: "other", isLand: false, canActivate: true });
+    const onActivate = vi.fn();
+    setup([blade], { sandbox: false, onActivate });
+    fireEvent.click(screen.getByRole("button", { name: "Grim Blade" }));
+    expect(onActivate).toHaveBeenCalledWith(blade.id);
+  });
+
+  it("keeps the sandbox's tap on a click, and the ability in the menu", () => {
+    const blade = card("Grim Blade", { lane: "other", isLand: false, canActivate: true });
+    const onActivate = vi.fn();
+    const { onAct } = setup([blade], { onActivate });
+    fireEvent.click(screen.getByRole("button", { name: "Grim Blade" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [blade.id], tapped: true });
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("does not pile a permanent that can be activated with one that cannot", () => {
+    setup([card("Mishra's Factory", { canActivate: true }), card("Mishra's Factory")]);
+    expect(screen.getAllByRole("button", { name: "Mishra's Factory" })).toHaveLength(2);
   });
 });

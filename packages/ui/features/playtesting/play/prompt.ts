@@ -52,6 +52,16 @@ const TITLES: Record<string, string> = {
   OrderTriggers: "Order your triggers",
   AssignCombatDamage: "Assign combat damage",
   RetargetChoice: "Choose a new target",
+  ExertChoice: "Exert it as it attacks?",
+  UntapChoice: "Untap it?",
+  ModalFaceChoice: "Which face?",
+  CastingVariantChoice: "How do you cast it?",
+  TopOrBottomChoice: "On top or on the bottom?",
+  SeparatePilesChoice: "Choose a pile",
+  ChooseRoomDoor: "Which door?",
+  ChooseDungeon: "Choose a dungeon",
+  DistributeAmong: "Divide",
+  CombatTaxPayment: "Pay to attack?",
 };
 
 /** What the reader is choosing, for the questions whose title alone does not say it. */
@@ -160,6 +170,70 @@ export interface OptionLabel {
 /** The questions whose answers differ by their kind more than by what they point at. */
 const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
 
+/** The answers that are a yes or a no, as each one's yes and no read: "Exert", "Don’t exert". */
+const YES_NO: Record<string, readonly [string, string]> = {
+  ChooseExert: ["Exert", "Don’t exert"],
+  ChooseUntap: ["Untap", "Leave tapped"],
+  ChooseAdventureFace: ["Cast the creature", "Cast the adventure"],
+  ChoosePlayDraw: ["Play first", "Draw first"],
+  ChooseTopOrBottom: ["On top", "On the bottom"],
+  PayUnlessCost: ["Pay", "Don’t pay"],
+  PayCombatTax: ["Pay", "Don’t pay"],
+};
+
+/** The dungeons by phase's names for them, as their cards print them. */
+const DUNGEONS: Record<string, string> = {
+  LostMineOfPhandelver: "Lost Mine of Phandelver",
+  DungeonOfTheMadMage: "Dungeon of the Mad Mage",
+  TombOfAnnihilation: "Tomb of Annihilation",
+  Undercity: "Undercity",
+  BaldursGateWilderness: "Baldur’s Gate Wilderness",
+};
+
+/**
+ * The words of an answer whose kind says more than its facts — a yes or a no that is an exert,
+ * an untap, a face, an optional cost; a pile; a Room's door; a dungeon — or `null` for an answer
+ * the general reading says well.
+ */
+function kindText(
+  option: PlaytestOption,
+  prompt: Partial<Pick<PlaytestPrompt, "keyword">>,
+): string | null {
+  const pair = YES_NO[option.kind];
+  if (pair !== undefined && option.label === null && option.yes !== null)
+    return option.yes ? pair[0] : pair[1];
+  // An optional cost (a kicker, a gift, a bargain): the first answer pays it.
+  if (option.kind === "DecideOptionalCost" && option.yes !== null) {
+    if (!option.yes) return "Don’t pay";
+    return prompt.keyword ? `Pay ${words(prompt.keyword).toLowerCase()}` : "Pay";
+  }
+  if (option.label === null) return null;
+  if (option.kind === "ChoosePile") {
+    const n = option.cards.length;
+    return `Pile ${option.label} (${n} ${n === 1 ? "card" : "cards"})`;
+  }
+  if (option.kind === "UnlockRoomDoor" || option.kind === "ChooseRoomDoor")
+    return doorText(option.label, option.kind === "UnlockRoomDoor" ? "Unlock" : null);
+  if (option.kind === "ChooseDungeon") return DUNGEONS[option.label] ?? spaced(option.label);
+  return null;
+}
+
+/** A Room's door and what is done to it, from its words in either order ("Unlock Left", "Left
+ *  Lock"): "Unlock the left door". */
+function doorText(label: string, op: string | null): string {
+  const parts = label.split(" ").filter(Boolean);
+  const door = parts.find((w) => w === "Left" || w === "Right");
+  const verb = parts.find((w) => w !== door) ?? op;
+  if (door === undefined || verb === undefined || verb === null)
+    return words(label.replace(/ /g, ""));
+  return `${words(verb)} the ${door.toLowerCase()} door`;
+}
+
+/** A name in phase's spelling, its capitals kept: "LostMine" → "Lost Mine". */
+function spaced(name: string): string {
+  return name.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+}
+
 /**
  * One answer's words, from its facts: a named choice's own word first, then a yes or a no, a
  * number, the cards it points at, the players. A target answer that points at nothing is the one
@@ -170,6 +244,13 @@ const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
  *
  * A retarget's answers name the new target (issue #1520); the one that names none leaves the
  * spell's targets as they are ("Keep the targets").
+ *
+ * A yes or a no says what it does where its kind says it ("Exert" and "Don’t exert", "Untap" and
+ * "Leave tapped", "Cast the creature" and "Cast the adventure", an optional cost's "Pay kicker"
+ * and "Don’t pay"); a pile is "Pile A (3 cards)", its cards beside; a Room's door "Unlock the
+ * left door"; a dungeon its printed name. A permanent's ability is said by its words, its card
+ * beside. A named choice's word — a cast's variant ("Warp"), modes ("Mode words + mode words"),
+ * a Pathway's face — goes before a number.
  *
  * A player is "You" or "Opponent", and at a four-player table (`opponents` of 3) the opponent's
  * number too: "Opponent 2".
@@ -193,6 +274,19 @@ export function optionLabel(
       hint: rest.length === 0 ? null : `then ${rest.join(", then ")}`,
     };
   }
+  const special = kindText(option, prompt);
+  if (special !== null) {
+    const names = option.kind === "ChoosePile" ? option.cards.map((c) => c.name) : [];
+    return { text: special, hint: names.length === 0 ? null : names.join(", ") };
+  }
+  // A permanent's ability is said by its own words, its card beside (or, between a cast and an
+  // activation, the kind of answer).
+  const activated = option.kind === "ActivateAbility" && option.cards.length === 1;
+  if (activated && option.cards[0].text !== null)
+    return {
+      text: option.cards[0].text,
+      hint: BY_KIND.has(prompt.kind) ? words(option.kind) : option.cards[0].name,
+    };
   // A card standing for one of its abilities (a replacement effect) is said with the ability.
   const ability = option.cards.length === 1 ? option.cards[0].text : null;
   const hint = BY_KIND.has(prompt.kind) ? words(option.kind) : ability;
@@ -342,6 +436,13 @@ export function cardOfRef(
       tax: 0,
       attachedTo: null,
       foretold: false,
+      faceDown: false,
+      damage: 0,
+      sick: false,
+      phasedOut: false,
+      classLevel: null,
+      chosen: [],
+      marks: [],
       canForetell: false,
       canActivate: false,
       castable: false,

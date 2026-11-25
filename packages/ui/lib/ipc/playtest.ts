@@ -61,7 +61,10 @@ export type PlaytestPickPurpose =
   | "choose"
   | "keep"
   | "sacrifice"
-  | "cast";
+  | "cast"
+  | "order"
+  | "pay"
+  | "pile";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -156,7 +159,15 @@ export interface PlaytestView {
    * `opponent` is whoever sits next after them. `null` in every other stage.
    */
   deciding: PlaytestPlayer | null;
+  /** Day or night (CR 731), once a daybound or nightbound card has made it one; `null` before. */
+  dayNight: PlaytestDayNight | null;
+  /** On the reader's own turn, the lands they may still play this turn (CR 305.2); `null` on
+   *  another player's turn. */
+  landsLeft: number | null;
 }
+
+/** It is day or night (CR 731). */
+export type PlaytestDayNight = "day" | "night";
 
 /** A step to stop at, on whose turn: the reader's, or any opponent's. */
 export interface PlaytestStop {
@@ -170,7 +181,11 @@ export interface PlaytestSeat {
   out: boolean;
   life: number;
   poison: number;
-  /** The reader's hand; empty for the opponent. */
+  /**
+   * The reader's hand. For an opponent, only the cards of their hand the reader may see —
+   * revealed (Telepathy) or known since they last saw them (Thoughtseize) — as phase's own
+   * projection says; `handCount` is all of them.
+   */
   hand: GameCard[];
   handCount: number;
   battlefield: GameCard[];
@@ -188,12 +203,14 @@ export interface PlaytestSeat {
   /** The reader's library, top first; empty for the opponent. */
   libraryCards: GameCard[];
   /**
-   * The top of this seat's library while the reader may see it, drawn face up on the pile
-   * (issue #1722): the reader's own under a "you may look at the top card of your library any
-   * time" static (CR 701.20e), or any seat's played with the top card revealed (CR 400.2).
-   * phase's statics decide; `null` otherwise, and for an empty library.
+   * The top card of this seat's library when the reader may see it (CR 401.5): revealed to every
+   * player (Courser of Kruphix), or the reader's own they may look at any time (Future Sight).
+   * Its `castable` and `canActivate` say what the rules let the reader do with it there — a
+   * `play` or an `activate`, sandbox or not. `null` while it is hidden.
    */
   libraryTop: GameCard | null;
+  /** `libraryTop` is revealed to every player, rather than looked at by the reader alone. */
+  libraryTopRevealed: boolean;
   manaOpen: number;
   /** The same open mana by type, and what is floating in the pool. */
   mana: ManaTable;
@@ -210,6 +227,30 @@ export interface PlaytestSeat {
    * holds. Always `null` for a player who can lose.
    */
   deadOn: number | null;
+  /** Energy, experience, rad and ticket counters (CR 122.1). */
+  energy: number;
+  experience: number;
+  rad: number;
+  tickets: number;
+  /** Speed (CR 702.179), once this player has any. */
+  speed: number | null;
+  /** The monarch (CR 724), the initiative (CR 725), the city's blessing (CR 702.131). */
+  monarch: boolean;
+  initiative: boolean;
+  cityBlessing: boolean;
+  /** How many times the Ring has tempted this player (CR 701.54); 0 for never. */
+  ring: number;
+  /** The dungeon this player is in, and the room their venture marker is on (CR 309). */
+  dungeon: PlaytestDungeon | null;
+  /** The ids of the battlefield permanents attached to this player — a Curse (CR 303.4). */
+  enchantedBy: number[];
+}
+
+/** A player's place in a dungeon: its name, the room the marker is on and that room's words. */
+export interface PlaytestDungeon {
+  name: string;
+  room: string;
+  roomText: string;
 }
 
 /**
@@ -317,6 +358,43 @@ export interface PlaytestPrompt {
    * answers.
    */
   damage: PlaytestDamage | null;
+  /**
+   * Cards the question shows the reader without asking for them: the card they looked at ("look
+   * at the top card of your library; you may reveal it"), a cascade's or discover's hit.
+   */
+  shown: PlaytestCardRef[];
+  /**
+   * An amount to divide among targets as the reader chooses (`DistributeAmong`, CR 601.2d),
+   * which `options` cannot list: `distribute` answers.
+   */
+  distribute: PlaytestDistribute | null;
+  /** The question is to name something, and any legal word may be answered (`name`), not only
+   *  the options listed. */
+  nameEntry: boolean;
+}
+
+/** An amount to divide among targets (CR 601.2d). */
+export interface PlaytestDistribute {
+  /** All of it is divided. */
+  total: number;
+  /** What is divided, in the engine's word: `Damage`, `Counters`… */
+  unit: string;
+  targets: PlaytestDistributeTarget[];
+}
+
+/** A target an amount is divided among, and the least it may be given (1 as a spell is cast,
+ *  0 — not chosen — as it resolves). */
+export interface PlaytestDistributeTarget {
+  card: PlaytestCardRef | null;
+  player: PlaytestPlayer | null;
+  min: number;
+}
+
+/** So much of a divided amount to one target (`distribute`): a card by `id`, or a `player`. */
+export interface PlaytestShare {
+  id: number | null;
+  player: PlaytestPlayer | null;
+  amount: number;
 }
 
 /**
@@ -369,6 +447,11 @@ export interface PlaytestPick {
    * (issue #1329). `null` for cards from several places.
    */
   zone: GamePlace | null;
+  /**
+   * An `order` pick split between a library's top and bottom (Telling Time): the first `split`
+   * picked go on top, in the order picked, and the rest on the bottom. `null` for any other pick.
+   */
+  split: number | null;
 }
 
 export interface PlaytestOption {
@@ -451,6 +534,10 @@ export type PlaytestAction =
   /** Answer the prompt's `damage`: so much to each blocker, and `excess` past them (trample's,
    *  once each has lethal). The amounts add up to its whole `total`. */
   | { type: "assignDamage"; blockers: PlaytestDamageShare[]; excess: number }
+  /** Answer the prompt's `distribute`: so much to each target, adding up to its `total`. */
+  | { type: "distribute"; shares: PlaytestShare[] }
+  /** Answer a naming prompt (`nameEntry`) with a word of the reader's own. */
+  | { type: "name"; text: string }
   | { type: "auto" }
   | { type: "cancel" }
   /*
@@ -550,9 +637,28 @@ export type PlaytestHappened =
   /** Mana the reader added to their pool by hand (`delta` above zero) or took from it, and how
    *  much of that kind is `floating` after it. */
   | { type: "manaChanged"; kind: GameManaKind; delta: number; floating: number }
+  /** Cards revealed to every player (CR 701.20), by name, in the order revealed. */
+  | { type: "revealed"; seat: PlaytestPlayer; names: string[] }
+  /** A spell countered; `name` is `null` for an opponent's face-down spell, `by` the card whose
+   *  spell or ability countered it. */
+  | { type: "countered"; seat: PlaytestPlayer; name: string | null; by: string | null }
+  /** A coin flipped (CR 705): whether `seat` won the flip. */
+  | { type: "flipped"; seat: PlaytestPlayer; won: boolean }
+  /** A die rolled (CR 706); `result` is `null` for the planar die. */
+  | { type: "rolled"; seat: PlaytestPlayer; sides: number; result: number | null }
+  /** A player named a card or a word for an effect. */
+  | { type: "named"; seat: PlaytestPlayer; name: string }
+  /** A player became the monarch, took the initiative, got the city's blessing or was tempted
+   *  by the Ring. */
+  | { type: "became"; seat: PlaytestPlayer; what: PlaytestDesignation }
+  /** It became day or night (CR 731). */
+  | { type: "dayNight"; now: PlaytestDayNight }
   | { type: "chose"; what: string }
   | { type: "eliminated"; seat: PlaytestPlayer }
   | { type: "gameOver"; winner: PlaytestPlayer | null };
+
+/** A designation a player takes (`became`). */
+export type PlaytestDesignation = "monarch" | "initiative" | "cityBlessing" | "ringTempted";
 
 export interface PlaytestStep {
   view: PlaytestView;

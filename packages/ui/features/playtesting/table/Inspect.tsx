@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 import type { CardCounter, GameCard } from "@/lib/ipc";
 import { CardImage } from "@/components/CardImage";
+import { GrimoireMark } from "@/components/GrimoireMark";
 import { cardImageUrl, type ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { gapWords } from "../support";
-import { effectLine } from "./effects";
+import { cardStates, effectLine } from "./effects";
 import type { Pointed } from "./types";
 
 /** How long the pointer rests on a card before its preview opens. */
@@ -133,6 +134,7 @@ export function Inspect({
 
   if (!visible) return null;
   const { card } = pointed;
+  const states = cardStates(card);
   const caption = [
     pointed.line,
     card.power !== null && card.toughness !== null ? `${card.power}/${card.toughness}` : null,
@@ -156,6 +158,18 @@ export function Inspect({
         <StatsChip card={card} className="right-3 bottom-3 px-2 text-lg" />
       </div>
       <span className="text-xs text-dim">{caption}</span>
+      {states.length > 0 && (
+        <ul className="flex flex-col gap-0.5 text-xs text-text" data-testid="card-state">
+          {states.map((state) => (
+            <li
+              key={state.key}
+              className={state.tone === "danger" ? "text-destructive" : undefined}
+            >
+              {capital(state.line)}
+            </li>
+          ))}
+        </ul>
+      )}
       {card.effects.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-xs text-text" data-testid="card-effects">
           {card.effects.map((effect, i) => (
@@ -175,6 +189,20 @@ export function Inspect({
 /** What a card the engine plays only in part is called under its preview. */
 const PARTLY = "Played only in part by the rules engine";
 
+function capital(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * A card's name as the table says it: its own, or — for a face-down card the reader may not look
+ * at (CR 708.5), which the engine sends with no name — "Face-down card".
+ */
+export function shownName(card: GameCard): string {
+  return card.name === "" ? FACE_DOWN : card.name;
+}
+
+const FACE_DOWN = "Face-down card";
+
 /**
  * One card's face at whatever size its box is: the printing's picture, or — for a token the
  * engine has no printing for — a plain tile with its name and power/toughness, so it is still a
@@ -186,6 +214,10 @@ const PARTLY = "Played only in part by the rules engine";
  * screen's mark for the same verdict — gold until 2026-10-22, when it was found too quiet for a
  * card whose rules do not all work; the border sits inside the card, clear of the table's outline
  * marks (attack, block, pick), which sit outside it.
+ *
+ * **A face-down card the reader may not look at is a card back** (CR 708.5): the engine sends it
+ * with no name and no printing. The reader's own face-down card shows its face; the table marks it
+ * with a chip ({@link cardStates}).
  *
  * `alt` defaults to empty because every caller but one wraps the face in a control that already
  * names the card; a second name inside it would be read twice.
@@ -219,6 +251,17 @@ function Face({
   alt?: string;
   className?: string;
 }): JSX.Element {
+  // Face down and not the reader's to look at: no name, no printing — the back of a card.
+  if (card.faceDown && card.cardId === null && card.name === "") {
+    return (
+      <span
+        data-face-down=""
+        className="flex h-full w-full items-center justify-center rounded-md border border-border bg-surface"
+      >
+        <GrimoireMark size={24} className="text-accent" />
+      </span>
+    );
+  }
   if (card.cardId === null) {
     const pt =
       card.power !== null && card.toughness !== null ? `${card.power}/${card.toughness}` : null;
