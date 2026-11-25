@@ -20,7 +20,11 @@
 //! app's phone-sized dev window, under `tauri.light.conf.json`. [`configured_small`] is the test,
 //! and such a window keeps the size it was asked for, first and later alike.
 
-use tauri::Manager;
+use std::sync::{Arc, Mutex};
+
+use tauri::{Emitter, Manager};
+
+use crate::mcp::show::{SearchHandoff, SearchWindows, Shown, SEARCH_SHOW_EVENT};
 
 /// The sizes the window may open at, largest first.
 ///
@@ -259,9 +263,142 @@ pub fn open_sized_to_monitor(window: &tauri::WebviewWindow) {
     let _ = window.show();
 }
 
+/// The window the reader last focused, so an agent's search lands where they are looking.
+/// Fed from `RunEvent::WindowEvent` (`Focused(true)` records, `Destroyed` forgets).
+#[derive(Default)]
+pub struct LastFocused(Mutex<Option<String>>);
+
+impl LastFocused {
+    pub fn record(&self, label: &str) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(label.to_owned());
+    }
+
+    /// Clears the record only when it names `label`.
+    pub fn forget(&self, label: &str) {
+        let mut last = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_deref() == Some(label) {
+            *last = None;
+        }
+    }
+
+    /// The last focused window if it is still open, else `main`, else the first label in sorted
+    /// order (so a pick is repeatable).
+    pub fn pick(&self, open: &[String]) -> Option<String> {
+        let last = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(label) = last.filter(|l| open.contains(l)) {
+            return Some(label);
+        }
+        if open.iter().any(|l| l == "main") {
+            return Some("main".to_owned());
+        }
+        open.iter().min().cloned()
+    }
+}
+
+/// The app's real windows, as `show_search` needs them.
+pub struct DesktopWindows(tauri::AppHandle);
+
+impl DesktopWindows {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self(app)
+    }
+}
+
+impl SearchWindows for DesktopWindows {
+    fn show(&self, handoff: &SearchHandoff) -> Result<Shown, String> {
+        let app = &self.0;
+        let open: Vec<String> = app.webview_windows().keys().cloned().collect();
+        let label = app
+            .state::<Arc<LastFocused>>()
+            .pick(&open)
+            .ok_or_else(|| "No app window is open.".to_owned())?;
+        let window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| "No app window is open.".to_owned())?;
+        app.emit_to(label.as_str(), SEARCH_SHOW_EVENT, handoff)
+            .map_err(|e| e.to_string())?;
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let came_forward = in_front(app, &window);
+        if !came_forward {
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+        }
+        Ok(Shown {
+            label,
+            came_forward,
+        })
+    }
+}
+
+/// Whether `window` is the foreground window. `set_focus` always answers Ok even when Windows'
+/// foreground lock refused it, so ask afterwards — on the main thread, queued behind
+/// `set_focus`'s own message. Runs on the blocking pool, so waiting on the channel is safe.
+#[cfg(windows)]
+fn in_front(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    let want = hwnd.0 as isize;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let queued = app.run_on_main_thread(move || {
+        // SAFETY: GetForegroundWindow takes no arguments and only reads.
+        let front = unsafe { GetForegroundWindow() } as isize;
+        let _ = tx.send(front == want);
+    });
+    if queued.is_err() {
+        return false;
+    }
+    rx.recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn in_front(_app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> bool {
+    window.is_focused().unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_focused_window_is_picked_while_it_is_open() {
+        let last = LastFocused::default();
+        let open = vec![
+            "main".to_owned(),
+            "window-2".to_owned(),
+            "window-3".to_owned(),
+        ];
+        assert_eq!(
+            last.pick(&open).as_deref(),
+            Some("main"),
+            "nothing recorded yet: main"
+        );
+        last.record("window-3");
+        last.record("window-2");
+        assert_eq!(last.pick(&open).as_deref(), Some("window-2"));
+    }
+
+    #[test]
+    fn a_closed_window_is_never_picked() {
+        let last = LastFocused::default();
+        last.record("window-2");
+        last.forget("window-2");
+        assert_eq!(
+            last.pick(&["main".into(), "window-3".into()]).as_deref(),
+            Some("main")
+        );
+        last.record("window-3");
+        // Gone without a Destroyed event reaching us: the open list still rules.
+        assert_eq!(
+            last.pick(&["window-4".into(), "window-5".into()])
+                .as_deref(),
+            Some("window-4")
+        );
+        assert_eq!(last.pick(&[]), None);
+    }
 
     /// The case this module exists for. A 1920×1080 desk with a 48px taskbar cannot hold a
     /// 1080-tall window — the frame would want 1089 of the 1032 it has, and 1936 of its 1920

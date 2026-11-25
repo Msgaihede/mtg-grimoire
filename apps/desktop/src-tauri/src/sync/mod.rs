@@ -77,6 +77,8 @@ pub struct AppState {
     /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
     /// holds a clone of it for the life of the process, as a second observer.
     pub changes: Arc<crate::changes::Changes>,
+    /// The local MCP server's `show_search`: the hand-off to a Search page waiting for its report.
+    pub show_search: Arc<crate::mcp::show::ShowSearch>,
 }
 
 /// **What keeps every reader of `state.db` unedited.** `AppState` is named in seventy-odd files

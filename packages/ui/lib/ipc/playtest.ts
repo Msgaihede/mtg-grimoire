@@ -25,7 +25,15 @@
  */
 import { core } from "@/lib/core";
 import type { DeckVariant } from "./decks";
-import type { GameCard, GamePlace, GameSeat, ManaTable, MulliganView, TokenOffer } from "./table";
+import type {
+  GameCard,
+  GameManaKind,
+  GamePlace,
+  GameSeat,
+  ManaTable,
+  MulliganView,
+  TokenOffer,
+} from "./table";
 import { invoke, type Unlisten } from "./invoke";
 
 /**
@@ -179,6 +187,13 @@ export interface PlaytestSeat {
   library: number;
   /** The reader's library, top first; empty for the opponent. */
   libraryCards: GameCard[];
+  /**
+   * The top of this seat's library while the reader may see it, drawn face up on the pile
+   * (issue #1722): the reader's own under a "you may look at the top card of your library any
+   * time" static (CR 701.20e), or any seat's played with the top card revealed (CR 400.2).
+   * phase's statics decide; `null` otherwise, and for an empty library.
+   */
+  libraryTop: GameCard | null;
   manaOpen: number;
   /** The same open mana by type, and what is floating in the pool. */
   mana: ManaTable;
@@ -455,6 +470,13 @@ export type PlaytestAction =
   | { type: "shuffle" }
   | { type: "setLife"; seat: PlaytestPlayer; life: number }
   /**
+   * Add mana of `kind` to the reader's pool by hand (`delta` above zero) or take it away (below
+   * zero; issue #1723): mana a card the engine does not play would have made, or a pool set up
+   * to try a line. It floats until a cast spends it or the step ends. Taking more than is
+   * floating takes what there is; taking from none is a refusal.
+   */
+  | { type: "mana"; kind: GameManaKind; delta: number }
+  /**
    * Put a card under `seat`'s control by hand (issue #1713): a permanent changes controller where
    * it lies, and a card in a graveyard, in exile or in the command zone is put onto the
    * battlefield under that control. Summoning sick for its new controller (CR 302.6); refused for
@@ -525,6 +547,9 @@ export type PlaytestHappened =
   | { type: "counters"; seat: PlaytestPlayer; name: string; kind: string; count: number }
   | { type: "shuffled" }
   | { type: "lifeSet"; seat: PlaytestPlayer; life: number; was: number }
+  /** Mana the reader added to their pool by hand (`delta` above zero) or took from it, and how
+   *  much of that kind is `floating` after it. */
+  | { type: "manaChanged"; kind: GameManaKind; delta: number; floating: number }
   | { type: "chose"; what: string }
   | { type: "eliminated"; seat: PlaytestPlayer }
   | { type: "gameOver"; winner: PlaytestPlayer | null };

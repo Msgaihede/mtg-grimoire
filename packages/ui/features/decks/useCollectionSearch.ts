@@ -16,6 +16,7 @@ import { useCollectionFolderList } from "@/features/collection/useCollectionFold
 import {
   activeFilterCount,
   bordersParam,
+  colorFilterFor,
   colorParam,
   DEBOUNCE_MS,
   formatParams,
@@ -312,6 +313,12 @@ export interface CollectionSearchOptions {
    * data to filter by (`casual` is every deck's birth format and matches no rows at all).
    */
   defaultFormat?: FormatFilterOption | null;
+  /**
+   * The colours the list **opens** on — the deck's commander identity (issue #1725), handed down
+   * through the panel from `DeckEditor`, or `null`/absent for none. `useCardSearch`'s
+   * `defaultColors` exactly: seeded loose, a default and never a constraint.
+   */
+  defaultColors?: readonly ColorKey[] | null;
 }
 
 /**
@@ -326,7 +333,11 @@ export interface CollectionSearchOptions {
  * **The write is here rather than in the component** because the invalidation is the part of it
  * that can be wrong in a way nothing on screen names — see {@link useCollectionSearch}'s `move`.
  */
-export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchOptions) {
+export function useCollectionSearch({
+  deckId,
+  defaultFormat,
+  defaultColors,
+}: CollectionSearchOptions) {
   const queryClient = useQueryClient();
   // Part of the payload and part of the key: the marketplace decides what a row's `unitPrice`
   // is, not merely how it is written.
@@ -389,7 +400,18 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // is shared with the other three hooks that own a colour filter and carries the reason. The
   // flag stays out of the `activeFilterCount` call below: it is a modifier on the row rather
   // than a filter of its own.
-  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  //
+  // Seeded from the deck's commander identity (issue #1725), with the format's render-phase
+  // re-seed guard: a commander changing re-points the row, Reset all sticks.
+  const defaultColorsValue = colorParam(defaultColors ?? []) ?? "";
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(() =>
+    colorFilterFor(defaultColorsValue),
+  );
+  const [appliedDefaultColors, setAppliedDefaultColors] = useState(defaultColorsValue);
+  if (defaultColorsValue !== appliedDefaultColors) {
+    setAppliedDefaultColors(defaultColorsValue);
+    setColorFilter(colorFilterFor(defaultColorsValue));
+  }
   const colors = colorFilter.picked;
   const colorsStrict = colorFilter.strict;
   // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity

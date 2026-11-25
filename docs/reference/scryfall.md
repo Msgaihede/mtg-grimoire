@@ -58,6 +58,12 @@ collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — 
   describes all three and `Client::check_bulk_dataset` is the one call that fetches any of them.
   Each goes through `api_send` like everything else, so they spend the same pacing budget and
   honour the same 429 lockout.
+  **A two-sided printing has no top-level `illustration_id`** — `reversible_card`, `transform`,
+  `modal_dfc`, `double_faced_token` and `art_series` keep one per `card_faces` entry — so
+  `CardRow::illustration_id` falls back to the front face, and `schema::fill_face_illustrations`
+  repairs rows ingested before that at launch (issue #1727: eight Star Trek Secret Lair
+  reversibles missing from `atag:star-trek`). **Only the front face joins:** Scryfall's `atag:`
+  also matches a back face's picture, and one `illustration_id` column cannot hold two.
   **Both are checked weekly while Scryfall regenerates them daily**, and the two cadences must not
   be blurred: Scryfall's `docs/api/tags` says the files are updated daily and both `updated_at`
   stamps were the previous day when checked on 2026-08-20, while the week is

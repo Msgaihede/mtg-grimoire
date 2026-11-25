@@ -56,8 +56,10 @@ use engine::game::combat::AttackTarget;
 use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
+use engine::game::functioning_abilities::game_active_statics;
 use engine::game::mana_sources::{activatable_mana_actions_for_player, max_mana_yield};
 use engine::game::printed_cards::intrinsic_etb_counters;
+use engine::game::static_abilities::{check_static_ability, StaticCheckContext};
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
@@ -87,9 +89,9 @@ use serde_json::Value;
 
 use crate::cards::{self, CardFacts};
 use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
-use crate::table::{game_card, is_permanent, mana_table, place_of};
+use crate::table::{game_card, is_permanent, mana_table, mana_type, place_of};
 use crate::tokens::{DeckTokens, TokenFacts};
-use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{GameCard, ManaKind, MulliganView, Place, Seat, TokenOffer};
 
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
@@ -146,6 +148,8 @@ const SANDBOX_OFF: &str =
     "That changes the game by hand. Turn the sandbox on in the game menu to do it.";
 const HIDDEN: &str = "That card is in a zone you cannot see.";
 const NO_SUCH_PLAYER: &str = "There is no such player in this game.";
+/// The most mana one sandbox edit adds or takes (`mana`): a pool is set up a few at a time.
+const MANA_EDIT_LIMIT: i32 = 99;
 const PLAYER_OUT: &str = "That player is out of the game.";
 const NOT_A_PERSON: &str = "That seat is not a person's at this table.";
 const NOT_YOURS: &str = "Another player is deciding. Wait for your turn to act.";
@@ -1251,6 +1255,7 @@ impl Playtest {
             } else {
                 Vec::new()
             },
+            library_top: self.library_top(seat).and_then(|id| self.card(id)),
             mana_open: s
                 .battlefield
                 .iter()
@@ -1283,6 +1288,32 @@ impl Playtest {
                 None
             },
         }
+    }
+
+    /// The top of `seat`'s library when the chair may see it (issue #1722): their own under a
+    /// "you may look at the top card of your library any time" static (CR 701.20e), or anyone's
+    /// played with the top card revealed (CR 400.2). Both are phase's statics, asked as phase's
+    /// own `derive_display_state` and `sync_continuous_reveals` ask them — never a list of cards
+    /// of ours, and never the derived flags, which phase refreshes only at its public boundary.
+    fn library_top(&self, seat: PlayerId) -> Option<ObjectId> {
+        let s = &self.state;
+        let top = *s.players[seat.0 as usize].library.front()?;
+        let looks = seat == self.you
+            && check_static_ability(
+                s,
+                StaticMode::MayLookAtTopOfLibrary,
+                &StaticCheckContext {
+                    player_id: Some(seat),
+                    ..Default::default()
+                },
+            );
+        let revealed = || {
+            game_active_statics(s).any(|(source, def)| {
+                matches!(def.mode, StaticMode::RevealTopOfLibrary { all_players }
+                    if all_players || source.controller == seat)
+            })
+        };
+        (looks || revealed()).then_some(top)
     }
 
     /// `seat`'s emblems, oldest first: every one in the command zone it controls (CR 114.2),
@@ -3153,8 +3184,51 @@ impl Playtest {
                 out.own(self.you, PlaytestHappened::LifeSet { seat, life, was });
                 Ok(())
             }
+            PlaytestAction::Mana { kind, delta } => self.mana(kind, delta, out),
             _ => Err(MAIN_ONLY.into()),
         }
+    }
+
+    /// Mana of `kind` added to the reader's pool by hand, or taken from it (issue #1723): the
+    /// mana a card the engine does not play would have made, or a pool set up to try a line.
+    /// Added through phase's own `AddMana`, which stamps each unit as produced mana is, so a
+    /// cast spends it like any other; taken by the pool's own `spend`, since phase has no debug
+    /// action that takes mana away. Only the reader's pool — an opponent's mana is theirs to
+    /// make. It floats until a cast spends it or the rules empty the pool (CR 500.4). Taking
+    /// more than is floating takes what there is; taking from none is a refusal.
+    fn mana(&mut self, kind: ManaKind, delta: i32, out: &mut Log) -> Result<(), String> {
+        let mana = mana_type(kind);
+        let was = self.player(self.you).mana_pool.count_color(mana) as u32;
+        let delta = delta.clamp(-MANA_EDIT_LIMIT, MANA_EDIT_LIMIT);
+        if delta > 0 {
+            self.debug(DebugAction::AddMana {
+                player_id: self.you,
+                mana: vec![mana; delta.unsigned_abs() as usize],
+            })?;
+        } else if delta < 0 {
+            if was == 0 {
+                let name = format!("{kind:?}").to_lowercase();
+                return Err(format!(
+                    "There is no {name} mana in your pool to take away."
+                ));
+            }
+            let pool = &mut self.state.players[self.you.0 as usize].mana_pool;
+            for _ in 0..delta.unsigned_abs().min(was) {
+                pool.spend(mana);
+            }
+        } else {
+            return Ok(());
+        }
+        let floating = self.player(self.you).mana_pool.count_color(mana) as u32;
+        out.own(
+            self.you,
+            PlaytestHappened::ManaChanged {
+                kind,
+                delta: floating as i32 - was as i32,
+                floating,
+            },
+        );
+        Ok(())
     }
 
     /// Put a card somewhere by hand: no cost, no trigger, no replacement. Its owner's zone — an
@@ -3821,6 +3895,7 @@ fn is_sandbox(action: &PlaytestAction) -> bool {
             | PlaytestAction::Mill { .. }
             | PlaytestAction::Shuffle
             | PlaytestAction::SetLife { .. }
+            | PlaytestAction::Mana { .. }
     )
 }
 

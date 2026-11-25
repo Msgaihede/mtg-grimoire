@@ -10,7 +10,14 @@ import { readDragData } from "@/features/decks/dnd";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { viewMemory } from "@/lib/viewMemory";
 import { WALL_CARD_VARIANT } from "@/lib/images";
-import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
+import type {
+  CardSummary,
+  SearchHandoff,
+  SearchRequest,
+  SearchResponse,
+  SetSummary,
+  WishInput,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
@@ -30,11 +37,14 @@ const wishlistAdd = vi.hoisted(() => vi.fn());
  * default, which would make every currency assertion below pass for the wrong reason.
  */
 const getMarketplace = vi.hoisted(() => vi.fn());
+/** The page's report to the MCP tool `show_search` waiting on an agent's search. */
+const mcpSearchShown = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     searchCards,
     getMarketplace,
+    mcpSearchShown,
     // The filter row asks for facet counts beside every page. Answered **cold** — `ready:
     // false`, every map empty — which leaves every control live and every accessible name
     // plain, so this file's queries say what they always said. The greying itself is
@@ -274,6 +284,7 @@ beforeEach(() => {
   viewportHeight = 600;
   scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
+  mcpSearchShown.mockReset().mockResolvedValue(undefined);
   listSets.mockReset().mockResolvedValue([ALPHA]);
   prefetchImages.mockReset().mockResolvedValue(undefined);
   collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
@@ -1906,6 +1917,179 @@ describe("SearchPage — text handed over by the quick search", () => {
     await waitFor(() => expect(lastRequest()).toMatchObject({ text: "bolt" }));
     expect(box).toHaveValue("bolt");
     await waitFor(() => expect(useAppStore.getState().pendingSearchText).toBeNull());
+  });
+});
+
+/**
+ * The MCP tool `show_search`: an agent's search reaches the page as `pendingSearchHandoff`, which
+ * is answered the way the quick search's text is above — a seed on a mount, a render-phase
+ * adjustment on a page already mounted — with the agent's filters, tag chips and sort in place
+ * of the clean slate.
+ */
+describe("SearchPage — a search handed over by an agent", () => {
+  const handoff = (over: Partial<SearchHandoff> = {}): SearchHandoff => ({
+    id: 1,
+    text: "t:creature",
+    format: "commander",
+    colors: ["U", "R"],
+    colorsStrict: true,
+    types: [],
+    rarities: ["rare"],
+    sets: [],
+    manaValues: [2],
+    manaX: false,
+    owned: null,
+    priceMin: null,
+    priceMax: 5,
+    borders: ["borderless"],
+    finishes: [],
+    universe: null,
+    tags: [{ slug: "ramp", label: "Ramp", namespace: "oracle" }],
+    sort: { key: "price", dir: "desc" },
+    allPrintings: null,
+    ...over,
+  });
+  afterEach(() => useAppStore.setState({ pendingSearchHandoff: null }));
+
+  it("opens on the agent's text, filters, chips and sort, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingSearchHandoff: handoff() });
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    for (const [req] of searchCards.mock.calls) {
+      expect(req).toMatchObject({
+        format: "commander",
+        colors: "UR",
+        colorsStrict: true,
+        rarities: ["rare"],
+        borders: ["borderless"],
+        priceMax: 5,
+      });
+      expect(req.oracleTags?.include).toEqual(["ramp"]);
+    }
+    expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("t:creature");
+    expect(lastRequest().sort).toEqual([{ key: "price", dir: "desc" }]);
+    // The chips row draws the agent's tag by its label.
+    expect(screen.getAllByText("Ramp").length).toBeGreaterThan(0);
+    await waitFor(() => expect(useAppStore.getState().pendingSearchHandoff).toBeNull());
+  });
+
+  it("replaces what the reader had, leftover tag chips included, on a page already open", async () => {
+    // A chip picked in the sidebar on an earlier visit, which the agent's search does not name.
+    viewMemory("searchTags").keep({
+      selection: {
+        chips: [{ slug: "dragon", label: "Dragon", namespace: "art", mode: "include" }],
+        namespace: "both",
+        floor: "any",
+      },
+      text: "",
+    });
+    wrap(<SearchPage />);
+    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "goblin");
+    // A colour the reader picked, which the agent's search does not name either.
+    await userEvent.click(screen.getByRole("button", { name: /blue/i }));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ text: "goblin", colors: "U" }));
+    expect(lastRequest().artTags).toEqual({ include: ["dragon"], exclude: [] });
+    act(() =>
+      useAppStore
+        .getState()
+        .showSearchHandoff(
+          handoff({ id: 2, format: null, colors: [], colorsStrict: false, tags: [], sort: null }),
+        ),
+    );
+    // The agent's request, by a filter only it names. `Tokens & extras` sends no `format` and no
+    // `playableOnly` key at all (`formatParams`), so they are read one by one rather than matched.
+    await waitFor(() =>
+      expect(lastRequest()).toMatchObject({ rarities: ["rare"], text: undefined }),
+    );
+    expect(lastRequest().format).toBeUndefined();
+    expect(lastRequest().playableOnly).toBeUndefined();
+    expect(lastRequest().colors).toBeUndefined();
+    expect(lastRequest().artTags).toBeUndefined();
+    expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("t:creature");
+  });
+
+  it("reports the wall's answer once, for the latest hand-off only", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    // Each hand-off's search held in flight, so id 4 lands while id 3's is still unanswered.
+    const held = (): ((response: SearchResponse) => void) => {
+      let answer: (response: SearchResponse) => void = () => {};
+      searchCards.mockImplementationOnce(
+        () =>
+          new Promise<SearchResponse>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      return (response) => answer(response);
+    };
+    const answerThree = held();
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 3 })));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ rarities: ["rare"] }));
+    const threeAsked = searchCards.mock.calls.length;
+    const answerFour = held();
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 4, text: "t:instant" })));
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(threeAsked));
+    expect(lastRequest().predicates).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "instant" })]),
+    );
+    expect(mcpSearchShown).not.toHaveBeenCalled();
+    await act(async () => answerThree(page([BOLT], 30)));
+    await act(async () => answerFour(page([BOLT], 40)));
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalled());
+    // Let every render and effect the two answers set off run before counting.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mcpSearchShown).toHaveBeenCalledTimes(1);
+    expect(mcpSearchShown).toHaveBeenCalledWith(
+      4,
+      expect.objectContaining({ total: 40, keywords: expect.arrayContaining(["t:instant"]) }),
+    );
+  });
+
+  it("reports a hand-off that changes nothing on screen", async () => {
+    wrap(<SearchPage />);
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 5 })));
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledWith(5, expect.anything()));
+    const asked = searchCards.mock.calls.length;
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 6 })));
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledWith(6, expect.anything()));
+    // Answered by the rows already on screen, not by a search of its own.
+    expect(searchCards.mock.calls.length).toBe(asked);
+  });
+
+  it("waits for the hand-off's own rows, not the last search's left on screen", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    let answer: (response: SearchResponse) => void = () => {};
+    searchCards.mockImplementationOnce(
+      () =>
+        new Promise<SearchResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 7 })));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ rarities: ["rare"] }));
+    // The browse's rows stay drawn while the agent's search is in flight; they are not its answer.
+    expect(mcpSearchShown).not.toHaveBeenCalled();
+    await act(async () => answer(page([BOLT], 42)));
+    await waitFor(() =>
+      expect(mcpSearchShown).toHaveBeenCalledWith(7, expect.objectContaining({ total: 42 })),
+    );
+    expect(mcpSearchShown).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a search that failed, in the backend's own sentence", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    searchCards.mockRejectedValue("database is locked");
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 8 })));
+    await waitFor(() =>
+      expect(mcpSearchShown).toHaveBeenCalledWith(
+        8,
+        expect.objectContaining({ failure: "database is locked" }),
+      ),
+    );
   });
 });
 

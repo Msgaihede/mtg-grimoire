@@ -105,6 +105,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     emblems: [],
     library: 0,
     libraryCards: [],
+    libraryTop: null,
     manaOpen: 0,
     mana: manaTable(),
     commanderDamage: [],
@@ -215,7 +216,7 @@ const ZONE_OF: Record<GamePlace, Zone> = {
 
 /**
  * What a story's or test's seat does with a sandbox action — the engine's answer in outline, for
- * clicking through one. Moves, taps, untapping, draws and mills; a play is a placement (an
+ * clicking through one. Moves, taps, untapping, draws, mills and the pool's mana; a play is a placement (an
  * instant or sorcery straight to the graveyard); anything else is ignored. A new seat every time,
  * with a new id for each card that moved (CR 400.7), as the engine answers. Never used outside
  * stories and tests.
@@ -274,8 +275,20 @@ export function playLocally(seat: PlaytestSeat, action: PlaytestAction): Playtes
         if (top) (action.type === "draw" ? v.hand : v.graveyard).push(top);
       }
       break;
+    case "mana": {
+      const floating = v.mana.floating;
+      const n = Math.max(0, floating[action.kind] + action.delta);
+      v.mana = { ...v.mana, floating: { ...floating, [action.kind]: n } };
+      break;
+    }
     default:
       break;
   }
-  return { ...v, handCount: v.hand.length, library: v.libraryCards.length };
+  return {
+    ...v,
+    handCount: v.hand.length,
+    library: v.libraryCards.length,
+    // A shown top stays shown, and is whatever is on top now.
+    libraryTop: v.libraryTop === null ? null : (v.libraryCards[0] ?? null),
+  };
 }

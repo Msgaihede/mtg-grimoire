@@ -8,7 +8,8 @@ import type { TransferCard } from "../TransferCard";
 // writer entering or leaving `ACTIVE_ONLY` shows up as a red test rather than as a comment here
 // that stopped being true.
 import { dropsInactive, EXPORT_FORMATS, EXPORT_FORMAT_LABEL } from "./format";
-import { MORE_EXPORT_FORMATS, ROW_EXPORT_FORMATS } from "../formats";
+import { EXPORT_FORMAT_PLACE, ROW_EXPORT_FORMATS } from "../formats";
+import { EXPORT_PRESET_ORDER, EXPORT_PRESETS } from "./presets";
 
 /** The save dialog **and** the write, which are one command: Rust opens a native window nothing
  *  in a test or a browser can reach and writes where it answered (issue #545), so this is the
@@ -84,10 +85,11 @@ async function showList(user: ReturnType<typeof userEvent.setup>): Promise<void>
 }
 
 /**
- * Choose a format the way a reader does: its radio when it is one of the row's, otherwise **More
- * formats** opened and the format's row pressed (issue #1702). A test about what a format writes
- * goes through this rather than naming the control, so moving a format between the two halves is
- * an edit to `EXPORT_FORMAT_PLACE` and not to every test that exports in it.
+ * Choose a format the way a reader does: its radio when it is one of the row's, otherwise the
+ * **Presets** row of that name (issues #1702 and #1726) — MTGO, Moxfield and TCGplayer are reached
+ * by their presets alone. A test about what a format writes goes through this rather than naming
+ * the control, so moving a format between the two halves is an edit to `EXPORT_FORMAT_PLACE` and
+ * not to every test that exports in it.
  */
 async function pickFormat(user: ReturnType<typeof userEvent.setup>, label: string): Promise<void> {
   await screen.findByRole("radiogroup", { name: "Export format" });
@@ -96,13 +98,31 @@ async function pickFormat(user: ReturnType<typeof userEvent.setup>, label: strin
     await user.click(radio);
     return;
   }
-  await user.click(moreFormats());
-  await user.click(await screen.findByRole("option", { name: label }));
+  await pickPreset(user, label);
 }
 
-/** The **More formats** trigger — named `More formats`, or `More formats: MTGO` while it holds
- *  the export's format. */
-const moreFormats = () => screen.getByRole("button", { name: /^More formats/ });
+/** Open **Presets** and press the row whose name is `label` — the row also carries the site as
+ *  its hint, so the row is found by its name's own text rather than its whole accessible name. */
+async function pickPreset(user: ReturnType<typeof userEvent.setup>, label: string): Promise<void> {
+  await user.click(presets());
+  await user.click(presetRow(label));
+}
+
+/** One open **Presets** row by its name. */
+function presetRow(label: string): HTMLElement {
+  const row = presetRows().find((o) => rowName(o) === label);
+  if (row === undefined) throw new Error(`no preset row named ${label}`);
+  return row;
+}
+
+/** The open panel's rows. */
+const presetRows = () => within(screen.getByRole("listbox")).getAllByRole("option");
+
+/** A row's name, without its site hint — the row's first text span. */
+const rowName = (row: HTMLElement) => row.querySelector("span")?.textContent ?? "";
+
+/** The **Presets** trigger — named `Presets`, or `Presets: MTGO` while one is chosen. */
+const presets = () => screen.getByRole("button", { name: /^Presets/ });
 
 beforeEach(() => {
   exportSaveFile.mockReset();
@@ -205,103 +225,151 @@ describe("ExportDialog", () => {
     expect(await screen.findByText("Deck 2 Lightning Bolt (LEA) 161")).toBeInTheDocument();
   });
 
-  it("offers every format format.ts writes, each once, in that file's own order", async () => {
-    const user = userEvent.setup();
-    render(
-      <ExportDialog {...props} />,
-    );
-    // The radios and the dropdown map `EXPORT_FORMATS`' two halves, so this reads the arrays
-    // rather than a list drawn by hand — an eighth writer reaches the reader without an edit
-    // here. Compared against the arrays themselves rather than a count, which is a number that
-    // rots the moment a writer is added.
+  it("offers every format format.ts writes: the row's as radios, the rest through a preset", async () => {
+    // The radios map `EXPORT_FORMATS`' row half, so this reads the arrays rather than a list
+    // drawn by hand — an eighth writer reaches the reader without an edit here. A format off the
+    // row is reached by a preset that writes it (`presets.test.ts` holds the same fence on the
+    // data).
+    render(<ExportDialog {...props} />);
     const radios = (await screen.findAllByRole("radio")).map((radio) => radio.textContent);
-    await user.click(moreFormats());
-    const more = within(await screen.findByRole("listbox"))
-      .getAllByRole("option")
-      .map((option) => option.textContent);
     expect(radios).toEqual(ROW_EXPORT_FORMATS.map((format) => EXPORT_FORMAT_LABEL[format]));
-    expect(more).toEqual(MORE_EXPORT_FORMATS.map((format) => EXPORT_FORMAT_LABEL[format]));
-    // Together they are every writer, and no writer is offered twice.
-    expect([...radios, ...more].sort()).toEqual(
-      EXPORT_FORMATS.map((format) => EXPORT_FORMAT_LABEL[format]).sort(),
-    );
+    const reached = new Set(EXPORT_PRESET_ORDER.map((id) => EXPORT_PRESETS[id].format));
+    for (const format of EXPORT_FORMATS) {
+      if (EXPORT_FORMAT_PLACE[format] === "preset") expect(reached).toContain(format);
+    }
   });
 
   /**
-   * **More formats** — issue #1702. The three formats a reader picks for one site live behind a
-   * searchable dropdown after the radios, and a pick there is the export's format exactly as a
-   * radio press is: the same `chooseFormat`, the same preview, the same remembered choice.
+   * **Presets** — issue #1726, which renamed issue #1702's **More formats**. A site's whole export
+   * setting by the site's name, right-aligned after the radios, and fully preset: no Fields
+   * checkboxes and no `Include inactive categories` box while one is chosen.
    */
-  describe("More formats", () => {
-    it("holds MTGO, Moxfield and TCGplayer, and leaves the rest on the row", async () => {
+  describe("Presets", () => {
+    it("lists every site preset by name, with the site beside it, and leaves the rest on the row", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} />);
-      // By name, because these two lists are the issue's own ask rather than a derived fact.
+      // By name, because these lists are the issues' own ask rather than a derived fact.
       const radios = (await screen.findAllByRole("radio")).map((radio) => radio.textContent);
       expect(radios).toEqual(["Plain text", "Arena", "Archidekt", "CSV"]);
-      expect(moreFormats()).toHaveTextContent("More formats");
-      await user.click(moreFormats());
-      const listbox = within(await screen.findByRole("listbox"));
-      expect(listbox.getAllByRole("option").map((o) => o.textContent)).toEqual([
-        "MTGO",
+      expect(presets()).toHaveTextContent("Presets");
+      await user.click(presets());
+      expect(presetRows().map(rowName)).toEqual([
+        "Card Kingdom",
+        "Cardmarket",
+        "Mana Pool",
         "Moxfield",
+        "MTG Print",
+        "MTG Proxy",
+        "MTGO",
+        "Proxxied",
+        "Proxy Print",
         "TCGplayer",
       ]);
+      expect(presetRow("Proxy Print")).toHaveTextContent("proxyprint.taxiera.net");
     });
 
-    it("makes the picked format the export's format, and a radio takes it back", async () => {
+    it("sits at the row's far end, apart from the radios", async () => {
+      render(<ExportDialog {...props} />);
+      await screen.findByRole("radiogroup", { name: "Export format" });
+      // The trigger's own wrapper carries the push and the gap — jsdom lays nothing out, so the
+      // classes are what can be read; the live check is the CDP pass.
+      expect(presets().parentElement?.parentElement).toHaveClass("ml-auto", "pl-6");
+    });
+
+    it("makes the preset the export's setting, with no checkbox, and a radio takes it back", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} />);
       await showList(user);
+      expect(screen.getByRole("checkbox", { name: "Finish" })).toBeInTheDocument();
 
-      await pickFormat(user, "Moxfield");
+      await pickPreset(user, "Moxfield");
       // The panel closes behind the pick, the preview is Moxfield's, and the trigger says which
-      // format it holds — in words and in its accessible name — with no radio left checked.
+      // preset it holds — in words and in its accessible name — with no radio left checked.
       expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
       expect(await screen.findByText("Deck 2 Lightning Bolt (LEA) 161")).toBeInTheDocument();
-      expect(moreFormats()).toHaveAccessibleName("More formats: Moxfield");
-      expect(moreFormats()).toHaveTextContent("Moxfield");
+      expect(presets()).toHaveAccessibleName("Presets: Moxfield");
+      expect(presets()).toHaveTextContent("Moxfield");
       for (const radio of screen.getAllByRole("radio")) {
         expect(radio).toHaveAttribute("aria-checked", "false");
       }
+      // Fully preset: not one checkbox in the dialog.
+      expect(screen.queryAllByRole("checkbox")).toEqual([]);
       // The group is still one Tab stop with nothing checked in it.
       expect(screen.getByRole("radio", { name: "Plain text" })).toHaveAttribute("tabindex", "0");
 
       await user.click(screen.getByRole("radio", { name: "CSV" }));
       expect(screen.getByRole("radio", { name: "CSV" })).toHaveAttribute("aria-checked", "true");
-      expect(moreFormats()).toHaveAccessibleName("More formats");
-      expect(moreFormats()).toHaveTextContent("More formats");
+      expect(presets()).toHaveAccessibleName("Presets");
+      expect(presets()).toHaveTextContent("Presets");
+      expect(screen.getByRole("checkbox", { name: "Finish" })).toBeInTheDocument();
     });
 
-    it("finds a format by what is typed, and Enter picks it", async () => {
+    it("checks no radio under a preset that writes a radio's format", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} />);
+      await pickPreset(user, "Card Kingdom");
+      // Card Kingdom is plain text, but not the Plain text radio's setting: no finish mark, no box.
+      expect(screen.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      await showList(user);
+      expect(screen.getByText("2 Lightning Bolt")).toBeInTheDocument();
+      expect(screen.queryAllByRole("checkbox")).toEqual([]);
+
+      // And the radio is still pressable: it puts the preset down and its own setting back.
+      await user.click(screen.getByRole("radio", { name: "Plain text" }));
+      expect(screen.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.getByRole("checkbox", { name: "Finish" })).toBeChecked();
+    });
+
+    it("finds a preset by its site as well as its name, and Enter picks it", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} />);
       await screen.findByRole("radiogroup", { name: "Export format" });
 
-      await user.click(moreFormats());
-      const search = await screen.findByRole("combobox", { name: "Search formats" });
+      await user.click(presets());
+      const search = await screen.findByRole("combobox", { name: "Search presets" });
+      await user.type(search, "taxiera");
+      expect(presetRows().map(rowName)).toEqual(["Proxy Print"]);
+      await user.clear(search);
       await user.type(search, "tcg");
-      const listbox = within(screen.getByRole("listbox"));
-      expect(listbox.getAllByRole("option").map((o) => o.textContent)).toEqual(["TCGplayer"]);
+      expect(presetRows().map(rowName)).toEqual(["TCGplayer"]);
 
       await user.keyboard("{Enter}");
-      expect(moreFormats()).toHaveAccessibleName("More formats: TCGplayer");
+      expect(presets()).toHaveAccessibleName("Presets: TCGplayer");
       // TCGplayer's printing is `[SET] number`, so the preview proves the format really moved.
       await showList(user);
       expect(screen.getByText("2 Lightning Bolt [LEA] 161")).toBeInTheDocument();
     });
 
-    it("keeps the reader's fields when the format already chosen is picked again", async () => {
+    it("writes Mana Pool's documented mass-entry line", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} />);
-      await pickFormat(user, "Moxfield");
-      await user.click(screen.getByRole("checkbox", { name: "Finish" }));
-      expect(screen.getByRole("checkbox", { name: "Finish" })).not.toBeChecked();
+      await pickPreset(user, "Mana Pool");
+      await showList(user);
+      expect(screen.getByText("2 Lightning Bolt [LEA] 161")).toBeInTheDocument();
+    });
 
-      // A pick that changes nothing must not re-derive the field row from the format's defaults,
-      // which would tick Finish back on under the reader.
-      await pickFormat(user, "Moxfield");
-      expect(screen.getByRole("checkbox", { name: "Finish" })).not.toBeChecked();
+    it("leaves switched-off piles out, and says so", async () => {
+      const user = userEvent.setup();
+      const copy = vi.mocked(copyTextMock);
+      render(
+        <ExportDialog
+          {...props}
+          cards={[
+            exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
+            exportCard({ name: "Forest", quantity: 6, categoryName: "Cuts", categoryActive: false }),
+          ]}
+        />,
+      );
+      await pickPreset(user, "Proxxied");
+      expect(screen.getByText("6 cards in inactive categories are left out.")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Copy" }));
+      expect(copy).toHaveBeenLastCalledWith("1 Sol Ring\n");
     });
 
     it("clears the Copied status, as a radio does", async () => {
@@ -311,19 +379,19 @@ describe("ExportDialog", () => {
       await user.click(screen.getByRole("button", { name: "Copy" }));
       expect(await screen.findByText("Copied.")).toBeInTheDocument();
 
-      await pickFormat(user, "MTGO");
+      await pickPreset(user, "MTGO");
       expect(screen.queryByText("Copied.")).not.toBeInTheDocument();
     });
 
-    it("opens on a format it holds, remembered from the last export", async () => {
+    it("opens on a preset it holds, remembered from the last export", async () => {
       const user = userEvent.setup();
       const { unmount } = render(<ExportDialog {...props} />);
-      await pickFormat(user, "MTGO");
+      await pickPreset(user, "MTGO");
       unmount();
 
       render(<ExportDialog {...props} />);
-      expect(await screen.findByRole("button", { name: /^More formats/ })).toHaveAccessibleName(
-        "More formats: MTGO",
+      expect(await screen.findByRole("button", { name: /^Presets/ })).toHaveAccessibleName(
+        "Presets: MTGO",
       );
       expect(screen.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
         "aria-checked",
@@ -354,9 +422,9 @@ describe("ExportDialog", () => {
     await user.click(await screen.findByRole("radio", { name: "Arena" }));
     expect(screen.getByText(/can't include inactive categories, so 6 cards/)).toBeInTheDocument();
 
-    // Moxfield has a maybeboard, so it writes that pile and leaves nothing out. The sentence is
+    // Plain text writes every pile and leaves nothing out of its own accord. The sentence is
     // about the format on screen, so it has to go with it.
-    await pickFormat(user, "Moxfield");
+    await pickFormat(user, "Plain text");
     expect(screen.queryByText(/can't include inactive categories/)).not.toBeInTheDocument();
 
     // **The tick is what keeps this test's original claim the claim it is making** (issue #390).
@@ -687,7 +755,8 @@ describe("ExportDialog", () => {
     it("draws for every format that has not already answered the question", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} cards={CUTS} />);
-      for (const format of EXPORT_FORMATS) {
+      // The radios' formats: a preset draws no box at all (issue #1726) — see "Presets".
+      for (const format of ROW_EXPORT_FORMATS) {
         const label = EXPORT_FORMAT_LABEL[format];
         await pickFormat(user, label);
         if (dropsInactive(format)) {
@@ -727,13 +796,14 @@ describe("ExportDialog", () => {
 
     /**
      * **Off on a first open, and what is asserted is the file rather than the checkbox.** This is
-     * the half of #390 that is a behaviour change rather than a new control: Moxfield has a
-     * maybeboard and wrote that pile into it until the day this shipped, so the sentence worth
-     * pinning is "those cards are not in the text", not "the box is unticked".
+     * the half of #390 that is a behaviour change rather than a new control: Archidekt can flag a
+     * pile `{noDeck}` and wrote that pile until the day this shipped, so the sentence worth
+     * pinning is "those cards are not in the text", not "the box is unticked". (Moxfield was the
+     * format here until it became a preset, issue #1726, which draws no box.)
      *
      * The whole copied text rather than a line of the preview, for the Arena filter's reason —
      * two cards write two lines into one text node and `getByText` is a whole-node match — and
-     * the absent `Maybeboard` heading is the half that a filter applied in the wrong place would
+     * the absent `Cuts` heading is the half that a filter applied in the wrong place would
      * get wrong: `formatExport` writing a heading over no rows is the other way this could fail
      * and would be invisible to a test that only counted cards.
      */
@@ -741,11 +811,11 @@ describe("ExportDialog", () => {
       const user = userEvent.setup();
       const copy = vi.mocked(copyTextMock);
       render(<ExportDialog {...props} cards={CUTS} />);
-      await pickFormat(user, "Moxfield");
+      await pickFormat(user, "Archidekt");
       expect(inactiveBox()).not.toBeChecked();
 
       await user.click(screen.getByRole("button", { name: /Copy/ }));
-      expect(copy).toHaveBeenLastCalledWith("Deck\n1 Sol Ring (LTC) 285\n");
+      expect(copy).toHaveBeenLastCalledWith("Ramp\n1x Sol Ring (ltc) 285 [Ramp]\n");
     });
 
     /**
@@ -756,8 +826,8 @@ describe("ExportDialog", () => {
      * put the cards back and lost the marker would hand a reader an Archidekt import in which
      * their maybeboard had become part of the deck, and the copies would all be present.
      *
-     * Moxfield's `Maybeboard` heading is the same statement in the other vocabulary, pressed for
-     * in the same session, because the filter is one gate in front of seven writers: a fix that
+     * Plain text's flat list is the same pile in a second writer, pressed for in the same
+     * session, because the filter is one gate in front of seven writers: a fix that
      * reached one writer's rows and not the other's is exactly the drift one format's test cannot
      * see. It also crosses a format with the box on, which is the trip below asserted in passing.
      */
@@ -775,11 +845,9 @@ describe("ExportDialog", () => {
         "Ramp\n1x Sol Ring (ltc) 285 [Ramp]\n\nCuts\n6x Forest (ltc) 285 [Cuts{noDeck}]\n",
       );
 
-      await pickFormat(user, "Moxfield");
+      await pickFormat(user, "Plain text");
       await user.click(screen.getByRole("button", { name: /Copy/ }));
-      expect(copy).toHaveBeenLastCalledWith(
-        "Deck\n1 Sol Ring (LTC) 285\n\nMaybeboard\n6 Forest (LTC) 285\n",
-      );
+      expect(copy).toHaveBeenLastCalledWith("1 Sol Ring\n6 Forest\n");
     });
 
     /**
@@ -1043,7 +1111,7 @@ describe("ExportDialog", () => {
     // (Lightning Bolt) instead, which the exact-string CSV and plain-text assertions above pin,
     // so this test names the card its own assertions are about.
     render(<ExportDialog {...props} cards={[exportCard()]} surface="deck" />);
-    await pickFormat(user, "Moxfield");
+    await pickFormat(user, "Arena");
     await user.click(screen.getByRole("button", { name: /Show decklist/ }));
     expect(screen.getByText(/Sol Ring \(LTC\) 285/)).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Set code" }));

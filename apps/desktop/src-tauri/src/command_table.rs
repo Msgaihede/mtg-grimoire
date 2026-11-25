@@ -75,6 +75,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "mcp_claude_desktop_save",
         "Rust-owned native save dialog for Claude Desktop's extension",
     ),
+    (
+        "mcp_search_shown",
+        "the Search page's answer to the local MCP server's show_search, which only this process's listener waits for",
+    ),
     ("window_count", "how many windows this host has open"),
     ("update_status", "the portable updater swaps this exe"),
     ("update_history", "the portable updater swaps this exe"),

@@ -10,6 +10,7 @@ import {
   ipc,
   ipcError,
   type QueryPredicate,
+  type SearchHandoff,
   type SearchRequest,
   type SearchResponse,
   type SearchSortKey,
@@ -508,6 +509,16 @@ export interface ColorFilter {
 export const NO_COLORS: ColorFilter = { picked: [], strict: false };
 
 /**
+ * A caller's default colours — a {@link colorParam} string, `""` for none — as the filter the row
+ * opens on: those letters, **loose** (issue #1725). Loose is the backend's subset reading, which
+ * is what a commander's identity means: every card that fits inside it, colourless included.
+ */
+export function colorFilterFor(defaultColors: string): ColorFilter {
+  if (!defaultColors) return NO_COLORS;
+  return { picked: MANA_KEYS.filter((c) => defaultColors.includes(c)), strict: false };
+}
+
+/**
  * Add or remove one colour, **leaving the flag alone**. See {@link ColorFilter}.
  *
  * It used to drop the flag with the last colour. That rule was the disappearing chip's — with
@@ -644,6 +655,20 @@ export interface CardSearchOptions {
    */
   defaultFormat?: FormatFilterOption | null;
   /**
+   * The colours the colour row opens on, or `null`/absent for none — the deck editor's answer for
+   * a deck with a commander: the command zone's colour identity (issue #1725, `searchColorDefault`
+   * in `features/decks/`). `["C"]` is a colourless commander's.
+   *
+   * {@link defaultFormat}'s contract exactly: **a default, never a constraint**. It seeds the row
+   * **loose** (`strict: false`), which is the backend's subset reading — every card whose identity
+   * fits inside these colours, colourless included — and so precisely the cards that may go in
+   * the deck. The reader can clear it or pick other colours, and Reset all clears it and it stays
+   * cleared until the default itself changes (a commander added, swapped or removed), the same
+   * render-phase guard the format uses. Read as its {@link colorParam} string, so a caller
+   * building the array inline costs nothing.
+   */
+  defaultColors?: readonly ColorKey[] | null;
+  /**
    * Which printings mode the view **opens** on — `false` (one row per card) unless a caller
    * says otherwise, which is what this hook has always answered.
    *
@@ -713,6 +738,15 @@ export interface CardSearchOptions {
    */
   initialText?: string | null;
   /**
+   * An agent's search to **open** on — `SearchPage` passing the MCP tool `show_search`'s hand-off
+   * (`store.ts`'s `pendingSearchHandoff`) when that is what mounted it. {@link initialText}'s seed
+   * with the agent's filters in place of the clean slate: the box, the format (`Tokens & extras`
+   * when it names none) and every filter are the hand-off's, and the sort and printings mode are
+   * too where it names them. Read once and ignored after; {@link showHandoff} is the same answer
+   * for a page already mounted, and {@link handoffFilters} is the one mapping both read.
+   */
+  initialHandoff?: SearchHandoff | null;
+  /**
    * Remember this search's filters under this name, so the view opens on them again when the
    * reader comes back to it (issue #908) — `SearchPage` and the light app's phone search pass
    * `"search"`. Absent remembers nothing, which is the deck builder's docked panels: they open on
@@ -750,6 +784,37 @@ interface RememberedSearch {
   allPrintings: boolean;
 }
 
+/**
+ * An agent's search as the filter half of {@link RememberedSearch} — every control the Search page
+ * draws, set from the hand-off. **One mapping for both ways in**: the seed when the hand-off is
+ * what mounted the page (`initialHandoff`) and `showHandoff` on a page already mounted, so the two
+ * cannot disagree about what the agent asked for.
+ *
+ * Every filter is the hand-off's whether it names it or not: an empty list or a `null` is that
+ * control cleared, never the reader's last answer left standing, for `showOnlyText`'s reason — the
+ * agent asked this question and nothing narrower. `format: null` is `Tokens & extras`, no format
+ * filter at all. The sort and the printings mode are views rather than filters and are not here:
+ * they change only where the hand-off names them.
+ */
+function handoffFilters(h: SearchHandoff): Omit<RememberedSearch, "sort" | "allPrintings"> {
+  return {
+    text: h.text,
+    format: h.format ?? ANY_CARD,
+    colorFilter: { picked: h.colors, strict: h.colorsStrict },
+    types: h.types,
+    borders: h.borders,
+    finishes: h.finishes,
+    universe: h.universe ?? undefined,
+    sets: h.sets,
+    manaValues: h.manaValues,
+    manaX: h.manaX,
+    owned: h.owned ?? undefined,
+    rarities: h.rarities,
+    priceMin: h.priceMin ?? undefined,
+    priceMax: h.priceMax ?? undefined,
+  };
+}
+
 export function useCardSearch(options: CardSearchOptions = {}) {
   const { rememberAs } = options;
   /**
@@ -762,13 +827,20 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const [recalled] = useState(() =>
     rememberAs === undefined ? undefined : viewMemory<RememberedSearch>(rememberAs).recall(),
   );
-  const seed = options.initialSet || options.initialText ? undefined : recalled;
+  // An agent's search, when one mounted the page: its filters are the seed in place of the
+  // remembered ones — the set and text hand-offs' clean slate with the agent's answers on it. Only
+  // one hand-off is ever pending at a mount (`setActiveView` spends the others before each writes).
+  const handed = options.initialHandoff ? handoffFilters(options.initialHandoff) : undefined;
+  const seed = handed ?? (options.initialSet || options.initialText ? undefined : recalled);
   // A hand-off's box text, when one mounted the page — the seed for both `text` and the debounced
   // copy the request reads, so the first request is already the hand-off's.
   const seededText = options.initialText || (seed?.text ?? "");
   // Read once, and as a string rather than as the object: every caller builds that object
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
+  // The same for the colour row's default — its WUBRG string, `""` for none. See
+  // {@link CardSearchOptions.defaultColors}.
+  const defaultColorsValue = colorParam(options.defaultColors ?? []) ?? "";
   /**
    * The caller's tag chips — the search page's tag sidebar, and half of what finally rides.
    *
@@ -833,7 +905,23 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // **One state for the row and its `Exact` flag, not two** — one control's two halves, and one
   // value for `resetAll` to put back. {@link ColorFilter} carries the whole reading, including
   // the batching bug behind the rule that used to bind them and the reason that rule is gone.
-  const [colorFilter, setColorFilter] = useState<ColorFilter>(seed?.colorFilter ?? NO_COLORS);
+  //
+  // Seeded from the caller's default colours (issue #1725) for the format's reason above: the
+  // first request is already the narrowed one. A remembered row wins, and a set or text hand-off
+  // opens on no colours, both as the format does.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(() =>
+    options.initialSet || options.initialText
+      ? NO_COLORS
+      : (seed?.colorFilter ?? colorFilterFor(defaultColorsValue)),
+  );
+  // {@link appliedDefaultFormat}'s guard for the colour default: a commander added, swapped or
+  // removed re-seeds the row during render, so no request ever carries the previous commander's
+  // colours; a fresh array with the same letters changes nothing, and Reset all sticks.
+  const [appliedDefaultColors, setAppliedDefaultColors] = useState(defaultColorsValue);
+  if (defaultColorsValue !== appliedDefaultColors) {
+    setAppliedDefaultColors(defaultColorsValue);
+    setColorFilter(colorFilterFor(defaultColorsValue));
+  }
   const colors = colorFilter.picked;
   const colorsStrict = colorFilter.strict;
   // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
@@ -868,9 +956,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const [priceMin, setPriceMin] = useState<number | undefined>(seed?.priceMin);
   const [priceMax, setPriceMax] = useState<number | undefined>(seed?.priceMax);
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
-  // should not also throw away the order you chose to read it in.
+  // should not also throw away the order you chose to read it in. An agent's search that names an
+  // order opens in it, `initialSort`'s rule.
+  const handedSort = options.initialHandoff?.sort;
   const [sort, setSort] = useState<SortSpec<SearchSortKey>>(
-    options.initialSort ?? recalled?.sort ?? [],
+    handedSort ? [handedSort] : (options.initialSort ?? recalled?.sort ?? []),
   );
   // A **view mode**, and outside `resetAll` for the same reason the sort is: clearing what
   // you are looking at should not also change *how* you are looking at it.
@@ -886,9 +976,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   //
   // Seeded from the caller rather than pinned `false` since the Tags page landed — see
   // {@link CardSearchOptions.defaultAllPrintings} for why that page opens uncollapsed. A seed
-  // and not a lock: the toggle on the filter row is still the reader's.
+  // and not a lock: the toggle on the filter row is still the reader's. An agent's search that
+  // names a mode opens in it; `null` there keeps the reader's.
   const [allPrintings, setAllPrintings] = useState(
-    recalled?.allPrintings ?? options.defaultAllPrintings ?? false,
+    options.initialHandoff?.allPrintings ??
+      recalled?.allPrintings ??
+      options.defaultAllPrintings ??
+      false,
   );
   // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
   // to off-and-hidden. It is the format select's `Tokens & extras` row now — one control, because the
@@ -1540,10 +1634,19 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // read for. Counting it would caption a cold database's empty wall "try another word", and
   // there is no other word.
   const formatIsReaderSet = format !== "" && format !== ANY_CARD && format !== defaultFormatValue;
+  // The colour row's half of the same question (issue #1725): a commander's identity the caller
+  // seeded is not the reader asking, so an unsynced database under a Commander deck's panel is
+  // still captioned as empty rather than as a search that missed.
+  const colorsIsReaderSet = colorsParam !== undefined && colorsParam !== defaultColorsValue;
 
   return {
     text,
     setText,
+    /**
+     * The box's plain words — the debounced text with its keyword terms and tag names lifted out,
+     * which is the free text the request's `text` carries. `""` when the box holds syntax alone.
+     */
+    plainWords: parsed.text,
     fetchMore,
     /**
      * The tags the reader typed into the box, resolved — what the chip row under it draws.
@@ -1994,6 +2097,34 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setPriceMax(undefined);
     },
     /**
+     * Show an agent's search and nothing else — the MCP tool `show_search`, arriving through
+     * `store.ts`'s `pendingSearchHandoff` on a page already mounted ({@link
+     * CardSearchOptions.initialHandoff} is the mount's seed). {@link showOnlyText}'s clean slate
+     * with the agent's answers on it: the box flushed past the debounce, then every filter set
+     * from {@link handoffFilters} — one the hand-off leaves empty is cleared, not left standing.
+     * The sort and the printings mode change only where the hand-off names them, `showOnlySet`'s
+     * `order` rule.
+     */
+    showHandoff: (h: SearchHandoff) => {
+      const next = handoffFilters(h);
+      rewrite(next.text);
+      setFormat(next.format);
+      setColorFilter(next.colorFilter);
+      setSets(next.sets);
+      setTypes(next.types);
+      setBorders(next.borders);
+      setFinishes(next.finishes);
+      setUniverse(next.universe);
+      setManaValues(next.manaValues);
+      setManaX(next.manaX);
+      setOwned(next.owned);
+      setRarities(next.rarities);
+      setPriceMin(next.priceMin);
+      setPriceMax(next.priceMax);
+      if (h.sort) setSort([h.sort]);
+      if (h.allPrintings !== null) setAllPrintings(h.allPrintings);
+    },
+    /**
      * The marketplace every price on this view is quoted from — its label for the as-of
      * sentence and its currency for the formatter. The *numbers* were decided by the query
      * this is part of the key of.
@@ -2051,7 +2182,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     unfiltered:
       !debouncedText &&
       !formatIsReaderSet &&
-      !colorsParam &&
+      !colorsIsReaderSet &&
       !setsParam &&
       !typesParamValue &&
       !bordersParamValue &&
