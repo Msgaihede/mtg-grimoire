@@ -207,6 +207,7 @@ pub mod set_completion;
 /// viewer that opens a stranger's link is the desktop's.
 pub mod share;
 pub mod shelffolds;
+pub mod similar;
 pub mod slug;
 /// **The sort vocabulary and every price expression.**
 pub mod sorting;

@@ -1269,6 +1269,9 @@ commands! {
         read_card_tags(conn, &oracle_ids).map_err(|e| format!("could not read the tags: {e}"))
     };
     read card_oracle_tags in tags::oracle(card_id: String) = |conn| direct_tags(conn, &card_id);
+    read cards_similar in similar(oracle_id: String, format: Option<String>, identity: Option<String>, limit: i64) = |conn| {
+        similar_cards(conn, &oracle_id, format.as_deref(), identity.as_deref(), limit)
+    };
     read oracle_tags_for_printings in tags::oracle(card_ids: Vec<String>) = |conn| {
         read_printing_tags(conn, &card_ids).map_err(|e| format!("could not read the tags: {e}"))
     };

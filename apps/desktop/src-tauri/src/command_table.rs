@@ -285,6 +285,10 @@ const TABLE_ONLY: &[(&str, &str)] = &[
         "a card's own oracle tags with labels, for the MCP server's get_card; the page reads \
      the tag closure through oracle_tags_for_printings",
     ),
+    (
+        "cards_similar",
+        "cards that do what a card does, ranked by shared oracle tags, for the MCP server's      similar_cards tool",
+    ),
 ];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
