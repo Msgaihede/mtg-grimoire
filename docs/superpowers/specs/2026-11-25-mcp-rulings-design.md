@@ -1,6 +1,6 @@
 # MCP server: rulings (project D of the MCP improvements)
 
-Date: 2026-11-25. Status: draft, for the owner's approval.
+Date: 2026-11-25. Status: approved by the owner, 2026-11-25.
 
 Project D of the five in [the card knowledge design](2026-11-24-mcp-card-knowledge-design.md) §2:
 "Import Scryfall's rulings bulk file as a weekly feed; a rulings tool; rulings added to
