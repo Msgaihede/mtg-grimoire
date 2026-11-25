@@ -534,6 +534,13 @@ An opponent's draw is `drew` with no name, and a card going back from their hand
 is not told at all. The AI itself reads the whole `GameState`. Whether it plays as if it knows the
 reader's hand is phase's business, not this board's.
 
+**A library's top card is sent when the rules show it** (`libraryTop`, issue #1722), and the pile
+draws it face up: the reader's own while a "you may look at the top card of your library any time"
+is in play (phase's `MayLookAtTopOfLibrary`, CR 701.20e — Vizier of the Menagerie, Courser of
+Kruphix), and any seat's played with the top card revealed (`RevealTopOfLibrary`, CR 400.2 —
+Future Sight). The session asks phase's statics each view (`library_top`), never a list of cards
+of its own; the face is pointed at for the preview, sandbox or not.
+
 ## The commands and the wire
 
 | Command                                                               | Does                                                                                                                                                                                                                                                                                                                                              |

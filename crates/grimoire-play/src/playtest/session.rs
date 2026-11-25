@@ -56,8 +56,10 @@ use engine::game::combat::AttackTarget;
 use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
+use engine::game::functioning_abilities::game_active_statics;
 use engine::game::mana_sources::{activatable_mana_actions_for_player, max_mana_yield};
 use engine::game::printed_cards::intrinsic_etb_counters;
+use engine::game::static_abilities::{check_static_ability, StaticCheckContext};
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
@@ -1253,6 +1255,7 @@ impl Playtest {
             } else {
                 Vec::new()
             },
+            library_top: self.library_top(seat).and_then(|id| self.card(id)),
             mana_open: s
                 .battlefield
                 .iter()
@@ -1285,6 +1288,32 @@ impl Playtest {
                 None
             },
         }
+    }
+
+    /// The top of `seat`'s library when the chair may see it (issue #1722): their own under a
+    /// "you may look at the top card of your library any time" static (CR 701.20e), or anyone's
+    /// played with the top card revealed (CR 400.2). Both are phase's statics, asked as phase's
+    /// own `derive_display_state` and `sync_continuous_reveals` ask them — never a list of cards
+    /// of ours, and never the derived flags, which phase refreshes only at its public boundary.
+    fn library_top(&self, seat: PlayerId) -> Option<ObjectId> {
+        let s = &self.state;
+        let top = *s.players[seat.0 as usize].library.front()?;
+        let looks = seat == self.you
+            && check_static_ability(
+                s,
+                StaticMode::MayLookAtTopOfLibrary,
+                &StaticCheckContext {
+                    player_id: Some(seat),
+                    ..Default::default()
+                },
+            );
+        let revealed = || {
+            game_active_statics(s).any(|(source, def)| {
+                matches!(def.mode, StaticMode::RevealTopOfLibrary { all_players }
+                    if all_players || source.controller == seat)
+            })
+        };
+        (looks || revealed()).then_some(top)
     }
 
     /// `seat`'s emblems, oldest first: every one in the command zone it controls (CR 114.2),

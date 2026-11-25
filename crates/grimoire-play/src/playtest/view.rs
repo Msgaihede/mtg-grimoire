@@ -193,6 +193,13 @@ pub struct PlaytestSeat {
     /// The reader's library, **top first**, for the library menu's look and search; empty for the
     /// opponent.
     pub library_cards: Vec<GameCard>,
+    /// The top of this seat's library while the reader may see it, drawn face up on the pile
+    /// (issue #1722): the reader's own under a "you may look at the top card of your library any
+    /// time" static (CR 701.20e — Vizier of the Menagerie, Courser of Kruphix), or any seat's
+    /// played with the top card revealed (CR 400.2 — Future Sight, Magus of the Future). phase's
+    /// statics decide (`MayLookAtTopOfLibrary`, `RevealTopOfLibrary`); `None` otherwise, and for
+    /// an empty library.
+    pub library_top: Option<GameCard>,
     /// What this seat's untapped permanents could make right now (phase's `max_mana_yield`).
     pub mana_open: u32,
     /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
