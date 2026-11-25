@@ -187,7 +187,10 @@ pub fn list() -> Vec<Value> {
             "get_card",
             "Get card",
             "One printing's details: oracle text, type, mana cost, the finishes it was made in, \
-             its legalities and market prices, and how many the user owns.",
+             its legalities and market prices, how many the user owns, its faces, its oracle \
+             tags (direct ones, with tagData saying when the tag list was downloaded), the cards \
+             it brings with it (tokens, emblems, meld parts, combo pieces) and how many \
+             Commander Spellbook combos name it.",
             json!({ "cardId": card_id }),
             &["cardId"],
             &read,
@@ -301,6 +304,74 @@ pub fn list() -> Vec<Value> {
                 "identity": { "type": "string", "description": "Collection only: the missing card must fit this colour identity (WUBRG letters, C for colourless)." },
                 "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "How many of each list (default 20)." },
                 "offset": offset.clone(),
+            }),
+            &[],
+            &read,
+        ),
+        tool(
+            "card_scryfall",
+            "A card's Scryfall record",
+            "The whole Scryfall card object for up to 20 printings, in Scryfall's own format \
+             (keywords, layout, produced_mana, card_faces, all_parts and the rest), for facts the \
+             other tools do not carry. Without fields every field is answered except the image \
+             and shop links (image_uris, card_faces[].image_uris, purchase_uris, related_uris); \
+             fields names the top-level ones to answer instead. prices there are as of the last \
+             card sync, not the app's marketplace prices, which get_card answers. An id the \
+             database lacks is named in missing.",
+            json!({
+                "cardIds": {
+                    "type": "array", "items": { "type": "string" },
+                    "minItems": 1, "maxItems": 20,
+                    "description": "Printing ids, from find_cards.",
+                },
+                "fields": {
+                    "type": "array", "items": { "type": "string" },
+                    "description": "Top-level Scryfall field names to answer, e.g. [\"keywords\", \"layout\"].",
+                },
+            }),
+            &["cardIds"],
+            &read,
+        ),
+        tool(
+            "find_tags",
+            "Find oracle tags",
+            "Scryfall's community oracle tags (what a card does, such as ramp or card draw) whose \
+             name matches words, with their slugs and how many cards hold each. A slug is what \
+             find_cards takes in filters.oracleTags. Answers tagData: when the tag list was \
+             downloaded.",
+            json!({
+                "text": { "type": "string", "description": "Words of the tag, e.g. \"ramp\"." },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many to answer (default 10)." },
+            }),
+            &["text"],
+            &read,
+        ),
+        tool(
+            "similar_cards",
+            "Cards like a card",
+            "Cards that do what a card does, ranked by the oracle tags they share with it (a tag \
+             few cards hold counts for more than a common one). Each row names the cardId of its \
+             newest printing, its type, cost, score and the shared tags that weigh most. Answers \
+             tagData: when the tag list was downloaded.",
+            json!({
+                "cardId": card_id.clone(),
+                "format": { "type": "string", "description": "Only cards legal in this format key (one format_rules marks searchable)." },
+                "identity": { "type": "string", "description": "Only cards that fit inside this colour identity (WUBRG letters, C for colourless)." },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many to answer (default 10)." },
+            }),
+            &["cardId"],
+            &read,
+        ),
+        tool(
+            "format_rules",
+            "Format rules",
+            "The rules of the formats the app knows: deck size, copies allowed, sideboard, \
+             singleton, commander, starting life, companion, mana value cap, what restricted \
+             means, whether the app checks decks in it (validates) and whether it has legality \
+             data, so find_cards and similar_cards accept it as a format (searchable). With \
+             format, that one; without, every format the deck picker offers.",
+            json!({
+                "format": { "type": "string", "description": "One format key, e.g. \"commander\"." },
             }),
             &[],
             &read,
@@ -480,6 +551,10 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "card_combos" => card_combos(state, &args).await,
         "get_combo" => get_combo(state, &args).await,
         "held_combos" => held_combos(state, &args).await,
+        "card_scryfall" => card_scryfall(state, &args).await,
+        "find_tags" => find_tags(state, &args).await,
+        "similar_cards" => similar_cards(state, &args).await,
+        "format_rules" => format_rules(state, &args).await,
         "widget_vocabulary" => widget_vocabulary(&args),
         "widget_check" => widget_check(&args),
         "widget_preview" => widget_preview(state, &args).await,
@@ -569,6 +644,27 @@ impl Args {
         }
     }
 
+    /// A list of strings, trimmed, blanks dropped; absent is empty.
+    fn texts(&self, name: &str) -> Result<Vec<String>, String> {
+        match self.0.get(name) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(items)) => {
+                let mut out = Vec::new();
+                for item in items {
+                    let Some(text) = item.as_str() else {
+                        return Err(format!("{name} must be a list of strings."));
+                    };
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        out.push(text.to_owned());
+                    }
+                }
+                Ok(out)
+            }
+            Some(_) => Err(format!("{name} must be a list of strings.")),
+        }
+    }
+
     fn flag(&self, name: &str) -> Result<bool, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(false),
@@ -642,6 +738,11 @@ fn rows(value: &Value, field: &str) -> Vec<Value> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
+}
+
+/// A JSON array's items, empty for anything else.
+fn rows_of(value: &Value) -> Vec<Value> {
+    value.as_array().cloned().unwrap_or_default()
 }
 
 /// Whether every word of `query` is in `name`, ignoring case — the deck list's filter, which has
@@ -743,7 +844,243 @@ async fn get_card(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
             card["owned"] = holdings;
         }
     }
+    // Each extra is left out when its read fails, as `owned` is.
+    let faces: Vec<Value> = rows(&detail, "faces")
+        .iter()
+        .map(|f| {
+            pick(
+                f,
+                &[
+                    ("name", "name"),
+                    ("typeLine", "typeLine"),
+                    ("manaCost", "manaCost"),
+                    ("oracleText", "oracleText"),
+                ],
+            )
+        })
+        .collect();
+    if !faces.is_empty() {
+        card["faces"] = json!(faces);
+    }
+    if let Ok(tags) = run(state, "card_oracle_tags", json!({ "cardId": card_id })).await {
+        card["tags"] = tags;
+        if let Ok(status) = run(state, "oracle_tags_status", json!({})).await {
+            with_tag_data(&mut card, &status);
+        }
+    }
+    if let Ok(related) = run(state, "card_related", json!({ "id": card_id })).await {
+        card["related"] = related;
+    }
+    if let Some(oracle) = detail.get("oracleId").and_then(Value::as_str) {
+        let page = run(
+            state,
+            "combos_for_card",
+            json!({
+                "oracleId": oracle, "search": null, "produces": null, "cardCount": null,
+                "ownedOnly": false, "limit": 1, "offset": 0,
+            }),
+        )
+        .await;
+        if let Some(total) = page.ok().and_then(|p| p.get("total").cloned()) {
+            card["comboCount"] = total;
+        }
+    }
     Ok(card)
+}
+
+/// The top-level Scryfall fields `card_scryfall` leaves out unless asked for by name.
+const SCRYFALL_LINKS: [&str; 3] = ["image_uris", "purchase_uris", "related_uris"];
+
+async fn card_scryfall(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let ids = args.texts("cardIds")?;
+    if !(1..=20).contains(&ids.len()) {
+        return Err("cardIds must hold from 1 to 20 printing ids.".to_owned());
+    }
+    let fields = args.texts("fields")?;
+    let records = run(state, "card_raw", json!({ "ids": ids })).await?;
+    let mut cards = Vec::new();
+    let mut missing = Vec::new();
+    for record in records.as_array().into_iter().flatten() {
+        let id = record.get("id").cloned().unwrap_or(Value::Null);
+        let Some(Value::Object(scryfall)) = record.get("scryfall") else {
+            missing.push(id);
+            continue;
+        };
+        let mut kept = Map::new();
+        if fields.is_empty() {
+            for (key, value) in scryfall {
+                if !SCRYFALL_LINKS.contains(&key.as_str()) {
+                    kept.insert(key.clone(), value.clone());
+                }
+            }
+            if let Some(Value::Array(faces)) = kept.get_mut("card_faces") {
+                for face in faces {
+                    if let Some(face) = face.as_object_mut() {
+                        face.remove("image_uris");
+                    }
+                }
+            }
+        } else {
+            for field in &fields {
+                if let Some(value) = scryfall.get(field) {
+                    kept.insert(field.clone(), value.clone());
+                }
+            }
+        }
+        cards.push(json!({ "cardId": id, "scryfall": kept }));
+    }
+    Ok(json!({ "cards": cards, "missing": missing }))
+}
+
+async fn find_tags(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let text = args.required_text("text")?;
+    let limit = args.bounded("limit", 10, 1, 50)?;
+    let hits = run(
+        state,
+        "tag_search",
+        json!({ "text": text, "namespace": "oracle", "limit": limit }),
+    )
+    .await?;
+    let tags: Vec<Value> = hits
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| {
+            pick(
+                t,
+                &[
+                    ("slug", "slug"),
+                    ("label", "label"),
+                    ("cardCount", "cardCount"),
+                ],
+            )
+        })
+        .collect();
+    let status = run(state, "oracle_tags_status", json!({})).await?;
+    let mut answer = json!({ "tags": tags });
+    with_tag_data(&mut answer, &status);
+    Ok(answer)
+}
+
+/// The searchable format key `args` names, lower-cased; `None` when it names none. A key with no
+/// legality data (`casual`, `limited`, `unspecified`) would silently match nothing, so it is
+/// refused with the keys that do work. `specs` is `format_specs_list`'s answer.
+fn format_key(args: &Args, specs: &Value) -> Result<Option<String>, String> {
+    let Some(key) = args.text("format")? else {
+        return Ok(None);
+    };
+    let key = key.to_lowercase();
+    let searchable: Vec<&str> = specs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| f["hasLegalityData"] == true)
+        .filter_map(|f| f["key"].as_str())
+        .collect();
+    if searchable.contains(&key.as_str()) {
+        Ok(Some(key))
+    } else {
+        Err(format!(
+            "format cannot be {key:?}; the searchable formats are: {}.",
+            searchable.join(", ")
+        ))
+    }
+}
+
+async fn similar_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let card_id = args.required_text("cardId")?;
+    let limit = args.bounded("limit", 10, 1, 50)?;
+    let identity = args.text("identity")?.map(|i| i.to_uppercase());
+    let format = if args.text("format")?.is_some() {
+        let specs = run(state, "format_specs_list", json!({})).await?;
+        format_key(args, &specs)?
+    } else {
+        None
+    };
+    let detail = run(state, "card_detail", json!({ "id": card_id })).await?;
+    let Some(oracle) = detail.get("oracleId").and_then(Value::as_str) else {
+        return Err(format!(
+            "No card has the id {card_id}. Use find_cards to look one up."
+        ));
+    };
+    let found = run(
+        state,
+        "cards_similar",
+        json!({ "oracleId": oracle, "format": format, "identity": identity, "limit": limit }),
+    )
+    .await?;
+    let cards: Vec<Value> = found
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            pick(
+                c,
+                &[
+                    ("name", "name"),
+                    ("cardId", "cardId"),
+                    ("typeLine", "typeLine"),
+                    ("manaCost", "manaCost"),
+                    ("score", "score"),
+                    ("sharedTags", "sharedTags"),
+                ],
+            )
+        })
+        .collect();
+    let status = run(state, "oracle_tags_status", json!({})).await?;
+    let mut answer = json!({ "cards": cards });
+    with_tag_data(&mut answer, &status);
+    Ok(answer)
+}
+
+async fn format_rules(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let specs = run(state, "format_specs_list", json!({})).await?;
+    let wanted = args.text("format")?.map(|k| k.to_lowercase());
+    let known: Vec<&str> = specs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["key"].as_str())
+        .collect();
+    if let Some(key) = &wanted {
+        if !known.contains(&key.as_str()) {
+            return Err(format!(
+                "format cannot be {key:?}; the formats are: {}.",
+                known.join(", ")
+            ));
+        }
+    }
+    let formats: Vec<Value> = rows_of(&specs)
+        .iter()
+        .filter(|f| match &wanted {
+            Some(key) => f["key"] == key.as_str(),
+            None => f["enabledInPicker"] == true,
+        })
+        .map(|f| {
+            let mut row = pick(
+                f,
+                &[
+                    ("key", "key"),
+                    ("name", "displayName"),
+                    ("deckMin", "deckMin"),
+                    ("deckMax", "deckMax"),
+                    ("maxCopies", "maxCopies"),
+                    ("sideboardMax", "sideboardMax"),
+                    ("singleton", "singleton"),
+                    ("requiresCommander", "requiresCommander"),
+                    ("commanderRule", "commanderRule"),
+                    ("life", "life"),
+                    ("allowsCompanion", "allowsCompanion"),
+                    ("maxManaValue", "maxManaValue"),
+                    ("restrictedMeaning", "restrictedSemantic"),
+                    ("validates", "validates"),
+                ],
+            );
+            row["searchable"] = f["hasLegalityData"].clone();
+            row
+        })
+        .collect();
+    Ok(json!({ "formats": formats }))
 }
 
 async fn search_collection(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
@@ -1008,18 +1345,54 @@ fn combo_data(status: &Value) -> Value {
 }
 
 /// Put `comboData` on an answer, with the sentence that says so when nothing was downloaded.
-fn with_combo_data(answer: &mut Value, status: &Value, mut notes: Vec<String>) {
-    let data = combo_data(status);
+fn with_combo_data(answer: &mut Value, status: &Value, notes: Vec<String>) {
+    with_feed_data(
+        answer,
+        "comboData",
+        combo_data(status),
+        "combo list",
+        "no combos",
+        notes,
+    );
+}
+
+/// `tagData`: when the oracle tag list was last downloaded (Unix seconds, null if never).
+fn tag_data(status: &Value) -> Value {
+    json!({ "downloadedAt": status.get("ingestedAt").cloned().unwrap_or(Value::Null) })
+}
+
+/// Put `tagData` on an answer, as [`with_combo_data`] puts `comboData`.
+fn with_tag_data(answer: &mut Value, status: &Value) {
+    with_feed_data(
+        answer,
+        "tagData",
+        tag_data(status),
+        "oracle tag list",
+        "no tags",
+        Vec::new(),
+    );
+}
+
+/// Put a downloaded feed's `{ downloadedAt }` on an answer under `key`. When nothing was ever
+/// downloaded the answer also carries `note`, one sentence saying the `list` is missing, so an
+/// empty answer does not read as `nothing`, and where to fetch it; `notes` are joined after it.
+fn with_feed_data(
+    answer: &mut Value,
+    key: &str,
+    data: Value,
+    list: &str,
+    nothing: &str,
+    mut notes: Vec<String>,
+) {
     if data["downloadedAt"].is_null() {
         notes.insert(
             0,
-            "The combo list has not been downloaded yet, so an empty answer does not mean there \
-             are no combos. The app fetches it weekly when it starts, and Settings can fetch it \
-             now."
-                .to_owned(),
+            format!(
+                "The {list} has not been downloaded yet, so an empty answer does not mean there                  are {nothing}. The app fetches it weekly when it starts, and Settings can fetch                  it now."
+            ),
         );
     }
-    answer["comboData"] = data;
+    answer[key] = data;
     if !notes.is_empty() {
         answer["note"] = json!(notes.join(" "));
     }
@@ -1856,10 +2229,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 21);
+        assert_eq!(names.len(), 25);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 21, "names are unique");
+        assert_eq!(names.len(), 25, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -2741,5 +3114,324 @@ mod tests {
                 "{name}: {got}"
             );
         }
+    }
+
+    // ---- raw records, tags, similar cards and format rules -------------------------------
+
+    /// A printing `id` of oracle card `o-<id>` named `name`, its `raw` a gzipped Scryfall object.
+    fn raw_card(c: &rusqlite::Connection, id: &str, name: &str, raw: &Value) {
+        grimoire_core::schema::fixtures::seed_card(c, id, "lea", "1");
+        c.execute(
+            "UPDATE cards SET name = ?2, raw = ?3 WHERE id = ?1",
+            rusqlite::params![
+                id,
+                name,
+                grimoire_core::card_row::gzip_raw(&raw.to_string())
+            ],
+        )
+        .unwrap();
+    }
+
+    /// An oracle tag, and the oracle ids that hold it directly (and, here, through the closure).
+    fn tag(c: &rusqlite::Connection, slug: &str, label: &str, holders: &[&str]) {
+        c.execute(
+            "INSERT OR IGNORE INTO oracle_tags (slug, id, label, description, slug_norm)
+             VALUES (?1, ?2, ?3, 'About it.', ?1)",
+            rusqlite::params![slug, format!("id-{slug}"), label],
+        )
+        .unwrap();
+        for oracle in holders {
+            for table in ["oracle_taggings", "oracle_tag_cards"] {
+                c.execute(
+                    &format!("INSERT INTO {table} (oracle_id, slug) VALUES (?1, ?2)"),
+                    rusqlite::params![oracle, slug],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    fn tags_downloaded(c: &rusqlite::Connection) {
+        c.execute(
+            "INSERT INTO oracle_tag_meta (id, ingested_at, checked_at, tag_count, tagging_count)
+             VALUES (1, 1700000200, 1700000300, 2, 3)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn card_scryfall_answers_the_record_without_image_or_shop_links() {
+        let state = state("card-scryfall");
+        seed(&state, |c| {
+            raw_card(
+                c,
+                "p-a",
+                "Card A",
+                &json!({
+                    "name": "Card A", "layout": "normal", "keywords": ["Flying"],
+                    "image_uris": { "small": "x" }, "purchase_uris": { "a": "y" },
+                    "related_uris": { "b": "z" }, "prices": { "usd": "1.00" },
+                }),
+            );
+            raw_card(c, "p-b", "Card B", &json!({ "name": "Card B", "cmc": 2.0 }));
+        });
+        let got = done(
+            &state,
+            "card_scryfall",
+            json!({ "cardIds": ["p-a", "p-b", "nope"] }),
+        )
+        .await;
+        let a = &got["cards"][0];
+        assert_eq!(a["cardId"], "p-a");
+        assert_eq!(a["scryfall"]["keywords"], json!(["Flying"]));
+        assert_eq!(a["scryfall"]["prices"]["usd"], "1.00");
+        for gone in ["image_uris", "purchase_uris", "related_uris"] {
+            assert!(a["scryfall"].get(gone).is_none(), "{gone} stayed: {a}");
+        }
+        assert_eq!(got["cards"][1]["scryfall"]["cmc"], 2.0);
+        assert_eq!(got["cards"].as_array().unwrap().len(), 2);
+        assert_eq!(got["missing"], json!(["nope"]));
+
+        let only = done(
+            &state,
+            "card_scryfall",
+            json!({ "cardIds": ["p-a"], "fields": ["keywords", "image_uris"] }),
+        )
+        .await;
+        assert_eq!(
+            only["cards"][0]["scryfall"],
+            json!({ "keywords": ["Flying"], "image_uris": { "small": "x" } })
+        );
+
+        let ids: Vec<String> = (0..21).map(|i| format!("p-{i}")).collect();
+        let why = refused(&state, "card_scryfall", json!({ "cardIds": ids })).await;
+        assert!(why.contains("20"), "{why}");
+        let why = refused(&state, "card_scryfall", json!({ "cardIds": [] })).await;
+        assert!(why.contains("cardIds"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_two_faced_record_keeps_its_faces_text() {
+        let state = state("card-scryfall-faces");
+        seed(&state, |c| {
+            raw_card(
+                c,
+                "p-dfc",
+                "Front // Back",
+                &json!({
+                    "name": "Front // Back",
+                    "card_faces": [
+                        { "name": "Front", "oracle_text": "Front text.", "image_uris": { "small": "f" } },
+                        { "name": "Back", "oracle_text": "Back text.", "image_uris": { "small": "b" } },
+                    ],
+                }),
+            );
+        });
+        let got = done(&state, "card_scryfall", json!({ "cardIds": ["p-dfc"] })).await;
+        let faces = got["cards"][0]["scryfall"]["card_faces"]
+            .as_array()
+            .unwrap();
+        assert_eq!(faces.len(), 2);
+        assert_eq!(faces[0]["oracle_text"], "Front text.");
+        assert_eq!(faces[1]["oracle_text"], "Back text.");
+        assert!(
+            faces.iter().all(|f| f.get("image_uris").is_none()),
+            "{faces:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_card_names_tags_related_cards_faces_and_a_combo_count() {
+        let state = state("get-card-widened");
+        seed(&state, |c| {
+            raw_card(
+                c,
+                "p-a",
+                "Card A",
+                &json!({ "all_parts": [
+                    { "id": "tok-1", "object": "related_card", "component": "token",
+                      "name": "Spirit", "type_line": "Token Creature - Spirit" },
+                ]}),
+            );
+            c.execute(
+                "UPDATE cards SET faces = ?2 WHERE id = ?1",
+                rusqlite::params![
+                    "p-a",
+                    json!([
+                        { "name": "Front", "type_line": "Creature", "oracle_text": "Fly.", "mana_cost": "{U}" },
+                        { "name": "Back", "type_line": "Land", "oracle_text": "Tap.", "artist": "Z" },
+                    ])
+                    .to_string()
+                ],
+            )
+            .unwrap();
+            combo_card(c, "p-b", "Card B", "U", true);
+            combo(c, "c1", "R", &[("o-p-a", "Card A"), CB]);
+            downloaded(c);
+            tag(c, "ramp", "Ramp", &["o-p-a"]);
+            tag(c, "draw", "Card advantage", &["o-p-a"]);
+            tags_downloaded(c);
+        });
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(
+            got["tags"],
+            json!([
+                { "slug": "draw", "label": "Card advantage" },
+                { "slug": "ramp", "label": "Ramp" },
+            ])
+        );
+        assert_eq!(got["tagData"]["downloadedAt"], 1_700_000_200);
+        assert!(got.get("note").is_none(), "{got}");
+        assert_eq!(got["related"][0]["relation"], "token");
+        assert_eq!(got["related"][0]["name"], "Spirit");
+        assert_eq!(got["comboCount"], 1);
+        assert_eq!(
+            got["faces"],
+            json!([
+                { "name": "Front", "typeLine": "Creature", "manaCost": "{U}", "oracleText": "Fly." },
+                { "name": "Back", "typeLine": "Land", "oracleText": "Tap." },
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_untagged_card_has_no_tags_and_no_note() {
+        let state = state("get-card-untagged");
+        seed(&state, |c| {
+            raw_card(c, "p-a", "Card A", &json!({}));
+            tag(c, "ramp", "Ramp", &["o-other"]);
+            tags_downloaded(c);
+        });
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["tags"], json!([]));
+        assert_eq!(got["tagData"]["downloadedAt"], 1_700_000_200);
+        assert!(got.get("note").is_none(), "{got}");
+        assert_eq!(got["related"], json!([]));
+        assert_eq!(got["comboCount"], 0);
+        assert!(
+            got.get("faces").is_none(),
+            "a one-faced card has none: {got}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_tag_feed_says_so() {
+        let state = state("get-card-no-tag-feed");
+        seed(&state, |c| raw_card(c, "p-a", "Card A", &json!({})));
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["tags"], json!([]));
+        assert!(got["tagData"]["downloadedAt"].is_null(), "{got}");
+        assert!(got["note"].as_str().unwrap().contains("Settings"), "{got}");
+
+        let found = done(&state, "find_tags", json!({ "text": "ramp" })).await;
+        assert_eq!(found["tags"], json!([]));
+        assert!(found["tagData"]["downloadedAt"].is_null(), "{found}");
+        assert!(
+            found["note"].as_str().unwrap().contains("Settings"),
+            "{found}"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_tags_turns_words_into_slugs() {
+        let state = state("find-tags");
+        seed(&state, |c| {
+            tag(c, "ramp", "Ramp", &["o-1", "o-2"]);
+            tag(c, "mana-ramp", "Mana ramp", &["o-1"]);
+            tags_downloaded(c);
+        });
+        let got = done(&state, "find_tags", json!({ "text": "ramp" })).await;
+        assert_eq!(
+            got["tags"][0],
+            json!({ "slug": "ramp", "label": "Ramp", "cardCount": 2 })
+        );
+        assert_eq!(got["tags"][1]["slug"], "mana-ramp");
+        assert_eq!(got["tagData"]["downloadedAt"], 1_700_000_200);
+        assert!(got.get("note").is_none(), "{got}");
+
+        let one = done(&state, "find_tags", json!({ "text": "ramp", "limit": 1 })).await;
+        assert_eq!(one["tags"].as_array().unwrap().len(), 1);
+        let why = refused(&state, "find_tags", json!({ "text": "ramp", "limit": 51 })).await;
+        assert!(why.contains("limit"), "{why}");
+        let why = refused(&state, "find_tags", json!({})).await;
+        assert!(why.contains("text"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn similar_cards_ranks_by_shared_tags() {
+        let state = state("similar-cards");
+        seed(&state, |c| {
+            for (id, name) in [("p-a", "Card A"), ("p-b", "Card B"), ("p-c", "Card C")] {
+                combo_card(c, id, name, "U", true);
+            }
+            // A rare tag shared with B, a common one shared with C.
+            tag(c, "rare", "Rare thing", &["o-p-a", "o-p-b"]);
+            tag(
+                c,
+                "common",
+                "Common thing",
+                &["o-p-a", "o-p-c", "o-x", "o-y", "o-z"],
+            );
+            tags_downloaded(c);
+        });
+        let got = done(&state, "similar_cards", json!({ "cardId": "p-a" })).await;
+        let names: Vec<&str> = got["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Card B", "Card C"], "{got}");
+        let b = &got["cards"][0];
+        assert_eq!(b["cardId"], "p-b");
+        assert_eq!(b["sharedTags"], json!(["Rare thing"]));
+        assert!(b["score"].as_f64().unwrap() > got["cards"][1]["score"].as_f64().unwrap());
+        assert!(b.get("oracleId").is_none(), "{b}");
+        assert_eq!(got["tagData"]["downloadedAt"], 1_700_000_200);
+
+        let legal = done(
+            &state,
+            "similar_cards",
+            json!({ "cardId": "p-a", "format": "Commander", "identity": "u", "limit": 1 }),
+        )
+        .await;
+        assert_eq!(legal["cards"].as_array().unwrap().len(), 1);
+
+        let why = refused(
+            &state,
+            "similar_cards",
+            json!({ "cardId": "p-a", "format": "casual" }),
+        )
+        .await;
+        assert!(why.contains("commander"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+        let why = refused(&state, "similar_cards", json!({ "cardId": "nope" })).await;
+        assert!(why.contains("No card has the id nope"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn format_rules_marks_which_formats_can_be_searched() {
+        let state = state("format-rules");
+        let all = done(&state, "format_rules", json!({})).await;
+        let formats = all["formats"].as_array().unwrap();
+        assert!(formats.len() > 10, "{all}");
+        let by = |key: &str| formats.iter().find(|f| f["key"] == key);
+        let commander = by("commander").expect("the picker offers commander");
+        assert_eq!(commander["name"], "Commander");
+        assert_eq!(commander["searchable"], true);
+        assert_eq!(commander["singleton"], true);
+        assert_eq!(commander["requiresCommander"], true);
+        assert!(commander.get("restrictedMeaning").is_some(), "{commander}");
+        assert!(commander.get("enabledInPicker").is_none(), "{commander}");
+        assert!(by("casual").is_none_or(|f| f["searchable"] == false));
+
+        let one = done(&state, "format_rules", json!({ "format": "Commander" })).await;
+        assert_eq!(one["formats"].as_array().unwrap().len(), 1);
+        assert_eq!(one["formats"][0]["key"], "commander");
+
+        let why = refused(&state, "format_rules", json!({ "format": "nonesuch" })).await;
+        assert!(why.contains("commander"), "{why}");
+        assert!(!why.contains("  "), "{why}");
     }
 }
