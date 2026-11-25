@@ -411,7 +411,7 @@ checkpoint is dropped: the spell is cast, and the AI may already be answering it
 2026-10-17: **off by default against the AI, on against the goldfish**, and the reader's to turn on
 or off at any stage. Like `setStops` it changes nothing on the table, plays nothing on, and is not
 remembered by undo. Its actions are a hand on the table: move a card anywhere, tap, untap all,
-counters, token copies, preset tokens, draw, mill, shuffle and life totals — phase's debug actions,
+counters, token copies, preset tokens, draw, mill, shuffle, life totals and the pool's mana — phase's debug actions,
 which the engine permits for the reader's seat (`debug_permitted`) and never for the AI's.
 
 - **Off,** every one of them is refused: "That changes the game by hand. Turn the sandbox on in the
@@ -451,6 +451,20 @@ would take it out of combat, which no debug action does — and so is a card tha
 permanent card ("… is not a permanent card"), or a player out of the game. Told as `controlled`:
 whose card, where it was, who controls it now ("Gained control of the opponent's Hill Giant",
 "Put the opponent's Hill Giant onto the battlefield under your control").
+
+**Mana is put in the reader's pool by hand, or taken out of it** (`mana { kind, delta }`, issue
+#1723, 2026-11-25): the mana a card phase does not play would have made — or one the reader would
+rather not wait on — and a pool set up to try a line. Added through phase's own `AddMana` debug
+action, which stamps each unit as produced mana is, so a cast spends it like any other; taken by the
+pool's own `spend`, since phase has no debug action that takes mana away. Only the reader's pool:
+an opponent's mana is theirs to make. It floats until a cast spends it or the step ends (CR 500.4),
+as tapped mana does. Taking more than is floating takes what there is; taking from none is refused
+("There is no green mana in your pool to take away."). Told as `manaChanged { kind, delta,
+floating }` ("Added two green mana to your pool"). The board draws it in the mana table: with the
+sandbox on, its Pool row is always there, each type a vertical stepper (`+` above, `−` below, a
+typed amount sent as the difference), greyed while the sandbox's moves do not work. A rules tap
+(`tapForMana`) never goes through it: a land tapped by the rules sets off what watches mana being
+made (Caged Sun, which phase plays, issue #1723), and the sandbox's mana sets off nothing.
 
 **A permanent put onto the battlefield by hand enters with its intrinsic counters** (issue #1333):
 a planeswalker its loyalty and a battle its defense (CR 306.5b, 310.4b), phase's own
