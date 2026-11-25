@@ -1025,8 +1025,16 @@ async function openPage(
   const forget = () => browser.send("Network.clearBrowserCache", {}, sessionId);
   /**
    * A real press — the pointer down and up at the middle of the element `find` answers — once
-   * that element is on the page with a box. Not `element.click()`: the phone router takes only
-   * a primary click nothing else handled, and a press is what a reader makes.
+   * that element is on the page with a box **that has stopped moving**. Not `element.click()`:
+   * the phone router takes only a primary click nothing else handled, and a press is what a reader
+   * makes.
+   *
+   * **Settled, because the phone face moves things** (2026-11-25): a sheet rises the height of the
+   * glass on a spring and a page slides in from the right edge, so a box measured mid-flight is
+   * not where the element is a frame later. The first run after that pass measured the new deck's
+   * name field as its sheet rose, pressed where the field had been, typed into nothing, and
+   * Create deck refused a deck with no name. A reader aims at where a thing is, so the press waits
+   * for two polls in a row to find the box in the same place.
    */
   const press = async (what: string, find: string) => {
     const at = await until<Point>(
@@ -1036,9 +1044,14 @@ async function openPage(
         if (!el) return null;
         el.scrollIntoView({ block: "center" });
         const box = el.getBoundingClientRect();
-        return box.width > 0 && box.height > 0
-          ? { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-          : null;
+        if (!(box.width > 0 && box.height > 0)) return null;
+        const here = [box.x, box.y, box.width, box.height].map(Math.round).join(",");
+        if (window.__smokePressBox !== here) {
+          window.__smokePressBox = here;
+          return null;
+        }
+        delete window.__smokePressBox;
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
       })()`,
     );
     for (const type of ["mousePressed", "mouseReleased"] as const) {
