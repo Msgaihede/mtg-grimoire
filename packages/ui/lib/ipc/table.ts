@@ -27,6 +27,12 @@ export type GameSeat = "you" | "opponent";
 export type GameEffectKind =
   "copy" | "control" | "text" | "type" | "color" | "ability" | "setPt" | "modifyPt" | "switchPt";
 
+/**
+ * One type of mana, a column of the mana table: WUBRG and then colorless, {@link ManaByType}'s
+ * fields by name. What the sandbox adds to or takes from the reader's pool (`mana`, issue #1723).
+ */
+export type GameManaKind = "white" | "blue" | "black" | "red" | "green" | "colorless";
+
 /** A seat's mana by type (issue #1002). Every seat's, the reader's and each opponent's. */
 export interface ManaTable {
   /**

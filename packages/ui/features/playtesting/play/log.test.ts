@@ -287,6 +287,16 @@ const CASES: [PlaytestHappened, string | null, string][] = [
   [{ type: "lifeSet", seat: "you", life: 43, was: 40 }, "You gained 3, up to 43", "life"],
   [{ type: "lifeSet", seat: "opponent", life: 0, was: 4 }, "The opponent is dead", "life"],
   [
+    { type: "manaChanged", kind: "green", delta: 2, floating: 3 },
+    "Added two green mana to your pool",
+    "tap",
+  ],
+  [
+    { type: "manaChanged", kind: "colorless", delta: -1, floating: 0 },
+    "Took one colorless mana from your pool",
+    "tap",
+  ],
+  [
     { type: "chose", what: "TargetSelection" },
     "The engine chose for you: Choose a target",
     "engine",

@@ -1,10 +1,11 @@
 import type { JSX } from "react";
-import type { ManaByType, ManaTable } from "@/lib/ipc";
+import { QuantityStepper } from "@/components/QuantityStepper";
+import type { GameManaKind, ManaByType, ManaTable } from "@/lib/ipc";
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
 import { cn } from "@/lib/utils";
 
-/** The wire's field for each symbol key, in `MANA_KEYS` order. */
-const FIELD: Record<ManaKey, keyof ManaByType> = {
+/** The wire's field for each symbol key, in `MANA_KEYS` order — and the type of mana it is. */
+const FIELD: Record<ManaKey, GameManaKind> = {
   W: "white",
   U: "blue",
   B: "black",
@@ -27,19 +28,33 @@ export function anyMana(counts: ManaByType): boolean {
  *
  * Every source counts toward each type it can make, so a dual land is in two columns and the
  * columns sum to more than the seat's "mana open". The reader's, at the board's foot.
+ *
+ * **With the sandbox on, the pool is the reader's to set** (`onPool`, issue #1723): its row is
+ * always drawn, each type a stepper standing in its column — `+` above, `−` below, the number
+ * between, which takes a typed amount too. A press adds or takes one (the `mana` sandbox move);
+ * a typed number is sent as the difference. It is how a reader makes the mana a card the rules
+ * engine does not play would have made. `poolDisabled` greys the steppers while the sandbox's
+ * moves do not work (a question asked, the engine busy), as the life plates' are.
  */
 export function ManaTableView({
   mana,
   label = "Mana",
+  onPool,
+  poolDisabled = false,
   className,
 }: {
   mana: ManaTable;
   /** The table's accessible name; the playtest board names whose it is. */
   label?: string;
+  /** The sandbox is on: add (`delta` above zero) or take mana of `kind` from the pool by hand.
+   *  Absent, the pool is the rules' alone and its row is drawn only while mana floats. */
+  onPool?: (kind: GameManaKind, delta: number) => void;
+  /** The pool's steppers cannot be pressed now. */
+  poolDisabled?: boolean;
   className?: string;
 }): JSX.Element {
   const rows: [string, ManaByType][] = [["Open", mana.open]];
-  if (anyMana(mana.floating)) rows.push(["Pool", mana.floating]);
+  if (onPool === undefined && anyMana(mana.floating)) rows.push(["Pool", mana.floating]);
   return (
     <table
       aria-label={label}
@@ -85,6 +100,34 @@ export function ManaTableView({
             })}
           </tr>
         ))}
+        {onPool !== undefined && (
+          <tr>
+            <th scope="row" className="pr-0.5 text-left font-normal text-dim">
+              Pool
+            </th>
+            {MANA_KEYS.map((key) => {
+              const n = mana.floating[FIELD[key]];
+              return (
+                <td key={key} className="p-0 text-center">
+                  {/* A `fieldset` because the stepper has no `disabled` of its own (`LifePlate`). */}
+                  <fieldset disabled={poolDisabled} className="m-0 border-0 p-0">
+                    <QuantityStepper
+                      value={n}
+                      onChange={(next) => {
+                        if (next !== n) onPool(FIELD[key], next - n);
+                      }}
+                      min={0}
+                      max={99}
+                      label={`${MANA_LABEL[key]} mana in your pool`}
+                      size="xs"
+                      orientation="vertical"
+                    />
+                  </fieldset>
+                </td>
+              );
+            })}
+          </tr>
+        )}
       </tbody>
     </table>
   );
