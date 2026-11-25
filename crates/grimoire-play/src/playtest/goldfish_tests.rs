@@ -12,7 +12,7 @@ use engine::types::PlayerId;
 
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
-use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place, Seat};
+use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, ManaKind, Place, Seat};
 
 use super::session::Playtest;
 use super::view::{
@@ -1406,6 +1406,162 @@ fn a_mana_color_answer_is_told_by_its_color() {
     labels.sort();
     assert_eq!(labels, ["Black", "Blue", "Green", "Red", "White"]);
     assert_eq!(black.you.mana.floating.black, 1);
+}
+
+/// Issue #1723: Caged Sun's "add an additional one mana of that color", in Scryfall's Oracle
+/// words, is phase's to play — its color chosen as it enters, and a Forest tapped by hand for
+/// green makes two. A land's tap for any other color makes one.
+#[test]
+fn caged_sun_adds_one_more_of_its_color_to_a_lands_mana() {
+    let deck = vec![
+        card(
+            "Forest",
+            None,
+            "Basic Land — Forest",
+            "({T}: Add {G}.)",
+            None,
+            20,
+        ),
+        card(
+            "Mountain",
+            None,
+            "Basic Land — Mountain",
+            "({T}: Add {R}.)",
+            None,
+            20,
+        ),
+        card(
+            "Caged Sun",
+            Some("{6}"),
+            "Artifact",
+            "As this artifact enters, choose a color.\nCreatures you control of the chosen color \
+             get +1/+1.\nWhenever a land's ability causes you to add one or more mana of the \
+             chosen color, add an additional one mana of that color.",
+            None,
+            20,
+        ),
+    ];
+    let (asked, chosen, green, red) = engine(move || {
+        let (mut game, _) = fish(&deck, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let forest = put_down(&mut game, "Forest");
+        let mountain = put_down(&mut game, "Mountain");
+        let sun = in_hand(&mut game, "Caged Sun");
+        let asked = game.act(A::Play { id: sun }).unwrap().view;
+        let index = asked
+            .prompt
+            .as_ref()
+            .and_then(|p| {
+                p.options
+                    .iter()
+                    .find(|o| o.label.as_deref() == Some("Green"))
+            })
+            .map(|o| o.index)
+            .unwrap_or_else(|| panic!("a Green answer: {:?}", asked.prompt));
+        let chosen = game.act(A::Choose { index }).unwrap().view;
+        let green = game.act(A::TapForMana { id: forest }).unwrap().view;
+        let red = game.act(A::TapForMana { id: mountain }).unwrap().view;
+        (asked, chosen, green, red)
+    });
+    assert_eq!(asked.stage, Stage::Prompt);
+    let sun = find(&chosen.you.battlefield, "Caged Sun").expect("on the battlefield");
+    assert!(sun.gaps.is_empty(), "phase plays all of it: {:?}", sun.gaps);
+    assert_eq!(chosen.stage, Stage::Main);
+    assert_eq!(
+        green.you.mana.floating.green, 2,
+        "the Forest's {{G}} and Caged Sun's one more"
+    );
+    assert_eq!(red.you.mana.floating.red, 1, "red is not the chosen color");
+    assert_eq!(red.you.mana.floating.green, 2);
+}
+
+/// Issue #1723: the sandbox adds mana to the reader's pool by hand and takes it away — at the
+/// main phase, and refused with the sandbox off or with none of that kind to take. A cast spends
+/// the added mana like any other, and an undo takes the edit back.
+#[test]
+fn the_sandbox_adds_mana_to_the_pool_and_takes_it_away() {
+    let (added, taken, emptied, refused, off, undone, cast) = engine(|| {
+        let mut game = kept();
+        let added = game
+            .act(A::Mana {
+                kind: ManaKind::Green,
+                delta: 3,
+            })
+            .unwrap();
+        let taken = game
+            .act(A::Mana {
+                kind: ManaKind::Green,
+                delta: -1,
+            })
+            .unwrap();
+        let emptied = game
+            .act(A::Mana {
+                kind: ManaKind::Green,
+                delta: -5,
+            })
+            .unwrap();
+        let refused = game
+            .act(A::Mana {
+                kind: ManaKind::Green,
+                delta: -1,
+            })
+            .unwrap_err();
+        let undone = game.act(A::Undo).unwrap().view;
+        game.act(A::SetSandbox { on: false }).unwrap();
+        let off = game
+            .act(A::Mana {
+                kind: ManaKind::Blue,
+                delta: 1,
+            })
+            .unwrap_err();
+        game.act(A::SetSandbox { on: true }).unwrap();
+        let bear = in_hand(&mut game, "Grizzly Bears");
+        game.act(A::SetSandbox { on: false }).unwrap();
+        let cast = game.act(A::Play { id: bear }).unwrap();
+        (added, taken, emptied, refused, off, undone, cast)
+    });
+    assert_eq!(
+        added.view.stage,
+        Stage::Main,
+        "the reader stays where they were"
+    );
+    assert_eq!(added.view.you.mana.floating.green, 3);
+    assert_eq!(
+        added.happened,
+        vec![H::ManaChanged {
+            kind: ManaKind::Green,
+            delta: 3,
+            floating: 3,
+        }]
+    );
+    assert_eq!(taken.view.you.mana.floating.green, 2);
+    assert!(taken.happened.contains(&H::ManaChanged {
+        kind: ManaKind::Green,
+        delta: -1,
+        floating: 2,
+    }));
+    assert_eq!(
+        emptied.view.you.mana.floating,
+        ManaByType::default(),
+        "taking more than is floating takes what there is"
+    );
+    assert!(emptied.happened.contains(&H::ManaChanged {
+        kind: ManaKind::Green,
+        delta: -2,
+        floating: 0,
+    }));
+    assert!(refused.contains("no green mana"), "{refused}");
+    assert_eq!(undone.you.mana.floating.green, 2, "undo puts the two back");
+    assert!(off.contains("sandbox"), "{off}");
+    assert!(
+        cast.happened.contains(&H::Cast {
+            seat: YOU,
+            name: Some("Grizzly Bears".into()),
+        }),
+        "the pool's {{G}}{{G}} paid for the Bears, no land on the table: {:?}",
+        cast.happened
+    );
+    assert_eq!(cast.view.you.mana.floating, ManaByType::default());
 }
 
 #[test]
@@ -2951,4 +3107,73 @@ fn a_sandbox_edit_waits_for_the_question_to_be_answered() {
     assert_eq!(asked.view.stage, Stage::Prompt);
     assert!(refused.contains("Answer the question first"), "{refused}");
     assert_eq!(after, asked.view);
+}
+
+#[test]
+fn the_top_of_the_library_is_shown_while_a_static_lets_the_reader_look_at_it_or_reveals_it() {
+    // Issue #1722: "you may look at the top card of your library any time" (Vizier of the
+    // Menagerie's wording) and "play with the top card of your library revealed" (Future
+    // Sight's), each read by phase's parser as its static.
+    let mut cards = deck();
+    cards.push(card(
+        "Lookout Sage",
+        Some("{1}{G}"),
+        "Creature — Elf Druid",
+        "You may look at the top card of your library any time.",
+        Some(("1", "1")),
+        6,
+    ));
+    cards.push(card(
+        "Open Almanac",
+        Some("{2}{G}"),
+        "Enchantment",
+        "Play with the top card of your library revealed.",
+        None,
+        6,
+    ));
+    let (before, looked, gone, revealed) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        in_hand(&mut game, "Lookout Sage");
+        in_hand(&mut game, "Open Almanac");
+        let before = game.view();
+        let sage = put_down(&mut game, "Lookout Sage");
+        let looked = game.view();
+        game.act(A::Move {
+            id: sage,
+            to: Place::Graveyard,
+        })
+        .expect("the sage leaves");
+        let gone = game.view();
+        put_down(&mut game, "Open Almanac");
+        (before, looked, gone, game.view())
+    });
+    assert_eq!(before.you.library_top, None, "no static, a face-down pile");
+    let top = looked
+        .you
+        .library_top
+        .as_ref()
+        .expect("the sage shows the top");
+    assert_eq!(
+        top.id, looked.you.library_cards[0].id,
+        "the top, the library's first"
+    );
+    assert_eq!(
+        looked.opponents[0].library_top, None,
+        "the reader's own library only"
+    );
+    assert_eq!(
+        gone.you.library_top, None,
+        "the sage gone, the pile face down again"
+    );
+    let top = revealed
+        .you
+        .library_top
+        .as_ref()
+        .expect("revealed, the top shows");
+    assert_eq!(top.id, revealed.you.library_cards[0].id);
+    assert_eq!(
+        revealed.opponents[0].library_top, None,
+        "the goldfish's own is not revealed"
+    );
 }

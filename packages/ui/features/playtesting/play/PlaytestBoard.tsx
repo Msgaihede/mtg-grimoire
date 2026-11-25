@@ -1056,7 +1056,12 @@ export function PlaytestBoard({
         {!four && (
           <>
             <div className={cn(OPPONENT_COLUMN, "left-3")}>
-              <OpponentLibrary seat={opponent} size={zone} />
+              <OpponentLibrary
+                seat={opponent}
+                size={zone}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+              />
               <OpponentPile
                 seat={opponent}
                 zone="graveyard"
@@ -1125,6 +1130,8 @@ export function PlaytestBoard({
             onAct={offer}
             onDrop={drop}
             onLook={lookYou}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
             size={zone}
           />
         </div>
@@ -1179,7 +1186,12 @@ export function PlaytestBoard({
 
         {view !== null && view.stage !== "mulligan" && view.stage !== "over" && !replaying && (
           <div className="absolute right-3 bottom-3 flex flex-col items-end gap-2">
-            <ManaTableView mana={view.you.mana} label="Your mana" />
+            <ManaTableView
+              mana={view.you.mana}
+              label="Your mana"
+              onPool={sandboxOn ? (kind, delta) => act({ type: "mana", kind, delta }) : undefined}
+              poolDisabled={!edits}
+            />
             <span className="text-xs text-dim">
               {view.you.manaOpen} mana open · hand {view.you.hand.length}
             </span>
@@ -1585,7 +1597,7 @@ function PlaytestHelp({
       ) : sandbox ? (
         <>
           <span className="text-dim">
-            The sandbox is on. When the game waits on you, drag your cards anywhere, click a permanent to tap it (Shift-click taps the pile) and right-click any card for counters, copies, moves and who controls it. Set any life total. Cards the rules can't play are put down unpaid. To change a step the game passes, add a stop there. Answer an open question first.
+            The sandbox is on. When the game waits on you, drag your cards anywhere, click a permanent to tap it (Shift-click taps the pile) and right-click any card for counters, copies, moves and who controls it. Set any life total, and the mana in your pool. Cards the rules can't play are put down unpaid. To change a step the game passes, add a stop there. Answer an open question first.
           </span>
           <span className="text-dim">
             Point at one of your cards and press T to tap, G for graveyard, E to exile or H for hand.
@@ -1647,6 +1659,11 @@ function zoneOf(seat: PlaytestSeat, place: GamePlace): readonly GameCard[] {
       return seat.exile;
     case "command":
       return seat.command;
+    case "libraryTop":
+      // An opponent's library is no cards on the wire but a revealed top (issue #1722).
+      return seat.libraryCards.length > 0 || seat.libraryTop === null
+        ? seat.libraryCards
+        : [seat.libraryTop];
     default:
       return seat.libraryCards;
   }

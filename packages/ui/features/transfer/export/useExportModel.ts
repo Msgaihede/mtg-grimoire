@@ -20,6 +20,7 @@ import type { ExportPrefs } from "../prefs";
 import type { TransferCard } from "../TransferCard";
 import { isInArena, notInArenaCopies } from "./arena";
 import { exampleText } from "./example";
+import { EXPORT_PRESETS, presetFields, type ExportPresetId } from "./presets";
 import {
   dropsInactive,
   formatExport,
@@ -32,34 +33,66 @@ import {
 export interface ExportModelInput {
   surface: TransferSurface;
   cards: readonly TransferCard[];
-  /** This surface's remembered format, fields and the two filters. */
+  /** This surface's remembered format, fields, the two filters and the preset. */
   prefs: ExportPrefs;
   /** Remember a new answer for this surface. */
   setPrefs: (surface: TransferSurface, prefs: ExportPrefs) => void;
   /**
-   * Called on every change a reader makes to what the text says — the format, a field, either
-   * filter. The dialog clears its `Copied.` line here: the preview redraws on each of them and
-   * the clipboard does not, so the claim would be about text no longer on screen.
+   * Called on every change a reader makes to what the text says — the format, a preset, a
+   * field, either filter. The dialog clears its `Copied.` line here: the preview redraws on each
+   * of them and the clipboard does not, so the claim would be about text no longer on screen.
    */
   onChange?: () => void;
 }
 
 export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: ExportModelInput) {
-  const { format, fields, arenaOnly, includeInactive } = prefs;
+  const { format, arenaOnly, includeInactive, preset } = prefs;
+  /**
+   * The fields written. **A preset's own, read fresh, never the stored list** (issue #1726): a
+   * preset is fully preset, so what it writes is `presets.ts`' answer and not whatever `fields`
+   * happens to hold.
+   */
+  const fields = useMemo(
+    () => (preset === null ? prefs.fields : presetFields(preset, surface)),
+    [preset, prefs.fields, surface],
+  );
   /** The fields this format and this surface share — the whole of what decides which checkboxes
    *  draw, `ALWAYS` excluded: a line with no count and no name is not a card, and a checkbox
-   *  that can never move is furniture. */
+   *  that can never move is furniture. **None under a preset**, which decides them itself. */
   const available = useMemo(
-    () => availableFields(format, surface).filter((id) => !ALWAYS.includes(id)),
-    [format, surface],
+    () =>
+      preset === null ? availableFields(format, surface).filter((id) => !ALWAYS.includes(id)) : [],
+    [format, preset, surface],
   );
 
   /** Switching format re-derives the field set from that format's defaults rather than carrying
    *  the old selection across: a set chosen for CSV means nothing to Arena, and the intersection
-   *  would silently drop most of it anyway. */
+   *  would silently drop most of it anyway. A radio press also puts any preset down. */
   const chooseFormat = useCallback(
     (next: ExportFormat) => {
-      setPrefs(surface, { ...prefs, format: next, fields: defaultFields(next, surface) });
+      setPrefs(surface, {
+        ...prefs,
+        format: next,
+        fields: defaultFields(next, surface),
+        preset: null,
+      });
+      onChange?.();
+    },
+    [onChange, prefs, setPrefs, surface],
+  );
+
+  /** Pick a site preset — its format and its fields, together (issue #1726). `fields` is stored
+   *  too, so a later read of the prefs sees what the file says, though the model reads the
+   *  preset's own. */
+  const choosePreset = useCallback(
+    (next: ExportPresetId) => {
+      const chosen = presetFields(next, surface);
+      setPrefs(surface, {
+        ...prefs,
+        format: EXPORT_PRESETS[next].format,
+        fields: chosen,
+        preset: next,
+      });
       onChange?.();
     },
     [onChange, prefs, setPrefs, surface],
@@ -101,8 +134,15 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
    * across: a preference the reader cannot see must not be silently narrowing the file, and on
    * these two formats the honest sentence is the format's own rather than the reader's.
    */
-  const offersInactive = SURFACE_HAS_PILES[surface] && !dropsInactive(format);
-  const excludesInactive = offersInactive && !includeInactive;
+  const asksInactive = SURFACE_HAS_PILES[surface] && !dropsInactive(format);
+  /** **No box under a preset** (issue #1726), and the preset's answer is fixed: switched-off
+   *  piles stay out — see `presets.ts`. The count line still says what that held back. */
+  const offersInactive = asksInactive && preset === null;
+  const excludesInactive = asksInactive && (preset !== null || !includeInactive);
+
+  /** The Arena box is a radio's question: no preset writes Arena, and none could be narrowed by a
+   *  box it does not draw. */
+  const arenaFilters = format === "arena" && arenaOnly && preset === null;
 
   /**
    * The two row filters, applied **before** the writer rather than inside it.
@@ -127,10 +167,10 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
    */
   const exported = useMemo(() => {
     let rows: readonly TransferCard[] = cards;
-    if (format === "arena" && arenaOnly) rows = rows.filter(isInArena);
+    if (arenaFilters) rows = rows.filter(isInArena);
     if (excludesInactive) rows = rows.filter(isActivePile);
     return rows;
-  }, [arenaOnly, cards, excludesInactive, format]);
+  }, [arenaFilters, cards, excludesInactive]);
 
   const text = useMemo(() => formatExport(exported, format, fields), [exported, format, fields]);
   /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
@@ -139,8 +179,8 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
   /** Copies the Arena filter is holding back, or 0 when it is not the one holding anything.
    *  Counted over `cards` rather than `exported`, which is the list it has already emptied. */
   const notInArena = useMemo(
-    () => (format === "arena" && arenaOnly ? notInArenaCopies(cards) : 0),
-    [arenaOnly, cards, format],
+    () => (arenaFilters ? notInArenaCopies(cards) : 0),
+    [arenaFilters, cards],
   );
   /** Copies the reader's own `Include inactive categories` answer is holding back, or 0 when it
    *  is not the one holding anything. Counted over `cards` for `notInArena`'s reason — `exported`
@@ -174,6 +214,9 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
     fields,
     arenaOnly,
     includeInactive,
+    /** The site preset chosen, or `null` while the format is a radio's. While it is set no radio
+     *  is checked and no checkbox is drawn. */
+    preset,
     /** The checkboxes to draw, `ALWAYS` already taken out. */
     available,
     offersInactive,
@@ -184,6 +227,7 @@ export function useExportModel({ surface, cards, prefs, setPrefs, onChange }: Ex
     lines,
     example,
     chooseFormat,
+    choosePreset,
     toggleField,
     toggleArenaOnly,
     toggleIncludeInactive,

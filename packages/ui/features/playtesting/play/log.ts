@@ -20,7 +20,7 @@
  * `turn` on a line is the game's turn (`PlaytestView.turn`, every seat's turns counted), so the
  * log's headings follow the table's own "Turn 5".
  */
-import type { GamePlace, PlaytestHappened, PlaytestPlayer } from "@/lib/ipc";
+import type { GameManaKind, GamePlace, PlaytestHappened, PlaytestPlayer } from "@/lib/ipc";
 import { lifeSentence, type LogKind, type LogLine } from "../table/log";
 import { playerName, playerPossessive } from "./players";
 import { promptTitle } from "./prompt";
@@ -136,8 +136,7 @@ function putSentence(
     return `Put ${playerPossessive(seat, opponents, "mid")} ${name} ${PUT_THEIRS[to]}`;
   if ((from === "hand" || from === "command") && to === "battlefield")
     return `Put ${name} onto the battlefield`;
-  if ((from === "hand" || from === "command") && to === "graveyard")
-    return `Cast ${name} · unpaid`;
+  if ((from === "hand" || from === "command") && to === "graveyard") return `Cast ${name} · unpaid`;
   return `${name} to ${PUT_YOURS[to]}`;
 }
 
@@ -192,6 +191,14 @@ function countersSentence(
     : `${card} has ${plural(count, `${kind} counter`)}`;
 }
 
+/** "Added two green mana to your pool", "Took one colorless mana from your pool". */
+function manaSentence(kind: GameManaKind, delta: number) {
+  const n = spelled(Math.abs(delta));
+  return delta >= 0
+    ? `Added ${n} ${kind} mana to your pool`
+    : `Took ${n} ${kind} mana from your pool`;
+}
+
 /**
  * One fact, as a sentence, or `null` for a fact the log does not repeat. `opponents` is how many
  * the game has: one keeps the duel's "The opponent", three name each ("Opponent 2 cast …").
@@ -222,6 +229,8 @@ export function playtestSentence(
       return countersSentence(h.seat, h.name, h.kind, h.count, opponents);
     case "shuffled":
       return "Shuffled the library";
+    case "manaChanged":
+      return manaSentence(h.kind, h.delta);
     case "lifeSet":
       return lifeSentence(
         h.seat === "you" ? "you" : "opponent",
@@ -324,6 +333,8 @@ export function playtestKind(h: PlaytestHappened): LogKind {
       return "shuffle";
     case "lifeSet":
       return "life";
+    case "manaChanged":
+      return "tap";
     case "turnBegan":
       return "turn";
     case "played":

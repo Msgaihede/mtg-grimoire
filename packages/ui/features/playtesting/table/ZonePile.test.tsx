@@ -71,6 +71,49 @@ describe("LibraryZone", () => {
     fireEvent.contextMenu(pile);
     expect(onAct).not.toHaveBeenCalled();
   });
+
+  it("draws the top card face up and points at it while the reader may see it (issue #1722)", () => {
+    const top = card("Grizzly Bears");
+    const onPoint = vi.fn();
+    const { container } = render(
+      <LibraryZone
+        view={view({ libraryCards: [top], libraryTop: top })}
+        sandbox={false}
+        onAct={vi.fn()}
+        onDrop={vi.fn()}
+        onLook={vi.fn()}
+        onPoint={onPoint}
+        onUnpoint={vi.fn()}
+      />,
+    );
+    const pile = screen.getByRole("button", { name: "Library, 76 cards; Grizzly Bears on top" });
+    expect(pile.querySelector("svg")).toBeNull();
+    fireEvent.mouseEnter(container.querySelector(`[data-point="${top.id}"]`)!);
+    expect(onPoint).toHaveBeenCalledWith(
+      expect.objectContaining({ card: top, ids: [top.id], place: "libraryTop" }),
+    );
+  });
+
+  it("stays face down without a top to show", () => {
+    const onPoint = vi.fn();
+    const { container } = render(
+      <LibraryZone
+        view={view({ libraryCards: [card("Forest")] })}
+        sandbox
+        onAct={vi.fn()}
+        onDrop={vi.fn()}
+        onLook={vi.fn()}
+        onPoint={onPoint}
+        onUnpoint={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Library, 76 cards. Click to draw; right-click for more",
+      }),
+    ).toBeInTheDocument();
+    expect(container.querySelector("[data-point]")).toBeNull();
+  });
 });
 
 describe("CommandZone", () => {

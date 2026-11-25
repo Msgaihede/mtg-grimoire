@@ -118,6 +118,8 @@ export function soundOf(h: PlaytestHappened): SoundId | null {
       return h.amount < 0 ? "lifeLoss" : h.amount > 0 ? "lifeGain" : null;
     case "lifeSet":
       return h.life < h.was ? "lifeLoss" : h.life > h.was ? "lifeGain" : null;
+    case "manaChanged":
+      return h.delta > 0 ? "mana" : null;
     case "commanderDamage":
       return "commanderDamage";
     case "tokensCreated":

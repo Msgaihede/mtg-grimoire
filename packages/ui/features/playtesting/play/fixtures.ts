@@ -58,6 +58,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     emblems: [],
     library: 0,
     libraryCards: [],
+    libraryTop: null,
     manaOpen: 0,
     mana: manaTable(),
     commanderDamage: [],

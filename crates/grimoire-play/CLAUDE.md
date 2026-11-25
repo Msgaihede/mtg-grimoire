@@ -52,7 +52,9 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   holds each struct field for field, and every `PlaytestAction` / `PlaytestHappened` variant and
   field. A change to either side is one commit with the other.
 - **A game never sends what the reader may not see.** Each opponent's hand and library are counts
-  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). In a
+  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). A
+  library's top is sent (`library_top`, issue #1722) only when phase's statics show it to the
+  reader — their own under `MayLookAtTopOfLibrary`, anyone's under `RevealTopOfLibrary`. In a
   lobby's game that holds for every person: each guest is sent the view from its own seat
   (`guest_steps`, `view_of`), never the host's.
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
@@ -86,7 +88,9 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   was made at (`play_on`'s `held`): it never passes a priority or a stop. A card put under a
   player's control by hand (`control`, issue #1713) is summoning sick for its new controller
   (CR 302.6, which phase's layers do not see a debug change for) and refused in combat (no debug
-  action takes it out of combat, CR 506.4). The board's `sandboxEditsAt`
+  action takes it out of combat, CR 506.4). Mana by hand (`mana`, issue #1723) is the reader's
+  pool alone — phase's `AddMana` to add, the pool's `spend` to take — and sets off nothing that
+  watches mana being made; only `tap_for_mana` does that. The board's `sandboxEditsAt`
   (`packages/ui/features/playtesting/play/sandbox.ts`) mirrors the stages. Never check the sandbox
   action by action, and never let a hand edit reach the engine some other way.
 - **What the rules let the reader cast is theirs to cast, whoever owns it** (issue #1713): every

@@ -21,13 +21,16 @@ import {
   DESIGN_HEIGHT,
   confettiEnd,
   confettiPieces,
+  confettiRatio,
   confettiSeed,
   flashAt,
+  flashSquare,
   glowAt,
   pieceAt,
   type ConfettiBox,
   type ConfettiColor,
   type ConfettiPiece,
+  type Rect,
 } from "./confetti";
 
 /** One landing's confetti: which landing, and at which tier. */
@@ -100,9 +103,17 @@ export function TierConfetti({ burst, originBottom = 64 }: TierConfettiProps) {
  * or a palette whose tokens did not resolve.
  *
  * **Measured at the burst, not observed**: the canvas's bitmap is set to its box's CSS size times
- * the device pixel ratio as each burst starts, so the pieces are sharp on a 200 % display. A burst
+ * {@link confettiRatio} as each burst starts — the device pixel ratio, so the pieces are sharp on a
+ * 200 % display, **capped at a 1080p picture's pixels** (`MAX_CONFETTI_PIXELS`, issue #1724), so the
+ * pack opener's whole-window picture is not an 8-megapixel bitmap redrawn every frame. A burst
  * lasts 5.2 seconds at most — the jackpot's last raindrop, dropped 1.9 s in and falling for 3.3 s
  * (`RAIN`) — and the box does not change size while a reader is scanning.
+ *
+ * **And the bitmap is let go the moment the burst is over** — its last frame, or the stop — by
+ * sizing it back to 0×0. A cleared canvas is still a layer the size of its bitmap, and the browser
+ * composites it over the camera picture on every frame for as long as it stays that size: before
+ * issue #1724 the pack opener carried a full-window transparent bitmap from the first landing on,
+ * and its frame rate never came back between bursts.
  */
 function play(
   canvas: HTMLCanvasElement,
@@ -114,13 +125,13 @@ function play(
   // The size before the context: under jsdom every box is 0×0, and asking a canvas for a context
   // there prints a "Not implemented" line for every landing a suite makes.
   if (width === 0 || height === 0) return;
-  const ratio = window.devicePixelRatio || 1;
+  const ratio = confettiRatio(width, height, window.devicePixelRatio || 1);
   canvas.width = Math.round(width * ratio);
   canvas.height = Math.round(height * ratio);
   const ctx = canvas.getContext("2d");
-  if (ctx === null) return;
+  if (ctx === null) return release(canvas);
   const colors = resolveColors();
-  if (colors === null) return;
+  if (colors === null) return release(canvas);
 
   const box: ConfettiBox = { width, height, originX: width / 2, originY: height - originBottom };
   const pieces = confettiPieces(tier, box, confettiSeed(stamp));
@@ -131,12 +142,15 @@ function play(
   const frame = (now: number) => {
     start ??= now;
     const ms = now - start;
+    // The last frame lets the bitmap go: once every piece is gone, or the canvas has left the page
+    // (reduced motion switched on mid-burst), the loop stops rather than drawing nothing forever.
+    if (ms > end || !canvas.isConnected) {
+      release(canvas);
+      return;
+    }
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, width, height);
-    // The last frame is the clear: once every piece is gone, or the canvas has left the page
-    // (reduced motion switched on mid-burst), the loop stops rather than drawing nothing forever.
-    if (ms > end || !canvas.isConnected) return;
     drawFrame(ctx, tier, pieces, colors, box, ratio, ms);
     raf = requestAnimationFrame(frame);
   };
@@ -144,9 +158,18 @@ function play(
 
   return () => {
     cancelAnimationFrame(raf);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    release(canvas);
   };
+}
+
+/**
+ * The bitmap given back: a 0×0 canvas holds nothing to clear and nothing to composite. The next
+ * burst sizes it again — and its context, which a resize resets, is the same object.
+ */
+function release(canvas: HTMLCanvasElement): undefined {
+  canvas.width = 0;
+  canvas.height = 0;
+  return undefined;
 }
 
 /**
@@ -184,6 +207,13 @@ function drawFrame(
     // premultiplying, so a gold stop fading to `transparent` (transparent *black*) passes through
     // brown on its way out. The mask's colour is never seen — only its alpha counts — and the
     // `source-atop` fill paints the gold exactly where the mask is, at the mask's alpha.
+    //
+    // **Every fill covers only where its mask is** (issue #1724): the flash its own square, the
+    // glow its four bands. Outside them the canvas is empty, so a `source-atop` fill there changes
+    // nothing — and over the pack opener's whole-window picture, two full-canvas fills a frame
+    // were most of what a jackpot cost. A tint landing twice where the two overlap is the same
+    // gold at the same alpha.
+    const marked: Rect[] = [];
     if (flash !== null) {
       const radius = FLASH_RADIUS * scale;
       const light = ctx.createRadialGradient(
@@ -199,16 +229,20 @@ function drawFrame(
       light.addColorStop(1, "rgba(0,0,0,0)");
       ctx.globalAlpha = flash;
       ctx.fillStyle = light;
-      ctx.fillRect(0, 0, box.width, box.height);
+      const square = flashSquare(box, radius);
+      if (square !== null) {
+        ctx.fillRect(...square);
+        marked.push(square);
+      }
     }
     if (glow !== null) {
       ctx.globalAlpha = glow;
-      drawEdge(ctx, box.width, box.height, GLOW_DEPTH * scale);
+      marked.push(...drawEdge(ctx, box.width, box.height, GLOW_DEPTH * scale));
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-atop";
     ctx.fillStyle = colors.accent;
-    ctx.fillRect(0, 0, box.width, box.height);
+    for (const rect of marked) ctx.fillRect(...rect);
     ctx.globalCompositeOperation = "source-over";
   }
 
@@ -233,25 +267,29 @@ function drawFrame(
   }
 }
 
-/** The glow's mask: each edge fading inward over `depth`, brightest where two edges meet. */
+/**
+ * The glow's mask: each edge fading inward over `depth`, brightest where two edges meet. Answers
+ * the four bands it filled, for the tint to cover and nothing more.
+ */
 function drawEdge(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   depth: number,
-): void {
+): Rect[] {
   // Each side: the gradient's line from the edge inward, then the band it fills.
-  const sides: [number, number, number, number, number, number, number, number][] = [
-    [0, 0, 0, depth, 0, 0, width, depth],
-    [0, height, 0, height - depth, 0, height - depth, width, depth],
-    [0, 0, depth, 0, 0, 0, depth, height],
-    [width, 0, width - depth, 0, width - depth, 0, depth, height],
+  const sides: [number, number, number, number, Rect][] = [
+    [0, 0, 0, depth, [0, 0, width, depth]],
+    [0, height, 0, height - depth, [0, height - depth, width, depth]],
+    [0, 0, depth, 0, [0, 0, depth, height]],
+    [width, 0, width - depth, 0, [width - depth, 0, depth, height]],
   ];
-  for (const [x0, y0, x1, y1, x, y, w, h] of sides) {
+  for (const [x0, y0, x1, y1, rect] of sides) {
     const band = ctx.createLinearGradient(x0, y0, x1, y1);
     band.addColorStop(0, "rgba(0,0,0,0.7)");
     band.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = band;
-    ctx.fillRect(x, y, w, h);
+    ctx.fillRect(...rect);
   }
+  return sides.map(([, , , , rect]) => rect);
 }

@@ -1384,6 +1384,7 @@ describe("the export dialog's remembered choice", () => {
       fields: ["quantity", "name", "condition"],
       arenaOnly: false,
       includeInactive: false,
+      preset: null,
     });
     expect(useAppStore.getState().exportPrefs.collection.format).toBe("csv");
     expect(useAppStore.getState().exportPrefs.deck.format).toBe("plain");

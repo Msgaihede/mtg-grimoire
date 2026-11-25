@@ -12,7 +12,7 @@ vi.mock("motion/react", async (original) => ({
   useReducedMotion: () => motionPref.reduced,
 }));
 
-import { confettiEnd, confettiPieces, confettiSeed } from "./confetti";
+import { MAX_CONFETTI_PIXELS, confettiEnd, confettiPieces, confettiSeed } from "./confetti";
 import { TierConfetti } from "./TierConfetti";
 
 const JACKPOT = { stamp: "a:1", tier: "jackpot" } as const;
@@ -111,7 +111,8 @@ describe("TierConfetti", () => {
     const box = { width: 640, height: 600, originX: 320, originY: 536 };
     const end = confettiEnd("jackpot", confettiPieces("jackpot", box, confettiSeed(JACKPOT.stamp)));
 
-    const { rerender, unmount } = render(<TierConfetti burst={JACKPOT} />);
+    const { container, rerender, unmount } = render(<TierConfetti burst={JACKPOT} />);
+    const canvasOf = () => container.querySelector("canvas")!;
     expect(frames).toHaveLength(1);
     tick(1_000);
     expect(ctx.fillRect).toHaveBeenCalled();
@@ -123,11 +124,16 @@ describe("TierConfetti", () => {
     tick(1_000 + end / 2);
     expect(frames).toHaveLength(1);
 
-    // Past the last piece: the frame clears and asks for no other.
+    // In the air, the bitmap is the box at the device pixel ratio (jsdom's is 1).
+    expect([canvasOf().width, canvasOf().height]).toEqual([640, 600]);
+
+    // Past the last piece: the frame lets the bitmap go and asks for no other (issue #1724) — a
+    // cleared canvas the size of the picture is still composited over it every frame.
     ctx.fillRect.mockClear();
     tick(1_000 + end + 1);
     expect(frames).toHaveLength(0);
     expect(ctx.fillRect).not.toHaveBeenCalled();
+    expect([canvasOf().width, canvasOf().height]).toEqual([0, 0]);
 
     rerender(<TierConfetti burst={{ stamp: "a:2", tier: "tier1" }} />);
     expect(frames).toHaveLength(1);
@@ -135,7 +141,68 @@ describe("TierConfetti", () => {
     cancel.mockClear();
     rerender(<TierConfetti burst={{ stamp: "a:3", tier: "tier3" }} />);
     expect(cancel).toHaveBeenCalledTimes(1);
+    // A stop lets the bitmap go too, and the burst that follows sizes it again.
+    expect([canvasOf().width, canvasOf().height]).toEqual([640, 600]);
+    const canvas = canvasOf();
     unmount();
     expect(cancel).toHaveBeenCalledTimes(2);
+    expect([canvas.width, canvas.height]).toEqual([0, 0]);
+  });
+
+  /**
+   * The pack opener's picture is the whole window (issue #1724): at the device pixel ratio a
+   * 2560×1406 box at 150 % was a 3840×2109 bitmap. It is capped at a 1080p picture's pixels, and
+   * the flash's fills keep to its own square.
+   */
+  it("caps a whole-window picture's bitmap, and fills only where the flash is", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 2560,
+      height: 1406,
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 2560,
+      bottom: 1406,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(1.5);
+    const gradient = { addColorStop: vi.fn() };
+    const ctx = {
+      setTransform: vi.fn(),
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      createRadialGradient: vi.fn(() => gradient),
+      createLinearGradient: vi.fn(() => gradient),
+      globalAlpha: 1,
+      globalCompositeOperation: "source-over",
+      fillStyle: "",
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      ctx as unknown as CanvasRenderingContext2D,
+    );
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      getPropertyValue: () => "#c9a64b",
+    } as unknown as CSSStyleDeclaration);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+
+    const { container, unmount } = render(
+      <TierConfetti burst={{ stamp: "b:1", tier: "tier3" }} />,
+    );
+    const canvas = container.querySelector("canvas")!;
+    expect(canvas.width * canvas.height).toBeLessThanOrEqual(MAX_CONFETTI_PIXELS * 1.002);
+    expect(canvas.width).toBeLessThan(3840);
+
+    // The first frame — the flash at its brightest. No fill covers the whole picture.
+    frames.shift()!(0);
+    const fills = ctx.fillRect.mock.calls.filter(([, , w]) => w > 100);
+    expect(fills.length).toBeGreaterThan(0);
+    for (const [, , w, h] of fills) expect(w * h).toBeLessThan(2560 * 1406);
+    unmount();
   });
 });

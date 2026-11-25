@@ -1,7 +1,11 @@
 import { useMemo, useState } from "react";
 import { Dialog } from "@grimoire/ui/components/Dialog";
 import type { DeckCore } from "@grimoire/ui/features/decks/useDeckCore";
-import { useCardSearch, type FormatFilterOption } from "@grimoire/ui/features/search/useCardSearch";
+import {
+  useCardSearch,
+  type ColorKey,
+  type FormatFilterOption,
+} from "@grimoire/ui/features/search/useCardSearch";
 import { count } from "@grimoire/ui/lib/counts";
 import type { DeckCard } from "@grimoire/ui/lib/ipc";
 import { searchItem } from "../items";
@@ -17,7 +21,8 @@ import { ReceiptBar, type Receipt } from "./receipt";
  *
  * **The desktop's docked search panel, as a sheet**: the same `useCardSearch`, opened on the deck's
  * own format where the database can answer it (`defaultFormat`, a seed the reader can move — the
- * editor's `searchFormatDefault` rule) and counting owned copies as *copies this deck can use*
+ * editor's `searchFormatDefault` rule), on a commander deck's colour identity (`defaultColors`,
+ * the editor's `searchColorsDefault`, issue #1725) and counting owned copies as *copies this deck can use*
  * (`availableForDeck`). The line and the wall are the Search page's own, so the box, the filters
  * sheet and the count read here exactly as they do there.
  *
@@ -42,6 +47,7 @@ export function AddCards({
   cards,
   listWord,
   defaultFormat,
+  defaultColors,
   receipt,
   onClose,
 }: {
@@ -51,6 +57,8 @@ export function AddCards({
   /** `Theory` / `Actual` on a deck that keeps a plan, `null` on one that does not. */
   listWord: string | null;
   defaultFormat: FormatFilterOption | null;
+  /** The commander's colour identity, or `null` — a seed the reader can clear (issue #1725). */
+  defaultColors: readonly ColorKey[] | null;
   receipt: Receipt;
   onClose: () => void;
 }) {
@@ -68,7 +76,13 @@ export function AddCards({
       onDismiss={onClose}
       onClose={onClose}
     >
-      <Body deck={deck} cards={cards} defaultFormat={defaultFormat} receipt={receipt} />
+      <Body
+        deck={deck}
+        cards={cards}
+        defaultFormat={defaultFormat}
+        defaultColors={defaultColors}
+        receipt={receipt}
+      />
     </Dialog>
   );
 }
@@ -77,14 +91,20 @@ function Body({
   deck,
   cards,
   defaultFormat,
+  defaultColors,
   receipt,
 }: {
   deck: DeckCore;
   cards: readonly DeckCard[];
   defaultFormat: FormatFilterOption | null;
+  defaultColors: readonly ColorKey[] | null;
   receipt: Receipt;
 }) {
-  const search = useCardSearch({ defaultFormat, availableForDeck: deck.deck?.id ?? null });
+  const search = useCardSearch({
+    defaultFormat,
+    defaultColors,
+    availableForDeck: deck.deck?.id ?? null,
+  });
   const { query, marketplace } = search;
   const more = useMore(query, query.hasNextPage);
   const [added, setAdded] = useState<string | null>(null);
