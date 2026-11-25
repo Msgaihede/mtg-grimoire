@@ -31,6 +31,12 @@ export type LogKind =
   | "life"
   | "turn"
   | "engine"
+  /** Cards shown to every player, or a card named. */
+  | "reveal"
+  /** A coin flipped, a die rolled. */
+  | "chance"
+  /** A designation taken: the monarch, the initiative, the city's blessing, the Ring's temptation. */
+  | "status"
   /** An attack, a block, damage. */
   | "combat"
   /** A player is out, or the game is over. */

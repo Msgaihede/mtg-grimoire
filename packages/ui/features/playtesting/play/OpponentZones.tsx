@@ -1,13 +1,12 @@
 import type { JSX, MouseEvent } from "react";
 import type { GameCard, PlaytestSeat } from "@/lib/ipc";
 import { CountTag } from "@/components/CountTag";
-import { GrimoireMark } from "@/components/GrimoireMark";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { CardFace, pointerAt } from "../table/Inspect";
 import type { ZoneSize } from "../table/layout";
 import type { Pointed, ZoneLook } from "../table/types";
-import { markSize } from "../table/ZonePile";
+import { CASTABLE_RING, CardBack, isHidden, markSize } from "../table/ZonePile";
 
 /**
  * The opponent's side of the zone columns and their hand — the reader's own turned 180°: library
@@ -20,8 +19,10 @@ import { markSize } from "../table/ZonePile";
  * their graveyard's and exile's cards through that look (`LibraryDialog`, the same places as the
  * reader's own, issue #1521) and their battlefield's through `Battlefield`'s menu. What the reader
  * may not see is not on the wire (`ipc/playtest.ts`): their hand and library are counts, drawn as
- * backs — but for a library played with its top card revealed (`libraryTop`, issue #1722), whose
- * top is drawn face up and pointed at.
+ * backs — but for the cards of them the reader may see, drawn face up and pointed at like any
+ * other: the top of their library while it is revealed (`libraryTop`, Courser of Kruphix,
+ * CR 401.5) and the cards of their hand revealed or known (`hand`, Telepathy, Thoughtseize). A
+ * face-down card in their exile the reader may not look at (`isHidden`, CR 708) is a back too.
  *
  * **Compact, always**: each zone's count is a `CountTag` on its card rather than a line under it,
  * so a column is the card's width and no more.
@@ -67,22 +68,18 @@ function Back({ size, className }: { size: ZoneSize; className?: string }): JSX.
   return (
     <span
       aria-hidden="true"
-      className={cn(
-        "flex flex-none items-center justify-center rounded-lg border border-border bg-surface text-accent",
-        className,
-      )}
+      className={cn("block flex-none rounded-lg", className)}
       style={{ width: size.width, height: size.height }}
     >
-      <GrimoireMark size={markSize(size)} className="text-accent" />
+      <CardBack mark={markSize(size)} />
     </span>
   );
 }
 
-/** The edges of the cards under a library's top one, two of them, the way a deck sits. */
-const DECK_EDGES =
-  "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]";
-
-/** Their library: a back — or its revealed top card (`libraryTop`) — its edges and its count. */
+/**
+ * Their library: a back, its edges and its count — or, while its top card is revealed
+ * (`libraryTop`), that card face up on it, pointed at for the preview like any other.
+ */
 export function OpponentLibrary({
   seat,
   size,
@@ -93,52 +90,49 @@ export function OpponentLibrary({
   seat: PlaytestSeat | null;
   size: ZoneSize;
   owner?: string;
-  /** The preview of a revealed top card. */
   onPoint?: (pointed: Pointed) => void;
   onUnpoint?: () => void;
 }): JSX.Element {
   const count = seat?.library ?? 0;
-  const n = `${count} ${count === 1 ? "card" : "cards"}`;
   const top = seat?.libraryTop ?? null;
+  const seen = seat?.libraryTopRevealed === false ? "which only you see" : "revealed";
+  const n = `${count} ${count === 1 ? "card" : "cards"}`;
   return (
     <div
       role="img"
-      aria-label={
-        top === null
-          ? `${capital(owner)} library, ${n}`
-          : `${capital(owner)} library, ${n}; ${top.name} revealed on top`
-      }
+      aria-label={`${capital(owner)} library, ${n}${top === null ? "" : `; ${top.name} on top, ${seen}`}`}
       className="relative"
       data-point={top?.id}
-      onMouseEnter={
-        top === null || onPoint === undefined
-          ? undefined
-          : (e) =>
-              onPoint({
-                card: top,
-                ids: [top.id],
-                place: "libraryTop",
-                line: `Top of their library · ${n}`,
-                at: pointerAt(e),
-              })
-      }
-      onMouseLeave={top === null ? undefined : onUnpoint}
+      onMouseEnter={(e) => {
+        if (top === null) return;
+        onPoint?.({
+          card: top,
+          ids: [top.id],
+          place: "libraryTop",
+          line: `${top.name} · on top of ${owner} library`,
+          at: pointerAt(e),
+        });
+      }}
+      onMouseLeave={() => onUnpoint?.()}
     >
       {top === null ? (
-        <Back size={size} className={DECK_EDGES} />
+        <Back size={size} className={LIBRARY_EDGES} />
       ) : (
         <span
-          aria-hidden="true"
-          className={cn("block flex-none rounded-lg", DECK_EDGES)}
+          className={cn("block rounded-lg", LIBRARY_EDGES)}
           style={{ width: size.width, height: size.height }}
         >
           <CardFace card={top} />
         </span>
       )}
-      <Count count={count} title={`${count} ${count === 1 ? "card" : "cards"} in their library`} />
+      <Count count={count} title={`${n} in their library`} />
     </div>
   );
 }
+
+/** The edges of the cards under a library's top one, two of them, the way a deck sits. */
+const LIBRARY_EDGES =
+  "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]";
 
 /**
  * Their graveyard or exile, face up, its last card on top; a click or a right-click opens it to
@@ -166,6 +160,7 @@ export function OpponentPile({
 }): JSX.Element {
   const cards = seat?.[zone] ?? [];
   const top = cards.length > 0 ? cards[cards.length - 1] : null;
+  const hidden = top !== null && isHidden(top);
   const title = zone === "graveyard" ? "Graveyard" : "Exile";
   const where = zone === "graveyard" ? "their graveyard" : "their exile";
   const n = `${cards.length} ${cards.length === 1 ? "card" : "cards"}`;
@@ -181,25 +176,30 @@ export function OpponentPile({
       ) : (
         <button
           type="button"
-          aria-label={`${capital(owner)} ${title.toLowerCase()}, ${n}; ${top.name} on top. Click to look through it`}
+          aria-label={`${capital(owner)} ${title.toLowerCase()}, ${n}; ${hidden ? "a face-down card" : top.name} on top. Click to look through it`}
           onClick={browse}
           onContextMenu={browse}
-          onMouseEnter={(e) =>
+          onMouseEnter={(e) => {
+            if (hidden) return;
             onPoint({
               card: top,
               ids: [top.id],
               place: zone,
               line: `Top of ${where} · ${n}`,
               at: pointerAt(e),
-            })
-          }
+            });
+          }}
           onMouseLeave={onUnpoint}
-          data-point={top.id}
+          data-point={hidden ? undefined : top.id}
           data-land={top.id}
-          className={cn("relative cursor-pointer rounded-lg p-0", FOCUS)}
+          className={cn(
+            "relative cursor-pointer rounded-lg p-0",
+            FOCUS,
+            !hidden && (top.castable || top.canActivate) && CASTABLE_RING,
+          )}
           style={{ width: size.width, height: size.height }}
         >
-          <CardFace card={top} />
+          {hidden ? <CardBack mark={markSize(size)} /> : <CardFace card={top} />}
           <Count count={cards.length} title={`${n} in ${where}`} />
         </button>
       )}
@@ -311,23 +311,40 @@ export function opponentHandWidth(count: number): number {
 }
 
 /**
- * The opponent's hand: as many backs as they hold, hanging from the board's top edge the way the
+ * The opponent's hand: as many cards as they hold, hanging from the board's top edge the way the
  * reader's own hand rises from its foot, and the count beside them.
+ *
+ * **The cards of it the reader may see are face up** (`cards`, the seat's `hand`: revealed by
+ * Telepathy, or known since a Thoughtseize looked at them), first, each pointed at for the
+ * preview; the rest of `count` are backs. Their names are in the hand's own name too, since a
+ * hanging card shows only its foot.
  *
  * **`size` makes it one zone among the others**: a single back of that size with the count on
  * it, the way their library is drawn — a four-player table's opponent area has no edge of its
- * own to hang a hand from.
+ * own to hang a hand from. The known cards are named on it, not drawn.
  */
 export function OpponentHand({
   count,
+  cards = NO_CARDS,
   owner = THE_OPPONENTS,
   size,
+  onPoint,
+  onUnpoint,
 }: {
+  /** All the cards in their hand, the known ones among them. */
   count: number;
+  /** The cards of their hand the reader may see (`PlaytestSeat.hand`). */
+  cards?: readonly GameCard[];
   owner?: string;
   size?: ZoneSize;
+  onPoint?: (pointed: Pointed) => void;
+  onUnpoint?: () => void;
 }): JSX.Element {
-  const label = `${capital(owner)} hand, ${count} ${count === 1 ? "card" : "cards"}`;
+  const known = cards.slice(0, count);
+  const label = [
+    `${capital(owner)} hand, ${count} ${count === 1 ? "card" : "cards"}`,
+    known.length === 0 ? "" : `; known: ${known.map((c) => c.name).join(", ")}`,
+  ].join("");
   if (size !== undefined) {
     return (
       <div role="img" aria-label={label} className="relative">
@@ -343,12 +360,37 @@ export function OpponentHand({
         className="relative overflow-hidden"
         style={{ width: opponentHandWidth(count), height: HAND_BACK_PEEK }}
       >
-        {/* Hung from the top edge: only the bottom of each card shows. */}
-        {Array.from({ length: count }, (_, i) => (
+        {/* Hung from the top edge: only the bottom of each card shows. The known ones first. */}
+        {known.map((card, i) => (
           <span
-            key={i}
+            key={card.id}
+            data-point={card.id}
+            onMouseEnter={(e) =>
+              onPoint?.({
+                card,
+                ids: [card.id],
+                place: "hand",
+                line: `${card.name} · in ${owner} hand`,
+                at: pointerAt(e),
+              })
+            }
+            onMouseLeave={() => onUnpoint?.()}
+            className="absolute rounded-md"
+            style={{
+              left: i * step,
+              top: HAND_BACK_PEEK - HAND_BACK.height,
+              width: HAND_BACK.width,
+              height: HAND_BACK.height,
+            }}
+          >
+            <CardFace card={card} />
+          </span>
+        ))}
+        {Array.from({ length: count - known.length }, (_, i) => (
+          <span
+            key={`back-${i}`}
             className="absolute"
-            style={{ left: i * step, top: HAND_BACK_PEEK - HAND_BACK.height }}
+            style={{ left: (known.length + i) * step, top: HAND_BACK_PEEK - HAND_BACK.height }}
           >
             <Back size={HAND_BACK} />
           </span>
@@ -358,3 +400,5 @@ export function OpponentHand({
     </div>
   );
 }
+
+const NO_CARDS: readonly GameCard[] = [];

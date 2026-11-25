@@ -18,6 +18,7 @@ import {
 } from "./layout";
 import { cardMenu } from "./menus";
 import type { Pointed } from "./types";
+import { CASTABLE_RING } from "./ZonePile";
 
 /** How far past the row the hand's drop band reaches either side. */
 const BAND_REACH = 80;
@@ -57,6 +58,11 @@ export interface HandFanProps {
  * table; a band that caught the pointer would make the lands under it unclickable. Drops are
  * found by geometry, not by what is under the pointer (`useDndDropTarget`'s `overlay`), so the
  * band still wins a card let go over it.
+ *
+ * **A card the rules let the reader cast or play now wears the playable ring**
+ * ({@link GameCard.castable}, `ZonePile`'s `CASTABLE_RING`), the way phase's own client rings a
+ * playable card: the reader sees what a double-click will take before trying it. The ring is on
+ * the card's face, so it rises with the card pointed at.
  */
 export function HandFan({
   cards,
@@ -171,7 +177,7 @@ function HandCard({
     <button
       ref={ref}
       type="button"
-      aria-label={`${name}${card.gaps.length > 0 ? ", played only in part" : ""}. Drag to play, or double-click. Shift+arrow keys move it in your hand`}
+      aria-label={`${name}${card.gaps.length > 0 ? ", played only in part" : ""}. Drag to play, or double-click. Shift+arrow keys move it in your hand${card.castable ? ". Playable now" : ""}`}
       data-land={id}
       onDoubleClick={play}
       // A double-click is a mouse's gesture; Enter on the focused card is the keyboard's way to
@@ -222,6 +228,7 @@ function HandCard({
           "pointer-events-none block h-full w-full rounded-md",
           "transition-[translate,box-shadow] duration-150 ease-out motion-reduce:transition-none",
           lifted && "shadow-lg",
+          card.castable && CASTABLE_RING,
         )}
         style={{ translate: lifted ? `0 -${HAND_LIFT}px` : "0 0" }}
       >

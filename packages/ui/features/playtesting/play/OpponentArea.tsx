@@ -1,5 +1,5 @@
-import type { JSX } from "react";
-import type { GamePlace, PlaytestAction, PlaytestSeat } from "@/lib/ipc";
+import type { JSX, MouseEvent } from "react";
+import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,8 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * third of the width, so three stand side by side above the middle line in turn order.
  *
  * **The duel's pieces, each with a smaller size**: the compact `LifePlate` in a `PlateFrame` (the
- * turn's gold glow, poison, commander damage), their zones from `OpponentZones` at {@link AREA_ZONE} — the hand a
+ * turn's gold glow, poison, commander damage, the rest of their standing and the Curses on them),
+ * their zones from `OpponentZones` at {@link AREA_ZONE} — the hand a
  * face-down tile with its count among them, since an area has no edge of its own to hang a hand
  * from — and the `Battlefield` flipped, read-only and dense, the creature lane nearest the middle
  * line as on a duel's table. `data-plate` and `data-table` carry the player's own name, so the
@@ -65,6 +66,9 @@ export function OpponentArea({
   onPointEmblem,
   onUnpoint,
   onLook,
+  onActivate,
+  curses,
+  onPointCard,
   className,
 }: {
   seat: PlaytestSeat;
@@ -103,6 +107,12 @@ export function OpponentArea({
   onPointEmblem?: (pointed: Pointed) => void;
   onUnpoint: () => void;
   onLook: (look: ZoneLook) => void;
+  /** Activate one of their permanents the rules let the reader activate (`Battlefield`'s). */
+  onActivate?: (id: number) => void;
+  /** The permanents attached to this player — a Curse (`PlateFrame`'s). */
+  curses?: readonly GameCard[];
+  /** Point at a Curse's chip on the plate (`PlateFrame`'s). */
+  onPointCard?: (card: GameCard, e: MouseEvent) => void;
   className?: string;
 }): JSX.Element {
   const name = playerName(seat.player, opponents);
@@ -120,6 +130,10 @@ export function OpponentArea({
           poison={seat.poison}
           commanderDamage={seat.commanderDamage}
           lethal={lethal}
+          standing={seat}
+          curses={curses}
+          onPointCard={onPointCard}
+          onUnpoint={onUnpoint}
           compact
           aim={plateAim}
           className="max-w-full min-w-0"
@@ -153,7 +167,14 @@ export function OpponentArea({
 
       <div className={cn("flex min-h-0 flex-1 gap-2", seat.out && "opacity-40")}>
         <div className="grid flex-none grid-cols-2 content-center gap-1">
-          <OpponentHand count={seat.handCount} owner={owner} size={AREA_ZONE} />
+          <OpponentHand
+            count={seat.handCount}
+            cards={seat.hand}
+            owner={owner}
+            size={AREA_ZONE}
+            onPoint={onPoint}
+            onUnpoint={onUnpoint}
+          />
           <OpponentLibrary
             seat={seat}
             size={AREA_ZONE}
@@ -208,6 +229,7 @@ export function OpponentArea({
             pick={pick}
             across={across}
             control={control}
+            onActivate={seat.out ? undefined : onActivate}
             aim={seat.out ? undefined : aim}
             className="h-full w-full"
           />

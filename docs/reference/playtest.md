@@ -188,9 +188,18 @@ generically, never matched variant by variant.
     entry per target of the spell, `null` for each left as it is, so each answer names its new
     target — a card the board lights up and takes a click on (`pickableCards`), or a player — and
     the answer that names none is "Keep the targets" (issue #1520);
-  - a number (`value`, `index`, `ability_index`, the first of `indices`), which is 0-based;
-  - a yes or no (`accept`, `pay`, `top`);
-  - a named choice's word (`choice`);
+  - a number (`value`, `index`, `ability_index`, the first of `indices`, `amount`,
+    `room_index`…), which is 0-based;
+  - a yes or no (`accept`, `pay`, `top`, `exert`, `untap`, an adventurer's `creature`, a modal
+    face's `back_face`); a `DecideOptionalCost` row (kicker, gift, bargain) is `yes` for paying it;
+  - a named choice's word (`choice`), and the words an index counts into, read from the
+    question's own data by phase's field names (phase 0.132.0 parity, 2026-11-25): a cast's
+    `options` (`Omen`, `Warp`, a face), a modal spell's `mode_descriptions` (each chosen mode's
+    words, joined), a branch's `branch_descriptions`, a Pathway's face name, a door and what is
+    done to it, a dungeon, a pile (`A`, with that pile's cards);
+  - a player named by number (`opponent`, `player`, `recipient`, `protector`);
+  - an `ActivateAbility` row's card carries that ability's own words in `text` (phase's
+    `activated_ability_definitions`), so a planeswalker's three rows are its three abilities;
   - the abilities it names, when the question lists them (`Playtest::abilities`): a question
     whose data holds a list of `{ source_id, source_name, description }` — the triggers of
     `OrderTriggers`, the effects of `ReplacementChoice` — is answered by counting into it, an
@@ -227,6 +236,25 @@ generically, never matched variant by variant.
   - gives each ability on the stack its words and cause (`PlaytestStackItem.text`, `cause`), in
     its card's tooltip and its spoken label.
 
+- **Picks and a division where the generic options fall short** (phase 0.132.0 parity,
+  2026-11-25). phase's legal list is its AI's bounded one — 12 cards to a pool, 64 answers, one
+  canonical order — so these are asked as a `pick` or a `distribute`, as phase's own client asks
+  them:
+  - **an order** (`order`, `ordered`): "the rest on the bottom in any order" (`DigBottomOrder`,
+    `RevealUntilBottomOrder`, `RippleBottomOrder`), a dig kept back on the library (Index,
+    Sensei's Divining Top), and a split between the top and the bottom (`DigRestSplitChoice`,
+    Telling Time) whose first `split` picked go on top;
+  - **a cost paid with cards** (`pay`, `PayCost`): sacrificed, discarded, exiled, returned or
+    revealed — escape's "exile five other cards" among them;
+  - **a pile** (`pile`, `SeparatePilesPartition`): the picked cards are pile A, and choosing a
+    pile (`ChoosePile`) names each pile's cards;
+  - **proliferate and time travel** (any of the permanents), **an untap-step subset** (Winter
+    Orb), and **a reveal** of so many or any number (Metalworker), its count honoured;
+  - **a division** (`distribute`, `DistributeAmong`, CR 601.2d): an amount — damage, counters —
+    divided among targets, at least one each as it is cast, any as it resolves, answered by
+    `distribute` and never a `sole_answer` while two targets share it;
+  - **a name** (`nameEntry`): a `NamedChoice` that takes a free word is answered with any name
+    (`name`), checked by phase's `accepts_free_entry_answer`, beside its listed sample.
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
@@ -529,17 +557,34 @@ that lost it.
 ## What the reader may see
 
 Each opponent's hand and library are **counts** (`handCount`, `library`), the goldfish's too.
-Their `hand` and `libraryCards` are always empty on the wire, and the sandbox never reaches them.
+Their `libraryCards` are always empty on the wire, and the sandbox never reaches them.
+
+**What phase's own projection shows the reader, the board shows** (phase 0.132.0 parity,
+2026-11-25; `Playtest::sight`). Every view asks phase's `filter_state_for_viewer` for the reader's
+seat — the projection phase's own client draws from — and sends a hidden card only when it says
+the reader may see it (`display_visible_to_viewer`). Positions are read off the game, never off
+the projection, which reorders a library's hidden cards. From it:
+
+- **A library's top** (`libraryTop`, `libraryTopRevealed`, issue #1722), drawn face up on the
+  pile and pointed at for the preview, sandbox or not: the reader's own they may look at any
+  time (Future Sight, Vizier of the Menagerie, Bolas's Citadel), or anyone's played with the top
+  card revealed (Courser of Kruphix). Its `castable` and `canActivate` are the rules' offers there
+  — a land, a cast, a plot — taken by `play` and `activate` with the sandbox off.
+- **An opponent's hand**: `hand` holds the cards the reader may see — revealed (Telepathy, "reveal
+  your hand") or known since they last saw them (Thoughtseize, Peek) — and `handCount` all of them.
+- **Exile**: every card a seat owns there; a face-down one the reader may not look at (another
+  player's foretold or hideaway card, the reader's own Necropotence exile) is a nameless
+  `faceDown` card, drawn as a back, and one they may look at or play (Gonti) has its name and may
+  be `castable`.
+- **The reader's own face-down permanent** is the card underneath to them (CR 708.5): its name and
+  printing, `faceDown` set (the session reads phase's `back_face`, as its projection writes it for
+  the controller).
+- **A question's `shown`**: the cards the reader is privately looking at as it is asked (phase's
+  `private_look_ids`) and a cast offer's `hit_card` (a cascade's or a discover's).
+
 An opponent's draw is `drew` with no name, and a card going back from their hand to their library
 is not told at all. The AI itself reads the whole `GameState`. Whether it plays as if it knows the
 reader's hand is phase's business, not this board's.
-
-**A library's top card is sent when the rules show it** (`libraryTop`, issue #1722), and the pile
-draws it face up: the reader's own while a "you may look at the top card of your library any time"
-is in play (phase's `MayLookAtTopOfLibrary`, CR 701.20e — Vizier of the Menagerie, Courser of
-Kruphix), and any seat's played with the top card revealed (`RevealTopOfLibrary`, CR 400.2 —
-Future Sight). The session asks phase's statics each view (`library_top`), never a list of cards
-of its own; the face is pointed at for the preview, sandbox or not.
 
 ## The commands and the wire
 
@@ -1120,8 +1165,15 @@ putting a host's game away closes its lobby: dealt or being dealt, never refused
 - **Choosing the payment inside a cast.** The reader taps sources for mana first (`tapForMana`),
   and whatever the pool does not cover is paid by phase's `Auto`; the cast itself never stops for
   a payment (`CastPaymentMode::Manual`).
-- **A split or a pile.** A search that splits its finds between zones, separate piles and
-  distributions are still their generic options or `auto`.
+- **A search that splits its finds between zones** is still its generic options or `auto`.
+- **Mana payment inside a payment window.** phase's client taps sources during `ManaPayment`,
+  `UnlessPayment` and the like; here those are paid by phase's `Auto`, and a cast never stamps
+  `AutoExceptSacrificialMana`, so a Treasure may be spent without asking.
+- **The companion and the sideboard** (`CompanionToHand`, wishes' `ChooseOutsideGameCards`): the
+  deck sent to a game is its main deck and commanders only (`grimoire-core`'s `play.rs`).
+- **Conceding** (`Concede`) and phase's sourceless specials (ending a Licid's effect).
+- **Ordering five or more triggers freely.** phase lists every order up to four, and only two
+  orders past that.
 - **The light app.** Playtesting is not a destination there.
 - **A difficulty per opponent.** Every AI seat plays at the one difficulty.
 - **Two opponents, five or six.** phase seats up to six; the setup page offers the goldfish, a duel

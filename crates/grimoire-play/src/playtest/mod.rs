@@ -15,4 +15,6 @@ mod goldfish_tests;
 #[cfg(test)]
 mod lobby_tests;
 #[cfg(test)]
+mod parity_tests;
+#[cfg(test)]
 mod tests;

@@ -95,20 +95,43 @@ pub struct GameCard {
     /// creature. `None` for anything unattached, off the battlefield, or attached to a player.
     pub attached_to: Option<u64>,
     /// A card in exile that is foretold (CR 702.143): face down, cast later for its foretell cost.
-    /// Only the reader's are in a view; an opponent's are face down, so not shown at all.
+    /// Only the reader's are named; an opponent's are face down, so a nameless `face_down` card.
     pub foretold: bool,
+    /// Face down (CR 708): a morph, a manifest or a cloak on the battlefield, a face-down spell,
+    /// a foretold or hideaway card in exile. A face-down card the reader may look at — their own
+    /// (CR 708.5), one an effect lets them look at or play — carries its real name and printing;
+    /// one they may not has an empty `name` and no `card_id`, and the board draws its back.
+    pub face_down: bool,
+    /// The damage marked on it this turn (CR 120.6), until cleanup removes it. 0 off the
+    /// battlefield.
+    pub damage: u32,
+    /// Summoning sick (CR 302.6): a creature its controller has not controlled continuously since
+    /// their most recent turn began, without haste — it can neither attack nor pay `{T}`.
+    pub sick: bool,
+    /// Phased out (CR 702.26): treated as though it does not exist until it phases in.
+    pub phased_out: bool,
+    /// A Class's level (CR 716), from 1. `None` for anything but a Class.
+    pub class_level: Option<u8>,
+    /// What was chosen for it as it entered or resolved, as the engine names it: a color, a
+    /// creature type, a card name (Cavern of Souls, Pithing Needle). A secret choice is never
+    /// sent to anyone but its controller.
+    pub chosen: Vec<String>,
+    /// The rules' marks on it that are neither counters nor effects: goaded, monstrous, renowned,
+    /// saddled, suspected, the Ring-bearer.
+    pub marks: Vec<CardMark>,
     /// The rules let the reader foretell it now (CR 702.143a): a hand card with foretell, on their
     /// own turn, with {2} to pay. Set only in a view the reader can act in.
     pub can_foretell: bool,
     /// The rules let the reader activate one of its abilities from where it is now (CR 602.1):
-    /// from the hand cycling (CR 702.29a), typecycling, channel and the like (issue #1431); from
-    /// the graveyard unearth (CR 702.84a), embalm, scavenge and the like (issue #1714) — an
-    /// `Activate` of it. Only ever set on a hand, graveyard or exile card (a permanent's menu
-    /// offers its abilities by itself), and only in a view the reader can act in.
+    /// a permanent's (its own, or an opponent's that "any player may activate"), from the hand
+    /// cycling (CR 702.29a), channel or ninjutsu (issue #1431), from the graveyard unearth
+    /// (CR 702.84a) or embalm (issue #1714), from the top of the library plot — an `Activate` of
+    /// it. Only in a view the reader can act in.
     pub can_activate: bool,
-    /// The rules let the reader cast or play it from where it is now — a foretold card from
-    /// exile, a flashback card from the graveyard. Only ever set on a graveyard or exile card,
-    /// and only in a view the reader can act in.
+    /// The rules let the reader cast or play it from where it is now (phase's play-or-cast family:
+    /// a cast, a land, a miracle, madness, a face-down cast) — from the hand, the command zone, a
+    /// graveyard, exile, or the top of a library (Future Sight, Bolas's Citadel, Mystic Forge).
+    /// Only in a view the reader can act in.
     pub castable: bool,
     /// The rules let the reader tap it for mana now (CR 605.3a): one of their permanents with a
     /// mana ability they can activate, a land's `{T}` above all. Only ever set on a battlefield
@@ -119,6 +142,24 @@ pub struct GameCard {
     /// token. A card with any is still played, but the parts named do nothing, so the board marks
     /// it (issue #1093).
     pub gaps: Vec<String>,
+}
+
+/// A mark the rules put on a permanent that is neither a counter nor a continuous effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CardMark {
+    /// Goaded (CR 701.15): it attacks each combat, and a player other than its goader if it can.
+    Goaded,
+    /// Monstrous (CR 701.37).
+    Monstrous,
+    /// Renowned (CR 702.112).
+    Renowned,
+    /// Saddled this turn (CR 702.171).
+    Saddled,
+    /// Suspected (CR 701.60): menace, and it can't block.
+    Suspected,
+    /// Its controller's Ring-bearer (CR 701.54).
+    RingBearer,
 }
 
 /// Where a permanent sits: creatures toward the opponent; behind them lands on the left and

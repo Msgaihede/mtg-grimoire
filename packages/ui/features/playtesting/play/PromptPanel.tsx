@@ -1,4 +1,4 @@
-import type { JSX, MouseEvent } from "react";
+import { useState, type JSX, type MouseEvent } from "react";
 import { ManaText } from "@/components/ManaText";
 import type { GameCard, PlaytestAction, PlaytestPrompt } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
@@ -6,6 +6,7 @@ import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CardFace } from "../table/Inspect";
+import { DistributePanel } from "./DistributePanel";
 import {
   cardOfRef,
   distinctOptions,
@@ -45,6 +46,13 @@ import {
  * is offered once (`distinctOptions`). A question about one trigger (its targets) says the
  * trigger's cause beside its card, and its words in the tooltip (`promptSource`).
  *
+ * **What a question shows, a name to type, an amount to divide** (`shown`, `nameEntry`,
+ * `distribute`): the cards it shows lie in a strip above the answers, small and pointed while
+ * hovered; a naming question takes a typed name ("Name it", sent as `name`) as well as its listed
+ * answers, which narrow to the ones holding what is typed; a division draws a stepper per target
+ * (`DistributePanel`) in place of the answers, the engine's own division behind "Other answers".
+ * The body scrolls inside the panel's height.
+ *
  * **"Let the engine choose" is always there** (`auto`): phase's engine has well over a hundred
  * kinds of question, and a kind whose answers the board cannot draw — none sent, or none it can
  * name — is still one the reader can get past. Cancel only when the question came out of the
@@ -76,6 +84,11 @@ export function PromptPanel({
   const help = promptHelp(prompt.kind);
   const source = promptSource(prompt, opponents);
   const line = help ?? source?.text ?? null;
+  const [named, setNamed] = useState("");
+  const [others, setOthers] = useState(false);
+  // A question with more to it than its listed answers: cards shown, a name to type, an amount
+  // to divide. Its body scrolls as one.
+  const extra = prompt.shown.length > 0 || prompt.nameEntry || prompt.distribute !== null;
   return (
     <section
       aria-label={title}
@@ -120,43 +133,153 @@ export function PromptPanel({
         </span>
       </header>
 
-      {prompt.options.length === 0 ? (
+      {extra ? (
+        <div className="flex min-h-0 flex-col overflow-y-auto">
+          {prompt.shown.length > 0 && (
+            <ShownCards prompt={prompt} table={table} onPoint={onPoint} onUnpoint={onUnpoint} />
+          )}
+          {prompt.nameEntry && (
+            <form
+              className="flex flex-none items-center gap-1.5 px-1.5 pt-1.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const text = named.trim();
+                if (text !== "" && !disabled) onAct({ type: "name", text });
+              }}
+            >
+              <input
+                type="text"
+                aria-label="Name"
+                placeholder="Type a name"
+                value={named}
+                onChange={(e) => setNamed(e.target.value)}
+                className={cn(
+                  "h-7 min-w-0 flex-1 rounded-full border border-border bg-surface px-3 text-[12px]",
+                  FOCUS,
+                )}
+              />
+              <button
+                type="submit"
+                disabled={disabled || named.trim() === ""}
+                className={cn(
+                  FOOTER_BUTTON,
+                  "border-accent text-accent hover:bg-accent hover:text-accent-fg",
+                )}
+              >
+                Name it
+              </button>
+            </form>
+          )}
+          {prompt.distribute !== null && (
+            <DistributePanel
+              key={`${prompt.distribute.total}:${prompt.distribute.targets.map((t) => t.card?.id ?? t.player).join(",")}`}
+              distribute={prompt.distribute}
+              table={table}
+              disabled={disabled}
+              onAct={onAct}
+              onPoint={onPoint}
+              onUnpoint={onUnpoint}
+              opponents={opponents}
+            />
+          )}
+          {prompt.distribute !== null && prompt.options.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={others}
+              onClick={() => setOthers((o) => !o)}
+              className={cn(
+                FOOTER_BUTTON,
+                "mx-1.5 self-start border-transparent text-dim hover:text-text",
+              )}
+            >
+              Other answers
+            </button>
+          )}
+          {(prompt.distribute === null || others) && answers(named)}
+        </div>
+      ) : (
+        answers("")
+      )}
+    </section>
+  );
+
+  /** The listed answers, with the ability's words beside them when the question is about one;
+   *  `filter` narrows them to the ones whose words hold it (a name being typed). */
+  function answers(filter: string): JSX.Element | null {
+    if (prompt.options.length === 0)
+      return extra ? null : (
         <p className="m-0 px-3 py-2 text-[13px] text-dim">
           The board can’t show this choice. Let the engine choose for you
           {prompt.cancellable ? ", or cancel." : "."}
         </p>
-      ) : prompt.sourceText === null ? (
-        <OptionChips
-          prompt={prompt}
-          table={table}
-          disabled={disabled}
-          onAct={onAct}
-          onPoint={onPoint}
-          onUnpoint={onUnpoint}
-          opponents={opponents}
-        />
-      ) : (
-        <div className="flex min-h-0 items-center">
-          <p
-            title={prompt.sourceText}
-            className="m-0 line-clamp-2 min-w-0 flex-1 py-1.5 pl-3 text-[12px] leading-4 text-dim"
+      );
+    const chips = (className?: string) => (
+      <OptionChips
+        prompt={prompt}
+        table={table}
+        disabled={disabled}
+        onAct={onAct}
+        onPoint={onPoint}
+        onUnpoint={onUnpoint}
+        opponents={opponents}
+        filter={filter}
+        className={className}
+      />
+    );
+    if (prompt.sourceText === null) return chips();
+    return (
+      <div className="flex min-h-0 items-center">
+        <p
+          title={prompt.sourceText}
+          className="m-0 line-clamp-2 min-w-0 flex-1 py-1.5 pl-3 text-[12px] leading-4 text-dim"
+        >
+          {/* `inline`: rules text wraps, and the component's `inline-flex` would not. */}
+          <ManaText source={prompt.sourceText} className="inline" />
+        </p>
+        {chips("max-w-[60%] flex-none justify-end self-stretch")}
+      </div>
+    );
+  }
+}
+
+/**
+ * The cards a question shows the reader without asking for them (`prompt.shown`): the card they
+ * looked at, a cascade's hit. Small, as a row's pictures are, and pointed while hovered, so the
+ * preview shows each whole.
+ */
+function ShownCards({
+  prompt,
+  table,
+  onPoint,
+  onUnpoint,
+}: {
+  prompt: Pick<PlaytestPrompt, "shown">;
+  table: readonly GameCard[];
+  onPoint: (card: GameCard, e: MouseEvent) => void;
+  onUnpoint: () => void;
+}): JSX.Element {
+  return (
+    <ul
+      aria-label="Cards shown"
+      className="m-0 flex flex-none list-none flex-wrap gap-1.5 px-3 pt-1.5"
+    >
+      {prompt.shown.map((ref, i) => {
+        const card = cardOfRef(ref, table);
+        return (
+          <li
+            // By place, not id alone: a card can be shown twice (two looks at one library).
+            key={`${ref.id}-${i}`}
+            title={ref.name}
+            onMouseEnter={(e) => onPoint(card, e)}
+            onMouseLeave={onUnpoint}
+            data-point={ref.id}
+            className="relative h-[45px] w-8 flex-none"
           >
-            {/* `inline`: rules text wraps, and the component's `inline-flex` would not. */}
-            <ManaText source={prompt.sourceText} className="inline" />
-          </p>
-          <OptionChips
-            prompt={prompt}
-            table={table}
-            disabled={disabled}
-            onAct={onAct}
-            onPoint={onPoint}
-            onUnpoint={onUnpoint}
-            opponents={opponents}
-            className="max-w-[60%] flex-none justify-end self-stretch"
-          />
-        </div>
-      )}
-    </section>
+            <CardFace card={card} alt={ref.name} />
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -170,6 +293,7 @@ export function OptionChips({
   onPoint,
   onUnpoint,
   opponents = 1,
+  filter = "",
   className,
 }: {
   prompt: PlaytestPrompt;
@@ -179,8 +303,19 @@ export function OptionChips({
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
   opponents?: number;
+  /** Only the answers whose words hold this, ignoring case — a name being typed. */
+  filter?: string;
   className?: string;
 }): JSX.Element {
+  const query = filter.trim().toLowerCase();
+  const rows = distinctOptions(prompt)
+    .map((option) => ({ option, label: optionLabel(option, prompt, opponents) }))
+    .filter(
+      ({ label }) =>
+        query === "" ||
+        label.text.toLowerCase().includes(query) ||
+        (label.hint?.toLowerCase().includes(query) ?? false),
+    );
   return (
     <ul
       className={cn(
@@ -188,8 +323,8 @@ export function OptionChips({
         className,
       )}
     >
-      {distinctOptions(prompt).map((option) => {
-        const { text, hint } = optionLabel(option, prompt, opponents);
+      {rows.map(({ option, label }) => {
+        const { text, hint } = label;
         const cards = optionCards(option, prompt).map((ref) => cardOfRef(ref, table));
         const numbered = prompt.kind === "OrderTriggers" && cards.length > 1;
         const first = cards[0];

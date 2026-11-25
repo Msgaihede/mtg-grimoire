@@ -100,14 +100,34 @@ export interface GameCard {
   attachedTo: number | null;
   /** In exile and foretold (CR 702.143): cast later, for its foretell cost, by a `play`. */
   foretold: boolean;
+  /**
+   * Face down (CR 708): a morph, manifest or cloak, a face-down spell, a foretold or hideaway card
+   * in exile. One the reader may look at (their own, CR 708.5) carries its real `name` and
+   * printing; one they may not has an empty `name` and no `cardId`, and is drawn as a card back.
+   */
+  faceDown: boolean;
+  /** The damage marked on it this turn (CR 120.6); 0 off the battlefield. */
+  damage: number;
+  /** Summoning sick (CR 302.6): a creature that can neither attack nor pay `{T}` yet. */
+  sick: boolean;
+  /** Phased out (CR 702.26): treated as though it does not exist until it phases in. */
+  phasedOut: boolean;
+  /** A Class's level (CR 716); `null` for anything but a Class. */
+  classLevel: number | null;
+  /** What was chosen for it as it entered or resolved, in the engine's word: a color, a creature
+   *  type, a card name (Cavern of Souls, Pithing Needle). */
+  chosen: string[];
+  /** The rules' marks on it that are neither counters nor effects. */
+  marks: GameCardMark[];
   /** The rules let the reader foretell this hand card now (their turn, {2} to pay). */
   canForetell: boolean;
-  /** The rules let the reader activate one of this hand, graveyard or exile card's abilities
-   *  now (CR 602.1): cycling, typecycling, channel from the hand (issue #1431); unearth, embalm,
-   *  scavenge from the graveyard (issue #1714) — an `activate` of it. */
+  /** The rules let the reader activate one of this card's abilities now (CR 602.1): a
+   *  permanent's (theirs, or an opponent's "any player may activate"), cycling, channel or
+   *  ninjutsu from the hand (issue #1431), unearth from the graveyard (issue #1714), plot from the
+   *  library's top — an `activate` of it. */
   canActivate: boolean;
-  /** The rules let the reader cast or play this graveyard or exile card now (foretold,
-   *  flashback). */
+  /** The rules let the reader cast or play this card from where it is now — the hand, the command
+   *  zone, a graveyard, exile, or a library's top (Future Sight, Mystic Forge) — a `play`. */
   castable: boolean;
   /** The rules let the reader tap this battlefield permanent for mana now (CR 605.3a): one of
    *  theirs with a mana ability, a land's `{T}` above all — a `tapForMana`, sandbox or not. */
@@ -119,6 +139,15 @@ export interface GameCard {
    */
   gaps: string[];
 }
+
+/** A mark the rules put on a permanent that is neither a counter nor an effect. */
+export type GameCardMark =
+  | "goaded"
+  | "monstrous"
+  | "renowned"
+  | "saddled"
+  | "suspected"
+  | "ringBearer";
 
 export interface CardCounter {
   /** As a reader names it: `+1/+1`, `loyalty`, `charge`. */

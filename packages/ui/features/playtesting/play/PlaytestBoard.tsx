@@ -82,7 +82,7 @@ import {
   OpponentPile,
   opponentHandWidth,
 } from "./OpponentZones";
-import { PlateFrame } from "./PlateFrame";
+import { PlateFrame, cursesOn } from "./PlateFrame";
 import {
   OPPONENTS,
   controlSeats,
@@ -839,6 +839,9 @@ export function PlaytestBoard({
                     onPointEmblem={pointLoose}
                     onUnpoint={unpoint}
                     onLook={(l) => setLook({ look: l, side: seat.player })}
+                    onActivate={replaying ? undefined : onActivate}
+                    curses={cursesOn(seat, view)}
+                    onPointCard={pointCard}
                   />
                 ))}
               </div>
@@ -861,6 +864,7 @@ export function PlaytestBoard({
                   pick={theirPick}
                   across={across[1]}
                   control={controlSeats(view, "opponent")}
+                  onActivate={replaying ? undefined : onActivate}
                   aim={aims.tables.opponent}
                   className="h-full w-full"
                 />
@@ -953,9 +957,7 @@ export function PlaytestBoard({
           </button>
           <button
             type="button"
-            aria-label={
-              returnTo === "deck" ? `Back to ${deckName}` : "Back to setup"
-            }
+            aria-label={returnTo === "deck" ? `Back to ${deckName}` : "Back to setup"}
             onClick={onBack}
             className={cn(CHROME_BUTTON, "h-9 gap-1 rounded-full pr-3 pl-2 text-[13px]")}
           >
@@ -970,7 +972,12 @@ export function PlaytestBoard({
         {!four && (
           <>
             <div className="absolute top-0 left-1/2 -translate-x-1/2">
-              <OpponentHand count={handCount} />
+              <OpponentHand
+                count={handCount}
+                cards={opponent?.hand}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+              />
             </div>
             {/* Right of their hand, and never under the sound, help and log buttons: the box ends
               160 px from the edge, and a plate wider than it (a long deck name, the sandbox's
@@ -985,6 +992,10 @@ export function PlaytestBoard({
                 poison={opponent?.poison ?? 0}
                 commanderDamage={opponent?.commanderDamage}
                 lethal={view?.commanderDamageLethal}
+                standing={opponent}
+                curses={opponent === null || view === null ? undefined : cursesOn(opponent, view)}
+                onPointCard={pointCard}
+                onUnpoint={unpoint}
                 compact
                 aim={aims.plates.opponent}
                 className="min-w-0"
@@ -1169,6 +1180,10 @@ export function PlaytestBoard({
             poison={you?.poison ?? 0}
             commanderDamage={you?.commanderDamage}
             lethal={view?.commanderDamageLethal}
+            standing={you}
+            curses={you === null || view === null ? undefined : cursesOn(you, view)}
+            onPointCard={pointCard}
+            onUnpoint={unpoint}
             aim={aims.plates.you}
           >
             <LifePlate
@@ -1299,7 +1314,16 @@ export function PlaytestBoard({
             onPoint={pointCard}
             onUnpoint={unpoint}
             opponents={view.opponents.length}
-            className="absolute bottom-2 left-1/2 max-h-[104px] w-[min(640px,calc(100%-560px))] -translate-x-1/2"
+            // A question that shows cards, takes a name or divides an amount needs the room its
+            // body draws; any other keeps the hand in view under it.
+            className={cn(
+              "absolute bottom-2 left-1/2 w-[min(640px,calc(100%-560px))] -translate-x-1/2",
+              view.prompt!.shown.length > 0 ||
+                view.prompt!.nameEntry ||
+                view.prompt!.distribute !== null
+                ? "max-h-[260px]"
+                : "max-h-[104px]",
+            )}
           />
         )}
 
@@ -1572,24 +1596,23 @@ function PlaytestHelp({
 }): JSX.Element {
   return (
     <>
+      <span>Double-click a card in hand, or drag it to your battlefield, to play it.</span>
       <span>
-        Double-click a card in hand, or drag it to your battlefield, to play it.
+        Right-click a permanent to activate an ability. Drag a card onto a card or player to use it
+        on that target.
       </span>
       <span>
-        Right-click a permanent to activate an ability. Drag a card onto a card or player to use it on that target.
-      </span>
-      <span>
-        To attack, click each attacker, or drag it onto an opponent or planeswalker. Then press Attack.
+        To attack, click each attacker, or drag it onto an opponent or planeswalker. Then press
+        Attack.
       </span>
       {!goldfish && (
         <span>
-          To block, click your creature, then the attacker, or drag it onto the attacker. Click a blocker again to take it off.
+          To block, click your creature, then the attacker, or drag it onto the attacker. Click a
+          blocker again to take it off.
         </span>
       )}
       <span>When the engine asks, click a highlighted card or pick an answer in the panel.</span>
-      <span>
-        Click a land to tap it for mana. Mana stays in your pool until the step ends.
-      </span>
+      <span>Click a land to tap it for mana. Mana stays in your pool until the step ends.</span>
       {lobby ? (
         <span className="text-dim">
           The board waits while other players decide. Games with people have no sandbox and no undo.
@@ -1597,15 +1620,21 @@ function PlaytestHelp({
       ) : sandbox ? (
         <>
           <span className="text-dim">
-            The sandbox is on. When the game waits on you, drag your cards anywhere, click a permanent to tap it (Shift-click taps the pile) and right-click any card for counters, copies, moves and who controls it. Set any life total, and the mana in your pool. Cards the rules can't play are put down unpaid. To change a step the game passes, add a stop there. Answer an open question first.
+            The sandbox is on. When the game waits on you, drag your cards anywhere, click a
+            permanent to tap it (Shift-click taps the pile) and right-click any card for counters,
+            copies, moves and who controls it. Set any life total, and the mana in your pool. Cards
+            the rules can't play are put down unpaid. To change a step the game passes, add a stop
+            there. Answer an open question first.
           </span>
           <span className="text-dim">
-            Point at one of your cards and press T to tap, G for graveyard, E to exile or H for hand.
+            Point at one of your cards and press T to tap, G for graveyard, E to exile or H for
+            hand.
           </span>
         </>
       ) : (
         <span className="text-dim">
-          The sandbox is off: only legal plays. Turn it on with the Sandbox button or the game menu to change cards by hand.
+          The sandbox is off: only legal plays. Turn it on with the Sandbox button or the game menu
+          to change cards by hand.
         </span>
       )}
       <span className="text-dim">
@@ -1660,10 +1689,9 @@ function zoneOf(seat: PlaytestSeat, place: GamePlace): readonly GameCard[] {
     case "command":
       return seat.command;
     case "libraryTop":
-      // An opponent's library is no cards on the wire but a revealed top (issue #1722).
-      return seat.libraryCards.length > 0 || seat.libraryTop === null
-        ? seat.libraryCards
-        : [seat.libraryTop];
+      // The top card the reader may see is on the wire for an opponent too, whose library's
+      // cards are not (CR 401.5): the preview of it re-reads it from there.
+      return seat.libraryTop === null ? seat.libraryCards : [seat.libraryTop, ...seat.libraryCards];
     default:
       return seat.libraryCards;
   }

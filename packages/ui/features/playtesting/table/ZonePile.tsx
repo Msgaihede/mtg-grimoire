@@ -1,4 +1,5 @@
 import { useEffect, useRef, type JSX, type MouseEvent, type RefObject } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat } from "@/lib/ipc";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { ManaText } from "@/components/ManaText";
@@ -10,7 +11,7 @@ import { CountTag } from "@/components/CountTag";
 import { CardFace, pointerAt } from "./Inspect";
 import { tableDraggable, useTableDropTarget, type TableDrag } from "./tableDrag";
 import { ZONE_H, ZONE_W, type ZoneSize } from "./layout";
-import { cardMenu, libraryMenu } from "./menus";
+import { cardMenu, libraryMenu, rulesPlay } from "./menus";
 import type { Pointed, ZoneLook } from "./types";
 
 /**
@@ -30,20 +31,65 @@ import type { Pointed, ZoneLook } from "./types";
  * **`sandbox` is whether the sandbox's moves work now** (on, the reader playing or
  * declaring, nothing out). Off, the zones keep only what the rules do: the commander is cast (double-click, drag onto
  * the table, its menu's Cast), the graveyard and exile are opened to look through, read-only — and
- * the library is a pile with a count, not drawn from, not looked through and not dropped on.
+ * the library is a pile with a count, not drawn from, not looked through and not dropped on, but
+ * for a top card the rules let the reader see (`libraryTop`) and play from there.
  *
- * **A library whose top the reader may see is drawn with that card face up** (`libraryTop`, issue
- * #1722): a "look at the top card of your library any time" or a "play with the top card
- * revealed" in play. It is pointed at as any face-up card is, sandbox or not — a look is the
- * rules', not a move.
+ * **A card the rules let the reader play where it lies wears {@link CASTABLE_RING}** — the
+ * command zone's commander, the top of the library, the graveyard's or exile's top card — as
+ * phase's own client rings a playable card, and as the hand does (`HandFan`).
  */
+
+/**
+ * The ring a card wears while the rules let the reader cast or play it, or activate one of its
+ * abilities, from where it lies ({@link GameCard.castable}, {@link GameCard.canActivate}). A ring
+ * (a box shadow), never an outline: an outline is the keyboard's focus and the table's marks
+ * (attack, block, pick), and this is a state. Soft gold, so a hand of playable cards does not
+ * shout.
+ */
+export const CASTABLE_RING = "ring-2 ring-accent/70";
+
+/**
+ * A card the reader may not look at: face down (CR 708) with its name kept from them — another
+ * player's foretold or hideaway card in exile, a card exiled face down by an opponent's effect.
+ * Drawn as a back, never pointed at for a preview of nothing. A face-down card the reader may
+ * look at (their own, CR 708.5) carries its name and is drawn face up.
+ */
+export function isHidden(card: GameCard): boolean {
+  return card.faceDown && card.name === "";
+}
+
+/**
+ * A card back filling its box: the library's face, and a hidden card wherever one lies. `mark` is
+ * the Grimoire mark's size ({@link markSize} of the box).
+ */
+export function CardBack({ mark, className }: { mark: number; className?: string }): JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      data-back=""
+      className={cn(
+        "flex h-full w-full items-center justify-center rounded-lg border border-border bg-surface text-accent",
+        className,
+      )}
+    >
+      <GrimoireMark size={mark} className="text-accent" />
+    </span>
+  );
+}
 
 type Drop = (drag: TableDrag, to: GamePlace) => void;
 
 /** What the zone columns read of a game: the reader's seat. */
 export type ZoneView = Pick<
   PlaytestSeat,
-  "command" | "battlefield" | "graveyard" | "exile" | "library" | "libraryCards" | "libraryTop"
+  | "command"
+  | "battlefield"
+  | "graveyard"
+  | "exile"
+  | "library"
+  | "libraryCards"
+  | "libraryTop"
+  | "libraryTopRevealed"
 >;
 
 /** The inline box for a zone card of `size`, or nothing for the artboard's own (its classes). */
@@ -201,15 +247,19 @@ function CommanderCard({
   const ref = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
   useZoneDraggable(ref, card, "command");
-  const cast = () => onAct({ type: "play", id: card.id });
+  // The rules' way with it first: its cast when the rules offer one, else an ability that works
+  // from the command zone (commander ninjutsu, CR 702.49d). With neither it is still a `play` —
+  // the sandbox's unpaid cast, or the engine's refusal saying why not.
+  const cast = () => onAct(rulesPlay(card) ?? { type: "play", id: card.id });
   const build = () => cardMenu({ card, ids: [card.id], place: "command", sandbox, onAct });
   const openMenu = menu(build);
+  const word = !card.castable && card.canActivate ? "activate" : "cast";
 
   return (
     <button
       ref={ref}
       type="button"
-      aria-label={`${card.name} in the command zone${card.gaps.length > 0 ? ", played only in part" : ""}. Double-click or drag to cast`}
+      aria-label={`${card.name} in the command zone${card.gaps.length > 0 ? ", played only in part" : ""}. Double-click${word === "cast" ? " or drag" : ""} to ${word}`}
       onDoubleClick={cast}
       // Enter or Space on the focused card casts it too — the keyboard has no double-click.
       onClick={(e) => {
@@ -232,7 +282,11 @@ function CommanderCard({
       onMouseLeave={onUnpoint}
       data-point={card.id}
       data-land={card.id}
-      className={cn("absolute left-0 h-[252px] w-[180px] cursor-grab rounded-md p-0", FOCUS)}
+      className={cn(
+        "absolute left-0 h-[252px] w-[180px] cursor-grab rounded-md p-0",
+        FOCUS,
+        (card.castable || card.canActivate) && CASTABLE_RING,
+      )}
       style={{ top, ...boxOf(size) }}
     >
       <CardFace card={card} />
@@ -272,6 +326,10 @@ export function GraveyardZone(props: PileZoneProps): JSX.Element {
  * A face-up zone: its top card, which can be carried off with the sandbox's moves working, and
  * every card in it a right-click away (`ZoneLook`'s browse) — public, so open whatever the
  * sandbox says. A plain click browses too, so the zone has a keyboard way in.
+ *
+ * **A hidden card is a back** ({@link isHidden}): exile holds face-down cards the reader may not
+ * look at, counted with the rest but never named or previewed. A top card the rules let the
+ * reader play from here wears {@link CASTABLE_RING}; its Cast is in the look (`LibraryDialog`).
  */
 function FaceUpZone({
   view,
@@ -297,6 +355,7 @@ function FaceUpZone({
   const over = useTableDropTarget({ ref, place: zone, onDrop, sandbox, overlay: true });
   const cards = view?.[zone] ?? [];
   const top = cards.length > 0 ? cards[cards.length - 1] : null;
+  const hidden = top !== null && isHidden(top);
   useZoneDraggable(cardRef, top, zone, !sandbox);
   const browse = (e?: MouseEvent) => {
     e?.preventDefault();
@@ -312,20 +371,21 @@ function FaceUpZone({
         <button
           ref={cardRef}
           type="button"
-          aria-label={`${title}, ${cards.length} ${cards.length === 1 ? "card" : "cards"}; ${top.name} on top. Click to look through it`}
+          aria-label={`${title}, ${cards.length} ${cards.length === 1 ? "card" : "cards"}; ${hidden ? "a face-down card" : top.name} on top. Click to look through it`}
           onClick={() => browse()}
           onContextMenu={browse}
-          onMouseEnter={(e) =>
+          onMouseEnter={(e) => {
+            if (hidden) return;
             onPoint({
               card: top,
               ids: [top.id],
               place: zone,
               line: `Top of ${where} · ${cards.length} ${cards.length === 1 ? "card" : "cards"}`,
               at: pointerAt(e),
-            })
-          }
+            });
+          }}
           onMouseLeave={onUnpoint}
-          data-point={top.id}
+          data-point={hidden ? undefined : top.id}
           data-land={top.id}
           style={boxOf(size)}
           className={cn(
@@ -333,9 +393,10 @@ function FaceUpZone({
             sandbox ? "cursor-grab" : "cursor-pointer",
             FOCUS,
             over && OVER_OUTLINE,
+            !hidden && (top.castable || top.canActivate) && CASTABLE_RING,
           )}
         >
-          <CardFace card={top} />
+          {hidden ? <CardBack mark={markSize(size)} /> : <CardFace card={top} />}
           {size?.compact && (
             <CardCount
               count={cards.length}
@@ -359,7 +420,7 @@ export interface LibraryZoneProps {
   onAct: (action: PlaytestAction) => void;
   onDrop: Drop;
   onLook: (look: ZoneLook) => void;
-  /** The preview of a top card the reader may see (`libraryTop`). */
+  /** The pointer has come onto the top card the reader may see (`libraryTop`). */
   onPoint?: (pointed: Pointed) => void;
   onUnpoint?: () => void;
   size?: ZoneSize;
@@ -373,6 +434,15 @@ export interface LibraryZoneProps {
  * **Every one of those is a sandbox move**, so with `sandbox` off it is a pile and a count and
  * nothing more: a disabled button, so it still says what it is, with no draw, no menu and no drop.
  * The rules draw for the reader.
+ *
+ * **But a top card the reader may see is drawn face up on it** (`libraryTop`, CR 401.5) —
+ * revealed to every player (Courser of Kruphix) or the reader's own to look at any time (Future
+ * Sight, Bolas's Citadel) — with a chip saying which, and it can be pointed at for the preview,
+ * sandbox or not. **One the rules let the reader play from there is the rules' play, sandbox or
+ * not** ({@link CASTABLE_RING}): a double-click (Enter on the focused pile) casts it, or plays
+ * it, or — when only an ability works from there (plot, CR 702.170) — activates it, and the menu
+ * heads with the same rows. While it can, a single click draws nothing, since a double-click is
+ * two clicks first; the sandbox's Draw a card is still the menu's.
  */
 export function LibraryZone({
   view,
@@ -390,65 +460,111 @@ export function LibraryZone({
   const count = view?.library ?? 0;
   const cards = `${count} ${count === 1 ? "card" : "cards"}`;
   const top = view?.libraryTop ?? null;
-  const pile = top === null ? `Library, ${cards}` : `Library, ${cards}; ${top.name} on top`;
-  const build = () => (view === null || !sandbox ? [] : libraryMenu({ view, onAct, onLook }));
+  const revealed = view?.libraryTopRevealed ?? false;
+  const play = top === null ? null : rulesPlay(top);
+  const build = () => (view === null ? [] : libraryMenu({ view, sandbox, onAct, onLook }));
+  const openMenu = menu(build);
+  const verb =
+    play === null ? null : play.type === "activate" ? "activate" : top?.isLand ? "play" : "cast";
+  const label = [
+    `Library, ${cards}`,
+    top === null ? "" : `; ${top.name} on top, ${revealed ? "revealed" : "which only you see"}`,
+    verb === null ? "" : `. Double-click to ${verb} it`,
+    !sandbox
+      ? ""
+      : verb === null
+        ? ". Click to draw; right-click for more"
+        : "; right-click for more",
+  ].join("");
 
   return (
     <div ref={ref} className="flex flex-col items-end gap-1.5">
-      {/* The pointer is read off a wrapper, not the button: a disabled button (the sandbox off)
-          may take no pointer events, and the top card is pointed at either way. */}
-      <div
-        className="flex"
+      <button
+        type="button"
+        // Enabled for the sandbox's moves, and for a top card to point at or play by the rules.
+        disabled={view === null || (!sandbox && top === null)}
+        data-land={libraryEnds(view)}
         data-point={top?.id}
-        onMouseEnter={
-          top === null || onPoint === undefined
-            ? undefined
-            : (e) =>
-                onPoint({
-                  card: top,
-                  ids: [top.id],
-                  place: "libraryTop",
-                  line: `Top of the library · ${cards}`,
-                  at: pointerAt(e),
-                })
-        }
-        onMouseLeave={top === null ? undefined : onUnpoint}
+        aria-label={label}
+        onClick={(e) => {
+          // A keyboard's press carries no `detail`: Enter plays the top card, as a double-click.
+          if (play !== null) {
+            if (e.detail === 0) onAct(play);
+            return;
+          }
+          if (sandbox) onAct({ type: "draw", count: 1 });
+        }}
+        onDoubleClick={() => {
+          if (play !== null) onAct(play);
+        }}
+        onContextMenu={(e) => {
+          onUnpoint?.();
+          openMenu(e);
+        }}
+        onKeyDown={menuKey(build)}
+        onMouseEnter={(e) => {
+          if (top === null) return;
+          onPoint?.({
+            card: top,
+            ids: [top.id],
+            place: "libraryTop",
+            line: `${top.name} · on top of your library${revealed ? ", revealed" : ""}`,
+            at: pointerAt(e),
+          });
+        }}
+        onMouseLeave={() => onUnpoint?.()}
+        style={boxOf(size)}
+        className={cn(
+          "relative flex h-[252px] w-[180px] items-center justify-center rounded-lg border bg-surface p-0 text-accent disabled:cursor-default",
+          sandbox || play !== null ? "cursor-pointer" : "cursor-default",
+          // The edges of the cards under the top one, two of them, the way a deck sits.
+          "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
+          over ? "border-accent" : "border-border",
+          PRESS,
+          FOCUS,
+          play !== null && CASTABLE_RING,
+        )}
       >
-        <button
-          type="button"
-          disabled={view === null || !sandbox}
-          data-land={libraryEnds(view)}
-          aria-label={sandbox ? `${pile}. Click to draw; right-click for more` : pile}
-          onClick={() => onAct({ type: "draw", count: 1 })}
-          onContextMenu={menu(build)}
-          onKeyDown={menuKey(build)}
-          style={boxOf(size)}
-          className={cn(
-            "flex h-[252px] w-[180px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
-            // The edges of the cards under the top one, two of them, the way a deck sits.
-            "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
-            over ? "border-accent" : "border-border",
-            PRESS,
-            FOCUS,
-            size?.compact && "relative",
-            top !== null && "p-0",
-          )}
-        >
-          {top === null ? (
-            <GrimoireMark size={markSize(size)} className="text-accent" />
-          ) : (
-            <CardFace card={top} />
-          )}
-          {size?.compact && (
-            <CardCount
-              count={count}
-              title={`${count} ${count === 1 ? "card" : "cards"} in the library`}
-            />
-          )}
-        </button>
-      </div>
+        {top === null ? (
+          <GrimoireMark size={markSize(size)} className="text-accent" />
+        ) : (
+          <>
+            <span className="absolute inset-0">
+              <CardFace card={top} />
+            </span>
+            <TopChip revealed={revealed} compact={size?.compact ?? false} />
+          </>
+        )}
+        {size?.compact && (
+          <CardCount
+            count={count}
+            title={`${count} ${count === 1 ? "card" : "cards"} in the library`}
+          />
+        )}
+      </button>
       {!size?.compact && <span className={ZONE_LABEL}>Library · {count}</span>}
     </div>
+  );
+}
+
+/**
+ * Who sees the library's top card, on it: every player (`revealed`, an eye) or the reader alone
+ * (a closed eye — they look at it, nobody else does). Decorative: the pile's name says it.
+ */
+function TopChip({ revealed, compact }: { revealed: boolean; compact: boolean }): JSX.Element {
+  const Icon = revealed ? Eye : EyeOff;
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="library-top-chip"
+      className={cn(
+        "pointer-events-none absolute top-1 left-1 inline-flex items-center gap-1 rounded border border-border bg-bg/90 px-[5px] text-[10px]/4 text-text",
+        compact && "px-[3px]",
+      )}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+      {!compact && (revealed ? "Revealed" : "You look at it")}
+    </span>
   );
 }
 

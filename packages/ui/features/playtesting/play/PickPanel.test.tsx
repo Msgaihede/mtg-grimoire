@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { PlaytestPrompt } from "@/lib/ipc";
+import type { PlaytestPick, PlaytestPrompt } from "@/lib/ipc";
 import { castPick, discardPick, scryPick } from "./fixtures";
 import { PickPanel } from "./PickPanel";
 
@@ -19,6 +19,47 @@ function setup(prompt: PlaytestPrompt) {
   );
   return { onAct, pick };
 }
+
+/** A question answered by a set of four library cards, of `over`'s purpose. */
+function libraryPick(over: Partial<PlaytestPick>): PlaytestPrompt {
+  const cards = ["Opt", "Island", "Brainstorm", "Ponder"].map((name, i) => ({
+    id: 10 + i,
+    name,
+    cardId: null,
+    text: null,
+    cause: null,
+  }));
+  return {
+    kind: "DigRestSplitChoice",
+    source: "Telling Time",
+    sourceText: null,
+    cause: null,
+    options: [],
+    cancellable: false,
+    keyword: null,
+    damage: null,
+    shown: [],
+    distribute: null,
+    nameEntry: false,
+    pick: {
+      purpose: "order",
+      cards,
+      eligible: cards.map((c) => c.id),
+      min: cards.length,
+      max: cards.length,
+      ordered: true,
+      powerCap: null,
+      zone: "libraryTop",
+      split: null,
+      ...over,
+    },
+  };
+}
+
+const labels = (region: HTMLElement) =>
+  within(region)
+    .queryAllByRole("button")
+    .map((el) => el.getAttribute("aria-label"));
 
 describe("PickPanel", () => {
   it("sorts a scry into Keep on top and Bottom, in the order picked", () => {
@@ -85,5 +126,65 @@ describe("PickPanel", () => {
     const { onAct } = setup(castPick().view.prompt!);
     fireEvent.click(screen.getByRole("button", { name: "Don’t cast" }));
     expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [] });
+  });
+
+  it("puts cards on the bottom in the order picked, every one of them", () => {
+    const { onAct } = setup(libraryPick({}));
+    expect(screen.getByRole("heading", { name: "Put on the bottom in order" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Ponder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Opt" }));
+    expect(screen.getByRole("button", { name: "Ponder, 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Opt, 2" })).toBeInTheDocument();
+    const done = screen.getByRole("button", { name: "Done" });
+    expect(done).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Island" }));
+    fireEvent.click(screen.getByRole("button", { name: "Brainstorm" }));
+    fireEvent.click(done);
+    expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [13, 10, 11, 12] });
+  });
+
+  it("shows which picked cards go on top and which on the bottom (Telling Time)", () => {
+    const { onAct } = setup(libraryPick({ split: 1 }));
+    expect(
+      screen.getByRole("heading", { name: "Put 1 on top and the rest on the bottom" }),
+    ).toBeInTheDocument();
+    const top = () => screen.getByRole("region", { name: "On top" });
+    const bottom = () => screen.getByRole("region", { name: "On the bottom" });
+    const place = () => screen.getByRole("region", { name: "To place" });
+    expect(labels(place())).toHaveLength(4);
+    expect(within(bottom()).getByText(/Once 1 is on top/)).toBeInTheDocument();
+    fireEvent.click(within(place()).getByRole("button", { name: "Brainstorm" }));
+    fireEvent.click(within(place()).getByRole("button", { name: "Opt" }));
+    fireEvent.click(within(place()).getByRole("button", { name: "Ponder" }));
+    expect(labels(top())).toEqual(["Brainstorm, top 1"]);
+    expect(labels(bottom())).toEqual(["Opt, bottom 1", "Ponder, bottom 2"]);
+    expect(labels(place())).toEqual(["Island"]);
+    fireEvent.click(within(place()).getByRole("button", { name: "Island" }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [12, 10, 13, 11] });
+  });
+
+  it("pays a cost with the cards picked", () => {
+    const { onAct } = setup(libraryPick({ purpose: "pay", min: 2, max: 2, ordered: false }));
+    expect(screen.getByRole("heading", { name: "Choose 2 to pay the cost" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Opt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Island" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pay" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [10, 11] });
+  });
+
+  it("separates the cards into two piles, the picked ones pile A", () => {
+    const { onAct } = setup(libraryPick({ purpose: "pile", min: 0, max: 4, ordered: false }));
+    expect(
+      screen.getByRole("heading", { name: "Separate into two piles: picked cards are pile A" }),
+    ).toBeInTheDocument();
+    const a = () => screen.getByRole("region", { name: "Pile A" });
+    const b = () => screen.getByRole("region", { name: "Pile B" });
+    expect(within(a()).getByText("Click a card to put it in pile A.")).toBeInTheDocument();
+    fireEvent.click(within(b()).getByRole("button", { name: "Ponder" }));
+    expect(labels(a())).toEqual(["Ponder"]);
+    expect(labels(b())).toEqual(["Opt", "Island", "Brainstorm"]);
+    fireEvent.click(screen.getByRole("button", { name: "Make piles" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [13] });
   });
 });

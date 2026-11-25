@@ -15,9 +15,10 @@
 // in Tauri's managed state, which must be `Send + Sync`. phase.rs's `GameState` is deep enough
 // that proving it `Send` overflows the compiler's default limit of 128 — measured 2026-10-12, on
 // the goldfish board's slot of then: `overflow evaluating the requirement tauri::State<'_,
-// GoldfishSlot> well-formed`, through `Box<grimoire_play::Goldfish>: Send` — and 256 is the bound
-// rustc suggested and is enough.
-#![recursion_limit = "256"]
+// GoldfishSlot> well-formed`, through `Box<grimoire_play::Goldfish>: Send` — and 256 was the bound
+// rustc suggested then. phase 0.132.0's `GameState` (2026-11-25) overflows 256 the same way,
+// through `Playtest`'s chairs' `Checkpoint`, and rustc suggests 512.
+#![recursion_limit = "512"]
 
 /// **The collection's and the wishlist's history, and the feed that reads it beside
 /// [`deck_audit`].** A table, a `record` that takes the caller's `&Connection` so a row lands
