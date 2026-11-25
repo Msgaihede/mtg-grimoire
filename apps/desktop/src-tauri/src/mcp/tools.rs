@@ -992,6 +992,13 @@ async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
     req.insert("collapse".into(), json!(!all));
     req.insert("paperOnly".into(), json!(true));
     req.insert("limit".into(), json!(limit));
+    // Prices, and the price filters, are the reader's marketplace's; a read that fails leaves the
+    // search on its default.
+    if let Ok(market) = run(state, "get_marketplace", json!({})).await {
+        if market.is_string() {
+            req.insert("marketplace".into(), market);
+        }
+    }
     let found = run(state, "search_cards", json!({ "req": req })).await?;
     let cards: Vec<Value> = rows(&found, "items")
         .iter()
@@ -3905,5 +3912,31 @@ mod tests {
         assert!(!why.contains("  "), "{why}");
         let why = refused(&state, "find_cards", json!({ "filters": {} })).await;
         assert!(why.contains("filters"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn the_price_filters_read_the_readers_marketplace() {
+        let state = state("find-cards-marketplace");
+        seed(&state, |c| {
+            filter_cards(c);
+            // Cheap in dollars, dear in euros.
+            c.execute(
+                "UPDATE cards SET price_usd = 1.0, price_eur = 10.0 WHERE id = 'f-bolt'",
+                [],
+            )
+            .unwrap();
+        });
+        let dear = json!({ "filters": { "priceMin": 5 } });
+        // The default marketplace is TCGplayer: a dollar is below the floor.
+        let got = done(&state, "find_cards", dear.clone()).await;
+        assert!(names(&got).is_empty(), "{got}");
+        seed(&state, |c| {
+            grimoire_core::marketplace::store(c, "cardmarket").unwrap();
+        });
+        let got = done(&state, "find_cards", dear).await;
+        assert_eq!(names(&got), ["Bolt Mage"], "{got}");
+        assert_eq!(got["cards"][0]["price"], 10.0, "{got}");
+        let cheap = json!({ "filters": { "priceMax": 5 } });
+        assert!(names(&done(&state, "find_cards", cheap).await).is_empty());
     }
 }
