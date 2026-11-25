@@ -8906,8 +8906,8 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(CORPUS, TAG_INDEXES_SQL))
 }
 
-/// The four columns corpus schema 2 put on `combos`, and what [`migrate_corpus`] gates its rung
-/// on.
+/// The columns on `combos` that corpus schema 2 (four) and corpus schema 9 (`requires`) added, and
+/// what [`migrate_corpus`] gates its rungs on.
 ///
 /// A named list rather than a comparison against [`COMBO_TABLES_SQL`], which is the idiom the
 /// user rungs already use — v24 and v29 both ask `pragma_table_info … WHERE name = ?` before
@@ -8916,8 +8916,9 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
 /// every launch.
 ///
 /// **What a stale list costs is bounded, which is why the simpler thing is the right one.** The
-/// probe only has to be able to tell the two shapes apart, and any one of these four does that;
-/// a future rung that adds a fifth column owes the same thing every rung owes — a fixture at the
+/// probe only has to be able to tell the two shapes apart, and any one of these does that (a
+/// schema-8 corpus is told apart from head by `requires` alone);
+/// a future rung that adds another column owes the same thing every rung owes — a fixture at the
 /// shape below it — and that fixture is what goes red if this list is not widened with it.
 const COMBO_V2_COLUMNS: [&str; 5] = [
     "mana_needed",
@@ -22275,7 +22276,8 @@ pub(crate) mod tests {
         conn
     }
 
-    /// The four columns [`COMBO_TABLES_SQL`] added, **spelled out again rather than reading
+    /// The columns [`COMBO_TABLES_SQL`] added (schema 2's four and schema 9's `requires`),
+    /// **spelled out again rather than reading
     /// [`COMBO_V2_COLUMNS`]**. An assertion that asked [`combos_are_at_head`], or looped over
     /// the implementation's own list, would agree with whatever that constant currently says —
     /// including a list with a typo in it, or an empty one.
@@ -22372,7 +22374,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// A corpus built from nothing gets the same four columns, so the ladder and a first build
+    /// A corpus built from nothing gets the same columns (schema 2's four and schema 9's
+    /// `requires`), so the ladder and a first build
     /// cannot disagree about what `combos` is.
     ///
     /// The bare `ATTACH ':memory:'` is the right fixture for the same reason
@@ -23707,7 +23710,7 @@ pub(crate) mod tests {
         assert_eq!(
             blanks,
             NEW_COMBO_COLUMNS.len(),
-            "the four are `DEFAULT ''` because the feed writes an empty string: {live:?}"
+            "the schema-2 four are `DEFAULT ''` because the feed writes an empty string: {live:?}"
         );
         assert_eq!(defaults("combos_staging"), live);
     }
