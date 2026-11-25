@@ -1206,7 +1206,7 @@ fn start(app: &tauri::AppHandle) {
 }
 
 /// Start the launch's optional feeds, each on a task of its own: the selected marketplace's
-/// price feed, both Tagger files and the combos. [`start`] calls this beside the card sync, or
+/// price feed, both Tagger files, the combos and the rulings. [`start`] calls this beside the card sync, or
 /// behind it on a first run — see the comment there.
 fn spawn_optional_feeds(state: &Arc<AppState>) {
     // The selected marketplace's price feed, if it is one this app downloads and it is
@@ -1275,6 +1275,16 @@ fn spawn_optional_feeds(state: &Arc<AppState>) {
     let combo_state = state.core.clone();
     tauri::async_runtime::spawn(async move {
         combos::refresh_if_due(&combo_state).await;
+    });
+
+    // Scryfall's rulings, on a seventh task for the same reason as the three above it — a
+    // seventh schedule, and none may be the reason another is late. **The desktop's alone** (the
+    // owner's decision, 2026-11-25): its one reader is the local MCP server, which only this host
+    // has, so the light app's hosts do not fetch the 5.5 MB file. Silent and best-effort: a
+    // failure is in `error_log`, and every answer built on the rulings says when there are none.
+    let ruling_state = state.core.clone();
+    tauri::async_runtime::spawn(async move {
+        grimoire_core::rulings::refresh_if_due(&ruling_state).await;
     });
 }
 

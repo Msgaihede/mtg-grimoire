@@ -40,7 +40,7 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | ------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `find_cards` | `search_cards` (paper printings; one per card unless `allPrintings`) | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price. A `filters` object takes the Search page's filter bar: `format`, `colors` (`colorsExact`), `types`, `rarities`, `sets`, `manaValues` (`manaX`), `owned`, `priceMin`/`priceMax` (in the reader's marketplace currency), `oracleTags` and `gameChanger`, with or without a name `query` |
 | `show_search` | `format_specs_list` and `tag_resolve` (`find_cards`' filter checks), then `search:show` to one window | What the Search page shows once it has run the search: `shown`, `cameForward`, `total` (`totalIsCapped`), `keywords`, `words` and `unknownTags`, with a `note` when the wall is empty, the search failed, or the window stayed behind or did not answer. Takes `text` (the Search box, in Scryfall syntax; at most 1,000 characters), `find_cards`' `filters` plus `borders`, `finishes` and `universe`, `sort` and `allPrintings`. Changes what one window shows, never data (below) |
-| `get_card` | `get_marketplace`, `card_detail`, `card_holdings`, `card_oracle_tags`, `card_related`, `combos_for_card`, and the two lists' status commands (`oracle_tags_status`, `combos_status`) | Oracle text, finishes, legalities, prices per finish (in the reader's marketplace), and what the reader owns of the card; its `faces`, its direct oracle `tags` (with `tagData`: when the tag list was downloaded), what it brings with it (`related`: tokens, emblems, meld parts, combo pieces; at most 25, with `relatedTotal` the full count when there are more; `comboPiece` is Scryfall's word for cards that refer to each other, not a Spellbook combo) and how many Spellbook combos name it (`comboCount`, with `comboData`) |
+| `get_card` | `get_marketplace`, `card_detail`, `card_holdings`, `card_oracle_tags`, `card_related`, `combos_for_card`, `rulings_for_cards`, and the three lists' status commands (`oracle_tags_status`, `combos_status`, `rulings_status`) | Oracle text, finishes, legalities, prices per finish (in the reader's marketplace), and what the reader owns of the card; its `faces`, its direct oracle `tags` (with `tagData`: when the tag list was downloaded), what it brings with it (`related`: tokens, emblems, meld parts, combo pieces; at most 25, with `relatedTotal` the full count when there are more; `comboPiece` is Scryfall's word for cards that refer to each other, not a Spellbook combo) and how many Spellbook combos name it (`comboCount`, with `comboData`) and how many rulings it has (`rulingCount`, with `rulingData`; `card_rulings` answers their text) |
 | `search_collection` | `collection_list`                                                      | Entries by name words and folder: printing, finish, condition, language, quantity, folder                                                                                                                                                                                                                                       |
 | `search_wishlist`   | `wishlist_list`, `wishlist_folder_list`                                | Wishes by name words and folder, with whether a wish is for any printing                                                                                                                                                                                                                                                        |
 | `list_folders`      | `collection_folder_list` / `wishlist_folder_list` / `deck_folder_list` | Folder ids, names and parents; a collection folder's `kind` (only `user` takes an add)                                                                                                                                                                                                                                          |
@@ -58,6 +58,7 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | `get_combo` | `combo_get` | One combo whole: cards, steps, prerequisites, templates, mana needed, what it produces and Spellbook's `url` |
 | `held_combos` | `deck_get`, `combos_for_cards`, `deck_commander_identities`, `format_specs_list` and `combos_near` for a deck; `format_specs_list` and `combos_in_collection` for the collection; `combos_status` | The combos a deck holds whole (read by its active piles) and, by default, the ones it is one card short of, with the missing card; with no `deckId`, the same over the whole collection (`format` and `identity` narrow the missing card) |
 | `card_scryfall` | `card_raw` | The whole Scryfall record of up to 20 printings in Scryfall's own format (`keywords`, `layout`, `produced_mana`, `card_faces`...), minus image and shop links unless `fields` names them; `missing` names an id the database lacks |
+| `card_rulings` | `card_detail`, `rulings_for_cards`, `rulings_status` | Scryfall's rulings for up to 10 printings, oldest first: each with its date (`publishedAt`), `source` (`wotc`, Wizards' own, or `scryfall`, a note of Scryfall's) and `text`; `missing` names an id the database lacks, and `rulingData` says when the rulings were downloaded |
 | `find_tags` | `tag_search`, `oracle_tags_status` | Scryfall's community oracle tags whose name matches words, with their slugs (what `find_cards` takes in `filters.oracleTags`) and how many cards hold each |
 | `similar_cards` | `cards_similar` | Cards that do what a card does, ranked by the oracle tags they share (a rare tag weighs more), narrowed by `format` and `identity`; each row names its newest printing, type, cost, score and the shared tags that weigh most |
 | `format_rules` | the core's format table | Each format's deck size, copies allowed, sideboard, singleton, commander, starting life, companion, mana value cap, what restricted means, whether the app checks decks in it (`validates`) and whether it has legality data (`searchable`) |
@@ -75,12 +76,19 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 
 **The card knowledge tools** (`card_combos` to `read_guide`) answer how cards work together. Their
 core commands (`combo_get`, `combos_near`, `combos_in_collection`, `card_raw`, `card_related`,
-`card_oracle_tags`, `cards_similar`) live in `grimoire-core` on `command_table::TABLE_ONLY`, so the
-light app's hosts answer them too, and `combos_for_card` gained a `produces` filter. **The combo list is
-Commander Spellbook's and holds Commander-legal combos only**; the oracle tags are Scryfall's. Each list
-is downloaded on its own, so an answer whose list is missing says so in a note (`comboData`, `tagData`)
-rather than answering "none". Schema 9 added `combos.requires` (the templates a combo needs, "a creature
-with..."), so the combo tables rebuild and download again at the first launch after it. **Every answer
+`card_oracle_tags`, `cards_similar`, and project D's `rulings_for_cards` and `rulings_status`) live in
+`grimoire-core` on `command_table::TABLE_ONLY`, so the light app's hosts answer them too, and
+`combos_for_card` gained a `produces` filter. **The combo list is Commander Spellbook's and holds
+Commander-legal combos only**; the oracle tags and the rulings are Scryfall's. Each list is downloaded
+on its own, so an answer whose list is missing says so in a note (`comboData`, `tagData`, `rulingData`)
+rather than answering "none"; only the combo note says Settings can fetch its list now (*Refresh
+combos*), since Settings has no button for the other two. Corpus schema 9 added `combos.requires` (the
+templates a combo needs, "a creature with..."), so the combo tables rebuild and download again at the
+first launch after it. **The rulings are fetched by the desktop alone** (corpus schema 10, project D,
+the owner's decision 2026-11-25): Scryfall's 5.5 MB rulings file, weekly at launch
+(`grimoire_core::rulings`), so on the light app's hosts `rulings_for_cards` answers nothing and
+`rulings_status` says the file was never downloaded. Design:
+[2026-11-25-mcp-rulings-design.md](../superpowers/specs/2026-11-25-mcp-rulings-design.md). **Every answer
 that is an object is also its `structuredContent`** (`rpc::done_result`; MCP allows nothing else there),
 beside the text block older clients read; an array answer and a refusal carry the text alone.
 
@@ -149,9 +157,9 @@ with one optional argument for the user's own words:
 | `search_cards`      | `request`  | Which tool answers which question (all cards, the collection, the wishlist), the read graph's structured filters (`searchCards`, `collectionEntries`, `wishlistEntries`) for anything beyond a name, and when and how to show a search in the app (`show_search`: ask first, `filters` or `text`, reading the answer) |
 | `create_widget`     | `idea`     | The steps to write, check, preview and store a custom widget, closing with the whole widget catalogue (`catalog.prompt.md`)                                                                             |
 | `graphql_discovery` | `question` | A map of the graph's root fields, how its schema reads (nullability, ids, money, timestamps, filters, depth), and how to find, check and run a query                                                    |
-| `card_interactions` | `question` | Which tool answers what a card does, its combos, cards that do the same job, what it brings with it, its Scryfall record and a format's rules, and what each source can and cannot tell (Commander-legal combos only, templates, a list not yet downloaded) |
+| `card_interactions` | `question` | Which tool answers what a card does, its rulings, its combos, cards that do the same job, what it brings with it, its Scryfall record and a format's rules, and what each source can and cannot tell (Commander-legal combos only, templates, how to cite a ruling and that an older one can be overtaken, a list not yet downloaded) |
 | `review_deck` | `request` | A deck review in order — what the deck is, what the validation finds, the bracket floor, curve and mana, combos held and one card away, draw odds, what it is short of, owned upgrades — and its rules: suggest, never claim a change; a switched-off pile is not the deck; the bracket is a floor; not checked is not legal |
-| `build_from_collection` | `request` | Building a deck from what the reader owns: the format's rules, an owned commander or a plan, cards by function and identity from the collection, the collection's combos, a shape for the deck, and decklist text the reader pastes into the deck editor's Import |
+| `build_from_collection` | `request` | Building a deck from what the reader owns: the format's rules, an owned commander or a plan, cards by function and identity from the collection, the collection's combos, a shape for the deck, and decklist text the reader pastes into the Decks page's Import deck |
 
 Every fenced `graphql` example in them is held to the graph (`every_example_query_is_valid`), so a
 renamed field fails the build rather than an agent. The server's `instructions` name the four (a test holds them to every tool and prompt), and `read_guide`
@@ -337,6 +345,7 @@ curl -s http://127.0.0.1:39147/mcp -H "Authorization: Bearer <token>" -H "Conten
   one thing created, updated and deleted here. Each would be one more translation in `tools.rs` over a
   command already in the table.
 - **Card knowledge is not whole.** Still to do, as the later projects of the card knowledge plan:
-  rulings (project D) and Scryfall search syntax in the tools (project C).
+  Scryfall search syntax in the tools (project C). Rulings (project D) are an agent's only: no
+  page shows them, and the light app does not download them.
 - **The decklist writers are the desktop's** (`transfer/`), so `get_deck`'s `as: "text"` is too: the
   remote tier, which has no desktop, will need them moved into the core.

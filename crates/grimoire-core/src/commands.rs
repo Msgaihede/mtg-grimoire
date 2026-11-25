@@ -1303,6 +1303,12 @@ commands! {
         Ok(crate::tags::status_of(&ORACLE, &state))
     };
 
+    // rulings — the local MCP server's alone (`command_table::TABLE_ONLY`): no page reads them.
+    read rulings_for_cards in rulings(oracle_ids: Vec<String>) = |conn| {
+        rulings_for_cards(conn, &oracle_ids).map_err(|e| format!("could not read the rulings: {e}"))
+    };
+    read rulings_status in rulings() = |conn| Ok(status_now(conn));
+
     // tags::query
     read tag_children in tags::query(namespace: String, slug: Option<String>) = |conn| {
         run_tag_children(conn, &namespace, slug.as_deref())

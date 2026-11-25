@@ -268,6 +268,14 @@ pub const BULK_ORACLE_TAGS: &str = "oracle_tags";
 /// [`BULK_ORACLE_TAGS`]'s aliasing, for its reason.
 pub const BULK_ART_TAGS: &str = "art_tags";
 
+/// Scryfall's rulings: 80 928 `ruling` objects over 20 387 oracle ids, ~5.5 MB gzipped JSONL,
+/// one ruling per line. [`crate::rulings`] reads it.
+///
+/// [`BULK_ORACLE_TAGS`]'s document shape exactly — measured live 2026-11-25, entry id
+/// `06f54c0b-ab9c-452d-b35a-8297db5eb940`, `compressed_size` 5 508 481 and no
+/// `download_uri`/`size`. `rulings::BULK_NAME` aliases this, for [`BULK_ORACLE_TAGS`]' reason.
+pub const BULK_RULINGS: &str = "rulings";
+
 /// The bits of a `bulk_data` object this app needs. Note `jsonl_download_uri` and
 /// `compressed_size`: the pre-2026-07-20 `download_uri`/`size` fields are gone and
 /// the legacy `.json` URLs return 404.
@@ -570,10 +578,10 @@ impl Client {
     /// caller that only wants one of them means a 200 (and a re-download decision) every
     /// time any of the others is regenerated.
     ///
-    /// `dataset` is one of the [`BULK_DEFAULT_CARDS`]/[`BULK_ORACLE_TAGS`]/[`BULK_ART_TAGS`]
-    /// constants. It goes through [`api_send`](Client::api_send) like every other API call,
-    /// so a further dataset shares the one pacing gate and the one 429 lockout: three
-    /// datasets are still one application as far as Scryfall is concerned, and a second
+    /// `dataset` is one of the [`BULK_DEFAULT_CARDS`]/[`BULK_ORACLE_TAGS`]/[`BULK_ART_TAGS`]/
+    /// [`BULK_RULINGS`] constants. It goes through [`api_send`](Client::api_send) like every
+    /// other API call, so a further dataset shares the one pacing gate and the one 429 lockout:
+    /// four datasets are still one application as far as Scryfall is concerned, and a second
     /// client would be two.
     ///
     /// **A page sends no `If-None-Match`, whatever it is handed, and reads no `ETag`**
