@@ -883,6 +883,9 @@ async fn get_card(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
         .await;
         if let Some(total) = page.ok().and_then(|p| p.get("total").cloned()) {
             card["comboCount"] = total;
+            if let Ok(status) = run(state, "combos_status", json!({})).await {
+                with_combo_data(&mut card, &status, Vec::new());
+            }
         }
     }
     Ok(card)
@@ -1388,11 +1391,21 @@ fn with_feed_data(
         notes.insert(
             0,
             format!(
-                "The {list} has not been downloaded yet, so an empty answer does not mean there                  are {nothing}. The app fetches it weekly when it starts, and Settings can fetch                  it now."
+                concat!(
+                    "The {list} has not been downloaded yet, so an empty answer does not mean ",
+                    "there are {nothing}. The app fetches it weekly when it starts, and ",
+                    "Settings can fetch it now."
+                ),
+                list = list,
+                nothing = nothing
             ),
         );
     }
     answer[key] = data;
+    // A note an earlier feed put on this answer stays, ahead of this feed's.
+    if let Some(earlier) = answer.get("note").and_then(Value::as_str) {
+        notes.insert(0, earlier.to_owned());
+    }
     if !notes.is_empty() {
         answer["note"] = json!(notes.join(" "));
     }
@@ -3109,10 +3122,9 @@ mod tests {
         for (name, args) in calls {
             let got = done(&state, name, args).await;
             assert!(got["comboData"]["downloadedAt"].is_null(), "{name}: {got}");
-            assert!(
-                got["note"].as_str().unwrap().contains("Settings"),
-                "{name}: {got}"
-            );
+            let note = got["note"].as_str().unwrap();
+            assert!(note.contains("Settings"), "{name}: {got}");
+            assert!(!note.contains("  "), "{name}: {note}");
         }
     }
 
@@ -3286,6 +3298,7 @@ mod tests {
         assert_eq!(got["related"][0]["relation"], "token");
         assert_eq!(got["related"][0]["name"], "Spirit");
         assert_eq!(got["comboCount"], 1);
+        assert_eq!(got["comboData"]["downloadedAt"], 1_700_000_000);
         assert_eq!(
             got["faces"],
             json!([
@@ -3302,6 +3315,7 @@ mod tests {
             raw_card(c, "p-a", "Card A", &json!({}));
             tag(c, "ramp", "Ramp", &["o-other"]);
             tags_downloaded(c);
+            downloaded(c);
         });
         let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
         assert_eq!(got["tags"], json!([]));
@@ -3322,15 +3336,21 @@ mod tests {
         let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
         assert_eq!(got["tags"], json!([]));
         assert!(got["tagData"]["downloadedAt"].is_null(), "{got}");
-        assert!(got["note"].as_str().unwrap().contains("Settings"), "{got}");
+        let note = got["note"].as_str().unwrap();
+        assert!(
+            note.contains("tag list") && note.contains("combo list"),
+            "{got}"
+        );
+        assert!(!note.contains("  "), "{note}");
+        assert!(got["comboData"]["downloadedAt"].is_null(), "{got}");
+        assert_eq!(got["comboCount"], 0);
 
         let found = done(&state, "find_tags", json!({ "text": "ramp" })).await;
         assert_eq!(found["tags"], json!([]));
         assert!(found["tagData"]["downloadedAt"].is_null(), "{found}");
-        assert!(
-            found["note"].as_str().unwrap().contains("Settings"),
-            "{found}"
-        );
+        let note = found["note"].as_str().unwrap();
+        assert!(note.contains("Settings"), "{found}");
+        assert!(!note.contains("  "), "{note}");
     }
 
     #[tokio::test]
