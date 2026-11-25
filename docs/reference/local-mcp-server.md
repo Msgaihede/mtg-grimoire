@@ -10,7 +10,8 @@ Local MCP part of Settings → Integrations (`packages/ui/features/settings/`).
 at `http://127.0.0.1:39147/mcp`, behind a bearer token, whose tools are the app's own commands — so
 an agent reads with the fidelity of the app's own pages, at once, and nothing leaves the computer.**
 It writes nothing of the reader's cards, decks or wishlists; the one thing it writes is the reader's
-custom home widgets.
+custom home widgets, and the one thing it changes besides is what one window shows (`show_search`,
+after the reader says yes in chat).
 
 ---
 
@@ -38,6 +39,7 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | Tool                | Calls                                                                  | Answers                                                                                                                                                                                                                                                                                                                         |
 | ------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `find_cards` | `search_cards` (paper printings; one per card unless `allPrintings`) | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price. A `filters` object takes the Search page's filter bar: `format`, `colors` (`colorsExact`), `types`, `rarities`, `sets`, `manaValues` (`manaX`), `owned`, `priceMin`/`priceMax` (in the reader's marketplace currency), `oracleTags` and `gameChanger`, with or without a name `query` |
+| `show_search` | `format_specs_list` and `tag_resolve` (`find_cards`' filter checks), then `search:show` to one window | What the Search page shows once it has run the search: `shown`, `cameForward`, `total` (`totalIsCapped`), `keywords`, `words` and `unknownTags`, with a `note` when the wall is empty, the search failed, or the window stayed behind or did not answer. Takes `text` (the Search box, in Scryfall syntax; at most 1,000 characters), `find_cards`' `filters` plus `borders`, `finishes` and `universe`, `sort` and `allPrintings`. Changes what one window shows, never data (below) |
 | `get_card` | `get_marketplace`, `card_detail`, `card_holdings`, `card_oracle_tags`, `card_related`, `combos_for_card`, and the two lists' status commands (`oracle_tags_status`, `combos_status`) | Oracle text, finishes, legalities, prices per finish (in the reader's marketplace), and what the reader owns of the card; its `faces`, its direct oracle `tags` (with `tagData`: when the tag list was downloaded), what it brings with it (`related`: tokens, emblems, meld parts, combo pieces; at most 25, with `relatedTotal` the full count when there are more; `comboPiece` is Scryfall's word for cards that refer to each other, not a Spellbook combo) and how many Spellbook combos name it (`comboCount`, with `comboData`) |
 | `search_collection` | `collection_list`                                                      | Entries by name words and folder: printing, finish, condition, language, quantity, folder                                                                                                                                                                                                                                       |
 | `search_wishlist`   | `wishlist_list`, `wishlist_folder_list`                                | Wishes by name words and folder, with whether a wish is for any printing                                                                                                                                                                                                                                                        |
@@ -83,6 +85,27 @@ reader, so `widget_create`, `widget_update` and `widget_delete` may store, rewri
 the last two annotated `destructiveHint`. A widget is device-local (user schema v68: never synced,
 carried by the full export).
 
+**`show_search` changes what one window shows** (project B,
+[2026-11-25-mcp-show-search-design.md](../superpowers/specs/2026-11-25-mcp-show-search-design.md);
+`mcp/show.rs`). Every argument is checked before anything is sent, with `find_cards`' sentences, so
+a refused call changes no window. The window is the one the reader last focused
+(`window::LastFocused`, fed by `Focused(true)` and forgotten on `Destroyed`), else `main`, else the
+first label in sorted order; the tool reaches it only through the `SearchWindows` seam
+(`window::DesktopWindows`; a fake in tests), never an `AppHandle`. The search goes as a
+`SearchHandoff` in the filter bar's own shape — a value the bar has no control for (`gameChanger`, a format the picker lacks, the `special`
+and `bonus` rarities) goes into the text as a keyword — emitted as `search:show` to that window
+alone. The page listens on its own window (`onSearchShow`), hands it to the store as the one-shot
+`showSearchHandoff`, and the Search page applies it over a clean slate. Then the window is
+unminimized, shown and focused, and Windows is asked whether it came forward (`GetForegroundWindow`,
+since `set_focus` answers `Ok` either way); when it did not, its taskbar button flashes and the
+answer says `cameForward: false`. The page answers once the wall has answered that search (never
+the previous search's placeholder rows), through `mcp_search_shown(id, report)`. The tool waits at
+most 5 seconds and then answers `shown: null`, the search sent and unanswered, which is not a
+refusal; a second call while one waits answers the first `shown: false`. Annotated
+`readOnlyHint: false`, `idempotentHint: true`. The tool cannot check that the reader said yes, so
+its description, the `instructions` and the `search_cards` prompt each tell the agent to ask in chat
+first and call once per yes.
+
 **`widget_create` checks before it writes, and says everything at once.** The query goes through
 the read graph's `validate` (each problem with its line and column). The spec is held to the
 committed widget catalogue contract, `packages/ui/features/home/generated/catalog.contract.json`
@@ -115,7 +138,7 @@ with one optional argument for the user's own words:
 
 | Prompt              | Argument   | What it teaches                                                                                                                                                                                         |
 | ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search_cards`      | `request`  | Which tool answers which question (all cards, the collection, the wishlist), and the read graph's structured filters (`searchCards`, `collectionEntries`, `wishlistEntries`) for anything beyond a name |
+| `search_cards`      | `request`  | Which tool answers which question (all cards, the collection, the wishlist), the read graph's structured filters (`searchCards`, `collectionEntries`, `wishlistEntries`) for anything beyond a name, and when and how to show a search in the app (`show_search`: ask first, `filters` or `text`, reading the answer) |
 | `create_widget`     | `idea`     | The steps to write, check, preview and store a custom widget, closing with the whole widget catalogue (`catalog.prompt.md`)                                                                             |
 | `graphql_discovery` | `question` | A map of the graph's root fields, how its schema reads (nullability, ids, money, timestamps, filters, depth), and how to find, check and run a query                                                    |
 | `card_interactions` | `question` | Which tool answers what a card does, its combos, cards that do the same job, what it brings with it, its Scryfall record and a format's rules, and what each source can and cannot tell (Commander-legal combos only, templates, a list not yet downloaded) |
@@ -304,5 +327,5 @@ curl -s http://127.0.0.1:39147/mcp -H "Authorization: Bearer <token>" -H "Conten
   one thing created, updated and deleted here. Each would be one more translation in `tools.rs` over a
   command already in the table.
 - **Card knowledge is not whole.** Still to do, as the later projects of the card knowledge plan:
-  rulings (project D), Scryfall search syntax in the tools (project C), opening a search in the app
-  (project B), and deck statistics, validation, the bracket and the other deck tools (project E).
+  rulings (project D), Scryfall search syntax in the tools (project C), and deck statistics,
+  validation, the bracket and the other deck tools (project E).

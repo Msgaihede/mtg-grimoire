@@ -376,9 +376,12 @@ what one deck with two views should mean. [decks-storage.md](decks-storage.md) h
 The plugin emits to **one window's label**, and a target-Any listener hears it — so with two windows
 open, hovering one maximize button lit both. `getCurrentWindow` rather than
 `getCurrentWebviewWindow` because `@tauri-apps/api/window` is the specifier `.storybook/main.ts` and
-the tests already alias to a fake; a new specifier would reach the real module from every story. It
-is the only window-targeted event the page listens to — everything else the app emits is meant for
-every window.
+the tests already alias to a fake; a new specifier would reach the real module from every story.
+It was the only window-targeted event the page listened to until the MCP server's `show_search`
+(2026-11-25): `search:show` is emitted to the window the reader last focused (`emit_to`, label from
+`window::LastFocused`), and `onSearchShow` listens on its own window for the same reason, or an
+agent's search would land in every open window. Everything else the app emits is meant for every
+window.
 
 **Restart to finish.** When `useWindowCount() >= 2`, the Update panel's button carries
 *Restarting closes all N windows.* as an `aria-describedby` hint on a line of its own
