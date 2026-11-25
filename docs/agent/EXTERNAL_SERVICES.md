@@ -78,9 +78,9 @@ taxonomy up to seven days behind Scryfall is the design working, not a stale dow
 desktop's alone** (project D, the owner's decision 2026-11-25): the local MCP server is its one
 reader, so the light app's hosts never fetch it. ~5.5 MB gzipped JSONL, 80 928 rulings over 20 387
 cards (measured 2026-11-25), fetched weekly at launch through the same `scryfall::Client` — one
-`/bulk-data/rulings` check a week, a 304 most weeks — and never one request per card: no
-`/cards/{id}/rulings` call is made anywhere. Like the tag files it is regenerated daily and the week
-is this app's choice (`rulings::REFRESH_INTERVAL_SECS`). A failure keeps the rulings already stored.
+`/bulk-data/rulings` check a week and, since Scryfall regenerates the file daily, nearly always one
+5.5 MB download behind it — and never one request per card: no `/cards/{id}/rulings` call is made
+anywhere. The week is this app's choice (`rulings::REFRESH_INTERVAL_SECS`), as for the tag files. A failure keeps the rulings already stored.
 [data-and-sync.md](../reference/data-and-sync.md) has the tables (corpus schema 10).
 
 ## Commander Spellbook's combo feed

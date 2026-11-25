@@ -541,11 +541,11 @@ const SYNCING: &str = "a card update is running — clear the cache once it has 
 
 /// Refused when a feed is downloading into `data/tmp/`, in the reader's words.
 ///
-/// One sentence for all five feeds rather than one per feed: the reader did not necessarily
+/// One sentence for all six feeds rather than one per feed: the reader did not necessarily
 /// start any of them — every one of them can run at launch without a press — and what they
 /// need to know is that the press will work in a minute, not which file was in the way.
 const DOWNLOADING: &str =
-    "a price, tag or combo download is running — clear the cache once it has finished";
+    "a price, tag, combo or rulings download is running — clear the cache once it has finished";
 
 /// Why [`cache_clear`] must not run right now, or `None` when it may.
 ///

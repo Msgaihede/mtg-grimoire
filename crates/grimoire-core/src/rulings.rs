@@ -42,7 +42,9 @@ pub const BULK_NAME: &str = crate::scryfall::BULK_RULINGS;
 
 /// How long an ingested file stays fresh: a week, the tag files' figure and reason. Scryfall
 /// regenerates the file daily and rulings move at a set's release, so a daily download would
-/// buy almost nothing; the ETag makes a week's check that finds nothing cost no bytes.
+/// buy almost nothing. **A weekly check nearly always finds a new file** — it was rebuilt six
+/// times since the last one — so the week costs one 5.5 MB download; the ETag and the
+/// `updated_at` short cut save only a forced refresh made the same day.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// What [`refresh`] answers on a host that keeps no files, before it asks Scryfall anything.

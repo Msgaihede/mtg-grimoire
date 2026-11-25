@@ -46,8 +46,8 @@ across cards; any change to how combos, tags or cards are fetched.
 - An agent told a card has no rulings when the list was never downloaded (A's anti-goal, one
   feed over).
 - An extra live call to Scryfall: no per-card `/cards/{id}/rulings`, from a tool or anywhere else.
-  One `GET /bulk-data/rulings` a week (a free 304 most weeks) and one file download when it
-  changed.
+  One `GET /bulk-data/rulings` a week and one file download when it changed — which, since
+  Scryfall regenerates the file daily, is nearly every week (corrected in review, 2026-11-25).
 - A launch or a card sync that waits on, or breaks over, the rulings file.
 - An agent that presents its own reasoning as a ruling, or a ruling as current when a later one
   may have overtaken it.
