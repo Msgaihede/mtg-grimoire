@@ -145,15 +145,7 @@ async fn call(state: &Arc<AppState>, method: &str, params: Value) -> Result<Valu
                 }
             };
             match tools::call(state, name, arguments).await {
-                tools::Called::Done(answer) => {
-                    // `structuredContent` must be an object, so every tool answers one.
-                    debug_assert!(answer.is_object(), "{name} answered a non-object");
-                    Ok(json!({
-                        "content": [{ "type": "text", "text": answer.to_string() }],
-                        "structuredContent": answer,
-                        "isError": false,
-                    }))
-                }
+                tools::Called::Done(answer) => Ok(done_result(answer)),
                 tools::Called::Refused(why) => Ok(json!({
                     "content": [{ "type": "text", "text": why }],
                     "isError": true,
@@ -168,6 +160,19 @@ async fn call(state: &Arc<AppState>, method: &str, params: Value) -> Result<Valu
             format!("This server does not answer {method}."),
         )),
     }
+}
+
+/// A tool's answer as a `tools/call` result: the text block, and the answer again as
+/// `structuredContent` when it is an object (MCP allows nothing else there).
+fn done_result(answer: Value) -> Value {
+    let mut result = json!({
+        "content": [{ "type": "text", "text": answer.to_string() }],
+        "isError": false,
+    });
+    if answer.is_object() {
+        result["structuredContent"] = answer;
+    }
+    result
 }
 
 /// The handshake's answer: a revision both sides speak, what this server offers, and who it is.
@@ -235,6 +240,16 @@ mod tests {
         .unwrap();
         assert_eq!(refused["isError"], true);
         assert!(refused.get("structuredContent").is_none());
+    }
+
+    #[test]
+    fn a_non_object_answer_is_sent_as_text_alone() {
+        for answer in [json!([1, 2]), json!("x"), Value::Null] {
+            let result = done_result(answer.clone());
+            assert_eq!(result["isError"], false);
+            assert_eq!(result["content"][0]["text"], answer.to_string());
+            assert!(result.get("structuredContent").is_none());
+        }
     }
 
     #[test]
