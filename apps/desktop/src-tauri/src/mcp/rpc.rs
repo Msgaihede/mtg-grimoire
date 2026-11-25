@@ -47,6 +47,8 @@ const INSTRUCTIONS: &str = concat!(
     "format_rules a format's rules. ",
     "When an answer's note says a list has not been downloaded, tell the user so rather than ",
     "concluding there is nothing. ",
+    "show_search puts a search on the app's Search page and brings its window forward: offer it ",
+    "in chat first and call it only after the user says yes. ",
     "The one thing these tools write is the user's custom home-page widgets (widget_create, ",
     "widget_update, widget_delete). ",
     "Four prompts explain the work: search_cards, graphql_discovery, create_widget and ",
@@ -277,6 +279,7 @@ mod tests {
             "similar_cards",
             "card_scryfall",
             "format_rules",
+            "show_search",
         ] {
             assert!(INSTRUCTIONS.contains(tool), "the instructions omit {tool}");
         }
