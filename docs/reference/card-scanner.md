@@ -1101,6 +1101,20 @@ from the top, a gold flash and a glow round the edge. It draws on a `<canvas>` (
 runtime style) and is placed before the popup so the pieces leave from behind the card; a landing
 that asks the reader something, or sits below the first floor, throws nothing.
 
+**The canvas costs nothing between bursts, and a bounded amount during one** (issue #1724). In the
+pack opener the picture is the whole window, and the bitmap used to be that box at the device pixel
+ratio (3840×2109 for a 2560×1440 window at 150 %), cleared and refilled each frame, with the flash
+and the glow tinted by fills over the whole of it. It also kept that size after the last piece was
+gone, so the browser composited an empty full-window layer over the camera on every frame from the
+first landing on. With a card landing every second or so in a pack opening, bursts overlapped.
+Measured on Chromium's software rasteriser (which is how a WebView2 without GPU raster draws), the
+stage fell from about 35 frames a second to 10–22 and stayed there, the pump starved with it, and the
+window read as frozen. Now the bitmap is capped at a 1080p picture's pixels (`MAX_CONFETTI_PIXELS`,
+`confettiRatio`), so the camera column draws exactly as sharp as before. It is sized back to 0×0
+when a burst ends or is stopped, and the flash's and glow's fills cover only their own square and
+bands (`flashSquare`). On the same run, bursts hold 23–27 frames a second and the stage is back to
+its baseline the moment the last one ends.
+
 **The desktop tray** (`TrayPanel`): a header with the count, *Worth* (the tray's total at the
 reader's marketplace, drawn only once a copy has a price), the layout toggle and the `⋯` *Tray
 actions* menu (*Create deck…*, *Archive*, *Clear all…*); tiles of continuous cards, each with a

@@ -6,6 +6,11 @@
 //! - `reversible_card` has **no** top-level `oracle_id`, `cmc`, `type_line` or
 //!   `mana_cost` — they live in `card_faces[0]`, so every one of those reads falls
 //!   back to the first face.
+//! - Every layout with two physical sides — `reversible_card`, `transform`, `modal_dfc`,
+//!   `double_faced_token`, `art_series` — has **no** top-level `illustration_id` either: each
+//!   face carries its own. It falls back to the front face like the fields above, or the
+//!   printing joins no art tag at all (issue #1727: the eight Star Trek Secret Lair reversibles
+//!   missing from `atag:star-trek`).
 //! - `colors` is absent on cards whose colors are defined per face (transform,
 //!   modal_dfc, reversible), so it falls back too. `color_identity` never does:
 //!   it is a whole-card property and only ever appears at the top level.
@@ -51,6 +56,11 @@ pub struct CardRow {
     pub price_usd: Option<f64>,
     pub price_eur: Option<f64>,
     pub faces: Option<String>,
+    /// The picture this printing carries — the key art tags join on. Top level first, then
+    /// `card_faces[0]`: a printing with two physical sides keeps its illustration ids on its
+    /// faces only, so without the fallback every DFC, reversible card and art-series card read
+    /// NULL here and matched no art tag (issue #1727). The front face, because that is the
+    /// face the printing is shown and filed by — the same choice [`CardRow::artist`] makes.
     pub illustration_id: Option<String>,
     pub frame_effects: Option<String>,
     pub border_color: Option<String>,
@@ -506,7 +516,7 @@ impl CardRow {
                 .or_else(|| price(v, "usd_etched")),
             price_eur: price(v, "eur").or_else(|| price(v, "eur_foil")),
             faces: compact(v, "card_faces"),
-            illustration_id: s(v, "illustration_id"),
+            illustration_id: pick("illustration_id"),
             frame_effects: compact(v, "frame_effects"),
             border_color: s(v, "border_color"),
             full_art: v.get("full_art").and_then(Value::as_bool).unwrap_or(false),
@@ -589,6 +599,45 @@ mod tests {
         assert_eq!(c.cmc, Some(3.0));
         assert_eq!(c.type_line.as_deref(), Some("Legendary Creature"));
         assert!(c.search_text.contains("Face text."));
+    }
+
+    /// Issue #1727: Momentary Blink (sld 2745) has no top-level `illustration_id` — each face
+    /// carries its own — and read NULL, so `atag:star-trek` never reached it. The front face's
+    /// id is the printing's, as every other face fallback here takes the front.
+    #[test]
+    fn a_reversible_card_takes_its_illustration_from_the_front_face() {
+        let c = parse(
+            r#"{"object":"card","id":"dca9d627","name":"Momentary Blink // Momentary Blink","lang":"en","layout":"reversible_card","set":"sld","collector_number":"2745","games":["paper"],"card_faces":[{"name":"Momentary Blink","oracle_id":"a3ec","illustration_id":"fa0208b1"},{"name":"Momentary Blink","oracle_id":"a3ec","illustration_id":"5dccb55a"}]}"#,
+        );
+        assert_eq!(c.illustration_id.as_deref(), Some("fa0208b1"));
+    }
+
+    /// The same gap on every two-sided layout, not only reversibles: Delver's picture is on
+    /// its faces too.
+    #[test]
+    fn a_transform_card_takes_its_illustration_from_the_front_face() {
+        let c = parse(
+            r#"{"object":"card","id":"d","name":"Delver of Secrets // Insectile Aberration","lang":"en","layout":"transform","set":"isd","collector_number":"51","games":["paper"],"card_faces":[{"name":"Delver of Secrets","illustration_id":"1c2fee9b"},{"name":"Insectile Aberration","illustration_id":"c2b5f731"}]}"#,
+        );
+        assert_eq!(c.illustration_id.as_deref(), Some("1c2fee9b"));
+    }
+
+    /// The top level still wins where it exists — an adventure or a split card carries its
+    /// one picture there, and its faces may name the same id or none.
+    #[test]
+    fn a_top_level_illustration_beats_the_faces() {
+        let c = parse(
+            r#"{"object":"card","id":"b","name":"Bonecrusher Giant // Stomp","lang":"en","layout":"adventure","set":"eld","collector_number":"115","games":["paper"],"illustration_id":"top","card_faces":[{"name":"Bonecrusher Giant","illustration_id":"face"},{"name":"Stomp"}]}"#,
+        );
+        assert_eq!(c.illustration_id.as_deref(), Some("top"));
+
+        let none = parse(
+            r#"{"object":"card","id":"n","name":"Faceless","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"]}"#,
+        );
+        assert_eq!(
+            none.illustration_id, None,
+            "no picture anywhere is still NULL"
+        );
     }
 
     #[test]

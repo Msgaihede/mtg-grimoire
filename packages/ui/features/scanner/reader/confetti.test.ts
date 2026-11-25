@@ -5,14 +5,17 @@ import {
   CONFETTI_TOKEN,
   confettiEnd,
   confettiPieces,
+  confettiRatio,
   confettiSeed,
   DESIGN_HEIGHT,
   FADE,
   flashAt,
+  flashSquare,
   GLOW_MS,
   glowAt,
   JACKPOT_FLASH_MS,
   FLASH_MS,
+  MAX_CONFETTI_PIXELS,
   OUT,
   pieceAt,
   RAIN,
@@ -238,5 +241,49 @@ describe("the flash, the glow and the end", () => {
   it("seeds each stamp its own burst, and the same stamp the same one", () => {
     expect(confettiSeed("a:1")).toBe(confettiSeed("a:1"));
     expect(confettiSeed("a:1")).not.toBe(confettiSeed("a:2"));
+  });
+});
+
+/**
+ * The bitmap's size (issue #1724): the pack opener's picture is the whole window, and drawn at the
+ * device pixel ratio it was an 8-megapixel canvas cleared and refilled every frame of a burst.
+ */
+describe("confettiRatio", () => {
+  it("is the device pixel ratio for a box that fits in a 1080p picture at it", () => {
+    // The camera column's box at 200 %: 1280×1200 device pixels.
+    expect(confettiRatio(640, 600, 2)).toBe(2);
+    expect(confettiRatio(1920, 1080, 1)).toBe(1);
+    expect(confettiRatio(800, 600, 1.25)).toBe(1.25);
+  });
+
+  it("caps the bitmap at a 1080p picture's pixels, keeping the box's shape", () => {
+    // The pack opener in a 2560×1406 window at 150 % — 3840×2109 before the cap.
+    const ratio = confettiRatio(2560, 1406, 1.5);
+    expect(ratio).toBeLessThan(1.5);
+    const [w, h] = [2560 * ratio, 1406 * ratio];
+    expect(w * h).toBeCloseTo(MAX_CONFETTI_PIXELS, -1);
+    expect(w / h).toBeCloseTo(2560 / 1406, 6);
+    // A 4K window at 100 % gives way by the same rule.
+    expect(3840 * 2160 * confettiRatio(3840, 2160, 1) ** 2).toBeCloseTo(MAX_CONFETTI_PIXELS, -1);
+  });
+
+  it("reads a missing ratio as 1, and a box with no area as nothing to draw", () => {
+    expect(confettiRatio(640, 600, 0)).toBe(1);
+    expect(confettiRatio(0, 600, 2)).toBe(0);
+    expect(confettiRatio(640, 0, 2)).toBe(0);
+  });
+});
+
+describe("flashSquare", () => {
+  it("is the flash's circle's square, clipped to the box", () => {
+    // Centred, 64 px over the foot: the square runs off the bottom and is cut there.
+    expect(flashSquare(BOX, 100)).toEqual([220, 436, 200, 164]);
+    // Wider than the box: the whole box and no more.
+    expect(flashSquare(BOX, 2000)).toEqual([0, 0, 640, 600]);
+  });
+
+  it("is nothing when none of the circle is inside the box", () => {
+    expect(flashSquare({ ...BOX, originX: -50 }, 40)).toBeNull();
+    expect(flashSquare(BOX, 0)).toBeNull();
   });
 });

@@ -31,6 +31,11 @@ import type { Pointed, ZoneLook } from "./types";
  * declaring, nothing out). Off, the zones keep only what the rules do: the commander is cast (double-click, drag onto
  * the table, its menu's Cast), the graveyard and exile are opened to look through, read-only — and
  * the library is a pile with a count, not drawn from, not looked through and not dropped on.
+ *
+ * **A library whose top the reader may see is drawn with that card face up** (`libraryTop`, issue
+ * #1722): a "look at the top card of your library any time" or a "play with the top card
+ * revealed" in play. It is pointed at as any face-up card is, sandbox or not — a look is the
+ * rules', not a move.
  */
 
 type Drop = (drag: TableDrag, to: GamePlace) => void;
@@ -38,7 +43,7 @@ type Drop = (drag: TableDrag, to: GamePlace) => void;
 /** What the zone columns read of a game: the reader's seat. */
 export type ZoneView = Pick<
   PlaytestSeat,
-  "command" | "battlefield" | "graveyard" | "exile" | "library" | "libraryCards"
+  "command" | "battlefield" | "graveyard" | "exile" | "library" | "libraryCards" | "libraryTop"
 >;
 
 /** The inline box for a zone card of `size`, or nothing for the artboard's own (its classes). */
@@ -354,12 +359,16 @@ export interface LibraryZoneProps {
   onAct: (action: PlaytestAction) => void;
   onDrop: Drop;
   onLook: (look: ZoneLook) => void;
+  /** The preview of a top card the reader may see (`libraryTop`). */
+  onPoint?: (pointed: Pointed) => void;
+  onUnpoint?: () => void;
   size?: ZoneSize;
 }
 
 /**
  * The library, face down: a click draws, a right-click opens everything else it can do
- * (`libraryMenu`), and a card let go over it goes on top.
+ * (`libraryMenu`), and a card let go over it goes on top. Its top card is drawn face up while the
+ * reader may see it (`libraryTop`), and pointed at for the preview.
  *
  * **Every one of those is a sandbox move**, so with `sandbox` off it is a pile and a count and
  * nothing more: a disabled button, so it still says what it is, with no draw, no menu and no drop.
@@ -371,6 +380,8 @@ export function LibraryZone({
   onAct,
   onDrop,
   onLook,
+  onPoint,
+  onUnpoint,
   size,
 }: LibraryZoneProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
@@ -378,39 +389,64 @@ export function LibraryZone({
   const { menu, menuKey } = useContextMenu();
   const count = view?.library ?? 0;
   const cards = `${count} ${count === 1 ? "card" : "cards"}`;
+  const top = view?.libraryTop ?? null;
+  const pile = top === null ? `Library, ${cards}` : `Library, ${cards}; ${top.name} on top`;
   const build = () => (view === null || !sandbox ? [] : libraryMenu({ view, onAct, onLook }));
 
   return (
     <div ref={ref} className="flex flex-col items-end gap-1.5">
-      <button
-        type="button"
-        disabled={view === null || !sandbox}
-        data-land={libraryEnds(view)}
-        aria-label={
-          sandbox ? `Library, ${cards}. Click to draw; right-click for more` : `Library, ${cards}`
+      {/* The pointer is read off a wrapper, not the button: a disabled button (the sandbox off)
+          may take no pointer events, and the top card is pointed at either way. */}
+      <div
+        className="flex"
+        data-point={top?.id}
+        onMouseEnter={
+          top === null || onPoint === undefined
+            ? undefined
+            : (e) =>
+                onPoint({
+                  card: top,
+                  ids: [top.id],
+                  place: "libraryTop",
+                  line: `Top of the library · ${cards}`,
+                  at: pointerAt(e),
+                })
         }
-        onClick={() => onAct({ type: "draw", count: 1 })}
-        onContextMenu={menu(build)}
-        onKeyDown={menuKey(build)}
-        style={boxOf(size)}
-        className={cn(
-          "flex h-[252px] w-[180px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
-          // The edges of the cards under the top one, two of them, the way a deck sits.
-          "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
-          over ? "border-accent" : "border-border",
-          PRESS,
-          FOCUS,
-          size?.compact && "relative",
-        )}
+        onMouseLeave={top === null ? undefined : onUnpoint}
       >
-        <GrimoireMark size={markSize(size)} className="text-accent" />
-        {size?.compact && (
-          <CardCount
-            count={count}
-            title={`${count} ${count === 1 ? "card" : "cards"} in the library`}
-          />
-        )}
-      </button>
+        <button
+          type="button"
+          disabled={view === null || !sandbox}
+          data-land={libraryEnds(view)}
+          aria-label={sandbox ? `${pile}. Click to draw; right-click for more` : pile}
+          onClick={() => onAct({ type: "draw", count: 1 })}
+          onContextMenu={menu(build)}
+          onKeyDown={menuKey(build)}
+          style={boxOf(size)}
+          className={cn(
+            "flex h-[252px] w-[180px] cursor-pointer items-center justify-center rounded-lg border bg-surface text-accent disabled:cursor-default",
+            // The edges of the cards under the top one, two of them, the way a deck sits.
+            "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]",
+            over ? "border-accent" : "border-border",
+            PRESS,
+            FOCUS,
+            size?.compact && "relative",
+            top !== null && "p-0",
+          )}
+        >
+          {top === null ? (
+            <GrimoireMark size={markSize(size)} className="text-accent" />
+          ) : (
+            <CardFace card={top} />
+          )}
+          {size?.compact && (
+            <CardCount
+              count={count}
+              title={`${count} ${count === 1 ? "card" : "cards"} in the library`}
+            />
+          )}
+        </button>
+      </div>
       {!size?.compact && <span className={ZONE_LABEL}>Library · {count}</span>}
     </div>
   );

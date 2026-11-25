@@ -8,7 +8,7 @@ import {
   ROW_EXPORT_FORMATS,
 } from "@grimoire/ui/features/transfer/formats";
 import { ExportExample } from "@grimoire/ui/features/transfer/export/ExportExample";
-import { MoreFormats } from "@grimoire/ui/features/transfer/export/MoreFormats";
+import { PresetPicker } from "@grimoire/ui/features/transfer/export/PresetPicker";
 import { useExportModel } from "@grimoire/ui/features/transfer/export/useExportModel";
 import type { TransferCard } from "@grimoire/ui/features/transfer/TransferCard";
 import { copyText } from "@grimoire/ui/lib/clipboard";
@@ -64,7 +64,7 @@ const ACTION = cn(
  * Arena and switched-off-pile filters, `formatExport` and the three count lines, for both faces,
  * so the file written here is byte for byte the file the desktop writes from the same cards and
  * the same choices (the golden suite's writers, unchanged). **What is the phone's own** is the
- * drawing — every control 44px, the formats as a wrapping row of chips and More formats — where
+ * drawing — every control 44px, the formats as a wrapping row of chips and Presets — where
  * the choices are remembered (`usePhoneTransferPrefs`, per surface, opening on the desktop's own
  * defaults), and
  * where the text goes: the host's clipboard through `@/lib/clipboard`, as the desktop dialog's
@@ -207,8 +207,9 @@ function Body({
 
         {/* The desktop's format picker in chips that wrap: the row's formats in `EXPORT_FORMATS`'
             own order — plain first, the desktop's deliberate order — one Tab stop and the arrows
-            choose (`radioKeys`); then the shared **More formats** dropdown for the rest (issue
-            #1702), so both faces split the formats in the same place (`EXPORT_FORMAT_PLACE`). */}
+            choose (`radioKeys`); then the shared **Presets** dropdown at the row's far end (issues
+            #1702 and #1726), so both faces split the formats in the same place
+            (`EXPORT_FORMAT_PLACE`). While a preset is chosen no chip is checked. */}
         <div className="flex flex-wrap items-center gap-2">
           <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
             {ROW_EXPORT_FORMATS.map((f, i) => (
@@ -216,12 +217,14 @@ function Body({
                 key={f}
                 type="button"
                 role="radio"
-                aria-checked={format === f}
+                aria-checked={model.preset === null && format === f}
                 onClick={() => model.chooseFormat(f)}
                 {...radioKeys(ROW_EXPORT_FORMATS, format, model.chooseFormat, i)}
                 className={cn(
                   "h-11 shrink-0 rounded-md border px-3 text-sm",
-                  format === f ? "border-accent text-accent" : "border-border text-dim",
+                  model.preset === null && format === f
+                    ? "border-accent text-accent"
+                    : "border-border text-dim",
                   PRESS_SOFT,
                   FOCUS,
                 )}
@@ -232,8 +235,15 @@ function Body({
           </div>
           {/* A full 44px, level with the chips. Their `px-3` (the desktop radios' own) is what
               keeps the four on one line from a 360px screen up, with this one under them —
-              at `px-3.5` they measured 331.5px against the sheet's 328 and CSV wrapped alone. */}
-          <MoreFormats format={format} onChoose={model.chooseFormat} className="h-11 px-3" />
+              at `px-3.5` they measured 331.5px against the sheet's 328 and CSV wrapped alone.
+              Right-aligned with a gap before it, the desktop's `ml-auto pl-6` (issue #1726). */}
+          <div className="ml-auto pl-6">
+            <PresetPicker
+              preset={model.preset}
+              onChoose={model.choosePreset}
+              className="h-11 px-3"
+            />
+          </div>
         </div>
 
         {model.available.length > 0 && (

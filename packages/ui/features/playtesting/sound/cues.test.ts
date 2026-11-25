@@ -44,6 +44,8 @@ describe("soundOf", () => {
     [{ type: "life", seat: "you", amount: 0, total: 20 }, null],
     [{ type: "lifeSet", seat: "you", life: 15, was: 20 }, "lifeLoss"],
     [{ type: "lifeSet", seat: "you", life: 25, was: 20 }, "lifeGain"],
+    [{ type: "manaChanged", kind: "red", delta: 1, floating: 1 }, "mana"],
+    [{ type: "manaChanged", kind: "red", delta: -1, floating: 0 }, null],
     [{ type: "dealt", source: "Bolt", target: "Bear", targetId: 4, seat: "you", amount: 0 }, null],
     [{ type: "gameOver", winner: "you" }, "win"],
     [{ type: "gameOver", winner: null }, "lose"],

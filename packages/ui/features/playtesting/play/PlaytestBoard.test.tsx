@@ -763,6 +763,14 @@ describe("PlaytestBoard's sandbox", () => {
     expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
   });
 
+  it("sets the pool's mana by hand with the sandbox on, and offers no stepper off (issue #1723)", () => {
+    const { onAct, rerender } = setup(sandboxed());
+    fireEvent.click(screen.getByRole("button", { name: "Increase Green mana in your pool" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "mana", kind: "green", delta: 1 });
+    rerender({ ...sandboxed(), sandbox: false });
+    expect(screen.queryByRole("button", { name: "Increase Green mana in your pool" })).toBeNull();
+  });
+
   describe("life steppers (issue #1593)", () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());

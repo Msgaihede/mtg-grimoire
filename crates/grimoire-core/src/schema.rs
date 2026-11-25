@@ -8896,6 +8896,10 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         if set_blocks_are_owed(conn, CORPUS)? {
             add_set_blocks(conn, CORPUS)?;
         }
+        // Not a rung — no shape moves and no version is owed — but a data repair asked on
+        // every launch for the rungs' own reason: a version gate would skip every converted
+        // database and every fresh install. See [`fill_face_illustrations`] (issue #1727).
+        fill_face_illustrations(conn, CORPUS)?;
     }
     if v < CORPUS_SCHEMA_VERSION {
         conn.execute_batch(&format!(
@@ -9328,6 +9332,52 @@ fn add_set_blocks(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Give a printing whose picture Scryfall keeps on its faces the front face's
+/// `illustration_id` — issue #1727.
+///
+/// Every layout with two physical sides (`reversible_card`, `transform`, `modal_dfc`,
+/// `double_faced_token`, `art_series`) has no top-level `illustration_id`, and until
+/// [`crate::card_row::CardRow::illustration_id`] learned to fall back to `card_faces[0]` those
+/// printings stored NULL and joined no art tag: `atag:star-trek` answered 698 cards where
+/// Scryfall answers 706, the missing eight all Secret Lair reversibles. The parser fixes every
+/// row the next card sync writes; this fixes the rows already on disk, so the fix arrives with
+/// the update rather than up to a day after it.
+///
+/// **From `faces`, which is `card_faces` verbatim** — never from `raw`, a gzip BLOB that
+/// `json_extract` raises on. **Idempotent and cheap enough to ask every launch**: it seeks
+/// `idx_cards_illustration` for the NULLs (4 977 printings before the fix, measured 2026-08-20;
+/// only those with no picture on any face after it) and writes nothing once the front
+/// faces' ids are in. **`json_valid` first**, so one damaged `faces` value is skipped rather
+/// than raising `malformed JSON` inside [`migrate_corpus`] and stopping the launch.
+///
+/// A `cards` missing either column — or missing outright — owes nothing, every rung's rule: a
+/// launch must survive a repair it cannot carry out.
+fn fill_face_illustrations(conn: &Connection, schema: &str) -> rusqlite::Result<usize> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(cards)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !["illustration_id", "faces"]
+        .iter()
+        .all(|want| names.iter().any(|n| n == want))
+    {
+        return Ok(0);
+    }
+    let front = "(CASE WHEN json_valid(faces) \
+                 THEN json_extract(faces, '$[0].illustration_id') END)";
+    conn.execute(
+        &on_schema(
+            schema,
+            &format!(
+                "UPDATE {{schema}}.cards SET illustration_id = {front} \
+                 WHERE illustration_id IS NULL AND faces IS NOT NULL \
+                   AND typeof({front}) = 'text'"
+            ),
+        ),
+        [],
+    )
 }
 
 /// Corpus schema 2: drop the combo feed's tables and build them again from head.
@@ -23473,6 +23523,78 @@ pub(crate) mod tests {
         assert!(!validates_is_owed(&conn, CORPUS).unwrap());
         assert!(!unspecified_format_is_owed(&conn, CORPUS).unwrap());
         migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    // ---- issue #1727: the picture on a two-sided printing's faces ----------------------
+
+    /// A printing stored before the parser's face fallback reads NULL in `illustration_id`
+    /// and joins no art tag. The launch fills it from the front face, leaves a top-level id
+    /// alone, skips a row with no id on any face or with damaged `faces` (without stopping the
+    /// launch), and twice is once.
+    #[test]
+    fn a_launch_fills_a_two_sided_printings_illustration_from_its_front_face() {
+        let conn = memory_pair();
+        let rows: [(&str, Option<&str>, Option<&str>); 5] = [
+            (
+                "blink",
+                None,
+                Some(
+                    r#"[{"name":"Momentary Blink","illustration_id":"front"},{"name":"Momentary Blink","illustration_id":"back"}]"#,
+                ),
+            ),
+            ("bolt", Some("top"), None),
+            (
+                "giant",
+                Some("top"),
+                Some(r#"[{"name":"Bonecrusher Giant","illustration_id":"face"}]"#),
+            ),
+            ("faceless", None, Some(r#"[{"name":"A"},{"name":"B"}]"#)),
+            ("damaged", None, Some("[{not json")),
+        ];
+        for (id, illustration, faces) in rows {
+            conn.execute(
+                "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, \
+                 illustration_id, faces, raw) VALUES (?1, ?1, 'sld', '1', 'en', 'normal', ?2, ?3, '{}')",
+                rusqlite::params![id, illustration, faces],
+            )
+            .unwrap();
+        }
+        let illustration = |id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT illustration_id FROM cards WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        migrate_corpus(&conn).expect("a damaged `faces` must not stop the launch");
+
+        assert_eq!(illustration("blink").as_deref(), Some("front"));
+        assert_eq!(illustration("bolt").as_deref(), Some("top"));
+        assert_eq!(
+            illustration("giant").as_deref(),
+            Some("top"),
+            "a top-level id is the printing's and is never overwritten"
+        );
+        assert_eq!(illustration("faceless"), None);
+        assert_eq!(illustration("damaged"), None);
+        assert_eq!(
+            fill_face_illustrations(&conn, CORPUS).unwrap(),
+            0,
+            "a second launch writes nothing"
+        );
+    }
+
+    /// A `cards` that is not there owes the repair nothing, every rung's rule.
+    #[test]
+    fn the_face_illustration_repair_survives_a_corpus_with_no_cards() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards;"
+        ))
+        .unwrap();
+        assert_eq!(fill_face_illustrations(&conn, CORPUS).unwrap(), 0);
     }
 
     // ---- corpus schema 8: the facts a printing and a set carry ------------------------

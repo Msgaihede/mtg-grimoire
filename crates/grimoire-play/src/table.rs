@@ -13,7 +13,7 @@ use engine::types::zones::Zone;
 use engine::types::{EffectRef, GameState, Layer, PlayerId};
 
 use crate::view::{
-    CardCounter, CardEffect, EffectKind, GameCard, Lane, ManaByType, ManaTable, Place,
+    CardCounter, CardEffect, EffectKind, GameCard, Lane, ManaByType, ManaKind, ManaTable, Place,
 };
 
 /// One object as a board draws it. `card_id` is the printing to draw it by, which only the
@@ -331,6 +331,18 @@ const KINDS: [ManaType; 6] = [
     ManaType::Green,
     ManaType::Colorless,
 ];
+
+/// The engine's type of mana for a column of the mana table.
+pub(crate) fn mana_type(kind: ManaKind) -> ManaType {
+    match kind {
+        ManaKind::White => ManaType::White,
+        ManaKind::Blue => ManaType::Blue,
+        ManaKind::Black => ManaType::Black,
+        ManaKind::Red => ManaType::Red,
+        ManaKind::Green => ManaType::Green,
+        ManaKind::Colorless => ManaType::Colorless,
+    }
+}
 
 impl ManaByType {
     fn cell(&mut self, kind: ManaType) -> &mut u32 {

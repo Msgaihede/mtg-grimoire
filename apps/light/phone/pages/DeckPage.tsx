@@ -14,9 +14,11 @@ import { useDeckCore, type DeckCore } from "@grimoire/ui/features/decks/useDeckC
 import { useDeckNotes } from "@grimoire/ui/features/decks/useDeckNotes";
 import { useDecks } from "@grimoire/ui/features/decks/useDecks";
 import { useFormatSpecs } from "@grimoire/ui/features/decks/useFormatSpecs";
+import { searchColorDefault } from "@grimoire/ui/features/decks/searchColorDefault";
 import { validateForMarks } from "@grimoire/ui/features/decks/validation/engine";
 import { ruleBreak, violationsBySlot, violationsFor } from "@grimoire/ui/features/decks/violations";
 import { GroupHeader } from "@grimoire/ui/features/decks/views/GroupHeader";
+import type { ColorKey } from "@grimoire/ui/features/search/useCardSearch";
 import { splitRail } from "@grimoire/ui/features/decks/views/columns";
 import { count } from "@grimoire/ui/lib/counts";
 import { FINISH_LABEL } from "@grimoire/ui/lib/finish";
@@ -286,6 +288,15 @@ function DeckColumn({
       spec?.hasLegalityData === true ? { value: row.formatKey, label: spec.displayName } : null,
     [row.formatKey, spec],
   );
+  /**
+   * The search's opening colours — the editor's `searchColorsDefault`: the command zone's colour
+   * identity, or `null` (issue #1725). Held on its letters, so a stepper press is not a new seed.
+   */
+  const seedColorKey = searchColorDefault(cards, spec)?.join("") ?? null;
+  const searchColors = useMemo(
+    () => (seedColorKey === null ? null : ([...seedColorKey] as ColorKey[])),
+    [seedColorKey],
+  );
 
   const stack = (group: CardGroup) => (
     <Stack
@@ -377,6 +388,7 @@ function DeckColumn({
         cards={cards}
         listWord={row.theoryEnabled ? (variant === "theory" ? "Theory" : "Actual") : null}
         defaultFormat={searchFormat}
+        defaultColors={searchColors}
         receipt={receipt}
         onClose={() => setAdding(false)}
       />

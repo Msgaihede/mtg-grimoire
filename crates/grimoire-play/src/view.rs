@@ -31,6 +31,19 @@ pub struct ManaByType {
     pub colorless: u32,
 }
 
+/// One type of mana, a column of the mana table — WUBRG and then colorless, `ManaByType`'s fields
+/// by name. What the sandbox adds to or takes from a pool (`PlaytestAction::Mana`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManaKind {
+    White,
+    Blue,
+    Black,
+    Red,
+    Green,
+    Colorless,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MulliganView {

@@ -508,6 +508,16 @@ export interface ColorFilter {
 export const NO_COLORS: ColorFilter = { picked: [], strict: false };
 
 /**
+ * A caller's default colours — a {@link colorParam} string, `""` for none — as the filter the row
+ * opens on: those letters, **loose** (issue #1725). Loose is the backend's subset reading, which
+ * is what a commander's identity means: every card that fits inside it, colourless included.
+ */
+export function colorFilterFor(defaultColors: string): ColorFilter {
+  if (!defaultColors) return NO_COLORS;
+  return { picked: MANA_KEYS.filter((c) => defaultColors.includes(c)), strict: false };
+}
+
+/**
  * Add or remove one colour, **leaving the flag alone**. See {@link ColorFilter}.
  *
  * It used to drop the flag with the last colour. That rule was the disappearing chip's — with
@@ -644,6 +654,20 @@ export interface CardSearchOptions {
    */
   defaultFormat?: FormatFilterOption | null;
   /**
+   * The colours the colour row opens on, or `null`/absent for none — the deck editor's answer for
+   * a deck with a commander: the command zone's colour identity (issue #1725, `searchColorDefault`
+   * in `features/decks/`). `["C"]` is a colourless commander's.
+   *
+   * {@link defaultFormat}'s contract exactly: **a default, never a constraint**. It seeds the row
+   * **loose** (`strict: false`), which is the backend's subset reading — every card whose identity
+   * fits inside these colours, colourless included — and so precisely the cards that may go in
+   * the deck. The reader can clear it or pick other colours, and Reset all clears it and it stays
+   * cleared until the default itself changes (a commander added, swapped or removed), the same
+   * render-phase guard the format uses. Read as its {@link colorParam} string, so a caller
+   * building the array inline costs nothing.
+   */
+  defaultColors?: readonly ColorKey[] | null;
+  /**
    * Which printings mode the view **opens** on — `false` (one row per card) unless a caller
    * says otherwise, which is what this hook has always answered.
    *
@@ -769,6 +793,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // Read once, and as a string rather than as the object: every caller builds that object
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
+  // The same for the colour row's default — its WUBRG string, `""` for none. See
+  // {@link CardSearchOptions.defaultColors}.
+  const defaultColorsValue = colorParam(options.defaultColors ?? []) ?? "";
   /**
    * The caller's tag chips — the search page's tag sidebar, and half of what finally rides.
    *
@@ -833,7 +860,23 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // **One state for the row and its `Exact` flag, not two** — one control's two halves, and one
   // value for `resetAll` to put back. {@link ColorFilter} carries the whole reading, including
   // the batching bug behind the rule that used to bind them and the reason that rule is gone.
-  const [colorFilter, setColorFilter] = useState<ColorFilter>(seed?.colorFilter ?? NO_COLORS);
+  //
+  // Seeded from the caller's default colours (issue #1725) for the format's reason above: the
+  // first request is already the narrowed one. A remembered row wins, and a set or text hand-off
+  // opens on no colours, both as the format does.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(() =>
+    options.initialSet || options.initialText
+      ? NO_COLORS
+      : (seed?.colorFilter ?? colorFilterFor(defaultColorsValue)),
+  );
+  // {@link appliedDefaultFormat}'s guard for the colour default: a commander added, swapped or
+  // removed re-seeds the row during render, so no request ever carries the previous commander's
+  // colours; a fresh array with the same letters changes nothing, and Reset all sticks.
+  const [appliedDefaultColors, setAppliedDefaultColors] = useState(defaultColorsValue);
+  if (defaultColorsValue !== appliedDefaultColors) {
+    setAppliedDefaultColors(defaultColorsValue);
+    setColorFilter(colorFilterFor(defaultColorsValue));
+  }
   const colors = colorFilter.picked;
   const colorsStrict = colorFilter.strict;
   // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
@@ -1540,6 +1583,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // read for. Counting it would caption a cold database's empty wall "try another word", and
   // there is no other word.
   const formatIsReaderSet = format !== "" && format !== ANY_CARD && format !== defaultFormatValue;
+  // The colour row's half of the same question (issue #1725): a commander's identity the caller
+  // seeded is not the reader asking, so an unsynced database under a Commander deck's panel is
+  // still captioned as empty rather than as a search that missed.
+  const colorsIsReaderSet = colorsParam !== undefined && colorsParam !== defaultColorsValue;
 
   return {
     text,
@@ -2051,7 +2098,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     unfiltered:
       !debouncedText &&
       !formatIsReaderSet &&
-      !colorsParam &&
+      !colorsIsReaderSet &&
       !setsParam &&
       !typesParamValue &&
       !bordersParamValue &&

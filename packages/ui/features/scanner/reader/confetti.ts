@@ -118,6 +118,32 @@ export const CONFETTI: Record<PriceTier, ConfettiSpec> = {
 export const DESIGN_HEIGHT = 600;
 
 /**
+ * The most device pixels the confetti's bitmap may hold — a 1080p picture's worth (issue #1724).
+ *
+ * **The pack opener's picture is the whole window**, and at the device pixel ratio a 2560×1440
+ * window at 150 % was a 3840×2109 bitmap: every frame of a burst cleared it, and the tier-three
+ * flash and the jackpot's glow filled it again, over a live camera picture — and in a pack opening
+ * a card lands every second or so, so one burst ran into the next. Measured on Chromium's software
+ * rasteriser (a WebView2 without GPU raster draws the same way), the stage fell from about 35
+ * frames a second to 10–20 and the scanner's pump starved with it. Confetti is small, fast and
+ * soft-edged; drawn at a lower density on a box that large, nobody can tell.
+ */
+export const MAX_CONFETTI_PIXELS = 1920 * 1080;
+
+/**
+ * The device pixels per CSS pixel the confetti's bitmap is drawn at, for a `width`×`height` box at
+ * `devicePixelRatio`: the ratio itself while the bitmap fits in {@link MAX_CONFETTI_PIXELS}, and
+ * below it, by the same factor on both axes, when it would not — so the camera column's box is as
+ * sharp as ever and only a picture past 1080p gives way. `0` for a box with no area.
+ */
+export function confettiRatio(width: number, height: number, devicePixelRatio: number): number {
+  const area = width * height;
+  if (!(area > 0)) return 0;
+  const ratio = devicePixelRatio > 0 ? devicePixelRatio : 1;
+  return Math.min(ratio, Math.sqrt(MAX_CONFETTI_PIXELS / area));
+}
+
+/**
  * The jackpot's second wave: **every third burst piece leaves late**, 320–460 ms after the rest,
  * so the burst reads as two pops rather than one bigger one. No other tier has one.
  */
@@ -327,6 +353,22 @@ export function glowAt(tier: PriceTier, ms: number): number | null {
   if (!CONFETTI[tier].glow) return null;
   if (ms < 0 || ms > GLOW_MS) return null;
   return Math.sin((Math.PI * ms) / GLOW_MS);
+}
+
+/** A rectangle as `fillRect` takes it: left, top, width, height, in the box's CSS pixels. */
+export type Rect = [number, number, number, number];
+
+/**
+ * The flash's square — the circle its gradient fades out in, clipped to the box — or `null` when
+ * none of it is inside. Past the radius the gradient is fully transparent, so nothing outside the
+ * square is ever drawn.
+ */
+export function flashSquare(box: ConfettiBox, radius: number): Rect | null {
+  const left = Math.max(0, box.originX - radius);
+  const top = Math.max(0, box.originY - radius);
+  const right = Math.min(box.width, box.originX + radius);
+  const bottom = Math.min(box.height, box.originY + radius);
+  return right > left && bottom > top ? [left, top, right - left, bottom - top] : null;
 }
 
 /**

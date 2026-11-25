@@ -27,6 +27,7 @@ import {
   toggleIn,
   typesParam,
   useCardSearch,
+  type ColorKey,
   type FormatFilterOption,
 } from "./useCardSearch";
 
@@ -1013,6 +1014,117 @@ describe("the default format filter", () => {
 
     rerender({ deck: OATHBREAKER });
     expect(result.current.format).toBe("oathbreaker");
+  });
+});
+
+/**
+ * The colours the panel opens on (issue #1725) — a Commander deck's docked search seeded with the
+ * commander's colour identity. The format default's contract, over the colour row: a starting
+ * position, loose, that the reader can clear and that only a changed commander puts back.
+ */
+describe("the default colour filter", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  const BANT: readonly ColorKey[] = ["G", "U", "W"];
+  const RAKDOS: readonly ColorKey[] = ["B", "R"];
+
+  const renderWithIdentity = (initial: readonly ColorKey[] | null) =>
+    renderHook(
+      ({ identity }: { identity: readonly ColorKey[] | null }) =>
+        useCardSearch({ defaultColors: identity }),
+      { wrapper, initialProps: { identity: initial } },
+    );
+
+  const searchRequestAt = (i: number) => searchCards.mock.calls[i][0] as SearchRequest;
+
+  it("opens on no colours when nobody passes one", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.colors).toEqual([]);
+    expect(searchRequestAt(0).colors).toBeUndefined();
+  });
+
+  /** Call zero: a seed corrected after mount would send the whole corpus first. Loose, in WUBRG
+   *  order — the subset reading is what a commander's identity means. */
+  it("opens on the identity it was given, loose, and the first request already carries it", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultColors: BANT }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.colors).toEqual(["W", "U", "G"]);
+    expect(result.current.colorsStrict).toBe(false);
+    expect(searchRequestAt(0).colors).toBe("WUG");
+    expect(searchRequestAt(0).colorsStrict).toBeUndefined();
+  });
+
+  it("re-points at a new commander's identity, over a reader's own pick", async () => {
+    const { result, rerender } = renderWithIdentity(BANT);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleColor("W"));
+    await waitFor(() => expect(lastSearchRequest().colors).toBe("UG"));
+
+    rerender({ identity: RAKDOS });
+
+    expect(result.current.colors).toEqual(["B", "R"]);
+    await waitFor(() => expect(lastSearchRequest().colors).toBe("BR"));
+  });
+
+  /** The commander arriving after the panel opened — added to the zone, or the deck still reading. */
+  it("applies an identity that arrives late, and drops it when the commander leaves", async () => {
+    const { result, rerender } = renderWithIdentity(null);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.colors).toEqual([]);
+
+    rerender({ identity: BANT });
+    expect(result.current.colors).toEqual(["W", "U", "G"]);
+    await waitFor(() => expect(lastSearchRequest().colors).toBe("WUG"));
+
+    rerender({ identity: null });
+    expect(result.current.colors).toEqual([]);
+    await waitFor(() => expect(lastSearchRequest().colors).toBeUndefined());
+  });
+
+  /** A fresh array with the same letters is what every caller re-render hands over. */
+  it("leaves a reader's own pick alone while the identity holds", async () => {
+    const { result, rerender } = renderWithIdentity(BANT);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleColor("W"));
+    rerender({ identity: ["W", "U", "G"] });
+
+    expect(result.current.colors).toEqual(["U", "G"]);
+  });
+
+  it("counts a seeded identity as no filter, while Reset all still offers to clear it", async () => {
+    const { result, rerender } = renderWithIdentity(BANT);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.unfiltered).toBe(true);
+    expect(result.current.activeCount).toBe(1);
+
+    act(() => result.current.resetAll());
+    expect(result.current.colors).toEqual([]);
+    expect(result.current.activeCount).toBe(0);
+    await waitFor(() => expect(lastSearchRequest().colors).toBeUndefined());
+
+    // Reset all sticks until the commander itself changes.
+    rerender({ identity: [...BANT] });
+    expect(result.current.colors).toEqual([]);
+    rerender({ identity: RAKDOS });
+    expect(result.current.colors).toEqual(["B", "R"]);
+  });
+
+  it("seeds a colourless commander's colourless-only chip", async () => {
+    const { result } = renderHook(() => useCardSearch({ defaultColors: ["C"] }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(result.current.colors).toEqual(["C"]);
+    expect(searchRequestAt(0).colors).toBe("C");
   });
 });
 

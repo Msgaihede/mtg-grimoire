@@ -20,7 +20,8 @@ import { markSize } from "../table/ZonePile";
  * their graveyard's and exile's cards through that look (`LibraryDialog`, the same places as the
  * reader's own, issue #1521) and their battlefield's through `Battlefield`'s menu. What the reader
  * may not see is not on the wire (`ipc/playtest.ts`): their hand and library are counts, drawn as
- * backs.
+ * backs — but for a library played with its top card revealed (`libraryTop`, issue #1722), whose
+ * top is drawn face up and pointed at.
  *
  * **Compact, always**: each zone's count is a `CountTag` on its card rather than a line under it,
  * so a column is the card's width and no more.
@@ -77,27 +78,63 @@ function Back({ size, className }: { size: ZoneSize; className?: string }): JSX.
   );
 }
 
-/** Their library: a back, its edges and its count. */
+/** The edges of the cards under a library's top one, two of them, the way a deck sits. */
+const DECK_EDGES =
+  "shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]";
+
+/** Their library: a back — or its revealed top card (`libraryTop`) — its edges and its count. */
 export function OpponentLibrary({
   seat,
   size,
   owner = THE_OPPONENTS,
+  onPoint,
+  onUnpoint,
 }: {
   seat: PlaytestSeat | null;
   size: ZoneSize;
   owner?: string;
+  /** The preview of a revealed top card. */
+  onPoint?: (pointed: Pointed) => void;
+  onUnpoint?: () => void;
 }): JSX.Element {
   const count = seat?.library ?? 0;
+  const n = `${count} ${count === 1 ? "card" : "cards"}`;
+  const top = seat?.libraryTop ?? null;
   return (
     <div
       role="img"
-      aria-label={`${capital(owner)} library, ${count} ${count === 1 ? "card" : "cards"}`}
+      aria-label={
+        top === null
+          ? `${capital(owner)} library, ${n}`
+          : `${capital(owner)} library, ${n}; ${top.name} revealed on top`
+      }
       className="relative"
+      data-point={top?.id}
+      onMouseEnter={
+        top === null || onPoint === undefined
+          ? undefined
+          : (e) =>
+              onPoint({
+                card: top,
+                ids: [top.id],
+                place: "libraryTop",
+                line: `Top of their library · ${n}`,
+                at: pointerAt(e),
+              })
+      }
+      onMouseLeave={top === null ? undefined : onUnpoint}
     >
-      <Back
-        size={size}
-        className="shadow-[2px_2px_0_var(--color-bg),3px_3px_0_var(--color-border),5px_5px_0_var(--color-bg),6px_6px_0_var(--color-border)]"
-      />
+      {top === null ? (
+        <Back size={size} className={DECK_EDGES} />
+      ) : (
+        <span
+          aria-hidden="true"
+          className={cn("block flex-none rounded-lg", DECK_EDGES)}
+          style={{ width: size.width, height: size.height }}
+        >
+          <CardFace card={top} />
+        </span>
+      )}
       <Count count={count} title={`${count} ${count === 1 ? "card" : "cards"} in their library`} />
     </div>
   );
