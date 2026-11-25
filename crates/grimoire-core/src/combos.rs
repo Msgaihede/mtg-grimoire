@@ -2295,12 +2295,24 @@ fn combo_card_names(conn: &Connection, combo_id: &str) -> Result<Vec<String>, St
 
 /// The combos `held` holds whole (`near` false) or all but one card of (`near` true), paged.
 ///
-/// **[`MATCH_SQL`]'s shape**: `hit` is built from `held` through `idx_combo_cards_oracle`, never
-/// from a scan of `combos`. For `near` the missing piece is the one `combo_cards` row whose
-/// oracle id is not held, joined to the printing [`newest_printing_sql`] picks — an inner join,
-/// so a piece no `cards` row resolves leaves its combo out, and [`push_card_filters`] narrows
-/// that printing by `format` and `identity`. A held combo has no missing piece to filter and so
-/// ignores both.
+/// **[`MATCH_SQL`]'s shape, driven from the held set**: `hit` is `held CROSS JOIN combo_cards`
+/// through `idx_combo_cards_oracle`, never a walk of `combo_cards` and never a scan of
+/// `combos`. (Left to itself the planner walks all ~394 000 `combo_cards` rows for the `GROUP
+/// BY`; the `CROSS JOIN` pins the outer loop to the small side, as [`OWNED_CTE`] does.)
+///
+/// For `near` the missing piece is **exactly one** `combo_cards` row: the first (by rowid) whose
+/// oracle id is not held — the store keeps two rows for a card a combo names twice, and a join
+/// would list that combo twice. It is narrowed by [`push_card_filters`] over an `EXISTS` on the
+/// missing card's printings, so a card no `cards` row resolves leaves its combo out, and `format`
+/// and `identity` (both oracle-level facts) are asked of any printing. **`paper_only: Some(false)`**:
+/// a digital-only printing of a card does not make it unplayable, and the filter's default would
+/// drop combos whose newest printing happens to be digital. A held combo has no missing piece to
+/// filter and so ignores both.
+///
+/// **One statement**: `total` rides along as `count(*) OVER ()`, and the page's printing
+/// ([`newest_printing_sql`]) and owned count are resolved only for the page's rows, in the outer
+/// query. A page past the end answers no row to read the total from, so that case asks again at
+/// offset 0.
 fn held_combos(
     conn: &Connection,
     held: Held,
@@ -2314,12 +2326,13 @@ fn held_combos(
     let offset = offset.max(0);
     let h = held.name;
     let mut filters = Predicates::default();
-    let (from, columns) = if near {
+    let (from, missing) = if near {
         push_card_filters(
             &mut filters,
             &CardFilters {
                 format: format.map(str::to_owned),
                 colors: identity.map(str::to_owned),
+                paper_only: Some(false),
                 ..Default::default()
             },
             "d",
@@ -2328,35 +2341,44 @@ fn held_combos(
         (
             format!(
                 "FROM hit JOIN combos c ON c.id = hit.combo_id
-                   JOIN combo_cards m ON m.combo_id = c.id
-                                     AND m.oracle_id NOT IN (SELECT oracle_id FROM {h})
-                   JOIN cards d ON d.id = {printing}
-                  WHERE hit.have = c.card_count - 1 AND c.card_count >= 2 AND {filters}",
-                printing = newest_printing_sql("m.oracle_id"),
+                   JOIN combo_cards m ON m.rowid =
+                        (SELECT min(x.rowid) FROM combo_cards x
+                          WHERE x.combo_id = c.id
+                            AND x.oracle_id NOT IN (SELECT oracle_id FROM {h}))
+                  WHERE hit.have = c.card_count - 1 AND c.card_count >= 2
+                    AND EXISTS (SELECT 1 FROM cards d
+                                 WHERE d.oracle_id = m.oracle_id AND {filters})",
                 filters = filters.where_sql(),
             ),
-            format!(
-                "m.oracle_id, m.name, m.quantity, m.must_be_commander, {owned}, d.id",
-                owned = crate::collection_source::copies_of_oracle(
-                    conn,
-                    "m.oracle_id",
-                    crate::collection_source::Availability::Everything,
-                )
-            ),
+            "m.oracle_id AS mo, m.name AS mn, m.quantity AS mq, m.must_be_commander AS mm",
         )
     } else {
         (
             "FROM hit JOIN combos c ON c.id = hit.combo_id WHERE hit.have = c.card_count"
                 .to_owned(),
-            "NULL, NULL, NULL, NULL, NULL, NULL".to_owned(),
+            "NULL AS mo, NULL AS mn, NULL AS mq, NULL AS mm",
         )
     };
-    let with = format!(
+    let sql = format!(
         "WITH {cte},
               hit AS (SELECT cc.combo_id, count(DISTINCT cc.oracle_id) AS have
-                        FROM combo_cards cc JOIN {h} ON {h}.oracle_id = cc.oracle_id
-                       GROUP BY cc.combo_id)",
-        cte = held.cte
+                        FROM {h} CROSS JOIN combo_cards cc ON cc.oracle_id = {h}.oracle_id
+                       GROUP BY cc.combo_id)
+         SELECT p.id, p.bracket_tag, p.template_count, p.produces, p.popularity,
+                p.mo, p.mn, p.mq, p.mm, {owned}, {printing}, p.total
+           FROM (SELECT c.id, c.bracket_tag, c.template_count, c.produces, c.popularity,
+                        {missing}, count(*) OVER () AS total
+                   {from}
+                  ORDER BY c.template_count, c.popularity DESC, c.id
+                  LIMIT ? OFFSET ?) p
+          ORDER BY p.template_count, p.popularity DESC, p.id",
+        cte = held.cte,
+        owned = crate::collection_source::copies_of_oracle(
+            conn,
+            "p.mo",
+            crate::collection_source::Availability::Everything,
+        ),
+        printing = newest_printing_sql("p.mo"),
     );
     // The held cards bind first, the filters' parameters next: the order they appear in the text.
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = held
@@ -2367,44 +2389,38 @@ fn held_combos(
     binds.append(&mut filters.params);
     let fail = |e: rusqlite::Error| format!("could not look for combos: {e}");
 
-    let total: i64 = conn
-        .prepare_cached(&format!("{with} SELECT count(*) {from}"))
-        .and_then(|mut s| {
-            s.query_row(params_from_iter(binds.iter().map(|b| b.as_ref())), |r| {
-                r.get(0)
+    let run = |limit: i64, offset: i64| -> Result<(i64, Vec<HeldCombo>), String> {
+        let mut args: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        args.push(&limit);
+        args.push(&offset);
+        let mut page = conn.prepare_cached(&sql).map_err(fail)?;
+        let rows: Vec<(HeldCombo, i64)> = page
+            .query_map(params_from_iter(args), |r| {
+                Ok((
+                    HeldCombo {
+                        id: r.get(0)?,
+                        bracket_tag: r.get(1)?,
+                        cards: Vec::new(),
+                        template_count: r.get(2)?,
+                        produces: r.get(3)?,
+                        popularity: r.get(4)?,
+                        missing: match r.get::<_, Option<String>>(5)? {
+                            Some(_) => Some(piece_at(r, 5)?),
+                            None => None,
+                        },
+                    },
+                    r.get(11)?,
+                ))
             })
-        })
-        .map_err(fail)?;
-
-    binds.push(Box::new(limit));
-    binds.push(Box::new(offset));
-    let mut page = conn
-        .prepare_cached(&format!(
-            "{with}
-             SELECT c.id, c.bracket_tag, c.template_count, c.produces, c.popularity, {columns}
-               {from}
-              ORDER BY c.template_count, c.popularity DESC, c.id
-              LIMIT ? OFFSET ?"
-        ))
-        .map_err(fail)?;
-    let rows: Vec<HeldCombo> = page
-        .query_map(params_from_iter(binds.iter().map(|b| b.as_ref())), |r| {
-            Ok(HeldCombo {
-                id: r.get(0)?,
-                bracket_tag: r.get(1)?,
-                cards: Vec::new(),
-                template_count: r.get(2)?,
-                produces: r.get(3)?,
-                popularity: r.get(4)?,
-                missing: match r.get::<_, Option<String>>(5)? {
-                    Some(_) => Some(piece_at(r, 5)?),
-                    None => None,
-                },
-            })
-        })
-        .and_then(|rows| rows.collect())
-        .map_err(fail)?;
-    let mut combos = rows;
+            .and_then(|rows| rows.collect())
+            .map_err(fail)?;
+        let total = rows.first().map_or(0, |(_, t)| *t);
+        Ok((total, rows.into_iter().map(|(c, _)| c).collect()))
+    };
+    let (mut total, mut combos) = run(limit, offset)?;
+    if combos.is_empty() && offset > 0 {
+        total = run(1, 0)?.0;
+    }
     for combo in &mut combos {
         combo.cards = combo_card_names(conn, &combo.id)?;
     }
@@ -4345,6 +4361,46 @@ mod tests {
         assert_eq!(none.total, 0, "p-c is legal in commander alone");
         let some = collection_combos(&conn, true, Some("commander"), Some("U"), 20, 0).unwrap();
         assert_eq!(some.total, 1);
+    }
+
+    /// A digital printing newer than the paper one is the "newest printing", and that must not
+    /// make the card unplayable: `paper_only` stays off for the missing card.
+    #[test]
+    fn a_missing_card_whose_newest_printing_is_digital_is_still_offered() {
+        let db = stored(&[ranked_variant("tri", Some(5), &[A, B, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        conn.execute(
+            "UPDATE cards SET released_at = '2000-01-01' WHERE id = 'p-c'",
+            [],
+        )
+        .unwrap();
+        seed_legal_card(&conn, "p-c-arena", "o-c", "Card C", "U", true);
+        conn.execute(
+            "UPDATE cards SET is_paper = 0, released_at = '2020-01-01' WHERE id = 'p-c-arena'",
+            [],
+        )
+        .unwrap();
+        let deck = vec!["p-a".to_owned(), "p-b".to_owned()];
+        let page = near_combos(&conn, &deck, Some("commander"), Some("U"), 20, 0).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(
+            page.combos[0].missing.as_ref().unwrap().card_id.as_deref(),
+            Some("p-c-arena"),
+            "the piece still names the newest printing"
+        );
+    }
+
+    /// The store keeps two rows for a card a combo names twice; one combo is one answer.
+    #[test]
+    fn a_combo_naming_the_missing_card_twice_is_offered_once() {
+        let db = stored(&[ranked_variant("twice", Some(5), &[A, C, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        let page = near_combos(&conn, &["p-a".to_owned()], None, None, 20, 0).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(held_ids(&page), vec!["twice"]);
+        assert_eq!(page.combos[0].missing.as_ref().unwrap().oracle_id, "o-c");
     }
 
     #[test]
