@@ -9,6 +9,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { useSearchOpen } from "@/features/search/useSearchOpen";
+import type { ColorKey } from "@/features/search/useCardSearch";
 import { LAYER } from "@/lib/layers";
 import {
   ipc,
@@ -134,6 +135,7 @@ import { ValidationPanel } from "./ValidationPanel";
 import { DraftDeckBar } from "@/features/draft/deck/DraftDeckBar";
 import { withoutCollectionAdds } from "@/features/draft/deck/draftMenu";
 import { returnToDraftPage } from "@/features/draft/navigation";
+import { searchColorDefault } from "./searchColorDefault";
 import { validateForMarks } from "./validation/engine";
 import { sameViolations, violationsBySlot } from "./violations";
 
@@ -2893,6 +2895,22 @@ export function DeckEditor({
   );
 
   /**
+   * What the docked panel's **colour row** opens on — the command zone's colour identity, or
+   * `null` (issue #1725). `searchColorDefault` is the rule; it reads the validator's own
+   * `commanderIdentity`, so the wall opens on exactly the cards the identity check would pass.
+   *
+   * Held still on its letters, for {@link searchFormatDefault}'s reason: `deck.cards` is a new
+   * array on every stepper press (issue #1402), and a new array here would redraw the memoised
+   * column's whole wall for a commander that had not moved. The panel re-seeds only when the
+   * letters change — a commander added, swapped or removed.
+   */
+  const seedColorKey = searchColorDefault(deck.cards, spec)?.join("") ?? null;
+  const searchColorsDefault = useMemo(
+    () => (seedColorKey === null ? null : ([...seedColorKey] as ColorKey[])),
+    [seedColorKey],
+  );
+
+  /**
    * Which rows on screen the plan also asks for — the four views' theory tick.
    *
    * **`deckTheorySlots`, and emphatically not a second `deck_get` of the other variant.** That
@@ -3985,6 +4003,7 @@ export function DeckEditor({
           // {@link tracks} here and `DeckSearchPanelProps.tracksCollection` there.
           tracksCollection={tracks}
           defaultFormat={searchFormatDefault}
+          defaultColors={searchColorsDefault}
           open={panelOpen}
           setOpen={setPanelOpen}
           cardMenu={panelCardMenu}

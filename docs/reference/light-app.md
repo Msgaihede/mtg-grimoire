@@ -2114,7 +2114,9 @@ button, because a button floating over the right edge would sit on the rows' own
 card database as a full-height sheet (`deck/AddCards.tsx`) through the Search page's own line and
 wall — `SearchLine` and `SearchResults`, split out of `SearchPage` for it — over `useCardSearch`
 with the deck's format as the opening filter where the database can answer it (the editor's
-`searchFormatDefault`) and `availableForDeck`. **A press on a tile adds one copy** (the tile's name
+`searchFormatDefault`), a commander deck's colour identity as the opening colours (the editor's
+`searchColorsDefault`, issue #1725 — loose, so every card that fits the deck) and
+`availableForDeck`. **A press on a tile adds one copy** (the tile's name
 starts `Add …`), through `addCard` with `deckDefault`: the pile Deck settings names, else the pile
 the card's Oracle tags file it under. The foot says what was added and how many of that printing the
 list now holds. The filters sheet opens over it, stacked inside its panel.

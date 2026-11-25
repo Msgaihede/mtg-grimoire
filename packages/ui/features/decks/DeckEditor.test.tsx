@@ -2660,6 +2660,40 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * Issue #1725: a Commander deck's docked search opens on the commander's colour identity —
+   * loose, so every card that fits the deck — and a deck with no commander opens on none.
+   */
+  it("opens the docked search on the commander's colour identity", async () => {
+    const kirk = card({
+      name: "Captain Kirk, Boldly Going",
+      categoryKind: "commander",
+      typeLine: "Legendary Creature — Human Officer",
+      colorIdentity: "GUW",
+    });
+    deckGet.mockResolvedValue(
+      detail({ formatKey: "commander", formatName: "Commander" }, [kirk, bolt()]),
+    );
+
+    await open();
+    await openSearchPanel();
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const asked = searchCards.mock.calls.map((c) => (c[0] as { colors?: string }).colors);
+    expect(asked.at(-1)).toBe("WUG");
+    // Never the whole corpus first: every request the panel made already carried the identity.
+    expect(asked.every((colors) => colors === "WUG")).toBe(true);
+  });
+
+  it("opens the docked search on no colours for a deck without a commander", async () => {
+    await open();
+    await openSearchPanel();
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const last = searchCards.mock.calls.at(-1)?.[0] as { colors?: string };
+    expect(last.colors).toBeUndefined();
+  });
+
+  /**
    * **A card opened from the deck outlives the deck going away under it.**
    *
    * The pane that used to draw this sentence was the editor's own — a sticky overlay over one of

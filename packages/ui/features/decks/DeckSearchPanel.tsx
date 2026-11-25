@@ -15,7 +15,11 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { CardSearchBody } from "@/features/search/CardSearchBody";
 import { CardSearchPanel } from "@/features/search/CardSearchPanel";
-import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
+import {
+  useCardSearch,
+  type ColorKey,
+  type FormatFilterOption,
+} from "@/features/search/useCardSearch";
 import { useSearchOpen } from "@/features/search/useSearchOpen";
 import { soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -372,6 +376,22 @@ export interface DeckSearchPanelProps {
    */
   defaultFormat?: FormatFilterOption | null;
   /**
+   * The colours the filter row's colour chips **open** on — the open deck's commander identity
+   * (issue #1725), worked out by `DeckEditor` (`searchColorDefault`) and handed down for
+   * {@link DeckSearchPanelProps.defaultFormat}'s reason. `["C"]` is a colourless commander's.
+   *
+   * {@link DeckSearchPanelProps.defaultFormat}'s contract: **a default, never a constraint**.
+   * It is seeded loose — the subset reading, every card whose identity fits inside the
+   * commander's — so it narrows the wall to what the deck may hold, and the reader can clear it
+   * or press other colours, and a card they then add is added; an off-identity card is
+   * `validation/`'s rule break once it is in the deck.
+   *
+   * `null` and absent both mean no colours: a deck with no commander rule, or one whose command
+   * zone is still empty. **Must be a stable reference** — the panel is memoised; the editor
+   * memoises it on its letters.
+   */
+  defaultColors?: readonly ColorKey[] | null;
+  /**
    * What the *reader* last chose about the disclosure, and it starts **open** — on this deck, on
    * the next one, and on the next launch (issue #183, 2026-08-22). What is drawn is this and
    * {@link roomy} together.
@@ -501,6 +521,7 @@ export const DeckSearchPanel = memo(function DeckSearchPanel({
   targetCategoryId,
   tracksCollection,
   defaultFormat,
+  defaultColors,
   open: openProp,
   setOpen: setOpenProp,
   cardMenu,
@@ -595,6 +616,7 @@ export const DeckSearchPanel = memo(function DeckSearchPanel({
           deckId={deckId}
           targetCategoryId={targetCategoryId}
           defaultFormat={defaultFormat}
+          defaultColors={defaultColors}
           inDeck={inDeck}
         />
       ) : (
@@ -605,6 +627,7 @@ export const DeckSearchPanel = memo(function DeckSearchPanel({
           categories={categories}
           targetCategoryId={targetCategoryId}
           defaultFormat={defaultFormat}
+          defaultColors={defaultColors}
           deckId={deckId}
           cardMenu={cardMenu}
           cardMenuKey={cardMenuKey}
@@ -774,6 +797,7 @@ function OpenPanel({
   deckId,
   targetCategoryId,
   defaultFormat,
+  defaultColors,
   cardMenu,
   cardMenuKey,
   inDeck,
@@ -786,6 +810,7 @@ function OpenPanel({
   | "deckId"
   | "targetCategoryId"
   | "defaultFormat"
+  | "defaultColors"
   | "cardMenu"
   | "cardMenuKey"
 > & { inDeck: ReadonlyMap<string, number> }) {
@@ -815,7 +840,9 @@ function OpenPanel({
   // now the two tabs of one panel disagreed about the same card — issue #349. The deck's own
   // group still counts, which is what keeps this number and the deck row's "you own 2 of 4"
   // one story rather than two.
-  const search = useCardSearch({ defaultFormat, availableForDeck: deckId });
+  // The commander's colour identity seeds the colour row the same way (issue #1725) — see
+  // {@link DeckSearchPanelProps.defaultColors}.
+  const search = useCardSearch({ defaultFormat, defaultColors, availableForDeck: deckId });
 
   // Read here rather than handed down: the shell's own `selectedCardId` is for the caret effect,
   // and this is the wall's selection. One field, two subscriptions, no round trip either side.
