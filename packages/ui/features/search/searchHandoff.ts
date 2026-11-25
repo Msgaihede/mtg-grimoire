@@ -72,6 +72,8 @@ export function handoffReport(wall: HandoffWall): SearchShownReport | null {
  * The id applied names the search on screen: `SearchPage` changes it in the same render as the
  * filters, so the first wall read under a new id is already that search's. A hand-off that changes
  * no filter refetches nothing and is reported at once, because the rows on screen are its answer.
+ * A reader who changes the search after a hand-off lands but before its wall settles has the report
+ * describe the wall as it then is, under the agent's id — `keywords` and `words` show the difference.
  * The last id sent is a ref rather than state, so the effect sets nothing. A refused send is
  * dropped: the tool's own timeout already tells the agent the page did not answer.
  */

@@ -6050,6 +6050,17 @@ describe("the local MCP server's wrappers name the commands mcp/mod.rs declares"
     ).toBeGreaterThan(0);
     expect(declared("mcp_set_port")).toEqual([["port", "u16"]]);
   });
+
+  it("mcp_search_shown declares `id: u64` and `report: SearchShownReport`, the names the wrapper sends", () => {
+    expect(
+      Object.keys(MCP_SOURCES).length,
+      "nothing read under src-tauri/src/mcp/",
+    ).toBeGreaterThan(0);
+    expect(declared("mcp_search_shown")).toEqual([
+      ["id", "u64"],
+      ["report", "SearchShownReport"],
+    ]);
+  });
 });
 
 /**

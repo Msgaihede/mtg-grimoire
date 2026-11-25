@@ -1985,7 +1985,9 @@ describe("SearchPage — a search handed over by an agent", () => {
     });
     wrap(<SearchPage />);
     await userEvent.type(screen.getByPlaceholderText(/search cards/i), "goblin");
-    await waitFor(() => expect(lastRequest().text).toBe("goblin"));
+    // A colour the reader picked, which the agent's search does not name either.
+    await userEvent.click(screen.getByRole("button", { name: /blue/i }));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ text: "goblin", colors: "U" }));
     expect(lastRequest().artTags).toEqual({ include: ["dragon"], exclude: [] });
     act(() =>
       useAppStore
@@ -2008,14 +2010,40 @@ describe("SearchPage — a search handed over by an agent", () => {
 
   it("reports the wall's answer once, for the latest hand-off only", async () => {
     wrap(<SearchPage />);
-    act(() => {
-      useAppStore.getState().showSearchHandoff(handoff({ id: 3 }));
-      useAppStore.getState().showSearchHandoff(handoff({ id: 4, text: "t:instant" }));
+    await screen.findByText("Lightning Bolt");
+    // Each hand-off's search held in flight, so id 4 lands while id 3's is still unanswered.
+    const held = (): ((response: SearchResponse) => void) => {
+      let answer: (response: SearchResponse) => void = () => {};
+      searchCards.mockImplementationOnce(
+        () =>
+          new Promise<SearchResponse>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      return (response) => answer(response);
+    };
+    const answerThree = held();
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 3 })));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ rarities: ["rare"] }));
+    const threeAsked = searchCards.mock.calls.length;
+    const answerFour = held();
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 4, text: "t:instant" })));
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(threeAsked));
+    expect(lastRequest().predicates).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "instant" })]),
+    );
+    expect(mcpSearchShown).not.toHaveBeenCalled();
+    await act(async () => answerThree(page([BOLT], 30)));
+    await act(async () => answerFour(page([BOLT], 40)));
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalled());
+    // Let every render and effect the two answers set off run before counting.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
     });
-    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledTimes(1));
+    expect(mcpSearchShown).toHaveBeenCalledTimes(1);
     expect(mcpSearchShown).toHaveBeenCalledWith(
       4,
-      expect.objectContaining({ keywords: expect.arrayContaining(["t:instant"]) }),
+      expect.objectContaining({ total: 40, keywords: expect.arrayContaining(["t:instant"]) }),
     );
   });
 
@@ -2023,8 +2051,11 @@ describe("SearchPage — a search handed over by an agent", () => {
     wrap(<SearchPage />);
     act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 5 })));
     await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledWith(5, expect.anything()));
+    const asked = searchCards.mock.calls.length;
     act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 6 })));
     await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledWith(6, expect.anything()));
+    // Answered by the rows already on screen, not by a search of its own.
+    expect(searchCards.mock.calls.length).toBe(asked);
   });
 
   it("waits for the hand-off's own rows, not the last search's left on screen", async () => {

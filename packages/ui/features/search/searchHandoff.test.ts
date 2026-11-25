@@ -19,6 +19,17 @@ describe("the text an agent's search puts in the box", () => {
       expect(parseQuery(text).predicates).toHaveLength(1);
     }
   });
+
+  /** Rust groups an agent's text holding an `or` before it appends a keyword: the group is one
+   *  term and the keyword another, both narrowing the whole wall. */
+  it("reads an agent's grouped `or` and the keyword after it as two terms", () => {
+    const parsed = parseQuery("(t:goblin or t:elf) is:gamechanger");
+    expect(parsed.text).toBe("");
+    expect(parsed.tags).toEqual([]);
+    expect(parsed.predicates).toHaveLength(2);
+    // Ungrouped, the keyword is the elf's alone: the whole is one `or`.
+    expect(parseQuery("t:goblin or t:elf is:gamechanger").predicates).toHaveLength(1);
+  });
 });
 
 describe("handoffReport", () => {
