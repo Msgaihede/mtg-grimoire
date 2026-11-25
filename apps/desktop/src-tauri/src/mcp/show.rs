@@ -1,5 +1,7 @@
-//! **`show_search`'s translation** — an agent's text and checked filters into what the Search
-//! page's bar holds ([`SearchHandoff`]). Pure: no state, no window. A value the bar has a control
+//! **`show_search`** — an agent's text and checked filters into what the Search page's bar holds
+//! ([`handoff`], pure), the one hand-off waiting for its page's answer ([`ShowSearch`], on
+//! `AppState`, reaching windows only through [`SearchWindows`]), the tool's answer ([`answer`],
+//! pure) and the page's command that reports ([`mcp_search_shown`]). A value the bar has a control
 //! for lands on the control; one it has none for goes into the text as a term, so the page shows
 //! the whole of the search and nothing is silently dropped.
 
@@ -67,6 +69,29 @@ pub struct SearchHandoff {
     pub all_printings: Option<bool>,
 }
 
+impl SearchHandoff {
+    /// Whether the search narrows the wall at all — text, or any filter. `sort` and
+    /// `allPrintings` order and group the wall and narrow nothing, so a hand-off with only those
+    /// would put the reader's page down for every card.
+    pub(super) fn narrows(&self) -> bool {
+        !self.text.is_empty()
+            || self.format.is_some()
+            || !self.colors.is_empty()
+            || !self.types.is_empty()
+            || !self.rarities.is_empty()
+            || !self.sets.is_empty()
+            || !self.mana_values.is_empty()
+            || self.mana_x
+            || self.owned.is_some()
+            || self.price_min.is_some()
+            || self.price_max.is_some()
+            || !self.borders.is_empty()
+            || !self.finishes.is_empty()
+            || self.universe.is_some()
+            || !self.tags.is_empty()
+    }
+}
+
 /// A sort the agent asked for; `dir` is `"asc"` or `"desc"`.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -78,16 +103,20 @@ pub struct HandoffSort {
 /// The page's shape of a search: the text the agent typed, then the terms the bar has no control
 /// for (`is:gamechanger`, a format outside the picker, a rarity with no chip), joined by single
 /// spaces. `id` is 0 here.
+///
+/// **Text holding an `or` is grouped before a term is appended.** The page binds terms side by side
+/// tighter than `or` (`queryLanguage.ts`), so `t:goblin or t:elf` and `is:gamechanger` would be a
+/// goblin, or an elf game changer; `(t:goblin or t:elf) is:gamechanger` is what the agent asked.
+/// Any whitespace-separated `or` (in any case) counts, a nested one too, where an extra pair of
+/// parentheses changes nothing. Text with no `or`, or with nothing appended, is left as typed.
 pub(super) fn handoff(
     text: Option<&str>,
     f: &CheckedFilters,
     sort: Option<HandoffSort>,
     all_printings: Option<bool>,
 ) -> SearchHandoff {
+    let typed = text.map(str::trim).filter(|t| !t.is_empty());
     let mut parts: Vec<String> = Vec::new();
-    if let Some(t) = text.map(str::trim).filter(|t| !t.is_empty()) {
-        parts.push(t.to_owned());
-    }
     if f.game_changer {
         parts.push("is:gamechanger".to_owned());
     }
@@ -113,12 +142,23 @@ pub(super) fn handoff(
         });
         Vec::new()
     };
+    if let Some(t) = typed {
+        let holds_or = t.split_whitespace().any(|w| w.eq_ignore_ascii_case("or"));
+        parts.insert(
+            0,
+            if holds_or && !parts.is_empty() {
+                format!("({t})")
+            } else {
+                t.to_owned()
+            },
+        );
+    }
     SearchHandoff {
         id: 0,
         text: parts.join(" "),
         format,
         colors: f.colors.clone(),
-        colors_strict: f.colors_exact.unwrap_or(false),
+        colors_strict: f.colors_exact.unwrap_or(false) && !f.colors.is_empty(),
         types: f.types.iter().map(|t| (*t).to_owned()).collect(),
         rarities,
         sets: f.sets.clone(),
@@ -183,6 +223,12 @@ impl SearchWindows for Detached {
 type Waiting = Option<(u64, oneshot::Sender<Outcome>)>;
 
 /// The one hand-off waiting for its page's answer.
+///
+/// **Two overlapping calls may take the slot in one order and reach the window in the other**: the
+/// slot is taken before the window is sent the search, on the blocking pool, so the later call's
+/// search can arrive first. The window then shows the search that was answered "replaced", and the
+/// one left waiting times out with `shown: null`. Accepted: only parallel tool calls reach it, and
+/// the tool asks the agent to call once per yes.
 pub struct ShowSearch {
     windows: Arc<dyn SearchWindows>,
     wait: Duration,
@@ -289,6 +335,7 @@ pub fn answer(shown: &Shown, outcome: Option<Outcome>) -> Value {
             out.insert("keywords".into(), json!(r.keywords));
             out.insert("words".into(), json!(r.words));
             out.insert("unknownTags".into(), json!(r.unknown_tags));
+            out.insert("failure".into(), json!(r.failure));
         }
         Some(Outcome::Replaced) => {
             notes.push("A later search replaced this one.".to_owned());
@@ -415,11 +462,19 @@ mod tests {
             note.contains("no cards") && note.contains("cube:vintage"),
             "{note}"
         );
+        assert_eq!(
+            empty.get("failure"),
+            Some(&Value::Null),
+            "an answer with no failure says so"
+        );
         let failed = SearchShownReport {
             failure: Some("The tag list could not be read.".into()),
             ..report(0, "")
         };
-        assert!(answer(&front, Some(Outcome::Reported(failed)))["note"]
+        let failed = answer(&front, Some(Outcome::Reported(failed)));
+        assert_eq!(failed["shown"], true);
+        assert_eq!(failed["failure"], "The tag list could not be read.");
+        assert!(failed["note"]
             .as_str()
             .unwrap()
             .contains("could not be read"));
@@ -524,6 +579,83 @@ mod tests {
         );
     }
 
+    /// The page binds terms side by side tighter than `or` (`queryLanguage.ts`), so a term
+    /// appended after an agent's `a or b` would narrow `b` alone. Such text is grouped first;
+    /// text with no `or`, or with nothing appended, is left as the agent typed it.
+    #[test]
+    fn text_holding_an_or_is_grouped_before_a_term_is_appended() {
+        let gc = CheckedFilters {
+            game_changer: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            handoff(Some("t:goblin or t:elf"), &gc, None, None).text,
+            "(t:goblin or t:elf) is:gamechanger"
+        );
+        let premodern = CheckedFilters {
+            format: Some("premodern".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            handoff(Some("T:Goblin OR t:elf"), &premodern, None, None).text,
+            "(T:Goblin OR t:elf) f:premodern"
+        );
+        assert_eq!(
+            handoff(Some("bolt"), &gc, None, None).text,
+            "bolt is:gamechanger"
+        );
+        assert_eq!(
+            handoff(
+                Some("t:goblin or t:elf"),
+                &CheckedFilters::default(),
+                None,
+                None
+            )
+            .text,
+            "t:goblin or t:elf"
+        );
+    }
+
+    #[test]
+    fn a_search_narrows_by_its_text_or_a_filter_and_never_by_its_order() {
+        assert!(!blank().narrows());
+        let ordered = handoff(
+            Some("   "),
+            &CheckedFilters {
+                colors_exact: Some(true),
+                ..Default::default()
+            },
+            Some(HandoffSort {
+                key: "price".into(),
+                dir: "desc".into(),
+            }),
+            Some(true),
+        );
+        assert!(!ordered.colors_strict, "colorsExact with no colours");
+        assert!(!ordered.narrows(), "{ordered:?}");
+        assert!(handoff(Some("bolt"), &CheckedFilters::default(), None, None).narrows());
+        for f in [
+            CheckedFilters {
+                owned: Some(false),
+                ..Default::default()
+            },
+            CheckedFilters {
+                mana_x: true,
+                ..Default::default()
+            },
+            CheckedFilters {
+                universe: Some("within".into()),
+                ..Default::default()
+            },
+            CheckedFilters {
+                price_min: Some(1.0),
+                ..Default::default()
+            },
+        ] {
+            assert!(handoff(None, &f, None, None).narrows(), "{f:?}");
+        }
+    }
+
     #[test]
     fn the_rest_is_carried_in_the_pages_shape() {
         let tag = TagRef {
@@ -551,6 +683,14 @@ mod tests {
         assert_eq!(
             (h.colors.clone(), h.colors_strict),
             (vec!["U".to_owned(), "R".to_owned()], true)
+        );
+        let colourless_exact = CheckedFilters {
+            colors_exact: Some(true),
+            ..Default::default()
+        };
+        assert!(
+            !handoff(None, &colourless_exact, None, None).colors_strict,
+            "colorsExact with no colours sets no strictness the bar would draw"
         );
         assert_eq!(h.tags, [tag]);
         assert_eq!(h.sort, Some(sort));

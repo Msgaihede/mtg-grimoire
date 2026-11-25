@@ -169,6 +169,8 @@ Blue and red instants under 3 mana that draw a card, priciest first:
 - `shown: true`: the page answered. `total` is how many cards it shows (with `totalIsCapped`, at
   least that many), `keywords` the terms it read as keywords, `words` what it searched as plain
   words, and `unknownTags` any tag named in `text` that names no tag.
+- `failure`: the page shows no cards, and this is why (its search or its tag lookup failed). Tell
+  the user; `null` when nothing failed.
 - `total: 0` with a `:` term left in `words`, or a name in `unknownTags`: the page did not read
   that term (a typo, syntax from the list above, or a tag name `find_tags` would spell otherwise).
   Fix it and offer the corrected search; it is a new call, so ask again.

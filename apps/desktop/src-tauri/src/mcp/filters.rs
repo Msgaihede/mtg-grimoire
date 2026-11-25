@@ -10,6 +10,9 @@
 
 use super::tools::{format_key, run, Args};
 use crate::sync::AppState;
+// The words of the page's border, finish and universe chips are the core's, as the search the
+// page runs reads them.
+use grimoire_core::filters::{BORDER_KEYS, FINISH_KEYS, UNIVERSE_KEYS};
 use grimoire_core::tags::query::TagRef;
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -50,10 +53,6 @@ pub(super) const SHOW_FIELDS: [&str; 16] = [
     "finishes",
     "universe",
 ];
-
-const BORDERS: [&str; 3] = ["regular", "borderless", "fullart"];
-const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
-const UNIVERSES: [&str; 2] = ["beyond", "within"];
 
 /// What a `filters` object came to once every value was checked.
 #[derive(Debug, Default, Clone)]
@@ -192,14 +191,14 @@ pub(super) async fn checked(
         }
     }
     out.game_changer = filters.flag("gameChanger")?;
-    out.borders = words_of(filters, "borders", &BORDERS)?;
-    out.finishes = words_of(filters, "finishes", &FINISHES)?;
+    out.borders = words_of(filters, "borders", &BORDER_KEYS)?;
+    out.finishes = words_of(filters, "finishes", &FINISH_KEYS)?;
     if let Some(typed) = filters.text("universe")? {
         let typed = typed.to_lowercase();
-        if !UNIVERSES.contains(&typed.as_str()) {
+        if !UNIVERSE_KEYS.contains(&typed.as_str()) {
             return Err(format!(
                 "filters.universe cannot be {typed:?}; use one of: {}.",
-                UNIVERSES.join(", ")
+                UNIVERSE_KEYS.join(", ")
             ));
         }
         out.universe = Some(typed);

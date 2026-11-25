@@ -436,7 +436,8 @@ pub fn list() -> Vec<Value> {
             concat!(
                 "How to do a kind of task with these tools: the text of this server's prompt of ",
                 "that name, for when the user has not picked it. search_cards: finding cards by ",
-                "name and by filters in the database, the collection and the wishlist; ",
+                "name and by filters in the database, the collection and the wishlist, and ",
+                "showing a search in the app; ",
                 "create_widget: building a custom home-page widget; graphql_discovery: the read ",
                 "graph, for anything else in the user's data; card_interactions: what a card does, ",
                 "its combos, oracle tags, related and similar cards, its Scryfall record and format ",
@@ -885,6 +886,13 @@ fn matches_words(name: &str, query: Option<&str>) -> bool {
     })
 }
 
+/// `show_search`'s refusal of a call that narrows nothing — no text, no filter, or filters that are
+/// all empty (`{"colors": []}`): shown, it would put the reader's page down for every card.
+const SHOW_SEARCH_NEEDS: &str = concat!(
+    "show_search needs text (the Search box's words, in Scryfall syntax) ",
+    "or at least one field in filters."
+);
+
 /// `show_search`: the search checked as `find_cards` checks it, then handed to the app's window.
 /// Every refusal comes before any window changes.
 async fn show_search(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
@@ -905,11 +913,7 @@ async fn show_search(state: &Arc<AppState>, args: &Args) -> Result<Value, String
         Some(_) => return Err("filters must be an object.".to_owned()),
     };
     if text.is_none() && filters.is_none() {
-        return Err(concat!(
-            "show_search needs text (the Search box's words, in Scryfall syntax) ",
-            "or at least one field in filters."
-        )
-        .to_owned());
+        return Err(SHOW_SEARCH_NEEDS.to_owned());
     }
     let sort = match args.0.get("sort") {
         None | Some(Value::Null) => None,
@@ -944,6 +948,9 @@ async fn show_search(state: &Arc<AppState>, args: &Args) -> Result<Value, String
         None => super::filters::CheckedFilters::default(),
     };
     let handoff = super::show::handoff(text.as_deref(), &checked, sort, all_printings);
+    if !handoff.narrows() {
+        return Err(SHOW_SEARCH_NEEDS.to_owned());
+    }
     state.show_search.show(handoff).await
 }
 
@@ -2561,6 +2568,12 @@ mod tests {
         for (args, word) in [
             (json!({}), "text"),
             (json!({ "filters": {} }), "text"),
+            // Filters that narrow nothing are the empty call, and would wipe the reader's page.
+            (json!({ "filters": { "colors": [] } }), "text"),
+            (
+                json!({ "text": "  ", "filters": { "colorsExact": true, "gameChanger": false }, "sort": { "key": "price" } }),
+                "text",
+            ),
             (json!({ "text": long }), "1000"),
             (
                 json!({ "text": "x", "sort": { "key": "power" } }),
@@ -2606,6 +2619,32 @@ mod tests {
         assert_eq!(
             tool["inputSchema"]["properties"]["filters"]["additionalProperties"],
             false
+        );
+    }
+
+    /// The `filters` each schema describes are the fields each tool's check accepts, and
+    /// `show_search`'s are `find_cards`' thirteen and then its own three.
+    #[test]
+    fn the_filters_schemas_describe_the_fields_the_checks_accept() {
+        use std::collections::BTreeSet;
+        let keys = |name: &str| -> BTreeSet<String> {
+            let tools = list();
+            let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+            tool["inputSchema"]["properties"]["filters"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
+        };
+        let set = |fields: &[&str]| -> BTreeSet<String> {
+            fields.iter().map(|f| (*f).to_owned()).collect()
+        };
+        assert_eq!(keys("find_cards"), set(&crate::mcp::filters::FIND_FIELDS));
+        assert_eq!(keys("show_search"), set(&crate::mcp::filters::SHOW_FIELDS));
+        assert_eq!(
+            crate::mcp::filters::SHOW_FIELDS[..13],
+            crate::mcp::filters::FIND_FIELDS
         );
     }
 

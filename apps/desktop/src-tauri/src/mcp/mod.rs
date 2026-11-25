@@ -531,9 +531,10 @@ pub(crate) mod testing {
         state_with_show(name, ShowSearch::detached())
     }
 
-    /// A state whose `show_search` hands to `windows` and waits 300 ms for the page.
+    /// A state whose `show_search` hands to `windows` and waits 2 s for the page — long enough for a
+    /// test's report under a loaded machine; a refusal never reaches the wait.
     pub(crate) fn state_with(name: &str, windows: Arc<dyn SearchWindows>) -> Arc<AppState> {
-        state_with_show(name, ShowSearch::new(windows, Duration::from_millis(300)))
+        state_with_show(name, ShowSearch::new(windows, Duration::from_secs(2)))
     }
 
     fn state_with_show(name: &str, show_search: ShowSearch) -> Arc<AppState> {
