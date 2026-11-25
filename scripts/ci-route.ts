@@ -277,7 +277,9 @@ export const ARMS = [
   // page imports (`crossWindow.ts`), and the other two ride along rather than earning an arm
   // each. The widget catalogue's `catalog.contract.json` joined them with user schema v68: the
   // desktop's MCP tool `widget_create` checks a spec against it (`mcp::tools`, `include_str!`);
-  // the widget-state golden followed with the authoring tools (`widget_preview`'s state).
+  // the widget-state golden followed with the authoring tools (`widget_preview`'s state), and the
+  // query-language golden with the parser's Rust port (`grimoire_core::query_language`'s tests,
+  // `include_str!`; only `rust`, since nothing but a test reads it, so no other target changes).
   {
     match: [
       "packages/ui/features/transfer/__golden__/*",
@@ -285,6 +287,7 @@ export const ARMS = [
       "packages/ui/lib/syncedTables.json",
       "packages/ui/features/home/generated/catalog.contract.json",
       "packages/ui/features/home/generated/__golden__/*",
+      "packages/ui/features/search/__golden__/*",
     ],
     jobs: ["rust", ...PAGE_SIDE],
   },
