@@ -176,6 +176,9 @@ pub mod panelwidth;
 pub mod platform;
 pub mod play;
 pub mod price_history;
+/// **Scryfall's query syntax**, ported from the page's `queryLanguage.ts` for hosts with no window
+/// and held to it by a shared golden.
+pub mod query_language;
 pub mod recent_cards;
 /// **Scryfall's id-migration log applied to the reader's rows, and the orphan sweep** — both
 /// behind the capture guard, because every device derives them for itself.

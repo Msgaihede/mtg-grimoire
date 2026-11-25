@@ -281,8 +281,10 @@ export const ARMS = [
   // Search page's two lists files joined with `show_search`: `mcp::show`'s
   // `the_lists_match_the_pages_own` reads `FORMATS`, `SEARCH_SORT_OPTIONS` and `RARITIES` out of
   // them (`include_str!`), so a format added to the page's picker is red in `rust` until the tool
-  // learns it. The deck goldens hold the core's port of the deck page's validation, bracket and
-  // stats (`deck_rules`, `deck_stats`, `include_str!`) to the TypeScript that writes them.
+  // learns it. The query-language golden joined with the parser's Rust port
+  // (`grimoire_core::query_language`'s tests, `include_str!`), and the deck goldens hold the
+  // core's port of the deck page's validation, bracket and stats (`deck_rules`, `deck_stats`,
+  // `include_str!`) to the TypeScript that writes them.
   {
     match: [
       "packages/ui/features/transfer/__golden__/*",
@@ -293,6 +295,7 @@ export const ARMS = [
       "packages/ui/features/home/generated/__golden__/*",
       "packages/ui/features/search/useCardSearch.ts",
       "packages/ui/features/search/filterOptions.ts",
+      "packages/ui/features/search/__golden__/*",
     ],
     jobs: ["rust", ...PAGE_SIDE],
   },

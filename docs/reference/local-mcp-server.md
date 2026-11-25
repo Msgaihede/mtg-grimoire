@@ -38,11 +38,11 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 
 | Tool                | Calls                                                                  | Answers                                                                                                                                                                                                                                                                                                                         |
 | ------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `find_cards` | `search_cards` (paper printings; one per card unless `allPrintings`) | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price. A `filters` object takes the Search page's filter bar: `format`, `colors` (`colorsExact`), `types`, `rarities`, `sets`, `manaValues` (`manaX`), `owned`, `priceMin`/`priceMax` (in the reader's marketplace currency), `oracleTags` and `gameChanger`, with or without a name `query` |
+| `find_cards` | `search_cards` (paper printings; one per card unless `allPrintings`) | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price. A `filters` object takes the Search page's filter bar: `format`, `colors` (`colorsExact`), `types`, `rarities`, `sets`, `manaValues` (`manaX`), `owned`, `priceMin`/`priceMax` (in the reader's marketplace currency), `oracleTags` and `gameChanger`, with or without a name `query`; `syntax` takes a Scryfall search beside both (below) |
 | `show_search` | `format_specs_list` and `tag_resolve` (`find_cards`' filter checks), then `search:show` to one window | What the Search page shows once it has run the search: `shown`, `cameForward`, `total` (`totalIsCapped`), `keywords`, `words` and `unknownTags`, with a `note` when the wall is empty, the search failed, or the window stayed behind or did not answer. Takes `text` (the Search box, in Scryfall syntax; at most 1,000 characters), `find_cards`' `filters` plus `borders`, `finishes` and `universe`, `sort` and `allPrintings`. Changes what one window shows, never data (below) |
 | `get_card` | `get_marketplace`, `card_detail`, `card_holdings`, `card_oracle_tags`, `card_related`, `combos_for_card`, `rulings_for_cards`, and the three lists' status commands (`oracle_tags_status`, `combos_status`, `rulings_status`) | Oracle text, finishes, legalities, prices per finish (in the reader's marketplace), and what the reader owns of the card; its `faces`, its direct oracle `tags` (with `tagData`: when the tag list was downloaded), what it brings with it (`related`: tokens, emblems, meld parts, combo pieces; at most 25, with `relatedTotal` the full count when there are more; `comboPiece` is Scryfall's word for cards that refer to each other, not a Spellbook combo) and how many Spellbook combos name it (`comboCount`, with `comboData`) and how many rulings it has (`rulingCount`, with `rulingData`; `card_rulings` answers their text) |
-| `search_collection` | `collection_list`                                                      | Entries by name words and folder: printing, finish, condition, language, quantity, folder                                                                                                                                                                                                                                       |
-| `search_wishlist`   | `wishlist_list`, `wishlist_folder_list`                                | Wishes by name words and folder, with whether a wish is for any printing                                                                                                                                                                                                                                                        |
+| `search_collection` | `collection_list`                                                      | Entries by name words, a Scryfall search (`syntax`) and folder: printing, finish, condition, language, quantity, folder |
+| `search_wishlist`   | `wishlist_list`, `wishlist_folder_list`                                | Wishes by name words, a Scryfall search (`syntax`) and folder, with whether a wish is for any printing |
 | `list_folders`      | `collection_folder_list` / `wishlist_folder_list` / `deck_folder_list` | Folder ids, names and parents; a collection folder's `kind` (only `user` takes an add)                                                                                                                                                                                                                                          |
 | `list_decks`        | `deck_list`                                                            | Deck ids, names, formats and card counts; archived decks only when asked                                                                                                                                                                                                                                                        |
 | `get_deck` | `deck_get`, `deck_check`, `deck_stats` | One list (`live` or `theory`): its kind (`regular`, `theory`, `virtual`), game, commanders and companion, colour `identity` (the commanders', else the active cards', with `identityFrom`), settings (set bracket or `auto`, X spells apart, theory list, tags), `counts` (`sized`, `copies`, `inactive`) and how many `problems` `check_deck` finds; its cards pile by pile, or with `as: "text"` as decklist text written by the app's export writer (`textFormat`: `moxfield`, the default, with zone headings; `arena`; `mtgo`; `plain`) |
@@ -91,6 +91,14 @@ the owner's decision 2026-11-25): Scryfall's 5.5 MB rulings file, weekly at laun
 [2026-11-25-mcp-rulings-design.md](../superpowers/specs/2026-11-25-mcp-rulings-design.md). **Every answer
 that is an object is also its `structuredContent`** (`rpc::done_result`; MCP allows nothing else there),
 beside the text block older clients read; an array answer and a refusal carry the text alone.
+
+**Scryfall syntax** (project C, [search-syntax.md](search-syntax.md#the-rust-port-project-c)):
+`find_cards`, `search_collection` and `search_wishlist` take a Scryfall search in `syntax`, ANDed with
+their other arguments. It is read by `grimoire_core::query_language`, the page's parser ported to Rust
+and held to it by a shared golden, through `read`, which refuses every term it would not apply as
+written in one answer; every tag it names, inside an `or` too, is resolved first (`tag_resolve`) and an
+unknown one refused with its closest names (`tag_search`). The translation is `mcp/syntax.rs`; no core
+command was added.
 
 **No tool writes the reader's collection, wishlist or decks** (the owner's decision, 2026-10-31,
 which retired the issue's three adds, `add_to_collection`, `add_to_wishlist` and
@@ -147,7 +155,7 @@ query, the spec and the state agree; then `widget_create`. `widget_preview`'s st
 `packages/ui/features/home/generated/__golden__/widget-state.json`, so a preview is what the page
 draws.
 
-**Six MCP prompts — the server's skills** (`prompts/list`, `prompts/get`; the `prompts`
+**Seven MCP prompts — the server's skills** (`prompts/list`, `prompts/get`; the `prompts`
 capability; `mcp/prompts.rs`, the owner's decision 2026-10-31 to ship them as prompts rather than
 files a reader installs). Each is a Markdown file beside the code, `mcp/prompts/*.md`, compiled in,
 with one optional argument for the user's own words:
@@ -158,11 +166,13 @@ with one optional argument for the user's own words:
 | `create_widget`     | `idea`     | The steps to write, check, preview and store a custom widget, closing with the whole widget catalogue (`catalog.prompt.md`)                                                                             |
 | `graphql_discovery` | `question` | A map of the graph's root fields, how its schema reads (nullability, ids, money, timestamps, filters, depth), and how to find, check and run a query                                                    |
 | `card_interactions` | `question` | Which tool answers what a card does, its rulings, its combos, cards that do the same job, what it brings with it, its Scryfall record and a format's rules, and what each source can and cannot tell (Commander-legal combos only, templates, how to cite a ruling and that an older one can be overtaken, a list not yet downloaded) |
+| `scryfall_syntax` | `search` | Scryfall's search language as the three search tools take it in `syntax`: the grammar, what a bare `:` means per keyword, where the app differs from Scryfall (word-prefix `t:`/`o:`, tags by name, no regular expressions or display keywords), how a refusal reads and worked examples, closing with a keyword reference generated from the parser's table |
 | `review_deck` | `request` | A deck review in order — what the deck is, what the validation finds, the bracket floor, curve and mana, combos held and one card away, draw odds, what it is short of, owned upgrades — and its rules: suggest, never claim a change; a switched-off pile is not the deck; the bracket is a floor; not checked is not legal |
 | `build_from_collection` | `request` | Building a deck from what the reader owns: the format's rules, an owned commander or a plan, cards by function and identity from the collection, the collection's combos, a shape for the deck, and decklist text the reader pastes into the Decks page's Import deck |
 
 Every fenced `graphql` example in them is held to the graph (`every_example_query_is_valid`), so a
-renamed field fails the build rather than an agent. The server's `instructions` name the four (a test holds them to every tool and prompt), and `read_guide`
+renamed field fails the build rather than an agent; every example search must pass the parser's
+`read` (`every_example_search_reads_as_written`). The server's `instructions` name the four (a test holds them to every tool and prompt), and `read_guide`
 answers any of them by name for a client that shows its user no prompts.
 
 **Every write tells every window.** `crate::changes` emits `db:changed` only while a second window
@@ -344,8 +354,7 @@ curl -s http://127.0.0.1:39147/mcp -H "Authorization: Bearer <token>" -H "Conten
 - **No deck creation, no edits, no removals** — the owner retired the adds; a custom widget is the
   one thing created, updated and deleted here. Each would be one more translation in `tools.rs` over a
   command already in the table.
-- **Card knowledge is not whole.** Still to do, as the later projects of the card knowledge plan:
-  Scryfall search syntax in the tools (project C). Rulings (project D) are an agent's only: no
-  page shows them, and the light app does not download them.
+- **The card knowledge plan's five projects have all landed** (A to E). Rulings (project D) are an
+  agent's only: no page shows them, and the light app does not download them.
 - **The decklist writers are the desktop's** (`transfer/`), so `get_deck`'s `as: "text"` is too: the
   remote tier, which has no desktop, will need them moved into the core.

@@ -1038,6 +1038,28 @@ const LANGUAGE_CODE = new Map<string, string>([
   ["quenya", "qya"],
 ]);
 
+/**
+ * The parser's private vocabulary tables, gathered for one reader outside this module: the golden
+ * (`queryLanguage.golden.test.ts`), which writes them into `__golden__/query-language.json` so the
+ * Rust port's constants (`grimoire_core::query_language`) are held to these rather than to a copy
+ * someone retyped. The parser itself keeps reading the consts directly; nothing in the page reads
+ * this, and nothing should — a table the page needs is exported on its own, as
+ * {@link QUERY_KEYWORDS} and {@link COLOR_NAMES} are.
+ */
+export const QUERY_VOCABULARY: {
+  readonly displayKeywords: ReadonlySet<string>;
+  readonly vocabulary: Readonly<Partial<Record<PredicateField, ReadonlySet<string>>>>;
+  readonly languageCodes: ReadonlyMap<string, string>;
+  readonly rarityWords: ReadonlyMap<string, string>;
+  readonly crossFields: ReadonlyMap<string, string>;
+} = {
+  displayKeywords: DISPLAY_KEYWORDS,
+  vocabulary: VOCABULARY,
+  languageCodes: LANGUAGE_CODE,
+  rarityWords: RARITY_BY_WORD,
+  crossFields: CROSS_FIELD,
+};
+
 /** The two operators that are not a comparison of order — what an unordered value accepts. */
 const isEquality = (op: PredicateOp) => op === "colon" || op === "eq" || op === "ne";
 
