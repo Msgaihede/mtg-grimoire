@@ -7,7 +7,7 @@ import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { rowHasBackFace } from "@/features/card/printings";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type TrayCell } from "@/features/search/FilterBar";
-import type { FormatFilterOption } from "@/features/search/useCardSearch";
+import type { ColorKey, FormatFilterOption } from "@/features/search/useCardSearch";
 import { COLLECTION_SORTS } from "@/features/collection/useCollection";
 import { sortOptions } from "@/lib/options";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
@@ -282,6 +282,7 @@ export function CollectionSearchTab({
   deckId,
   targetCategoryId,
   defaultFormat,
+  defaultColors,
   inDeck = NOTHING_IN_DECK,
 }: {
   /** Copies of each card already in the deck's drawn list, by oracle id — the tiles' mark
@@ -307,9 +308,12 @@ export function CollectionSearchTab({
   /** The format the wall opens on — the deck's, already fenced by `spec.hasLegalityData` in
    *  `DeckEditor`. A default and never a constraint. */
   defaultFormat?: FormatFilterOption | null;
+  /** The colours the wall opens on — the deck's commander identity (issue #1725), worked out in
+   *  `DeckEditor`. A default and never a constraint. */
+  defaultColors?: readonly ColorKey[] | null;
 }) {
   const tip = useTooltip();
-  const search = useCollectionSearch({ deckId, defaultFormat });
+  const search = useCollectionSearch({ deckId, defaultFormat, defaultColors });
   const { query, rows, move, sourceOf, playStateOf, marketplace } = search;
 
   /**

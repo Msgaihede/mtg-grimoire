@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::view::{GameCard, ManaTable, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{GameCard, ManaKind, ManaTable, MulliganView, Place, Seat, TokenOffer};
 
 /// A player at the table, from the reader's seat: the reader, or one of up to three opponents in
 /// turn order after them. On the wire `"you"`, `"opponent"`, `"opponent2"` and `"opponent3"`, so a
@@ -625,8 +625,8 @@ pub enum PlaytestAction {
     // The sandbox, refused while it is off, taken wherever the reader plays or declares (`main`,
     // `respond`, `attack`, `block`; issue #1522), never in a question: on any card the
     // reader owns or controls, and on any card the table shows (an opponent's battlefield,
-    // graveyard, exile or command zone) — never on an opponent's hand or library. `Control`, the
-    // tenth, is below `SetLife`.
+    // graveyard, exile or command zone) — never on an opponent's hand or library. `Control` and
+    // `Mana`, the tenth and eleventh, are below `SetLife`.
     Move {
         id: u64,
         to: Place,
@@ -658,6 +658,15 @@ pub enum PlaytestAction {
     SetLife {
         seat: PlaytestPlayer,
         life: i32,
+    },
+    /// Add mana of `kind` to the reader's pool by hand (`delta` above zero), or take it away
+    /// (below zero) — mana a card the engine does not play would have made (issue #1723), or a
+    /// pool set up to try a line. It floats like any mana until a cast spends it or the rules
+    /// empty the pool (CR 500.4). Taking more than is floating takes what there is; taking from
+    /// an empty pool is a refusal.
+    Mana {
+        kind: ManaKind,
+        delta: i32,
     },
     /// Put a card under `seat`'s control by hand (issue #1713): a permanent changes controller
     /// where it lies, and a card in a graveyard, in exile or in the command zone is put onto the
@@ -808,6 +817,13 @@ pub enum PlaytestHappened {
         seat: PlaytestPlayer,
         life: i32,
         was: i32,
+    },
+    /// Mana the reader added to their pool by hand (`delta` above zero) or took from it (below),
+    /// and `floating`, how much of that kind is in the pool after it.
+    ManaChanged {
+        kind: ManaKind,
+        delta: i32,
+        floating: u32,
     },
     /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
     /// or the question had only one answer and the session took it (`sole_answer`).

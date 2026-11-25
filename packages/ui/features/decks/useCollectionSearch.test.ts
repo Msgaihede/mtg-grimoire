@@ -34,7 +34,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { ANY_CARD } from "@/features/search/useCardSearch";
+import { ANY_CARD, type ColorKey } from "@/features/search/useCardSearch";
 import { autoCategoryFor } from "./autoCategory";
 import {
   copySource,
@@ -178,12 +178,13 @@ beforeEach(() => {
 });
 
 /** The hook, mounted the way the tab mounts it. */
-function mount(options: { deckId?: number | null } = {}) {
+function mount(options: { deckId?: number | null; defaultColors?: readonly ColorKey[] } = {}) {
   return renderHook(
     () =>
       useCollectionSearch({
         deckId: options.deckId === undefined ? DECK_ID : options.deckId,
         defaultFormat: { value: "commander", label: "Commander" },
+        defaultColors: options.defaultColors,
       }),
     { wrapper },
   );
@@ -195,6 +196,22 @@ function lastQuery() {
 }
 
 describe("useCollectionSearch", () => {
+  /**
+   * Issue #1725: the Collection tab opens on the commander's colour identity too, loose, on the
+   * first request — the card-search tab's seed, so both tabs of one panel agree — and Reset all
+   * clears it.
+   */
+  it("opens on the commander's colour identity, loose, and Reset all clears it", async () => {
+    const { result } = mount({ defaultColors: ["G", "U", "W"] });
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(collectionList.mock.calls[0][0].colors).toBe("WUG");
+    expect(collectionList.mock.calls[0][0].colorsStrict).toBeFalsy();
+
+    act(() => result.current.resetAll());
+    await waitFor(() => expect(lastQuery().colors).toBeFalsy());
+  });
+
   /**
    * **The default is only-unallocated, and it is the whole point of the feature.**
    *
