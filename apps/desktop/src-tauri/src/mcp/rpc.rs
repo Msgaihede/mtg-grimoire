@@ -145,10 +145,15 @@ async fn call(state: &Arc<AppState>, method: &str, params: Value) -> Result<Valu
                 }
             };
             match tools::call(state, name, arguments).await {
-                tools::Called::Done(answer) => Ok(json!({
-                    "content": [{ "type": "text", "text": answer.to_string() }],
-                    "isError": false,
-                })),
+                tools::Called::Done(answer) => {
+                    // `structuredContent` must be an object, so every tool answers one.
+                    debug_assert!(answer.is_object(), "{name} answered a non-object");
+                    Ok(json!({
+                        "content": [{ "type": "text", "text": answer.to_string() }],
+                        "structuredContent": answer,
+                        "isError": false,
+                    }))
+                }
                 tools::Called::Refused(why) => Ok(json!({
                     "content": [{ "type": "text", "text": why }],
                     "isError": true,
@@ -203,6 +208,33 @@ mod tests {
         assert_eq!(unknown["serverInfo"]["name"], "mtg-grimoire");
         assert_eq!(unknown["capabilities"]["tools"]["listChanged"], false);
         assert_eq!(unknown["capabilities"]["prompts"]["listChanged"], false);
+    }
+
+    #[tokio::test]
+    async fn a_tool_s_answer_is_also_structured_content() {
+        let state = crate::mcp::testing::state("rpc_structured");
+        let done = call(
+            &state,
+            "tools/call",
+            json!({ "name": "search_collection", "arguments": {} }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done["isError"], false);
+        let text: Value = serde_json::from_str(done["content"][0]["text"].as_str().unwrap())
+            .expect("the text is the answer's JSON");
+        assert!(done["structuredContent"].is_object());
+        assert_eq!(done["structuredContent"], text);
+
+        let refused = call(
+            &state,
+            "tools/call",
+            json!({ "name": "search_collection", "arguments": { "limit": -1 } }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refused["isError"], true);
+        assert!(refused.get("structuredContent").is_none());
     }
 
     #[test]

@@ -1465,7 +1465,10 @@ mod tests {
 
     async fn done(state: &Arc<AppState>, name: &str, args: Value) -> Value {
         match call(state, name, args).await {
-            Called::Done(v) => v,
+            Called::Done(v) => {
+                assert!(v.is_object(), "{name} answered a non-object: {v}");
+                v
+            }
             Called::Refused(why) => panic!("{name} refused: {why}"),
             Called::NoSuchTool => panic!("{name} is not a tool"),
         }
