@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
+import { motion } from "motion/react";
 import {
   Layers,
   LayoutGrid,
@@ -13,7 +14,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
-import { PRESS, PRESS_STILL } from "@/lib/motion";
+import { PRESS, PRESS_STILL, SPRING } from "@/lib/motion";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -808,11 +809,17 @@ export function CountPill({ count, className }: { count: number; className?: str
  * Each segment is its own `aria-pressed` button, so a group whose choices OR (Finish, Border) and
  * one whose choices partition (Universe, Owned) are both this control: the caller decides what a
  * press does. A greyed segment is `aria-disabled` and stays in the tab order, the row's rule.
+ *
+ * **`slide`, for a group where exactly one choice is ever on** (the Life tracker's setup): the
+ * pressed look is one marker that travels to the segment pressed on `SPRING.marker`, rather than
+ * a fill that blinks out of one and into the next — the tab bar's marker, at a smaller size. A
+ * group whose choices OR keeps the fill: several markers cannot be one thing moving.
  */
 export function JoinedChoices<T extends string>({
   label,
   choices,
   className,
+  slide = false,
 }: {
   /** The group's accessible name. */
   label: string;
@@ -828,8 +835,12 @@ export function JoinedChoices<T extends string>({
     hint?: string;
   }[];
   className?: string;
+  /** One choice is ever on, and its marker slides between them — see above. */
+  slide?: boolean;
 }) {
   const tip = useTooltip();
+  // Scoped per group, so two groups on a page never trade one marker.
+  const marker = useId();
   return (
     <div
       role="group"
@@ -858,14 +869,22 @@ export function JoinedChoices<T extends string>({
               i > 0 && "border-l border-border",
               i === 0 && "rounded-l-[5px]",
               i === choices.length - 1 && "rounded-r-[5px]",
-              c.pressed
-                ? "bg-accent/10 text-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
-                : "text-dim",
+              slide && "relative",
+              c.pressed && !slide && "bg-accent/10 shadow-[inset_0_0_0_1px_var(--color-accent)]",
+              c.pressed ? "text-accent" : "text-dim",
               !c.pressed && !c.disabled && "hover:text-text",
               c.disabled && FILTER_UNAVAILABLE,
             )}
           >
-            {c.label}
+            {slide && c.pressed && (
+              <motion.span
+                aria-hidden
+                layoutId={marker}
+                transition={SPRING.marker}
+                className="absolute inset-0 rounded-[5px] bg-accent/10 shadow-[inset_0_0_0_1px_var(--color-accent)]"
+              />
+            )}
+            {slide ? <span className="relative">{c.label}</span> : c.label}
           </button>
         );
       })}

@@ -157,6 +157,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   overshoots lifts off the foot and shows scrim under it, a page shows a strip of the page beneath.
   `sheet` is the phone's dialog preset (`DialogHost.sheets`), `PAGE` the page stack's geometry
   (`apps/light/phone/PageStack.tsx`), `pressSpring` a finger's press for a `motion` element.
+- **The Life tracker's three** (2026-11-25): `holdSqueeze(holdMs)` is a function because its length
+  is the hold's, not a tier (gesture intent, as `STACK_CLOSE_DELAY_MS` is); `NUMBER_POP` is the
+  total's pop on `SPRING.press`; `PULL`/`pulled` the commander swipe's rubber band.
 - **The page stack and the sheet drag animate motion values by hand** (`animate(value, …)`), which
   `MotionConfig reducedMotion` does not reach — so both read `useReducedMotion()` and swap travel
   for a cross-fade themselves. A swipe still follows the finger under reduced motion: that is the

@@ -14,10 +14,12 @@
  * and the number free to be as large as the panel allows. Names are for a screen reader, which
  * reads each panel as a region called "Player N".
  */
-import type { CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { animate, motion, useMotionValue, type MotionValue } from "motion/react";
 import { Shield, Skull } from "lucide-react";
 import { FOCUS_INSET } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
+import { holdSqueeze, NUMBER_POP, SPRING } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import {
   chipZoom,
@@ -70,6 +72,20 @@ export interface SeatPanelProps {
   now: number;
   reduced: boolean;
   act: PanelActions;
+  /** A press is being held on this panel: it sinks over the hold (`holdSqueeze`). */
+  held?: boolean;
+  /** How long that hold is, which is how long the sink takes. */
+  holdMs?: number;
+  /** A commander swipe is on this panel: how far it follows the finger, in its own frame. */
+  pull?: MotionValue<number> | null;
+}
+
+/**
+ * `next` as the turn nearest `from` — the same angle, give or take whole turns — so a panel turning
+ * to face another player takes the short way round: 180° to −90° is a quarter turn, not three.
+ */
+export function nearestTurn(from: number, next: number): number {
+  return from + ((((next - from) % 360) + 540) % 360) - 180;
 }
 
 /**
@@ -108,8 +124,19 @@ export function SeatPanel({
   now,
   reduced,
   act,
+  held = false,
+  holdMs = 0,
+  pull = null,
 }: SeatPanelProps) {
   const { lw, lh } = box;
+  // The angle drawn, kept unwrapped (React's derived-state pattern), so the turn takes the short
+  // way round whatever the seating module calls the new one.
+  const [turn, setTurn] = useState(box.rot);
+  const [lastRot, setLastRot] = useState(box.rot);
+  if (box.rot !== lastRot) {
+    setLastRot(box.rot);
+    setTurn(nearestTurn(turn, box.rot));
+  }
   const n = game.seats.length;
   const seat = game.seats[i];
   const name = playerName(i);
@@ -202,7 +229,7 @@ export function SeatPanel({
   const turned: CSSProperties = {
     width: lw,
     height: lh,
-    transform: `translate(-50%, -50%) rotate(${box.rot}deg)`,
+    transform: `translate(-50%, -50%) rotate(${turn}deg)`,
     color: dark ? "var(--color-dim)" : "var(--color-accent-fg)",
   };
 
@@ -227,45 +254,73 @@ export function SeatPanel({
       )}
       style={frame}
     >
-      <div className="absolute top-1/2 left-1/2" style={turned}>
-        {solo ? (
-          <SoloCommanderView
-            game={game}
-            box={box}
-            keep={keep}
-            colors={colors}
-            ownText={own.text}
-            ownInk={dead ? "var(--color-dim)" : "var(--color-text)"}
-            targetLine={targetLine}
-            delta={delta}
-            deltaLook={deltaLook}
-            movedHigh={movedHigh}
-            act={act}
-          />
-        ) : target ? (
-          <TargetView
-            dark={dark}
-            dotColor={colors[i]}
-            lw={lw}
-            lh={lh}
-            ownText={own.text}
-            ownInk={dead ? "var(--color-dim)" : "var(--color-text)"}
-            targetLine={targetLine}
-            delta={delta}
-            deltaLook={deltaLook}
-            movedHigh={movedHigh}
-            minusLabel={minusLabel}
-            plusLabel={plusLabel}
-            seat={i}
-            act={act}
-          />
-        ) : (
-          <CountView
-            {...{ game, view, i, box, keep, common, colors, act, dark, dead, source, active }}
-            {...{ name, shown, value, sub, subDot, first, delta, deltaLook, movedHigh, grow, zoom }}
-            {...{ time, showPill, showMonarch, isMonarch, minusLabel, plusLabel, glyphsUnder }}
-          />
-        )}
+      <div
+        // **The panels turn to face the counted player** as commander damage opens, and back as it
+        // closes (2026-11-25): a quarter or a half turn on the `slow` tier, the short way round.
+        // A CSS tween, not a spring: nothing interrupts it, and the transform is read as written.
+        className="absolute top-1/2 left-1/2 transition-transform duration-[var(--duration-slow)] ease-standard motion-reduce:transition-none"
+        style={turned}
+      >
+        {/* The panel's body, in its own turned frame: it sinks under a held press and follows a
+            commander swipe along "up" as its player sees it — both a finger's, so both springs. */}
+        <motion.div
+          className="absolute inset-0"
+          initial={false}
+          animate={held && !reduced ? holdSqueeze(holdMs) : { scale: 1, transition: SPRING.press }}
+          style={pull === null ? undefined : { y: pull }}
+        >
+          {solo ? (
+            <SoloCommanderView
+              game={game}
+              box={box}
+              keep={keep}
+              colors={colors}
+              ownText={own.text}
+              ownInk={dead ? "var(--color-dim)" : "var(--color-text)"}
+              targetLine={targetLine}
+              delta={delta}
+              deltaLook={deltaLook}
+              movedHigh={movedHigh}
+              act={act}
+            />
+          ) : target ? (
+            <TargetView
+              dark={dark}
+              dotColor={colors[i]}
+              lw={lw}
+              lh={lh}
+              ownText={own.text}
+              ownInk={dead ? "var(--color-dim)" : "var(--color-text)"}
+              targetLine={targetLine}
+              delta={delta}
+              deltaLook={deltaLook}
+              movedHigh={movedHigh}
+              minusLabel={minusLabel}
+              plusLabel={plusLabel}
+              seat={i}
+              act={act}
+            />
+          ) : (
+            <CountView
+              {...{ game, view, i, box, keep, common, colors, act, dark, dead, source, active }}
+              {...{
+                name,
+                shown,
+                value,
+                sub,
+                subDot,
+                first,
+                delta,
+                deltaLook,
+                movedHigh,
+                grow,
+                zoom,
+              }}
+              {...{ time, showPill, showMonarch, isMonarch, minusLabel, plusLabel, glyphsUnder }}
+              reduced={reduced}
+            />
+          )}
+        </motion.div>
       </div>
     </section>
   );
@@ -302,6 +357,24 @@ interface CountViewProps {
   isMonarch: boolean;
   minusLabel: string;
   plusLabel: string;
+  reduced: boolean;
+}
+
+/**
+ * The number's pop: it grows to `NUMBER_POP` the moment `value` changes and springs back — a tap
+ * counted where it was made. Not on the first draw, and not under reduced motion.
+ */
+function usePop(value: bigint, reduced: boolean): MotionValue<number> {
+  const scale = useMotionValue(1);
+  const last = useRef(value);
+  useEffect(() => {
+    if (last.current === value) return;
+    last.current = value;
+    if (reduced) return;
+    scale.set(NUMBER_POP);
+    void animate(scale, 1, SPRING.press);
+  }, [value, reduced, scale]);
+  return scale;
 }
 
 /** The life view: the number, its line, and the chips round it. */
@@ -342,6 +415,7 @@ function CountView(p: CountViewProps) {
   const showSub = p.sub !== "" && (p.delta === 0n || source);
   const showDelta = p.delta !== 0n && !source;
   const step = (stepper: Stepper, by: number) => act.dispatch({ type: "stepper", stepper, by });
+  const pop = usePop(p.value, p.reduced);
 
   const counter = (kind: "energy" | "xp", on: boolean, said: string) => {
     if (!on || inCmd || i !== 0) return null;
@@ -459,13 +533,13 @@ function CountView(p: CountViewProps) {
 
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-start">
         <div className="relative flex shrink-0 justify-center" style={{ marginTop: place.top }}>
-          <span
+          <motion.span
             aria-hidden
             className="font-mono leading-none font-semibold tracking-[-0.02em] whitespace-nowrap tabular-nums"
-            style={{ fontSize: place.size }}
+            style={{ fontSize: place.size, scale: pop }}
           >
             {p.shown.text}
-          </span>
+          </motion.span>
           {/* Fingers never land on this: it lets presses through to the − and + beneath. It
               stays in the page so a keyboard or a screen reader, which cannot hold a press, can
               still open the calculator. */}

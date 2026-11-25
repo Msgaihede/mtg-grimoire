@@ -2620,6 +2620,11 @@ app-like — smooth transitions, pleasing motion, full gesture support, a calmer
   sheet followed the finger (`translateY(172px)`) and closed it. Not yet driven on a phone: the
   Android WebView's gesture-navigation insets and iOS Safari's own edge swipe (which plays its
   snapshot and then our Back) are a real device's to judge.
+- **The Life tracker has the same pass** (`life-tracker.md` §4, *Motion and touch*), on both faces:
+  the board rises over the setup, a hold visibly sinks the panel before the calculator opens, a
+  commander swipe drags the panel with the finger, the panels turn the short way round to face the
+  counted player, the total pops on every change, the calculator and menu rise out of the scrim, and
+  the setup's choices slide one marker.
 - **Kept, deliberately**: seven tabs (an iPhone bar holds five — folding two into a *More* would be
   a navigation change for the owner to decide), no long-press and no swipe actions on a row (§7.5's
   reason), no pull-to-refresh (the data is local). The design canvas for this pass is the owner's

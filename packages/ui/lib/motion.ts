@@ -478,6 +478,38 @@ export const PAGE = {
 } as const;
 
 /**
+ * **A held press, made visible**: the Life tracker's panel sinks to this scale over the length of
+ * the hold that opens its calculator (`LifeBoard`'s `HOLD_MS`), so the reader sees the hold being
+ * counted rather than waiting on nothing — and lets go early to a spring back.
+ *
+ * A function, because the duration is **the gesture's and not a tier**: it is however long the
+ * hold is, the way `CardStack`'s `STACK_CLOSE_DELAY_MS` is gesture intent and never derived from a
+ * tween. `standard`, because the panel ends where it would have ended had the reader let go: the
+ * calculator takes over from a panel already sunk.
+ */
+export function holdSqueeze(holdMs: number): { scale: number; transition: Transition } {
+  return { scale: 0.955, transition: { duration: seconds(holdMs), ease: EASE.standard } };
+}
+
+/**
+ * **A number that changed, felt**: the Life tracker's total grows to this scale the instant it
+ * moves and springs back on {@link SPRING.press} — a tap counted under the finger that made it,
+ * at a glance, from across a table. Scale only: a total that jumped sideways would be misread.
+ */
+export const NUMBER_POP = 1.08;
+
+/**
+ * **A swipe the board is listening to**: how far a Life tracker panel follows a finger swiping it
+ * to open or close commander damage, before the swipe is decided on its let-go. Rubber-banded —
+ * `reach × (1 − e^(−travel / give))` — so it answers at once and never runs away from the panel.
+ */
+export const PULL = { reach: 28, give: 90 } as const;
+
+/** {@link PULL}'s band: the drawn offset for `travel` px of finger along the swipe. */
+export const pulled = (travel: number): number =>
+  travel <= 0 ? 0 : PULL.reach * (1 - Math.exp(-travel / PULL.give));
+
+/**
  * Press feedback for a `motion` element under a finger: a tile on a card wall, a tab.
  *
  * {@link press} with a spring under it rather than the `fast` tween, so a press released before
