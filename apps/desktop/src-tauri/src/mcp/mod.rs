@@ -31,9 +31,11 @@
 //! no sync spec names, so it never leaves this installation — and compared in constant time.
 
 pub mod claude_desktop;
+mod filters;
 pub mod http;
 pub mod prompts;
 pub mod rpc;
+pub mod show;
 pub mod tools;
 
 use crate::sync::AppState;

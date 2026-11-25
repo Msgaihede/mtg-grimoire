@@ -644,11 +644,11 @@ async fn graph_query(state: &Arc<AppState>, args: &Args) -> Result<Value, String
 }
 
 /// A tool's arguments, read with the refusal a wrong one deserves.
-struct Args(Map<String, Value>);
+pub(super) struct Args(pub(super) Map<String, Value>);
 
 impl Args {
     /// A string, trimmed; blank is absent.
-    fn text(&self, name: &str) -> Result<Option<String>, String> {
+    pub(super) fn text(&self, name: &str) -> Result<Option<String>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(s)) => {
@@ -690,7 +690,7 @@ impl Args {
     }
 
     /// A list of strings, trimmed, blanks dropped; absent is empty.
-    fn texts(&self, name: &str) -> Result<Vec<String>, String> {
+    pub(super) fn texts(&self, name: &str) -> Result<Vec<String>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(Vec::new()),
             Some(Value::Array(items)) => {
@@ -711,7 +711,7 @@ impl Args {
     }
 
     /// A number of zero or more; absent is `None`.
-    fn amount(&self, name: &str) -> Result<Option<f64>, String> {
+    pub(super) fn amount(&self, name: &str) -> Result<Option<f64>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(v) => v
@@ -723,7 +723,7 @@ impl Args {
     }
 
     /// True or false; absent is `None`, unlike [`Args::flag`], which reads absent as false.
-    fn switch(&self, name: &str) -> Result<Option<bool>, String> {
+    pub(super) fn switch(&self, name: &str) -> Result<Option<bool>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -731,7 +731,7 @@ impl Args {
         }
     }
 
-    fn flag(&self, name: &str) -> Result<bool, String> {
+    pub(super) fn flag(&self, name: &str) -> Result<bool, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(false),
             Some(Value::Bool(b)) => Ok(*b),
@@ -758,7 +758,11 @@ impl Args {
 }
 
 /// One table command, by name.
-async fn run(state: &Arc<AppState>, command: &str, args: Value) -> Result<Value, String> {
+pub(super) async fn run(
+    state: &Arc<AppState>,
+    command: &str,
+    args: Value,
+) -> Result<Value, String> {
     dispatch(&state.core, command, args, None).await
 }
 
@@ -822,172 +826,6 @@ fn matches_words(name: &str, query: Option<&str>) -> bool {
     })
 }
 
-/// The fields `find_cards`' `filters` object may hold.
-const FILTER_FIELDS: [&str; 13] = [
-    "format",
-    "colors",
-    "colorsExact",
-    "types",
-    "rarities",
-    "sets",
-    "manaValues",
-    "manaX",
-    "owned",
-    "priceMin",
-    "priceMax",
-    "oracleTags",
-    "gameChanger",
-];
-
-/// `filters` read into the `SearchRequest` fields it sets, every value checked against its
-/// field's vocabulary first.
-async fn filter_fields(
-    state: &Arc<AppState>,
-    filters: &Args,
-) -> Result<Map<String, Value>, String> {
-    if let Some(key) = filters
-        .0
-        .keys()
-        .find(|k| !FILTER_FIELDS.contains(&k.as_str()))
-    {
-        return Err(format!(
-            "filters has no field {key:?}; its fields are: {}.",
-            FILTER_FIELDS.join(", ")
-        ));
-    }
-    let mut req = Map::new();
-    if let Some(typed) = filters.text("format")? {
-        let specs = run(state, "format_specs_list", json!({})).await?;
-        req.insert(
-            "format".into(),
-            json!(format_key(Some(typed), "filters.format", &specs)?),
-        );
-    }
-    let colors: Vec<String> = filters
-        .texts("colors")?
-        .iter()
-        .map(|c| c.to_uppercase())
-        .collect();
-    if let Some(bad) = colors
-        .iter()
-        .find(|c| !["W", "U", "B", "R", "G", "C"].contains(&c.as_str()))
-    {
-        return Err(format!(
-            "filters.colors cannot hold {bad:?}; use W, U, B, R, G, or C alone for colourless."
-        ));
-    }
-    if colors.iter().any(|c| c == "C") && colors.len() > 1 {
-        return Err(
-            "filters.colors cannot mix C (colourless) with other colours; use C alone.".to_owned(),
-        );
-    }
-    if !colors.is_empty() {
-        req.insert("colors".into(), json!(colors.concat()));
-    }
-    if let Some(exact) = filters.switch("colorsExact")? {
-        req.insert("colorsStrict".into(), json!(exact));
-    }
-    let mut types = Vec::new();
-    for typed in filters.texts("types")? {
-        let Some(key) = grimoire_core::cardtypes::TYPE_KEYS
-            .iter()
-            .find(|k| k.eq_ignore_ascii_case(&typed))
-        else {
-            return Err(format!(
-                "filters.types cannot hold {typed:?}; use any of: {}.",
-                grimoire_core::cardtypes::TYPE_KEYS.join(", ")
-            ));
-        };
-        types.push(*key);
-    }
-    if !types.is_empty() {
-        req.insert("types".into(), json!(types));
-    }
-    let mut rarities = Vec::new();
-    for typed in filters.texts("rarities")? {
-        let typed = typed.to_lowercase();
-        if !grimoire_core::filters::ALL_RARITIES.contains(&typed.as_str()) {
-            return Err(format!(
-                "filters.rarities cannot hold {typed:?}; use any of: {}.",
-                grimoire_core::filters::ALL_RARITIES.join(", ")
-            ));
-        }
-        rarities.push(typed);
-    }
-    if !rarities.is_empty() {
-        req.insert("rarities".into(), json!(rarities));
-    }
-    let sets: Vec<String> = filters
-        .texts("sets")?
-        .iter()
-        .map(|s| s.to_lowercase())
-        .collect();
-    if !sets.is_empty() {
-        req.insert("sets".into(), json!(sets));
-    }
-    match filters.0.get("manaValues") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(values)) => {
-            let mut mana = Vec::new();
-            for v in values {
-                let Some(n) = v.as_u64().filter(|n| *n <= 8) else {
-                    return Err(format!(
-                        "filters.manaValues cannot hold {v}; use whole numbers from 0 to 8 (8 means 8 or more)."
-                    ));
-                };
-                mana.push(n);
-            }
-            if !mana.is_empty() {
-                req.insert("manaValues".into(), json!(mana));
-            }
-        }
-        Some(_) => return Err("filters.manaValues must be a list of whole numbers.".to_owned()),
-    }
-    if filters.flag("manaX")? {
-        req.insert("manaX".into(), json!(true));
-    }
-    if let Some(owned) = filters.switch("owned")? {
-        req.insert("owned".into(), json!(owned));
-    }
-    for field in ["priceMin", "priceMax"] {
-        if let Some(n) = filters.amount(field)? {
-            req.insert(field.into(), json!(n));
-        }
-    }
-    let tags = filters.texts("oracleTags")?;
-    if !tags.is_empty() {
-        if tags.len() > 64 {
-            return Err("filters.oracleTags takes at most 64 tags.".to_owned());
-        }
-        let asks: Vec<Value> = tags
-            .iter()
-            .map(|t| json!({ "namespace": "oracle", "value": t }))
-            .collect();
-        let resolved = run(state, "tag_resolve", json!({ "asks": asks })).await?;
-        let resolved = resolved.as_array().cloned().unwrap_or_default();
-        let mut slugs = Vec::new();
-        for (typed, hit) in tags.iter().zip(resolved.iter()) {
-            let Some(slug) = hit.get("slug").and_then(Value::as_str) else {
-                return Err(format!(
-                    "filters.oracleTags has no tag {typed:?}; look slugs up with find_tags."
-                ));
-            };
-            slugs.push(slug.to_owned());
-        }
-        req.insert(
-            "oracleTags".into(),
-            json!({ "include": slugs, "exclude": [] }),
-        );
-    }
-    if filters.flag("gameChanger")? {
-        req.insert(
-            "predicates".into(),
-            json!([{ "field": "is", "op": "colon", "value": "gamechanger" }]),
-        );
-    }
-    Ok(req)
-}
-
 async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
     let query = args.text("query")?;
     let filters = match args.0.get("filters") {
@@ -1007,7 +845,11 @@ async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
     let limit = args.bounded("limit", 10, 1, 50)?;
     let all = args.flag("allPrintings")?;
     let mut req = match &filters {
-        Some(filters) => filter_fields(state, filters).await?,
+        Some(filters) => {
+            let checked =
+                super::filters::checked(state, filters, &super::filters::FIND_FIELDS).await?;
+            super::filters::search_request(&checked)
+        }
         None => Map::new(),
     };
     req.insert("text".into(), json!(query));
@@ -1240,7 +1082,11 @@ async fn find_tags(state: &Arc<AppState>, args: &Args) -> Result<Value, String> 
 /// The searchable format key `args` names, lower-cased; `None` when it names none. A key with no
 /// legality data (`casual`, `limited`, `unspecified`) would silently match nothing, so it is
 /// refused with the keys that do work. `specs` is `format_specs_list`'s answer.
-fn format_key(typed: Option<String>, field: &str, specs: &Value) -> Result<Option<String>, String> {
+pub(super) fn format_key(
+    typed: Option<String>,
+    field: &str,
+    specs: &Value,
+) -> Result<Option<String>, String> {
     let Some(key) = typed else {
         return Ok(None);
     };
