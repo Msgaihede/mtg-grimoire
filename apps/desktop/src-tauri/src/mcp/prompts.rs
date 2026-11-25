@@ -42,7 +42,8 @@ const PROMPTS: [Prompt; 5] = [
             "How to find cards in the whole card database, the user's collection and their \
             wishlist — by name with the search tools, by type, colour, mana value, tags, rarity or \
             price through find_cards' filters, and through the read graph's structured filters \
-            for the collection and wishlist, art tags and sorting.",
+            for the collection and wishlist, art tags and sorting — and how to show a search on \
+            the app's Search page with show_search.",
         argument: ("request", "What the user is looking for, in their words."),
         body: include_str!("prompts/search_cards.md"),
     },
@@ -263,13 +264,14 @@ mod tests {
         blocks
     }
 
-    /// Every `syntax` value in a tool call written out as JSON.
+    /// Every search in a tool call written out as JSON: a `syntax` value, and a `text` one
+    /// (`show_search`'s box text, which is Scryfall syntax too; `find_tags`' words read as words).
     fn syntax_values(value: &Value, out: &mut Vec<String>) {
         match value {
             Value::Object(map) => {
                 for (key, v) in map {
                     match (key.as_str(), v) {
-                        ("syntax", Value::String(s)) => out.push(s.clone()),
+                        ("syntax" | "text", Value::String(s)) => out.push(s.clone()),
                         _ => syntax_values(v, out),
                     }
                 }
@@ -319,7 +321,7 @@ mod tests {
                 refused += 1;
             }
             for block in fenced(prompt.body, "json") {
-                if !block.contains("\"syntax\"") {
+                if !block.contains("\"syntax\"") && !block.contains("\"text\"") {
                     continue;
                 }
                 let call: Value = serde_json::from_str(block).unwrap_or_else(|e| {

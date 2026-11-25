@@ -98,6 +98,7 @@ mod tests {
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             mirror_pass: Mutex::new(()),
             changes,
+            show_search: Arc::new(crate::mcp::show::ShowSearch::detached()),
         })
     }
 

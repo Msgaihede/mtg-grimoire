@@ -33,9 +33,11 @@
 //! no sync spec names, so it never leaves this installation — and compared in constant time.
 
 pub mod claude_desktop;
+mod filters;
 pub mod http;
 pub mod prompts;
 pub mod rpc;
+pub mod show;
 pub mod syntax;
 pub mod tools;
 
@@ -482,10 +484,63 @@ pub async fn mcp_set_port(
 /// head — `sync_engine::live`'s, with a silent event sink.
 #[cfg(test)]
 pub(crate) mod testing {
+    use super::show::{SearchHandoff, SearchWindows, ShowSearch, Shown};
     use crate::sync::AppState;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// Windows that record every search they are given, answering from the label `"main"`.
+    pub(crate) struct FakeWindows {
+        pub shown: Mutex<Vec<SearchHandoff>>,
+        pub came_forward: bool,
+    }
+
+    impl FakeWindows {
+        pub fn forward(came_forward: bool) -> Self {
+            Self {
+                shown: Mutex::new(Vec::new()),
+                came_forward,
+            }
+        }
+
+        /// The first search sent, once it has been.
+        pub async fn wait_for_one(&self) -> SearchHandoff {
+            self.wait_for(1).await
+        }
+
+        /// The `n`-th search sent (1-based), polled for up to a second.
+        pub async fn wait_for(&self, n: usize) -> SearchHandoff {
+            for _ in 0..200 {
+                if let Some(h) = self.shown.lock().unwrap().get(n - 1) {
+                    return h.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("no search number {n} was sent within a second");
+        }
+    }
+
+    impl SearchWindows for FakeWindows {
+        fn show(&self, handoff: &SearchHandoff) -> Result<Shown, String> {
+            self.shown.lock().unwrap().push(handoff.clone());
+            Ok(Shown {
+                label: "main".into(),
+                came_forward: self.came_forward,
+            })
+        }
+    }
 
     pub(crate) fn state(name: &str) -> Arc<AppState> {
+        state_with_show(name, ShowSearch::detached())
+    }
+
+    /// A state whose `show_search` hands to `windows` and waits 2 s for the page — long enough for a
+    /// test's report under a loaded machine; a refusal never reaches the wait.
+    pub(crate) fn state_with(name: &str, windows: Arc<dyn SearchWindows>) -> Arc<AppState> {
+        state_with_show(name, ShowSearch::new(windows, Duration::from_secs(2)))
+    }
+
+    fn state_with_show(name: &str, show_search: ShowSearch) -> Arc<AppState> {
         let dir = crate::scratch::path(&format!("mcp-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -515,6 +570,7 @@ pub(crate) mod testing {
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             mirror_pass: Mutex::new(()),
             changes,
+            show_search: Arc::new(show_search),
         })
     }
 }
