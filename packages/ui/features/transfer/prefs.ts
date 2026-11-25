@@ -16,6 +16,7 @@ import { CONDITION_NOT_SET, type Condition } from "@/lib/conditions";
 import type { DeckFinish } from "@/lib/ipc";
 import { defaultFields, type TransferFieldId, type TransferSurface } from "./fields";
 import type { ExportFormat } from "./formats";
+import type { ExportPresetId } from "./export/presets";
 
 /**
  * What one surface's export dialog opens holding — see `useAppStore`'s `exportPrefs`, which is
@@ -40,6 +41,12 @@ export interface ExportPrefs {
    * {@link INITIAL_EXPORT_PREFS}, where the behaviour change this cost is written down.
    */
   includeInactive: boolean;
+  /**
+   * The site preset chosen, or `null` while the format is a radio's (issue #1726). While it is
+   * set, `format` is the preset's and the preset — not `fields` or `includeInactive` — decides
+   * what is written: `useExportModel` reads the preset's own setting and draws no checkbox.
+   */
+  preset: ExportPresetId | null;
 }
 
 /**
@@ -78,24 +85,28 @@ export const INITIAL_EXPORT_PREFS: Readonly<Record<TransferSurface, ExportPrefs>
     fields: defaultFields("plain", "deck"),
     arenaOnly: false,
     includeInactive: false,
+    preset: null,
   },
   collection: {
     format: "csv",
     fields: defaultFields("csv", "collection"),
     arenaOnly: false,
     includeInactive: false,
+    preset: null,
   },
   wishlist: {
     format: "plain",
     fields: defaultFields("plain", "wishlist"),
     arenaOnly: false,
     includeInactive: false,
+    preset: null,
   },
   trade: {
     format: "plain",
     fields: defaultFields("plain", "trade"),
     arenaOnly: false,
     includeInactive: false,
+    preset: null,
   },
 };
 

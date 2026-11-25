@@ -233,10 +233,13 @@ describe("a deck's export, on the phone", () => {
     expect(await within(sheet).findByText("Copied.", undefined, SETTLE)).toBeInTheDocument();
     expect(copied.text).toBe(await deckText("plain"));
 
-    // Moxfield is behind More formats (issue #1702): the shared dropdown, after the chips.
-    await user.click(within(sheet).getByRole("button", { name: "More formats" }));
-    await user.click(await within(sheet).findByRole("option", { name: "Moxfield" }, SETTLE));
-    expect(within(sheet).getByRole("button", { name: "More formats: Moxfield" })).toBeVisible();
+    // Moxfield is a preset (issues #1702 and #1726): the shared Presets dropdown, after the
+    // chips. Its row carries the site as a hint, so the name is matched from its start.
+    await user.click(within(sheet).getByRole("button", { name: "Presets" }));
+    await user.click(await within(sheet).findByRole("option", { name: /^Moxfield/ }, SETTLE));
+    expect(within(sheet).getByRole("button", { name: "Presets: Moxfield" })).toBeVisible();
+    // Fully preset: no field checkbox under it.
+    expect(within(sheet).queryByRole("checkbox", { name: "Finish" })).toBeNull();
     expect(within(sheet).getByRole("radio", { name: "Plain text" })).toHaveAttribute(
       "aria-checked",
       "false",
