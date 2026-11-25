@@ -12,6 +12,14 @@
     "mtg-grimoire-sb-mcp": {
       "url": "http://localhost:6006/mcp",
       "type": "http"
+    },
+    "motion": {
+      "type": "http",
+      "url": "https://mcp.motion.dev"
+    },
+    "motion-plus": {
+      "type": "http",
+      "url": "https://mcp.motion.dev/plus"
     }
   }
 }

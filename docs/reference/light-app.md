@@ -2584,6 +2584,55 @@ became (`apps/light/CLAUDE.md` §4 carries the rules):
   tab scrolls the page to its top (from inside the tab, to its root); no pull-to-refresh reload,
   no grey tap flash, no double-tap zoom wait. Still no long-press, for §7.5's reason.
 
+### 7.10 Motion and gestures — "feel like an iPhone app" (2026-11-25)
+
+Reported by readers through the owner: the light app and the Android app should feel more fluid and
+app-like — smooth transitions, pleasing motion, full gesture support, a calmer face. What changed
+(`apps/light/CLAUDE.md` §4 carries the rules, `motion.md` the springs):
+
+- **Pages move** (`phone/PageStack.tsx`). A push (a deck, a folder, a trade) slides in from the
+  right over the page it was opened from, which drifts 28% left and dims to 55%; Back — the header's
+  `‹`, Android's gesture, a browser's Back — plays it reversed; a tab cross-fades on `base`. Each
+  layer drives its own `x` and `opacity` by hand on `SPRING.surface`. The direction is the router's
+  (`useMove`): every verb names its move before it writes, and a change of address no verb named is
+  a traversal the reader made, read as `back`. Places alone cannot say it — a folder inside a folder
+  and its parent are the same view either way round.
+- **A page with a way up swipes back.** `useSwipeBack(parent)` beside each `‹` (a deck, a folder, a
+  trade) lends the page a horizontal touch drag (`@use-gesture/react`'s `useDrag`): the parent page is
+  mounted beneath under its own key, follows the drag, and on a let-go past 35% of the width (or a
+  0.5 px/ms flick) `up(parent)` lands on that same layer — its scroll and state intact, no second
+  arrival. Short of the line both spring back and the page beneath is dropped. Not from inside a
+  field, a range or anything that scrolls sideways. Android's own edge gesture is still the system's
+  Back, and animates as one.
+- **Every dialog is a page sheet** (`DialogHost.sheets`, lent by `PhoneFace`): it rises from the
+  foot of the glass (`motion.ts`'s `sheet`) instead of the desktop's centred scale, and a full-height
+  one stops 12px under the top inset with rounded top corners. The six phone sheets that padded the
+  top inset themselves (card, filters, tags, add cards, trade scan, import) no longer do.
+- **A sheet pulls down by its body**, not only its header, wherever what is under the finger is
+  scrolled to its top — touch events, because a browser cancels a pointer drag on anything it may
+  scroll. **`filterTaps` is never used**: with touch events it never sees a mouse begin, so it
+  swallowed every mouse click inside a sheet or a drill-down page (the web app below 1024px). The
+  suite caught it at once: 121 tests whose presses went nowhere.
+- **The tab bar wears a marker**: a soft gold lozenge behind the current tab that slides on
+  `SPRING.marker` (`layoutId`, scoped per bar by a `LayoutGroup`); a tab squeezes on
+  `pressSpring`; the header's title fades in with its page; a card tile on a phone wall dips on
+  `PRESS` (`CardTile`'s `pressClassName`, which the desktop walls do not pass).
+- **Measured in headless Chromium at 390 × 844 under touch emulation over `mobile:dev`**: a push
+  drew both pages mid-slide with the parallax; a CDP touch drag of 224px on a folder page drew the
+  gallery beneath and landed on `/decks` with one layer left; a body drag of 180px on the filters
+  sheet followed the finger (`translateY(172px)`) and closed it. Not yet driven on a phone: the
+  Android WebView's gesture-navigation insets and iOS Safari's own edge swipe (which plays its
+  snapshot and then our Back) are a real device's to judge.
+- **The Life tracker has the same pass** (`life-tracker.md` §4, *Motion and touch*), on both faces:
+  the board rises over the setup, a hold visibly sinks the panel before the calculator opens, a
+  commander swipe drags the panel with the finger, the panels turn the short way round to face the
+  counted player, the total pops on every change, the calculator and menu rise out of the scrim, and
+  the setup's choices slide one marker.
+- **Kept, deliberately**: seven tabs (an iPhone bar holds five — folding two into a *More* would be
+  a navigation change for the owner to decide), no long-press and no swipe actions on a row (§7.5's
+  reason), no pull-to-refresh (the data is local). The design canvas for this pass is the owner's
+  artifact *Light app — motion & gestures*.
+
 ## 8. The Android host — phase 4, a step at a time
 
 **Decided by Markus, 2026-10-03**, before anything was built: **the APK is built in CI** (this

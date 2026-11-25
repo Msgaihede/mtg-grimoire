@@ -149,6 +149,22 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   shadow tree, so there is no button to press and no hit test to miss. `motion.test.ts` sweeps
   `packages/ui/` for the class instead, slicing each `<input>` tag brace- and comment-aware, and pins
   four ways that sweep could go vacuously green.
+- **Springs, for what a finger starts, since 2026-11-25** (the light app's "feel like an iPhone
+  app" pass, `light-app.md` §7.10). `SPRING.surface` / `.marker` / `.press` are timed by
+  `visualDuration` on the existing tiers (`slow` / `base` / `fast`) — `motion.test.ts` holds
+  `visualDuration` to the tier set as it holds `duration` — because a let-go mid-drag is already
+  moving and a tween restarts from rest. **`bounce: 0` on anything docked to an edge**: a sheet that
+  overshoots lifts off the foot and shows scrim under it, a page shows a strip of the page beneath.
+  `sheet` is the phone's dialog preset (`DialogHost.sheets`), `PAGE` the page stack's geometry
+  (`apps/light/phone/PageStack.tsx`), `pressSpring` a finger's press for a `motion` element.
+- **The Life tracker's three** (2026-11-25): `holdSqueeze(holdMs)` is a function because its length
+  is the hold's, not a tier (gesture intent, as `STACK_CLOSE_DELAY_MS` is); `NUMBER_POP` is the
+  total's pop on `SPRING.press`; `PULL`/`pulled` the commander swipe's rubber band.
+- **The page stack and the sheet drag animate motion values by hand** (`animate(value, …)`), which
+  `MotionConfig reducedMotion` does not reach — so both read `useReducedMotion()` and swap travel
+  for a cross-fade themselves. A swipe still follows the finger under reduced motion: that is the
+  reader's own movement. Under `skipAnimations` (the suite) the stack sets no start state at all,
+  so a page is never caught at `opacity: 0` by `toBeVisible`.
 - **Cost: +41.4 kB gzip** for the full `motion.*` surface against the app's 176 kB (esbuild
   `--bundle --minify`, `NODE_ENV=production`, gzip -9). `m` + `LazyMotion(domAnimation)` measures
   +29.3 kB and code-splits; it was **not** taken, because the app loads from local disk in a

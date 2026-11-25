@@ -12,6 +12,7 @@ import {
   tabLinkTo,
   up,
   upLinkTo,
+  useMove,
   usePlace,
 } from "./router";
 
@@ -772,5 +773,55 @@ describe("up", () => {
     await landed;
     expect(url()).toBe("/trade");
     expect(window.history.state).toEqual({ ...PUSHED, depth: 1, over: "/search" });
+  });
+});
+
+/**
+ * Which way the reader moved — what the page stack animates a new page by (`PageStack.tsx`). Only
+ * the verb knows: a folder inside a folder and its parent are the same view, either way round.
+ */
+describe("the move a change of place was", () => {
+  const tab = (view: Place["view"]): Place => ({ view, deckId: null, cardId: null });
+  const deck: Place = { ...tab("decks"), deckId: 5 };
+
+  it("is forward for a push, back for a way up, and a switch for a tab", async () => {
+    window.history.replaceState(null, "", "/search");
+    const { result } = renderHook(() => useMove());
+
+    act(() => switchTo(tab("decks")));
+    expect(result.current).toEqual({ href: "/decks", move: "switch" });
+
+    act(() => navigate(deck));
+    expect(result.current).toEqual({ href: "/decks/5", move: "forward" });
+
+    const landed = popped();
+    act(() => up(tab("decks")));
+    await act(() => landed);
+    expect(result.current).toEqual({ href: "/decks", move: "back" });
+  });
+
+  it("is back for a traversal no verb made — Android's gesture, a browser's Back", async () => {
+    window.history.replaceState(null, "", "/decks");
+    const { result } = renderHook(() => useMove());
+    act(() => navigate(deck));
+    expect(result.current.move).toBe("forward");
+
+    const left = popped();
+    act(() => window.history.back());
+    await act(() => left);
+    expect(result.current).toEqual({ href: "/decks", move: "back" });
+  });
+
+  it("is back for a card closed by back(), and the next push is forward again", async () => {
+    window.history.replaceState(null, "", "/decks");
+    const { result } = renderHook(() => useMove());
+    act(() => navigate({ ...tab("decks"), cardId: "9" }));
+    const closed = popped();
+    act(() => back(tab("decks")));
+    await act(() => closed);
+    expect(result.current.move).toBe("back");
+
+    act(() => navigate(deck));
+    expect(result.current.move).toBe("forward");
   });
 });

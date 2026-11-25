@@ -29,12 +29,12 @@ import {
   type JSX,
   type PointerEvent,
 } from "react";
-import { useReducedMotion } from "motion/react";
+import { animate, AnimatePresence, useMotionValue, useReducedMotion } from "motion/react";
 import { Menu } from "lucide-react";
 import { useBackClaim } from "@/lib/dialogHost";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
-import { PRESS_STILL } from "@/lib/motion";
+import { PRESS_STILL, pulled, SPRING } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { resolveSeating, type LifeSetup } from "../types";
 import { commonSize } from "../game/fit";
@@ -183,6 +183,11 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
   const longTimer = useRef(0);
   const longFired = useRef(false);
   const swipe = useRef<{ seat: number; x: number; y: number; at: number } | null>(null);
+  /** The seat a press is being held on, drawn sinking (`holdSqueeze`) until the hold fires. */
+  const [held, setHeld] = useState<number | null>(null);
+  /** The panel a commander swipe is on, and how far it follows the finger in its own frame. */
+  const [pulling, setPulling] = useState<number | null>(null);
+  const pull = useMotionValue(0);
 
   const openCalc = (seat: number) => act((at) => ({ type: "openCalc", seat, now: at }));
 
@@ -198,8 +203,10 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
     window.clearTimeout(longTimer.current);
     longTimer.current = window.setTimeout(() => {
       longFired.current = true;
+      setHeld(null);
       openCalc(seat);
     }, HOLD_MS);
+    setHeld(seat);
     swipe.current = { seat, x: e.clientX, y: e.clientY, at: Date.now() };
   };
 
@@ -211,7 +218,55 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
     act((at) => ({ type: "tap", seat, by, now: at }));
   };
 
-  const letGo = () => window.clearTimeout(longTimer.current);
+  const letGo = () => {
+    window.clearTimeout(longTimer.current);
+    setHeld(null);
+  };
+
+  /**
+   * The panel a commander swipe from `s` is about, whether it closes, and the turn of that panel's
+   * frame — or `null` where no swipe can do anything: not a Commander game, an overlay up, or a
+   * swipe on another player's panel while one seat's damage is open.
+   */
+  const swipeable = (s: { seat: number }) => {
+    if (!game.setup.commander || view.edit || view.spin || view.menu || !plan) return null;
+    const closing = view.cmdFor !== null;
+    if (closing && s.seat !== view.cmdFor && s.seat < n) return null;
+    const who = closing ? view.cmdFor! : s.seat;
+    const rect = plan.seats[who];
+    return rect ? { who, closing, rot: rect.rot } : null;
+  };
+
+  /**
+   * **The panel follows a commander swipe** while the finger is down (2026-11-25): rubber-banded
+   * along "up" in its own frame (`pulled`), up to open and down to close — so the reader sees the
+   * board listening before the let-go decides. Only once the move is more along than across.
+   */
+  const follow = (dx: number, dy: number) => {
+    const s = swipe.current;
+    const on = s ? swipeable(s) : null;
+    if (!on) return;
+    const { up, across } = inSeatFrame(on.rot, dx, dy);
+    const far = on.closing ? -up : up;
+    if (far <= HOLD_SLOP_PX || far <= Math.abs(across)) {
+      pull.set(0);
+      return;
+    }
+    if (pulling !== on.who) setPulling(on.who);
+    // In the panel's frame "up" is towards its top: negative y to open, positive to close.
+    pull.set(on.closing ? pulled(far) : -pulled(far));
+  };
+
+  /** Whatever the let-go decides, the panel springs home — and stops following once it is there. */
+  const release = () => {
+    if (pulling === null) return;
+    if (reduced) {
+      pull.set(0);
+      setPulling(null);
+      return;
+    }
+    void animate(pull, 0, SPRING.surface).then(() => setPulling(null));
+  };
 
   /**
    * On release: far enough, quick enough, and more up than across, **measured in the panel's own
@@ -228,12 +283,10 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
     const dy = e.clientY - s.y;
     // A finger that travelled was not tapping − or +: a drag the wrong way changes nothing.
     if (Math.hypot(dx, dy) > TAP_SLOP_PX) longFired.current = true;
-    if (!game.setup.commander || view.edit || view.spin || view.menu || !plan) return;
-    const closing = view.cmdFor !== null;
-    if (closing && s.seat !== view.cmdFor && s.seat < n) return;
-    const rect = plan.seats[closing ? view.cmdFor! : s.seat];
-    if (!rect) return;
-    const { up, across } = inSeatFrame(rect.rot, dx, dy);
+    const on = swipeable(s);
+    if (!on) return;
+    const closing = on.closing;
+    const { up, across } = inSeatFrame(on.rot, dx, dy);
     const far = closing ? -up : up;
     if (far < SWIPE_PX || far < Math.abs(across) * 1.5 || Date.now() - s.at > SWIPE_MS) return;
     window.clearTimeout(longTimer.current);
@@ -366,19 +419,26 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
         onPointerDown={() => dispatch({ type: "pressElsewhere" })}
         onPointerMove={(e) => {
           const s = swipe.current;
-          if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > HOLD_SLOP_PX) letGo();
+          if (!s) return;
+          const dx = e.clientX - s.x;
+          const dy = e.clientY - s.y;
+          if (Math.hypot(dx, dy) > HOLD_SLOP_PX) letGo();
+          follow(dx, dy);
         }}
         onPointerUp={(e) => {
           swipeEnd(e);
           letGo();
+          release();
         }}
         onPointerCancel={() => {
           swipe.current = null;
           letGo();
+          release();
         }}
         onPointerLeave={() => {
           swipe.current = null;
           letGo();
+          release();
         }}
         // A held press is the calculator, not the platform's long-press menu.
         onContextMenu={(e) => e.preventDefault()}
@@ -415,6 +475,9 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
                   now={now}
                   reduced={reduced}
                   act={panelActions}
+                  held={held === i}
+                  holdMs={HOLD_MS}
+                  pull={pulling === i ? pull : null}
                 />
               );
             })}
@@ -456,15 +519,24 @@ export function LifeBoard({ setup, resume, onLeave }: LifeBoardProps): JSX.Eleme
               <Menu aria-hidden size={20} strokeWidth={2} />
             </button>
 
-            {view.edit && editRect && (
-              <CalculatorDialog
-                game={game}
-                edit={view.edit}
-                rot={editRect.rot}
-                dispatch={dispatch}
-              />
-            )}
-            {view.menu && <GameMenu game={game} dispatch={dispatch} onPickFirst={pickFirst} />}
+            {/* Each rises out of the board's own scrim and sinks back into it (`popup`), rather than
+                appearing — one presence each, so closing one never waits on the other. */}
+            <AnimatePresence>
+              {view.edit && editRect && (
+                <CalculatorDialog
+                  key="calculator"
+                  game={game}
+                  edit={view.edit}
+                  rot={editRect.rot}
+                  dispatch={dispatch}
+                />
+              )}
+            </AnimatePresence>
+            <AnimatePresence>
+              {view.menu && (
+                <GameMenu key="menu" game={game} dispatch={dispatch} onPickFirst={pickFirst} />
+              )}
+            </AnimatePresence>
           </>
         )}
       </div>

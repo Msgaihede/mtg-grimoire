@@ -1,8 +1,9 @@
 import { useRef, type KeyboardEvent } from "react";
+import { motion, useIsPresent } from "motion/react";
 import { Delete } from "lucide-react";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
-import { PRESS } from "@/lib/motion";
+import { popup, PRESS, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { cn } from "@/lib/utils";
 import { KEYS, SPOKEN, calcDisplay, type CalcKey } from "../game/calculator";
@@ -56,6 +57,9 @@ export function CalculatorDialog({
   dispatch: (action: BoardAction) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // False from the render the close starts in: on its way out the overlay is a picture — nothing
+  // to press and nothing for a screen reader, `Dialog`'s rule.
+  const present = useIsPresent();
   const close = () => dispatch({ type: "closeCalc" });
   useOverlayFocus(panelRef, close);
 
@@ -85,8 +89,12 @@ export function CalculatorDialog({
   };
 
   return (
-    <div className={cn("absolute inset-0", LAYER.popup)}>
-      <button
+    <div
+      className={cn("absolute inset-0", LAYER.popup, !present && "pointer-events-none")}
+      aria-hidden={present ? undefined : true}
+    >
+      <motion.button
+        {...scrim}
         type="button"
         tabIndex={-1}
         aria-label="Cancel"
@@ -96,95 +104,99 @@ export function CalculatorDialog({
         }}
         className="absolute inset-0 size-full cursor-default border-0 bg-[color-mix(in_oklab,var(--color-bg)_72%,transparent)] p-0"
       />
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${name}, ${whose}`}
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-        className="absolute top-1/2 left-1/2 box-border flex w-[320px] flex-col gap-2 rounded-[var(--radius)] border border-border bg-surface p-3 outline-none"
-        style={{ transform: `translate(-50%, -50%) rotate(${rot}deg)` }}
-      >
-        <div className="flex flex-col gap-0.5 px-1 pt-0.5 pb-1">
-          <span className="h-[18px] truncate text-[13px] leading-[18px] font-semibold text-text">
-            {name}
-          </span>
-          <div
-            aria-live="polite"
-            className="flex h-[38px] items-center justify-end font-mono leading-none font-semibold whitespace-nowrap tabular-nums"
-            style={{
-              fontSize: Math.floor(Math.max(14, Math.min(32, 284 / (0.61 * shown.value.length)))),
-              color: shown.touched ? "var(--color-text)" : "var(--color-dim)",
-            }}
-          >
-            {shown.value}
+      {/* The panel rises out of the scrim (`popup`) from a point at the board's centre: the box
+          that scales is this one, and the panel's own turn and centring are left as they read. */}
+      <motion.div {...popup} className="absolute top-1/2 left-1/2 size-0">
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${name}, ${whose}`}
+          tabIndex={-1}
+          onKeyDown={onKeyDown}
+          className="absolute top-1/2 left-1/2 box-border flex w-[320px] flex-col gap-2 rounded-[var(--radius)] border border-border bg-surface p-3 outline-none"
+          style={{ transform: `translate(-50%, -50%) rotate(${rot}deg)` }}
+        >
+          <div className="flex flex-col gap-0.5 px-1 pt-0.5 pb-1">
+            <span className="h-[18px] truncate text-[13px] leading-[18px] font-semibold text-text">
+              {name}
+            </span>
+            <div
+              aria-live="polite"
+              className="flex h-[38px] items-center justify-end font-mono leading-none font-semibold whitespace-nowrap tabular-nums"
+              style={{
+                fontSize: Math.floor(Math.max(14, Math.min(32, 284 / (0.61 * shown.value.length)))),
+                color: shown.touched ? "var(--color-text)" : "var(--color-dim)",
+              }}
+            >
+              {shown.value}
+            </div>
+            <div
+              className={cn(
+                "flex h-[18px] items-center justify-end leading-[18px] whitespace-nowrap",
+                shown.lineIsAnswer
+                  ? "font-mono text-[15px] font-semibold text-accent"
+                  : "text-xs text-dim",
+              )}
+            >
+              {shown.line}
+            </div>
           </div>
-          <div
-            className={cn(
-              "flex h-[18px] items-center justify-end leading-[18px] whitespace-nowrap",
-              shown.lineIsAnswer
-                ? "font-mono text-[15px] font-semibold text-accent"
-                : "text-xs text-dim",
-            )}
-          >
-            {shown.line}
+
+          <div className="grid grid-cols-5 gap-1.5">
+            {KEYS.map((key) => {
+              const held = shown.op === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={SPOKEN[key] ?? key}
+                  onClick={() => press(key)}
+                  className={cn(
+                    "flex h-12 cursor-pointer items-center justify-center rounded-md border border-border p-0 font-mono leading-none font-medium",
+                    PRESS,
+                    FOCUS,
+                    held
+                      ? "bg-accent text-2xl text-accent-fg"
+                      : SIGN_KEYS.has(key)
+                        ? "bg-bg text-2xl text-accent"
+                        : key === "del" || key === "C"
+                          ? "bg-transparent text-lg text-dim"
+                          : "bg-bg text-xl text-text",
+                  )}
+                >
+                  {key === "del" ? <Delete aria-hidden size={22} strokeWidth={2} /> : key}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={close}
+              className={cn(
+                "h-11 cursor-pointer rounded-md border border-border bg-transparent px-3 text-sm text-text",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={apply}
+              className={cn(
+                "h-11 cursor-pointer rounded-md border-0 bg-accent px-3 text-sm font-semibold text-accent-fg",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              {shown.applyLabel}
+            </button>
           </div>
         </div>
-
-        <div className="grid grid-cols-5 gap-1.5">
-          {KEYS.map((key) => {
-            const held = shown.op === key;
-            return (
-              <button
-                key={key}
-                type="button"
-                aria-label={SPOKEN[key] ?? key}
-                onClick={() => press(key)}
-                className={cn(
-                  "flex h-12 cursor-pointer items-center justify-center rounded-md border border-border p-0 font-mono leading-none font-medium",
-                  PRESS,
-                  FOCUS,
-                  held
-                    ? "bg-accent text-2xl text-accent-fg"
-                    : SIGN_KEYS.has(key)
-                      ? "bg-bg text-2xl text-accent"
-                      : key === "del" || key === "C"
-                        ? "bg-transparent text-lg text-dim"
-                        : "bg-bg text-xl text-text",
-                )}
-              >
-                {key === "del" ? <Delete aria-hidden size={22} strokeWidth={2} /> : key}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            onClick={close}
-            className={cn(
-              "h-11 cursor-pointer rounded-md border border-border bg-transparent px-3 text-sm text-text",
-              PRESS,
-              FOCUS,
-            )}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={apply}
-            className={cn(
-              "h-11 cursor-pointer rounded-md border-0 bg-accent px-3 text-sm font-semibold text-accent-fg",
-              PRESS,
-              FOCUS,
-            )}
-          >
-            {shown.applyLabel}
-          </button>
-        </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

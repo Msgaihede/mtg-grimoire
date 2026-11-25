@@ -57,12 +57,12 @@ export function TradeScan({
       open={open}
       title="Scan cards"
       closeLabel="Close scanner"
-      // `AddCards`' shape, wider: the whole window below 640px, with the top inset taken because
-      // the shell's header is underneath. Above it the panel takes what the scrim leaves — the
+      // `AddCards`' shape, wider: the whole window below 640px, less the page sheet's sliver and
+      // the top inset the scrim keeps. Above it the panel takes what the scrim leaves — the
       // page's two columns stand side by side whenever the phone is on its side (the `landscape:`
       // variant, at any width), and a 40rem panel there would leave the camera a sliver beside
       // the tray's 22rem.
-      size="h-full w-[56rem] pt-[env(safe-area-inset-top)] sm:pt-0"
+      size="h-full w-[56rem]"
       onDismiss={close}
       onClose={close}
     >
