@@ -3014,7 +3014,7 @@ fn nothing_is_held_across_a_turn(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::Write;
 
@@ -5491,6 +5491,7 @@ mod tests {
     /// the reader out of refreshing until they restarted the app.
     #[test]
     fn a_second_refresh_is_refused_and_the_claim_always_clears() {
+        let _serial = PAGE_REFRESHES.blocking_lock();
         {
             let held = RefreshGuard::claim().expect("first claim");
             assert!(RefreshGuard::claim().is_none(), "no second");
@@ -6063,8 +6064,11 @@ mod tests {
     // no files, and the response headers a cross-origin `fetch` hides hidden. The state is
     // the browser's too — one connection.
 
-    /// Held by every test here that runs a refresh: the claim is process-wide.
-    static PAGE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    /// Held by every test in this binary that claims the refresh — these that run one, the
+    /// claim's own test, and `commands`' every-command test, whose `combos_refresh` claims it in
+    /// passing. The claim is process-wide, so a claimer without this lock fails another at
+    /// random: the claim's own test lost its first claim to these on two runs in three.
+    pub(crate) static PAGE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn gzipped(body: &str) -> Vec<u8> {
         use flate2::{write::GzEncoder, Compression};

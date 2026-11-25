@@ -2685,6 +2685,8 @@ mod tests {
     /// `marketplace_feed`'s. Those are where a lock held across a chunk would fail by name.
     #[test]
     fn every_command_answers_on_one_connection_and_one_thread() {
+        // `combos_refresh` below claims the combo refresh, which is process-wide.
+        let _refreshes = crate::combos::tests::PAGE_REFRESHES.blocking_lock();
         let nowhere = httpmock::MockServer::start();
         let dir = crate::scratch::path("commands-alone");
         let _ = std::fs::remove_dir_all(&dir);
