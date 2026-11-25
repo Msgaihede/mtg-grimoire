@@ -469,6 +469,12 @@ commands! {
     };
     read combo_get in combos(id: String) = |conn| combo_by_id(conn, &id);
     read combos_for_cards in combos(card_ids: Vec<String>) = |conn| match_combos(conn, &card_ids);
+    read combos_near in combos(card_ids: Vec<String>, format: Option<String>, identity: Option<String>, limit: i64, offset: i64) = |conn| {
+        near_combos(conn, &card_ids, format.as_deref(), identity.as_deref(), limit, offset)
+    };
+    read combos_in_collection in combos(near: bool, format: Option<String>, identity: Option<String>, limit: i64, offset: i64) = |conn| {
+        collection_combos(conn, near, format.as_deref(), identity.as_deref(), limit, offset)
+    };
     blocking combos_status in combos() = |state| Ok(status_of(&state));
     task combos_refresh in combos(force: bool) = |state| async move {
         refresh(&state, force, &mut |phase, done, total| emit(&state, phase, done, total)).await

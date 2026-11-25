@@ -263,6 +263,15 @@ const TABLE_ONLY: &[(&str, &str)] = &[
         "one combo whole, for the MCP server's get_combo tool; the page reads combos a page at a \
      time through combos_for_card",
     ),
+    (
+        "combos_near",
+        "combos a deck is one card away from, for the MCP server's held_combos tool",
+    ),
+    (
+        "combos_in_collection",
+        "combos the reader's whole collection holds or is one card away from, for the MCP \
+     server's held_combos tool",
+    ),
 ];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
