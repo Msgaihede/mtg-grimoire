@@ -171,16 +171,38 @@ pub fn list() -> Vec<Value> {
         tool(
             "find_cards",
             "Find cards",
-            "Search the card database (every Magic card, not just the user's) by name. Answers \
-             printings with their Scryfall ids (cardId), which get_card takes. By default \
-             one printing per card; set allPrintings to choose a specific set's printing.",
+            "Search the card database (every Magic card, not just the user's) by name and by the \
+             Search page's filters. Answers printings with their Scryfall ids (cardId), which \
+             get_card takes. By default one printing per card; set allPrintings to choose a \
+             specific set's printing. Give query, filters, or both. Oracle tag slugs for \
+             filters.oracleTags come from find_tags; format keys from format_rules.",
             json!({
                 "query": { "type": "string", "description": "Words of the card's name." },
                 "set": { "type": "string", "description": "Only this set code, e.g. \"lea\"." },
                 "allPrintings": { "type": "boolean", "description": "Every printing rather than one per card." },
                 "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many to answer (default 10)." },
+                "filters": {
+                    "type": "object",
+                    "description": "The Search page's filter bar. Every field is optional; a card must pass all of them.",
+                    "properties": {
+                        "format": { "type": "string", "description": "A format key with legality data (see format_rules): only cards playable in it." },
+                        "colors": { "type": "array", "items": { "type": "string" }, "description": "Colour letters W, U, B, R, G, or just C for colourless: cards whose colour identity fits inside them." },
+                        "colorsExact": { "type": "boolean", "description": "With colors: exactly those colours, not a subset." },
+                        "types": { "type": "array", "items": { "type": "string" }, "description": "Card types: Artifact, Battle, Creature, Enchantment, Instant, Land, Planeswalker, Sorcery. Any one of them." },
+                        "rarities": { "type": "array", "items": { "type": "string" }, "description": "common, uncommon, rare, mythic, special or bonus. Any one of them." },
+                        "sets": { "type": "array", "items": { "type": "string" }, "description": "Set codes. Any one of them." },
+                        "manaValues": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 8 }, "description": "Mana values; 8 means 8 or more." },
+                        "manaX": { "type": "boolean", "description": "Also cards with {X} in their cost." },
+                        "owned": { "type": "boolean", "description": "true: only cards the user owns; false: only cards they do not." },
+                        "priceMin": { "type": "number", "minimum": 0, "description": "In the user's marketplace currency." },
+                        "priceMax": { "type": "number", "minimum": 0, "description": "In the user's marketplace currency." },
+                        "oracleTags": { "type": "array", "items": { "type": "string" }, "description": "Oracle tag slugs (from find_tags); a card must hold all of them." },
+                        "gameChanger": { "type": "boolean", "description": "true: only Commander game changers." },
+                    },
+                    "additionalProperties": false,
+                },
             }),
-            &["query"],
+            &[],
             &read,
         ),
         tool(
@@ -665,6 +687,27 @@ impl Args {
         }
     }
 
+    /// A number of zero or more; absent is `None`.
+    fn amount(&self, name: &str) -> Result<Option<f64>, String> {
+        match self.0.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_f64()
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .map(Some)
+                .ok_or_else(|| format!("{name} must be a number, zero or more.")),
+        }
+    }
+
+    /// True or false; absent is `None`, unlike [`Args::flag`], which reads absent as false.
+    fn switch(&self, name: &str) -> Result<Option<bool>, String> {
+        match self.0.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            Some(_) => Err(format!("{name} must be true or false.")),
+        }
+    }
+
     fn flag(&self, name: &str) -> Result<bool, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(false),
@@ -756,23 +799,200 @@ fn matches_words(name: &str, query: Option<&str>) -> bool {
     })
 }
 
+/// The fields `find_cards`' `filters` object may hold.
+const FILTER_FIELDS: [&str; 13] = [
+    "format",
+    "colors",
+    "colorsExact",
+    "types",
+    "rarities",
+    "sets",
+    "manaValues",
+    "manaX",
+    "owned",
+    "priceMin",
+    "priceMax",
+    "oracleTags",
+    "gameChanger",
+];
+
+/// `filters` read into the `SearchRequest` fields it sets, every value checked against its
+/// field's vocabulary first.
+async fn filter_fields(
+    state: &Arc<AppState>,
+    filters: &Args,
+) -> Result<Map<String, Value>, String> {
+    if let Some(key) = filters
+        .0
+        .keys()
+        .find(|k| !FILTER_FIELDS.contains(&k.as_str()))
+    {
+        return Err(format!(
+            "filters has no field {key:?}; its fields are: {}.",
+            FILTER_FIELDS.join(", ")
+        ));
+    }
+    let mut req = Map::new();
+    if let Some(typed) = filters.text("format")? {
+        let specs = run(state, "format_specs_list", json!({})).await?;
+        req.insert(
+            "format".into(),
+            json!(format_key(Some(typed), "filters.format", &specs)?),
+        );
+    }
+    let colors: Vec<String> = filters
+        .texts("colors")?
+        .iter()
+        .map(|c| c.to_uppercase())
+        .collect();
+    if let Some(bad) = colors
+        .iter()
+        .find(|c| !["W", "U", "B", "R", "G", "C"].contains(&c.as_str()))
+    {
+        return Err(format!(
+            "filters.colors cannot hold {bad:?}; use W, U, B, R, G, or C alone for colourless."
+        ));
+    }
+    if colors.iter().any(|c| c == "C") && colors.len() > 1 {
+        return Err(
+            "filters.colors cannot mix C (colourless) with other colours; use C alone.".to_owned(),
+        );
+    }
+    if !colors.is_empty() {
+        req.insert("colors".into(), json!(colors.concat()));
+    }
+    if let Some(exact) = filters.switch("colorsExact")? {
+        req.insert("colorsStrict".into(), json!(exact));
+    }
+    let mut types = Vec::new();
+    for typed in filters.texts("types")? {
+        let Some(key) = grimoire_core::cardtypes::TYPE_KEYS
+            .iter()
+            .find(|k| k.eq_ignore_ascii_case(&typed))
+        else {
+            return Err(format!(
+                "filters.types cannot hold {typed:?}; use any of: {}.",
+                grimoire_core::cardtypes::TYPE_KEYS.join(", ")
+            ));
+        };
+        types.push(*key);
+    }
+    if !types.is_empty() {
+        req.insert("types".into(), json!(types));
+    }
+    let mut rarities = Vec::new();
+    for typed in filters.texts("rarities")? {
+        let typed = typed.to_lowercase();
+        if !grimoire_core::filters::ALL_RARITIES.contains(&typed.as_str()) {
+            return Err(format!(
+                "filters.rarities cannot hold {typed:?}; use any of: {}.",
+                grimoire_core::filters::ALL_RARITIES.join(", ")
+            ));
+        }
+        rarities.push(typed);
+    }
+    if !rarities.is_empty() {
+        req.insert("rarities".into(), json!(rarities));
+    }
+    let sets: Vec<String> = filters
+        .texts("sets")?
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
+    if !sets.is_empty() {
+        req.insert("sets".into(), json!(sets));
+    }
+    match filters.0.get("manaValues") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(values)) => {
+            let mut mana = Vec::new();
+            for v in values {
+                let Some(n) = v.as_u64().filter(|n| *n <= 8) else {
+                    return Err(format!(
+                        "filters.manaValues cannot hold {v}; use whole numbers from 0 to 8 (8 means 8 or more)."
+                    ));
+                };
+                mana.push(n);
+            }
+            if !mana.is_empty() {
+                req.insert("manaValues".into(), json!(mana));
+            }
+        }
+        Some(_) => return Err("filters.manaValues must be a list of whole numbers.".to_owned()),
+    }
+    if filters.flag("manaX")? {
+        req.insert("manaX".into(), json!(true));
+    }
+    if let Some(owned) = filters.switch("owned")? {
+        req.insert("owned".into(), json!(owned));
+    }
+    for field in ["priceMin", "priceMax"] {
+        if let Some(n) = filters.amount(field)? {
+            req.insert(field.into(), json!(n));
+        }
+    }
+    let tags = filters.texts("oracleTags")?;
+    if !tags.is_empty() {
+        if tags.len() > 64 {
+            return Err("filters.oracleTags takes at most 64 tags.".to_owned());
+        }
+        let asks: Vec<Value> = tags
+            .iter()
+            .map(|t| json!({ "namespace": "oracle", "value": t }))
+            .collect();
+        let resolved = run(state, "tag_resolve", json!({ "asks": asks })).await?;
+        let resolved = resolved.as_array().cloned().unwrap_or_default();
+        let mut slugs = Vec::new();
+        for (typed, hit) in tags.iter().zip(resolved.iter()) {
+            let Some(slug) = hit.get("slug").and_then(Value::as_str) else {
+                return Err(format!(
+                    "filters.oracleTags has no tag {typed:?}; look slugs up with find_tags."
+                ));
+            };
+            slugs.push(slug.to_owned());
+        }
+        req.insert(
+            "oracleTags".into(),
+            json!({ "include": slugs, "exclude": [] }),
+        );
+    }
+    if filters.flag("gameChanger")? {
+        req.insert(
+            "predicates".into(),
+            json!([{ "field": "is", "op": "colon", "value": "gamechanger" }]),
+        );
+    }
+    Ok(req)
+}
+
 async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
-    let query = args.required_text("query")?;
+    let query = args.text("query")?;
+    let filters = match args.0.get("filters") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(map)) if !map.is_empty() => Some(Args(map.clone())),
+        Some(Value::Object(_)) => None,
+        Some(_) => return Err("filters must be an object.".to_owned()),
+    };
+    if query.is_none() && filters.is_none() {
+        return Err(concat!(
+            "find_cards needs a query (words of the card's name) ",
+            "or at least one field in filters."
+        )
+        .to_owned());
+    }
     let set = args.text("set")?.map(|s| s.to_lowercase());
     let limit = args.bounded("limit", 10, 1, 50)?;
     let all = args.flag("allPrintings")?;
-    let found = run(
-        state,
-        "search_cards",
-        json!({ "req": {
-            "text": query,
-            "setCode": set,
-            "collapse": !all,
-            "paperOnly": true,
-            "limit": limit,
-        }}),
-    )
-    .await?;
+    let mut req = match &filters {
+        Some(filters) => filter_fields(state, filters).await?,
+        None => Map::new(),
+    };
+    req.insert("text".into(), json!(query));
+    req.insert("setCode".into(), json!(set));
+    req.insert("collapse".into(), json!(!all));
+    req.insert("paperOnly".into(), json!(true));
+    req.insert("limit".into(), json!(limit));
+    let found = run(state, "search_cards", json!({ "req": req })).await?;
     let cards: Vec<Value> = rows(&found, "items")
         .iter()
         .map(|c| {
@@ -968,8 +1188,8 @@ async fn find_tags(state: &Arc<AppState>, args: &Args) -> Result<Value, String> 
 /// The searchable format key `args` names, lower-cased; `None` when it names none. A key with no
 /// legality data (`casual`, `limited`, `unspecified`) would silently match nothing, so it is
 /// refused with the keys that do work. `specs` is `format_specs_list`'s answer.
-fn format_key(args: &Args, specs: &Value) -> Result<Option<String>, String> {
-    let Some(key) = args.text("format")? else {
+fn format_key(typed: Option<String>, field: &str, specs: &Value) -> Result<Option<String>, String> {
+    let Some(key) = typed else {
         return Ok(None);
     };
     let key = key.to_lowercase();
@@ -984,7 +1204,7 @@ fn format_key(args: &Args, specs: &Value) -> Result<Option<String>, String> {
         Ok(Some(key))
     } else {
         Err(format!(
-            "format cannot be {key:?}; the searchable formats are: {}.",
+            "{field} cannot be {key:?}; the searchable formats are: {}.",
             searchable.join(", ")
         ))
     }
@@ -994,9 +1214,9 @@ async fn similar_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, Stri
     let card_id = args.required_text("cardId")?;
     let limit = args.bounded("limit", 10, 1, 50)?;
     let identity = args.text("identity")?.map(|i| i.to_uppercase());
-    let format = if args.text("format")?.is_some() {
+    let format = if let Some(typed) = args.text("format")? {
         let specs = run(state, "format_specs_list", json!({})).await?;
-        format_key(args, &specs)?
+        format_key(Some(typed), "format", &specs)?
     } else {
         None
     };
@@ -3453,5 +3673,237 @@ mod tests {
         let why = refused(&state, "format_rules", json!({ "format": "nonesuch" })).await;
         assert!(why.contains("commander"), "{why}");
         assert!(!why.contains("  "), "{why}");
+    }
+
+    // ---- find_cards' filters ---------------------------------------------------------------
+
+    /// A paper printing `id` named `name` with the columns the filters read.
+    #[allow(clippy::too_many_arguments)]
+    fn filter_card(
+        c: &rusqlite::Connection,
+        id: &str,
+        name: &str,
+        identity: &str,
+        type_line: &str,
+        cmc: f64,
+        rarity: &str,
+        commander_legal: bool,
+        game_changer: bool,
+    ) {
+        grimoire_core::schema::fixtures::seed_card(c, id, "lea", "1");
+        let legal = if commander_legal {
+            grimoire_core::legalities::bit("commander").unwrap() as i64
+        } else {
+            0
+        };
+        c.execute(
+            "UPDATE cards SET name = ?2, color_identity = ?3, type_line = ?4, type_mask = ?5,
+                cmc = ?6, rarity = ?7, legal_mask = ?8, game_changer = ?9, is_paper = 1,
+                search_text = ?2
+             WHERE id = ?1",
+            rusqlite::params![
+                id,
+                name,
+                identity,
+                type_line,
+                grimoire_core::cardtypes::type_mask(type_line),
+                cmc,
+                rarity,
+                legal,
+                game_changer
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Three cards that differ on every filter's column.
+    fn filter_cards(c: &rusqlite::Connection) {
+        filter_card(
+            c,
+            "f-bolt",
+            "Bolt Mage",
+            "R",
+            "Instant",
+            1.0,
+            "common",
+            true,
+            false,
+        );
+        filter_card(
+            c,
+            "f-drake",
+            "Blue Drake",
+            "U",
+            "Creature - Drake",
+            3.0,
+            "rare",
+            true,
+            false,
+        );
+        filter_card(
+            c,
+            "f-gold",
+            "Gold Thing",
+            "UR",
+            "Creature - Elemental",
+            5.0,
+            "mythic",
+            false,
+            true,
+        );
+        // The name index a `query` reads.
+        c.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+    }
+
+    fn names(found: &Value) -> Vec<String> {
+        let mut names: Vec<String> = found["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn find_cards_filters_by_format_colours_types_and_mana_value() {
+        let state = state("find-cards-filters");
+        seed(&state, filter_cards);
+        let find = |filters: Value| {
+            let state = state.clone();
+            async move { done(&state, "find_cards", json!({ "filters": filters })).await }
+        };
+        assert_eq!(
+            names(&find(json!({ "format": "commander" })).await),
+            ["Blue Drake", "Bolt Mage"]
+        );
+        // Identity inside U: the blue card, not the gold one or the red one.
+        assert_eq!(
+            names(&find(json!({ "colors": ["U"] })).await),
+            ["Blue Drake"]
+        );
+        assert_eq!(
+            names(&find(json!({ "colors": ["U", "R"] })).await),
+            ["Blue Drake", "Bolt Mage", "Gold Thing"]
+        );
+        assert_eq!(
+            names(&find(json!({ "colors": ["U", "R"], "colorsExact": true })).await),
+            ["Gold Thing"]
+        );
+        assert_eq!(
+            names(&find(json!({ "types": ["Instant"] })).await),
+            ["Bolt Mage"]
+        );
+        assert_eq!(
+            names(&find(json!({ "types": ["Creature"], "rarities": ["mythic"] })).await),
+            ["Gold Thing"]
+        );
+        assert_eq!(
+            names(&find(json!({ "manaValues": [3] })).await),
+            ["Blue Drake"]
+        );
+        assert_eq!(
+            names(&find(json!({ "manaValues": [1, 8] })).await),
+            ["Bolt Mage"]
+        );
+        assert_eq!(names(&find(json!({ "sets": ["lea"] })).await).len(), 3);
+        // A query narrows beside the filters.
+        let both = done(
+            &state,
+            "find_cards",
+            json!({ "query": "bolt", "filters": { "format": "commander" } }),
+        )
+        .await;
+        assert_eq!(names(&both), ["Bolt Mage"]);
+    }
+
+    #[tokio::test]
+    async fn a_format_typed_with_capitals_is_accepted() {
+        let state = state("find-cards-format-capitals");
+        seed(&state, filter_cards);
+        let got = done(
+            &state,
+            "find_cards",
+            json!({ "filters": { "format": "Commander" } }),
+        )
+        .await;
+        assert_eq!(names(&got), ["Blue Drake", "Bolt Mage"]);
+    }
+
+    #[tokio::test]
+    async fn game_changers_are_a_filter() {
+        let state = state("find-cards-game-changers");
+        seed(&state, filter_cards);
+        let got = done(
+            &state,
+            "find_cards",
+            json!({ "filters": { "gameChanger": true } }),
+        )
+        .await;
+        assert_eq!(names(&got), ["Gold Thing"]);
+    }
+
+    #[tokio::test]
+    async fn oracle_tags_narrow_and_an_unknown_tag_is_refused_naming_find_tags() {
+        let state = state("find-cards-oracle-tags");
+        seed(&state, |c| {
+            filter_cards(c);
+            tag(c, "ramp", "Ramp", &["o-f-drake", "o-f-gold"]);
+            tag(c, "removal", "Removal", &["o-f-gold", "o-f-bolt"]);
+            tags_downloaded(c);
+        });
+        let got = done(
+            &state,
+            "find_cards",
+            json!({ "filters": { "oracleTags": ["ramp"] } }),
+        )
+        .await;
+        assert_eq!(names(&got), ["Blue Drake", "Gold Thing"]);
+        let both = done(
+            &state,
+            "find_cards",
+            json!({ "filters": { "oracleTags": ["ramp", "removal"] } }),
+        )
+        .await;
+        assert_eq!(names(&both), ["Gold Thing"]);
+        let why = refused(
+            &state,
+            "find_cards",
+            json!({ "filters": { "oracleTags": ["ramp", "nonesuch"] } }),
+        )
+        .await;
+        assert!(why.contains("find_tags"), "{why}");
+        assert!(why.contains("nonesuch"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_filter_value_is_refused_naming_its_field() {
+        let state = state("find-cards-bad-values");
+        seed(&state, filter_cards);
+        for (field, value) in [
+            ("colors", json!(["X"])),
+            ("types", json!(["Wizard"])),
+            ("rarities", json!(["epic"])),
+            ("format", json!("casual")),
+            ("manaValues", json!([9])),
+            ("nonsense", json!(true)),
+        ] {
+            let why = refused(&state, "find_cards", json!({ "filters": { field: value } })).await;
+            assert!(why.contains(field), "{field}: {why}");
+            assert!(!why.contains("  "), "{field}: {why}");
+        }
+    }
+
+    #[tokio::test]
+    async fn find_cards_needs_a_query_or_a_filter() {
+        let state = state("find-cards-needs-something");
+        let why = refused(&state, "find_cards", json!({})).await;
+        assert!(why.contains("query") && why.contains("filters"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+        let why = refused(&state, "find_cards", json!({ "filters": {} })).await;
+        assert!(why.contains("filters"), "{why}");
     }
 }
