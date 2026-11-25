@@ -140,6 +140,13 @@ the board. Everything here is the shared feature's, so both faces have it; the t
 - **The setup's one-of-many choices** (Players, Seating, Starting life) slide one marker between
   segments (`JoinedChoices`' `slide`, `SPRING.marker`).
 - Under reduced motion the squeeze, the pop, the follow and the turn are gone; the fades stay.
+- **Nothing at rest moved — the board's look is the design's** (the owner's ask, 2026-11-25).
+  Measured by pixel against the commit before this pass (`a48e0b5`), over the fake at 390 × 844
+  and 1280 × 800: the board, a total moved, the calculator and the game menu are identical; commander
+  damage open and closed differ only in sub-threshold antialiasing; the setup's pressed segments
+  differ by a pixel of antialiasing on their corner curve (the marker takes its segment's own
+  corners, `rounded-[inherit]`). The one visible change on the phone's setup is the app-wide tab
+  bar's marker, which is the shell's and not the tracker's.
 
 ## 5. Immersive: the bars, the rotation and the screen
 
