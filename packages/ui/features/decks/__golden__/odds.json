@@ -1,0 +1,3610 @@
+{
+  "about": "Written by packages/ui/features/decks/golden/stats.golden.test.ts from openingHand.ts' handOdds and choose; read by crates/grimoire-core/src/deck_stats/odds.rs. Never edited by hand.",
+  "base": {
+    "promoTypes": null,
+    "id": 0,
+    "cardId": "c-Lightning Bolt",
+    "categoryId": 1,
+    "categoryName": "Main deck",
+    "categoryKind": "main",
+    "categoryActive": true,
+    "variant": "live",
+    "finish": null,
+    "labelId": null,
+    "labelName": null,
+    "labelColor": null,
+    "quantity": 1,
+    "name": "Lightning Bolt",
+    "setCode": "lea",
+    "setName": "Limited Edition Alpha",
+    "collectorNumber": "161",
+    "lang": "en",
+    "needsReview": null,
+    "oracleId": "o-Lightning Bolt",
+    "manaCost": "{R}",
+    "cmc": 1,
+    "typeLine": "Instant",
+    "oracleText": null,
+    "colors": "R",
+    "colorIdentity": "R",
+    "producedMana": "",
+    "legalities": "{\"modern\":\"legal\",\"vintage\":\"legal\",\"commander\":\"legal\",\"oathbreaker\":\"legal\",\"brawl\":\"legal\",\"paupercommander\":\"legal\",\"duel\":\"legal\",\"oldschool\":\"legal\",\"tlr\":\"legal\"}",
+    "power": null,
+    "toughness": null,
+    "layout": "normal",
+    "rarity": "common",
+    "faces": null,
+    "gameChanger": false,
+    "finishes": null,
+    "everUncommon": false,
+    "unitPrice": null,
+    "ownedQuantity": 0
+  },
+  "cases": [
+    {
+      "name": "odds 0: atLeast 1 of 1 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.175
+    },
+    {
+      "name": "odds 1: exactly 1 of 1 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.175
+    },
+    {
+      "name": "odds 2: atMost 1 of 1 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 3: atLeast 2 of 1 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 4: exactly 2 of 1 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 5: atMost 2 of 1 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 6: atLeast 1 of 4 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.5522486048801838
+    },
+    {
+      "name": "odds 7: exactly 1 of 4 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.4179013021118284
+    },
+    {
+      "name": "odds 8: atMost 1 of 4 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.8656526972316445
+    },
+    {
+      "name": "odds 9: atLeast 2 of 4 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.1343473027683554
+    },
+    {
+      "name": "odds 10: exactly 2 of 4 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.12132618448407922
+    },
+    {
+      "name": "odds 11: atMost 2 of 4 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.9869788817157237
+    },
+    {
+      "name": "odds 12: atLeast 1 of 17 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.9868503118503119
+    },
+    {
+      "name": "odds 13: exactly 1 of 17 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.09204781704781705
+    },
+    {
+      "name": "odds 14: atMost 1 of 17 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.1051975051975052
+    },
+    {
+      "name": "odds 15: atLeast 2 of 17 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.8948024948024949
+    },
+    {
+      "name": "odds 16: exactly 2 of 17 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.24546084546084546
+    },
+    {
+      "name": "odds 17: atMost 2 of 17 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.35065835065835066
+    },
+    {
+      "name": "odds 18: atLeast 1 of 24 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.999386383287312
+    },
+    {
+      "name": "odds 19: exactly 1 of 24 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.010308760773157058
+    },
+    {
+      "name": "odds 20: atMost 1 of 24 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.010922377485844978
+    },
+    {
+      "name": "odds 21: atLeast 2 of 24 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.989077622514155
+    },
+    {
+      "name": "odds 22: exactly 2 of 24 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.06466404484980337
+    },
+    {
+      "name": "odds 23: atMost 2 of 24 in 7 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.07558642233564834
+    },
+    {
+      "name": "odds 24: atLeast 1 of 1 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.11666666666666667
+    },
+    {
+      "name": "odds 25: exactly 1 of 1 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.11666666666666667
+    },
+    {
+      "name": "odds 26: atMost 1 of 1 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 27: atLeast 2 of 1 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 28: exactly 2 of 1 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 29: atMost 2 of 1 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 30: atLeast 1 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.3994996257446656
+    },
+    {
+      "name": "odds 31: exactly 1 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.33628020958298727
+    },
+    {
+      "name": "odds 32: atMost 1 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.9367805838383216
+    },
+    {
+      "name": "odds 33: atLeast 2 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.06321941616167831
+    },
+    {
+      "name": "odds 34: exactly 2 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.059343566396997754
+    },
+    {
+      "name": "odds 35: atMost 2 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.9961241502353194
+    },
+    {
+      "name": "odds 36: atLeast 1 of 17 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.9165625670301298
+    },
+    {
+      "name": "odds 37: exactly 1 of 17 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.2683528249571499
+    },
+    {
+      "name": "odds 38: atMost 1 of 17 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.35179025792702
+    },
+    {
+      "name": "odds 39: atLeast 2 of 17 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.64820974207298
+    },
+    {
+      "name": "odds 40: exactly 2 of 17 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.3389719894195578
+    },
+    {
+      "name": "odds 41: atMost 2 of 17 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.6907622473465778
+    },
+    {
+      "name": "odds 42: atLeast 1 of 24 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.978385472740882
+    },
+    {
+      "name": "odds 43: exactly 1 of 24 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.12104135265106074
+    },
+    {
+      "name": "odds 44: atMost 1 of 24 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.14265587991017872
+    },
+    {
+      "name": "odds 45: atLeast 2 of 24 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.8573441200898212
+    },
+    {
+      "name": "odds 46: exactly 2 of 24 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.26941462364268354
+    },
+    {
+      "name": "odds 47: atMost 2 of 24 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.41207050355286223
+    },
+    {
+      "name": "odds 48: atLeast 1 of 1 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.0707070707070707
+    },
+    {
+      "name": "odds 49: exactly 1 of 1 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.0707070707070707
+    },
+    {
+      "name": "odds 50: atMost 1 of 1 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 51: atLeast 2 of 1 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 52: exactly 2 of 1 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 53: atMost 2 of 1 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 54: atLeast 1 of 4 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.2577375373767126
+    },
+    {
+      "name": "odds 55: exactly 1 of 4 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.23352077475788816
+    },
+    {
+      "name": "odds 56: atMost 1 of 4 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.9757832373811755
+    },
+    {
+      "name": "odds 57: atLeast 2 of 4 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.024216762618824477
+    },
+    {
+      "name": "odds 58: exactly 2 of 4 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.023352077475788817
+    },
+    {
+      "name": "odds 59: atMost 2 of 4 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.9991353148569643
+    },
+    {
+      "name": "odds 60: atLeast 1 of 17 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.7446262671800248
+    },
+    {
+      "name": "odds 61: exactly 1 of 17 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.3998615027049613
+    },
+    {
+      "name": "odds 62: atMost 1 of 17 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.6552352355249366
+    },
+    {
+      "name": "odds 63: atLeast 2 of 17 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.34476476447506343
+    },
+    {
+      "name": "odds 64: exactly 2 of 17 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.24926431337452132
+    },
+    {
+      "name": "odds 65: atMost 2 of 17 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.9044995488994578
+    },
+    {
+      "name": "odds 66: atLeast 1 of 24 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.8666739004257731
+    },
+    {
+      "name": "odds 67: exactly 1 of 24 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.3246200685285523
+    },
+    {
+      "name": "odds 68: atMost 1 of 24 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.4579461681027791
+    },
+    {
+      "name": "odds 69: atLeast 2 of 24 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.5420538318972209
+    },
+    {
+      "name": "odds 70: exactly 2 of 24 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.31998263897814444
+    },
+    {
+      "name": "odds 71: atMost 2 of 24 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.7779288070809236
+    },
+    {
+      "name": "odds 72: atLeast 1 of 1 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.07
+    },
+    {
+      "name": "odds 73: exactly 1 of 1 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.07
+    },
+    {
+      "name": "odds 74: atMost 1 of 1 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 1,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 75: atLeast 2 of 1 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 76: exactly 2 of 1 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 77: atMost 2 of 1 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 1,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 78: atLeast 1 of 4 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.25540232962913373
+    },
+    {
+      "name": "odds 79: exactly 1 of 4 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.23165260855982506
+    },
+    {
+      "name": "odds 80: atMost 1 of 4 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 4,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.9762502789306913
+    },
+    {
+      "name": "odds 81: atLeast 2 of 4 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.0237497210693087
+    },
+    {
+      "name": "odds 82: exactly 2 of 4 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.022910697549872808
+    },
+    {
+      "name": "odds 83: atMost 2 of 4 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 4,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.9991609764805641
+    },
+    {
+      "name": "odds 84: atLeast 1 of 17 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.7406276521529752
+    },
+    {
+      "name": "odds 85: exactly 1 of 17 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.4008481739454021
+    },
+    {
+      "name": "odds 86: atMost 1 of 17 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 17,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.6602205217924271
+    },
+    {
+      "name": "odds 87: atLeast 2 of 17 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.339779478207573
+    },
+    {
+      "name": "odds 88: exactly 2 of 17 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.2466757993510167
+    },
+    {
+      "name": "odds 89: atMost 2 of 17 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 17,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.9068963211434438
+    },
+    {
+      "name": "odds 90: atLeast 1 of 24 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.8634276997404875
+    },
+    {
+      "name": "odds 91: exactly 1 of 24 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.32777352062282966
+    },
+    {
+      "name": "odds 92: atMost 1 of 24 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 24,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.464345820882342
+    },
+    {
+      "name": "odds 93: atLeast 2 of 24 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.5356541791176579
+    },
+    {
+      "name": "odds 94: exactly 2 of 24 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.31854046370387673
+    },
+    {
+      "name": "odds 95: atMost 2 of 24 in 7 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 24,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.7828862845862188
+    },
+    {
+      "name": "odds 96: atLeast 1 of 9 in 9 from 27",
+      "cards": [],
+      "deck": 27,
+      "successes": 9,
+      "hand": 9,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.9896262395118232
+    },
+    {
+      "name": "odds 97: atLeast 5 of 44 in 6 from 44",
+      "cards": [],
+      "deck": 44,
+      "successes": 44,
+      "hand": 6,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 98: atMost 5 of 42 in 3 from 95",
+      "cards": [],
+      "deck": 95,
+      "successes": 42,
+      "hand": 3,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 99: exactly 3 of 58 in 12 from 61",
+      "cards": [],
+      "deck": 61,
+      "successes": 58,
+      "hand": 12,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 100: atMost 5 of 10 in 10 from 11",
+      "cards": [],
+      "deck": 11,
+      "successes": 10,
+      "hand": 10,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 101: exactly 2 of 2 in 6 from 95",
+      "cards": [],
+      "deck": 95,
+      "successes": 2,
+      "hand": 6,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.0033594624860022394
+    },
+    {
+      "name": "odds 102: exactly 0 of 51 in 1 from 71",
+      "cards": [],
+      "deck": 71,
+      "successes": 51,
+      "hand": 1,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.28169014084507044
+    },
+    {
+      "name": "odds 103: exactly 1 of 8 in 12 from 23",
+      "cards": [],
+      "deck": 23,
+      "successes": 8,
+      "hand": 12,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.008076457127473414
+    },
+    {
+      "name": "odds 104: atMost 4 of 19 in 10 from 62",
+      "cards": [],
+      "deck": 62,
+      "successes": 19,
+      "hand": 10,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 0.8582984166480137
+    },
+    {
+      "name": "odds 105: atLeast 3 of 75 in 9 from 82",
+      "cards": [],
+      "deck": 82,
+      "successes": 75,
+      "hand": 9,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0.9999999905306938
+    },
+    {
+      "name": "odds 106: exactly 5 of 13 in 10 from 71",
+      "cards": [],
+      "deck": 71,
+      "successes": 13,
+      "hand": 10,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0.012771707370760846
+    },
+    {
+      "name": "odds 107: atMost 5 of 2 in 4 from 9",
+      "cards": [],
+      "deck": 9,
+      "successes": 2,
+      "hand": 4,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 108: exactly 1 of 63 in 8 from 67",
+      "cards": [],
+      "deck": 67,
+      "successes": 63,
+      "hand": 8,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 109: exactly 5 of 31 in 12 from 31",
+      "cards": [],
+      "deck": 31,
+      "successes": 31,
+      "hand": 12,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 110: atLeast 0 of 62 in 6 from 84",
+      "cards": [],
+      "deck": 84,
+      "successes": 62,
+      "hand": 6,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 111: atMost 2 of 31 in 7 from 62",
+      "cards": [],
+      "deck": 62,
+      "successes": 31,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.21241097673330311
+    },
+    {
+      "name": "odds 112: atMost 5 of 28 in 12 from 34",
+      "cards": [],
+      "deck": 34,
+      "successes": 28,
+      "hand": 12,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 113: atMost 5 of 66 in 5 from 81",
+      "cards": [],
+      "deck": 81,
+      "successes": 66,
+      "hand": 5,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 114: atLeast 0 of 20 in 4 from 52",
+      "cards": [],
+      "deck": 52,
+      "successes": 20,
+      "hand": 4,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 0.9999999999999999
+    },
+    {
+      "name": "odds 115: atLeast 1 of 60 in 0 from 65",
+      "cards": [],
+      "deck": 65,
+      "successes": 60,
+      "hand": 0,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 116: atLeast 5 of 19 in 7 from 30",
+      "cards": [],
+      "deck": 30,
+      "successes": 19,
+      "hand": 7,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 0.48549955791335103
+    },
+    {
+      "name": "odds 117: atLeast 0 of 2 in 11 from 73",
+      "cards": [],
+      "deck": 73,
+      "successes": 2,
+      "hand": 11,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 118: atMost 4 of 67 in 5 from 83",
+      "cards": [],
+      "deck": 83,
+      "successes": 67,
+      "hand": 5,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 0.6673721747130541
+    },
+    {
+      "name": "odds 119: atMost 1 of 3 in 0 from 3",
+      "cards": [],
+      "deck": 3,
+      "successes": 3,
+      "hand": 0,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 120: atMost 5 of 1 in 10 from 54",
+      "cards": [],
+      "deck": 54,
+      "successes": 1,
+      "hand": 10,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 121: exactly 4 of 3 in 1 from 15",
+      "cards": [],
+      "deck": 15,
+      "successes": 3,
+      "hand": 1,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 122: exactly 3 of 12 in 9 from 26",
+      "cards": [],
+      "deck": 26,
+      "successes": 12,
+      "hand": 9,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0.211441647597254
+    },
+    {
+      "name": "odds 123: atMost 4 of 47 in 1 from 51",
+      "cards": [],
+      "deck": 51,
+      "successes": 47,
+      "hand": 1,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 124: atLeast 3 of 44 in 12 from 81",
+      "cards": [],
+      "deck": 81,
+      "successes": 44,
+      "hand": 12,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0.9947826653493966
+    },
+    {
+      "name": "odds 125: atMost 0 of 3 in 3 from 22",
+      "cards": [],
+      "deck": 22,
+      "successes": 3,
+      "hand": 3,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0.6292207792207792
+    },
+    {
+      "name": "odds 126: exactly 0 of 6 in 6 from 14",
+      "cards": [],
+      "deck": 14,
+      "successes": 6,
+      "hand": 6,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.009324009324009324
+    },
+    {
+      "name": "odds 127: atMost 4 of 4 in 7 from 13",
+      "cards": [],
+      "deck": 13,
+      "successes": 4,
+      "hand": 7,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 128: exactly 3 of 29 in 6 from 43",
+      "cards": [],
+      "deck": 43,
+      "successes": 29,
+      "hand": 6,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0.21816879123503596
+    },
+    {
+      "name": "odds 129: exactly 2 of 61 in 5 from 68",
+      "cards": [],
+      "deck": 68,
+      "successes": 61,
+      "hand": 5,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.00614439884084309
+    },
+    {
+      "name": "odds 130: atMost 5 of 0 in 1 from 6",
+      "cards": [],
+      "deck": 6,
+      "successes": 0,
+      "hand": 1,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 131: atMost 5 of 7 in 0 from 39",
+      "cards": [],
+      "deck": 39,
+      "successes": 7,
+      "hand": 0,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 132: exactly 4 of 13 in 9 from 45",
+      "cards": [],
+      "deck": 45,
+      "successes": 13,
+      "hand": 9,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0.16248006073960636
+    },
+    {
+      "name": "odds 133: exactly 1 of 1 in 10 from 95",
+      "cards": [],
+      "deck": 95,
+      "successes": 1,
+      "hand": 10,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.10526315789473684
+    },
+    {
+      "name": "odds 134: atMost 2 of 86 in 6 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 86,
+      "hand": 6,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.0024325317571181736
+    },
+    {
+      "name": "odds 135: exactly 1 of 34 in 6 from 47",
+      "cards": [],
+      "deck": 47,
+      "successes": 34,
+      "hand": 6,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.004075222585215486
+    },
+    {
+      "name": "odds 136: atMost 2 of 37 in 11 from 73",
+      "cards": [],
+      "deck": 73,
+      "successes": 37,
+      "hand": 11,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0.020431416948452186
+    },
+    {
+      "name": "odds 137: atMost 3 of 47 in 10 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 47,
+      "hand": 10,
+      "want": 3,
+      "mode": "atMost",
+      "odds": 0.203574699969078
+    },
+    {
+      "name": "odds 138: atLeast 0 of 2 in 9 from 36",
+      "cards": [],
+      "deck": 36,
+      "successes": 2,
+      "hand": 9,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 139: atLeast 0 of 64 in 9 from 73",
+      "cards": [],
+      "deck": 73,
+      "successes": 64,
+      "hand": 9,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 140: atLeast 4 of 25 in 11 from 61",
+      "cards": [],
+      "deck": 61,
+      "successes": 25,
+      "hand": 11,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0.7493453520513891
+    },
+    {
+      "name": "odds 141: exactly 2 of 16 in 8 from 35",
+      "cards": [],
+      "deck": 35,
+      "successes": 16,
+      "hand": 8,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.13833552431995147
+    },
+    {
+      "name": "odds 142: exactly 5 of 11 in 11 from 23",
+      "cards": [],
+      "deck": 23,
+      "successes": 11,
+      "hand": 11,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0.31572734709092226
+    },
+    {
+      "name": "odds 143: exactly 4 of 40 in 11 from 55",
+      "cards": [],
+      "deck": 55,
+      "successes": 40,
+      "hand": 11,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0.0049149780520310335
+    },
+    {
+      "name": "odds 144: exactly 2 of 2 in 8 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 2,
+      "hand": 8,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.035897435897435895
+    },
+    {
+      "name": "odds 145: exactly 0 of 5 in 2 from 24",
+      "cards": [],
+      "deck": 24,
+      "successes": 5,
+      "hand": 2,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.6195652173913043
+    },
+    {
+      "name": "odds 146: exactly 5 of 22 in 11 from 63",
+      "cards": [],
+      "deck": 63,
+      "successes": 22,
+      "hand": 11,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0.19228605889754216
+    },
+    {
+      "name": "odds 147: exactly 4 of 22 in 1 from 47",
+      "cards": [],
+      "deck": 47,
+      "successes": 22,
+      "hand": 1,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 148: exactly 2 of 45 in 4 from 66",
+      "cards": [],
+      "deck": 66,
+      "successes": 45,
+      "hand": 4,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.28846153846153844
+    },
+    {
+      "name": "odds 149: exactly 2 of 33 in 8 from 71",
+      "cards": [],
+      "deck": 71,
+      "successes": 33,
+      "hand": 8,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.13700745881970805
+    },
+    {
+      "name": "odds 150: atMost 0 of 21 in 3 from 41",
+      "cards": [],
+      "deck": 41,
+      "successes": 21,
+      "hand": 3,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0.10694183864915573
+    },
+    {
+      "name": "odds 151: atMost 4 of 23 in 11 from 31",
+      "cards": [],
+      "deck": 31,
+      "successes": 23,
+      "hand": 11,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 0.0008575530266297786
+    },
+    {
+      "name": "odds 152: atMost 5 of 25 in 9 from 41",
+      "cards": [],
+      "deck": 41,
+      "successes": 25,
+      "hand": 9,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0.4970417824000849
+    },
+    {
+      "name": "odds 153: exactly 1 of 68 in 10 from 85",
+      "cards": [],
+      "deck": 85,
+      "successes": 68,
+      "hand": 10,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 5.282818993259462e-7
+    },
+    {
+      "name": "odds 154: exactly 3 of 13 in 8 from 46",
+      "cards": [],
+      "deck": 46,
+      "successes": 13,
+      "hand": 8,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0.2601362960040116
+    },
+    {
+      "name": "odds 155: exactly 3 of 5 in 2 from 67",
+      "cards": [],
+      "deck": 67,
+      "successes": 5,
+      "hand": 2,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 156: atLeast 4 of 5 in 12 from 14",
+      "cards": [],
+      "deck": 14,
+      "successes": 5,
+      "hand": 12,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0.8901098901098901
+    },
+    {
+      "name": "odds 157: atMost 4 of 4 in 8 from 64",
+      "cards": [],
+      "deck": 64,
+      "successes": 4,
+      "hand": 8,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 158: exactly 3 of 65 in 8 from 94",
+      "cards": [],
+      "deck": 94,
+      "successes": 65,
+      "hand": 8,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0.046599428925339685
+    },
+    {
+      "name": "odds 159: atLeast 3 of 52 in 12 from 65",
+      "cards": [],
+      "deck": 65,
+      "successes": 52,
+      "hand": 12,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0.9999999048353936
+    },
+    {
+      "name": "odds 160: exactly 5 of 3 in 2 from 17",
+      "cards": [],
+      "deck": 17,
+      "successes": 3,
+      "hand": 2,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 161: atMost 0 of 54 in 11 from 74",
+      "cards": [],
+      "deck": 74,
+      "successes": 54,
+      "hand": 11,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 4.018352640482869e-8
+    },
+    {
+      "name": "odds 162: exactly 2 of 64 in 4 from 96",
+      "cards": [],
+      "deck": 96,
+      "successes": 64,
+      "hand": 4,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.30100783874580067
+    },
+    {
+      "name": "odds 163: exactly 4 of 0 in 2 from 3",
+      "cards": [],
+      "deck": 3,
+      "successes": 0,
+      "hand": 2,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 164: exactly 3 of 43 in 8 from 43",
+      "cards": [],
+      "deck": 43,
+      "successes": 43,
+      "hand": 8,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 165: atMost 5 of 7 in 8 from 91",
+      "cards": [],
+      "deck": 91,
+      "successes": 7,
+      "hand": 8,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0.9999997118849981
+    },
+    {
+      "name": "odds 166: atMost 0 of 58 in 9 from 83",
+      "cards": [],
+      "deck": 83,
+      "successes": 58,
+      "hand": 9,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0.000006215439730915652
+    },
+    {
+      "name": "odds 167: atLeast 2 of 0 in 12 from 19",
+      "cards": [],
+      "deck": 19,
+      "successes": 0,
+      "hand": 12,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 168: atLeast 4 of 17 in 3 from 22",
+      "cards": [],
+      "deck": 22,
+      "successes": 17,
+      "hand": 3,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 169: exactly 1 of 1 in 1 from 20",
+      "cards": [],
+      "deck": 20,
+      "successes": 1,
+      "hand": 1,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.05
+    },
+    {
+      "name": "odds 170: exactly 2 of 62 in 2 from 88",
+      "cards": [],
+      "deck": 88,
+      "successes": 62,
+      "hand": 2,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.4939916405433647
+    },
+    {
+      "name": "odds 171: exactly 2 of 4 in 0 from 16",
+      "cards": [],
+      "deck": 16,
+      "successes": 4,
+      "hand": 0,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 172: exactly 4 of 92 in 3 from 95",
+      "cards": [],
+      "deck": 95,
+      "successes": 92,
+      "hand": 3,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 173: atLeast 5 of 13 in 6 from 21",
+      "cards": [],
+      "deck": 21,
+      "successes": 13,
+      "hand": 6,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 0.22136222910216719
+    },
+    {
+      "name": "odds 174: atLeast 0 of 19 in 10 from 19",
+      "cards": [],
+      "deck": 19,
+      "successes": 19,
+      "hand": 10,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 175: atMost 5 of 17 in 9 from 81",
+      "cards": [],
+      "deck": 81,
+      "successes": 17,
+      "hand": 9,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0.9978672022657311
+    },
+    {
+      "name": "odds 176: atLeast 3 of 43 in 6 from 90",
+      "cards": [],
+      "deck": 90,
+      "successes": 43,
+      "hand": 6,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0.6181256694851517
+    },
+    {
+      "name": "odds 177: atMost 0 of 0 in 0 from 93",
+      "cards": [],
+      "deck": 93,
+      "successes": 0,
+      "hand": 0,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 178: exactly 4 of 13 in 0 from 32",
+      "cards": [],
+      "deck": 32,
+      "successes": 13,
+      "hand": 0,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 179: atLeast 3 of 12 in 2 from 21",
+      "cards": [],
+      "deck": 21,
+      "successes": 12,
+      "hand": 2,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 180: exactly 2 of 17 in 10 from 47",
+      "cards": [],
+      "deck": 47,
+      "successes": 17,
+      "hand": 10,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.1537249012570715
+    },
+    {
+      "name": "odds 181: atMost 0 of 46 in 7 from 78",
+      "cards": [],
+      "deck": 78,
+      "successes": 46,
+      "hand": 7,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0.001274027517718938
+    },
+    {
+      "name": "odds 182: atLeast 4 of 9 in 9 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 9,
+      "hand": 9,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0.09423669377229747
+    },
+    {
+      "name": "odds 183: atLeast 2 of 69 in 5 from 90",
+      "cards": [],
+      "deck": 90,
+      "successes": 69,
+      "hand": 5,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.9901405866418527
+    },
+    {
+      "name": "odds 184: atLeast 4 of 60 in 3 from 83",
+      "cards": [],
+      "deck": 83,
+      "successes": 60,
+      "hand": 3,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 185: exactly 2 of 14 in 9 from 30",
+      "cards": [],
+      "deck": 30,
+      "successes": 14,
+      "hand": 9,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0.07276361819090454
+    },
+    {
+      "name": "odds 186: atMost 1 of 11 in 5 from 38",
+      "cards": [],
+      "deck": 38,
+      "successes": 11,
+      "hand": 5,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.5454415051938272
+    },
+    {
+      "name": "odds 187: exactly 0 of 57 in 12 from 90",
+      "cards": [],
+      "deck": 90,
+      "successes": 57,
+      "hand": 12,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.0000012954379915893107
+    },
+    {
+      "name": "odds 188: exactly 4 of 86 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 86,
+      "hand": 7,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0.04079636213606185
+    },
+    {
+      "name": "odds 189: atMost 3 of 63 in 1 from 86",
+      "cards": [],
+      "deck": 86,
+      "successes": 63,
+      "hand": 1,
+      "want": 3,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 190: exactly 4 of 11 in 4 from 30",
+      "cards": [],
+      "deck": 30,
+      "successes": 11,
+      "hand": 4,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0.0120415982484948
+    },
+    {
+      "name": "odds 191: atLeast 2 of 31 in 7 from 34",
+      "cards": [],
+      "deck": 34,
+      "successes": 31,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 192: atMost 4 of 5 in 5 from 56",
+      "cards": [],
+      "deck": 56,
+      "successes": 5,
+      "hand": 5,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 0.9999997382072853
+    },
+    {
+      "name": "odds 193: atLeast 3 of 8 in 12 from 50",
+      "cards": [],
+      "deck": 50,
+      "successes": 8,
+      "hand": 12,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0.2874525556194123
+    },
+    {
+      "name": "odds 194: atLeast 5 of 81 in 8 from 98",
+      "cards": [],
+      "deck": 98,
+      "successes": 81,
+      "hand": 8,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 0.9712177582362838
+    },
+    {
+      "name": "odds 195: exactly 0 of 28 in 11 from 53",
+      "cards": [],
+      "deck": 53,
+      "successes": 28,
+      "hand": 11,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.00005847783428469246
+    },
+    {
+      "name": "odds 196: exactly 3 of 12 in 0 from 26",
+      "cards": [],
+      "deck": 26,
+      "successes": 12,
+      "hand": 0,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 197: exactly 4 of 4 in 9 from 19",
+      "cards": [],
+      "deck": 19,
+      "successes": 4,
+      "hand": 9,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0.032507739938080496
+    },
+    {
+      "name": "odds 198: exactly 5 of 26 in 0 from 62",
+      "cards": [],
+      "deck": 62,
+      "successes": 26,
+      "hand": 0,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 199: exactly 1 of 34 in 11 from 53",
+      "cards": [],
+      "deck": 53,
+      "successes": 34,
+      "hand": 11,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.00004120568554959054
+    },
+    {
+      "name": "odds 200: exactly 3 of 24 in 4 from 25",
+      "cards": [],
+      "deck": 25,
+      "successes": 24,
+      "hand": 4,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0.16
+    },
+    {
+      "name": "odds 201: atMost 1 of 5 in 7 from 15",
+      "cards": [],
+      "deck": 15,
+      "successes": 5,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0.18181818181818182
+    },
+    {
+      "name": "odds 202: exactly 3 of 0 in 7 from 2",
+      "cards": [],
+      "deck": 2,
+      "successes": 0,
+      "hand": 7,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 203: atMost 1 of 4 in 10 from 8",
+      "cards": [],
+      "deck": 8,
+      "successes": 4,
+      "hand": 10,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 204: atLeast 2 of 39 in 5 from 50",
+      "cards": [],
+      "deck": 50,
+      "successes": 39,
+      "hand": 5,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0.9937076403179217
+    },
+    {
+      "name": "odds 205: exactly 3 of 7 in 7 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 7,
+      "hand": 7,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 206: atLeast 1 of 6 in 7 from 32",
+      "cards": [],
+      "deck": 32,
+      "successes": 6,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0.8045668026201952
+    },
+    {
+      "name": "odds 207: atLeast 4 of 18 in 8 from 33",
+      "cards": [],
+      "deck": 33,
+      "successes": 18,
+      "hand": 8,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0.7595476455320727
+    },
+    {
+      "name": "odds 208: exactly 5 of 34 in 7 from 47",
+      "cards": [],
+      "deck": 47,
+      "successes": 34,
+      "hand": 7,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0.34510177599678454
+    },
+    {
+      "name": "odds 209: exactly 0 of 12 in 9 from 33",
+      "cards": [],
+      "deck": 33,
+      "successes": 12,
+      "hand": 9,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.00762126268244177
+    },
+    {
+      "name": "odds 210: atMost 3 of 14 in 10 from 16",
+      "cards": [],
+      "deck": 16,
+      "successes": 14,
+      "hand": 10,
+      "want": 3,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 211: atMost 4 of 88 in 2 from 97",
+      "cards": [],
+      "deck": 97,
+      "successes": 88,
+      "hand": 2,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 212: atMost 3 of 2 in 11 from 26",
+      "cards": [],
+      "deck": 26,
+      "successes": 2,
+      "hand": 11,
+      "want": 3,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 213: exactly 3 of 8 in 12 from 13",
+      "cards": [],
+      "deck": 13,
+      "successes": 8,
+      "hand": 12,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 214: atLeast 4 of 40 in 5 from 52",
+      "cards": [],
+      "deck": 52,
+      "successes": 40,
+      "hand": 5,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0.6751500600240096
+    },
+    {
+      "name": "odds 215: exactly 1 of 25 in 2 from 71",
+      "cards": [],
+      "deck": 71,
+      "successes": 25,
+      "hand": 2,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0.46277665995975853
+    },
+    {
+      "name": "odds 216: atLeast 0 of 0 in 0 from 0",
+      "cards": [],
+      "deck": 0,
+      "successes": 0,
+      "hand": 0,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 217: exactly 0 of 0 in 0 from 0",
+      "cards": [],
+      "deck": 0,
+      "successes": 0,
+      "hand": 0,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 218: atMost 0 of 0 in 0 from 0",
+      "cards": [],
+      "deck": 0,
+      "successes": 0,
+      "hand": 0,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 219: atLeast 1 of 0 in 7 from 0",
+      "cards": [],
+      "deck": 0,
+      "successes": 0,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 220: exactly 1 of 0 in 7 from 0",
+      "cards": [],
+      "deck": 0,
+      "successes": 0,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 221: atMost 1 of 0 in 7 from 0",
+      "cards": [],
+      "deck": 0,
+      "successes": 0,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 222: atLeast 0 of 4 in 0 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 0,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 223: exactly 0 of 4 in 0 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 0,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 224: atMost 0 of 4 in 0 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 0,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 225: atLeast 1 of 1 in 1 from 1",
+      "cards": [],
+      "deck": 1,
+      "successes": 1,
+      "hand": 1,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 226: exactly 1 of 1 in 1 from 1",
+      "cards": [],
+      "deck": 1,
+      "successes": 1,
+      "hand": 1,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 1
+    },
+    {
+      "name": "odds 227: atMost 1 of 1 in 1 from 1",
+      "cards": [],
+      "deck": 1,
+      "successes": 1,
+      "hand": 1,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 228: atLeast 0 of 0 in 1 from 1",
+      "cards": [],
+      "deck": 1,
+      "successes": 0,
+      "hand": 1,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 229: exactly 0 of 0 in 1 from 1",
+      "cards": [],
+      "deck": 1,
+      "successes": 0,
+      "hand": 1,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 1
+    },
+    {
+      "name": "odds 230: atMost 0 of 0 in 1 from 1",
+      "cards": [],
+      "deck": 1,
+      "successes": 0,
+      "hand": 1,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 231: atLeast 3 of 3 in 9 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 3,
+      "hand": 9,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 232: exactly 3 of 3 in 9 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 3,
+      "hand": 9,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 1
+    },
+    {
+      "name": "odds 233: atMost 3 of 3 in 9 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 3,
+      "hand": 9,
+      "want": 3,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 234: atLeast 5 of 7 in 12 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 7,
+      "hand": 12,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 235: exactly 5 of 7 in 12 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 7,
+      "hand": 12,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 236: atMost 5 of 7 in 12 from 7",
+      "cards": [],
+      "deck": 7,
+      "successes": 7,
+      "hand": 12,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 237: atLeast 0 of 0 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 0,
+      "hand": 7,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 238: exactly 0 of 0 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 0,
+      "hand": 7,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 1
+    },
+    {
+      "name": "odds 239: atMost 0 of 0 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 0,
+      "hand": 7,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 240: atLeast 5 of 60 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 60,
+      "hand": 7,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 241: exactly 5 of 60 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 60,
+      "hand": 7,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 242: atMost 5 of 60 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 60,
+      "hand": 7,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 243: atLeast 5 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 244: exactly 5 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 245: atMost 5 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 246: atLeast 4 of 4 in 2 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 2,
+      "want": 4,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 247: exactly 4 of 4 in 2 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 2,
+      "want": 4,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 248: atMost 4 of 4 in 2 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 2,
+      "want": 4,
+      "mode": "atMost",
+      "odds": 0.9999999999999999
+    },
+    {
+      "name": "odds 249: atLeast -1 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": -1,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 250: exactly -1 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": -1,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 251: atMost -1 of 4 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 4,
+      "hand": 7,
+      "want": -1,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 252: atLeast 2 of 70 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 70,
+      "hand": 7,
+      "want": 2,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 253: exactly 2 of 70 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 70,
+      "hand": 7,
+      "want": 2,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 254: atMost 2 of 70 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 70,
+      "hand": 7,
+      "want": 2,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 255: atLeast 0 of -2 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": -2,
+      "hand": 7,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 256: exactly 0 of -2 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": -2,
+      "hand": 7,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 257: atMost 0 of -2 in 7 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": -2,
+      "hand": 7,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 258: atLeast 1 of 24 in -3 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": -3,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 259: exactly 1 of 24 in -3 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": -3,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 260: atMost 1 of 24 in -3 from 60",
+      "cards": [],
+      "deck": 60,
+      "successes": 24,
+      "hand": -3,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 261: atLeast 1 of 2 in 7 from -5",
+      "cards": [],
+      "deck": -5,
+      "successes": 2,
+      "hand": 7,
+      "want": 1,
+      "mode": "atLeast",
+      "odds": 0
+    },
+    {
+      "name": "odds 262: exactly 1 of 2 in 7 from -5",
+      "cards": [],
+      "deck": -5,
+      "successes": 2,
+      "hand": 7,
+      "want": 1,
+      "mode": "exactly",
+      "odds": 0
+    },
+    {
+      "name": "odds 263: atMost 1 of 2 in 7 from -5",
+      "cards": [],
+      "deck": -5,
+      "successes": 2,
+      "hand": 7,
+      "want": 1,
+      "mode": "atMost",
+      "odds": 0
+    },
+    {
+      "name": "odds 264: atLeast 5 of 50 in 12 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 50,
+      "hand": 12,
+      "want": 5,
+      "mode": "atLeast",
+      "odds": 0.8216693384362473
+    },
+    {
+      "name": "odds 265: exactly 5 of 50 in 12 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 50,
+      "hand": 12,
+      "want": 5,
+      "mode": "exactly",
+      "odds": 0.201472610550817
+    },
+    {
+      "name": "odds 266: atMost 5 of 50 in 12 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 50,
+      "hand": 12,
+      "want": 5,
+      "mode": "atMost",
+      "odds": 0.37980327211456943
+    },
+    {
+      "name": "odds 267: atLeast 12 of 99 in 12 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 99,
+      "hand": 12,
+      "want": 12,
+      "mode": "atLeast",
+      "odds": 0.88
+    },
+    {
+      "name": "odds 268: exactly 12 of 99 in 12 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 99,
+      "hand": 12,
+      "want": 12,
+      "mode": "exactly",
+      "odds": 0.88
+    },
+    {
+      "name": "odds 269: atMost 12 of 99 in 12 from 100",
+      "cards": [],
+      "deck": 100,
+      "successes": 99,
+      "hand": 12,
+      "want": 12,
+      "mode": "atMost",
+      "odds": 1
+    },
+    {
+      "name": "odds 270: atLeast 3 of 36 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 36,
+      "hand": 7,
+      "want": 3,
+      "mode": "atLeast",
+      "odds": 0.5010769598326311
+    },
+    {
+      "name": "odds 271: exactly 3 of 36 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 36,
+      "hand": 7,
+      "want": 3,
+      "mode": "exactly",
+      "odds": 0.28568812307743974
+    },
+    {
+      "name": "odds 272: atMost 3 of 36 in 7 from 99",
+      "cards": [],
+      "deck": 99,
+      "successes": 36,
+      "hand": 7,
+      "want": 3,
+      "mode": "atMost",
+      "odds": 0.7846111632448086
+    },
+    {
+      "name": "odds 273: atLeast 0 of 17 in 12 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 12,
+      "want": 0,
+      "mode": "atLeast",
+      "odds": 1
+    },
+    {
+      "name": "odds 274: exactly 0 of 17 in 12 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 12,
+      "want": 0,
+      "mode": "exactly",
+      "odds": 0.00024201064245558127
+    },
+    {
+      "name": "odds 275: atMost 0 of 17 in 12 from 40",
+      "cards": [],
+      "deck": 40,
+      "successes": 17,
+      "hand": 12,
+      "want": 0,
+      "mode": "atMost",
+      "odds": 0.00024201064245558127
+    },
+    {
+      "name": "choose -1 -1",
+      "cards": [],
+      "n": -1,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 0",
+      "cards": [],
+      "n": -1,
+      "k": 0,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 1",
+      "cards": [],
+      "n": -1,
+      "k": 1,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 2",
+      "cards": [],
+      "n": -1,
+      "k": 2,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 3",
+      "cards": [],
+      "n": -1,
+      "k": 3,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 7",
+      "cards": [],
+      "n": -1,
+      "k": 7,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 12",
+      "cards": [],
+      "n": -1,
+      "k": 12,
+      "choose": 0
+    },
+    {
+      "name": "choose -1 -2",
+      "cards": [],
+      "n": -1,
+      "k": -2,
+      "choose": 0
+    },
+    {
+      "name": "choose 0 -1",
+      "cards": [],
+      "n": 0,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 0 0",
+      "cards": [],
+      "n": 0,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 0 1",
+      "cards": [],
+      "n": 0,
+      "k": 1,
+      "choose": 0
+    },
+    {
+      "name": "choose 0 2",
+      "cards": [],
+      "n": 0,
+      "k": 2,
+      "choose": 0
+    },
+    {
+      "name": "choose 0 3",
+      "cards": [],
+      "n": 0,
+      "k": 3,
+      "choose": 0
+    },
+    {
+      "name": "choose 0 7",
+      "cards": [],
+      "n": 0,
+      "k": 7,
+      "choose": 0
+    },
+    {
+      "name": "choose 0 12",
+      "cards": [],
+      "n": 0,
+      "k": 12,
+      "choose": 0
+    },
+    {
+      "name": "choose 1 -1",
+      "cards": [],
+      "n": 1,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 1 0",
+      "cards": [],
+      "n": 1,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 1 1",
+      "cards": [],
+      "n": 1,
+      "k": 1,
+      "choose": 1
+    },
+    {
+      "name": "choose 1 2",
+      "cards": [],
+      "n": 1,
+      "k": 2,
+      "choose": 0
+    },
+    {
+      "name": "choose 1 3",
+      "cards": [],
+      "n": 1,
+      "k": 3,
+      "choose": 0
+    },
+    {
+      "name": "choose 1 7",
+      "cards": [],
+      "n": 1,
+      "k": 7,
+      "choose": 0
+    },
+    {
+      "name": "choose 1 12",
+      "cards": [],
+      "n": 1,
+      "k": 12,
+      "choose": 0
+    },
+    {
+      "name": "choose 2 -1",
+      "cards": [],
+      "n": 2,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 2 0",
+      "cards": [],
+      "n": 2,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 2 1",
+      "cards": [],
+      "n": 2,
+      "k": 1,
+      "choose": 2
+    },
+    {
+      "name": "choose 2 2",
+      "cards": [],
+      "n": 2,
+      "k": 2,
+      "choose": 1
+    },
+    {
+      "name": "choose 2 3",
+      "cards": [],
+      "n": 2,
+      "k": 3,
+      "choose": 0
+    },
+    {
+      "name": "choose 2 7",
+      "cards": [],
+      "n": 2,
+      "k": 7,
+      "choose": 0
+    },
+    {
+      "name": "choose 2 12",
+      "cards": [],
+      "n": 2,
+      "k": 12,
+      "choose": 0
+    },
+    {
+      "name": "choose 7 -1",
+      "cards": [],
+      "n": 7,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 7 0",
+      "cards": [],
+      "n": 7,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 7 1",
+      "cards": [],
+      "n": 7,
+      "k": 1,
+      "choose": 7
+    },
+    {
+      "name": "choose 7 2",
+      "cards": [],
+      "n": 7,
+      "k": 2,
+      "choose": 21
+    },
+    {
+      "name": "choose 7 3",
+      "cards": [],
+      "n": 7,
+      "k": 3,
+      "choose": 35
+    },
+    {
+      "name": "choose 7 7",
+      "cards": [],
+      "n": 7,
+      "k": 7,
+      "choose": 1
+    },
+    {
+      "name": "choose 7 12",
+      "cards": [],
+      "n": 7,
+      "k": 12,
+      "choose": 0
+    },
+    {
+      "name": "choose 7 6",
+      "cards": [],
+      "n": 7,
+      "k": 6,
+      "choose": 7
+    },
+    {
+      "name": "choose 7 8",
+      "cards": [],
+      "n": 7,
+      "k": 8,
+      "choose": 0
+    },
+    {
+      "name": "choose 33 -1",
+      "cards": [],
+      "n": 33,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 33 0",
+      "cards": [],
+      "n": 33,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 33 1",
+      "cards": [],
+      "n": 33,
+      "k": 1,
+      "choose": 33
+    },
+    {
+      "name": "choose 33 2",
+      "cards": [],
+      "n": 33,
+      "k": 2,
+      "choose": 528
+    },
+    {
+      "name": "choose 33 3",
+      "cards": [],
+      "n": 33,
+      "k": 3,
+      "choose": 5456
+    },
+    {
+      "name": "choose 33 7",
+      "cards": [],
+      "n": 33,
+      "k": 7,
+      "choose": 4272048
+    },
+    {
+      "name": "choose 33 12",
+      "cards": [],
+      "n": 33,
+      "k": 12,
+      "choose": 354817320
+    },
+    {
+      "name": "choose 33 16",
+      "cards": [],
+      "n": 33,
+      "k": 16,
+      "choose": 1166803110
+    },
+    {
+      "name": "choose 33 32",
+      "cards": [],
+      "n": 33,
+      "k": 32,
+      "choose": 33
+    },
+    {
+      "name": "choose 33 33",
+      "cards": [],
+      "n": 33,
+      "k": 33,
+      "choose": 1
+    },
+    {
+      "name": "choose 33 34",
+      "cards": [],
+      "n": 33,
+      "k": 34,
+      "choose": 0
+    },
+    {
+      "name": "choose 40 -1",
+      "cards": [],
+      "n": 40,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 40 0",
+      "cards": [],
+      "n": 40,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 40 1",
+      "cards": [],
+      "n": 40,
+      "k": 1,
+      "choose": 40
+    },
+    {
+      "name": "choose 40 2",
+      "cards": [],
+      "n": 40,
+      "k": 2,
+      "choose": 780
+    },
+    {
+      "name": "choose 40 3",
+      "cards": [],
+      "n": 40,
+      "k": 3,
+      "choose": 9880
+    },
+    {
+      "name": "choose 40 7",
+      "cards": [],
+      "n": 40,
+      "k": 7,
+      "choose": 18643560
+    },
+    {
+      "name": "choose 40 12",
+      "cards": [],
+      "n": 40,
+      "k": 12,
+      "choose": 5586853480
+    },
+    {
+      "name": "choose 40 20",
+      "cards": [],
+      "n": 40,
+      "k": 20,
+      "choose": 137846528820
+    },
+    {
+      "name": "choose 40 39",
+      "cards": [],
+      "n": 40,
+      "k": 39,
+      "choose": 40
+    },
+    {
+      "name": "choose 40 40",
+      "cards": [],
+      "n": 40,
+      "k": 40,
+      "choose": 1
+    },
+    {
+      "name": "choose 40 41",
+      "cards": [],
+      "n": 40,
+      "k": 41,
+      "choose": 0
+    },
+    {
+      "name": "choose 53 -1",
+      "cards": [],
+      "n": 53,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 53 0",
+      "cards": [],
+      "n": 53,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 53 1",
+      "cards": [],
+      "n": 53,
+      "k": 1,
+      "choose": 53
+    },
+    {
+      "name": "choose 53 2",
+      "cards": [],
+      "n": 53,
+      "k": 2,
+      "choose": 1378
+    },
+    {
+      "name": "choose 53 3",
+      "cards": [],
+      "n": 53,
+      "k": 3,
+      "choose": 23426
+    },
+    {
+      "name": "choose 53 7",
+      "cards": [],
+      "n": 53,
+      "k": 7,
+      "choose": 154143080
+    },
+    {
+      "name": "choose 53 12",
+      "cards": [],
+      "n": 53,
+      "k": 12,
+      "choose": 266783135710
+    },
+    {
+      "name": "choose 53 26",
+      "cards": [],
+      "n": 53,
+      "k": 26,
+      "choose": 973469712824056
+    },
+    {
+      "name": "choose 53 52",
+      "cards": [],
+      "n": 53,
+      "k": 52,
+      "choose": 53
+    },
+    {
+      "name": "choose 53 53",
+      "cards": [],
+      "n": 53,
+      "k": 53,
+      "choose": 1
+    },
+    {
+      "name": "choose 53 54",
+      "cards": [],
+      "n": 53,
+      "k": 54,
+      "choose": 0
+    },
+    {
+      "name": "choose 60 -1",
+      "cards": [],
+      "n": 60,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 60 0",
+      "cards": [],
+      "n": 60,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 60 1",
+      "cards": [],
+      "n": 60,
+      "k": 1,
+      "choose": 60
+    },
+    {
+      "name": "choose 60 2",
+      "cards": [],
+      "n": 60,
+      "k": 2,
+      "choose": 1770
+    },
+    {
+      "name": "choose 60 3",
+      "cards": [],
+      "n": 60,
+      "k": 3,
+      "choose": 34220
+    },
+    {
+      "name": "choose 60 7",
+      "cards": [],
+      "n": 60,
+      "k": 7,
+      "choose": 386206920
+    },
+    {
+      "name": "choose 60 12",
+      "cards": [],
+      "n": 60,
+      "k": 12,
+      "choose": 1399358844975
+    },
+    {
+      "name": "choose 60 30",
+      "cards": [],
+      "n": 60,
+      "k": 30,
+      "choose": 118264581564861420
+    },
+    {
+      "name": "choose 60 59",
+      "cards": [],
+      "n": 60,
+      "k": 59,
+      "choose": 59.999999999999986
+    },
+    {
+      "name": "choose 60 60",
+      "cards": [],
+      "n": 60,
+      "k": 60,
+      "choose": 0.9999999999999998
+    },
+    {
+      "name": "choose 60 61",
+      "cards": [],
+      "n": 60,
+      "k": 61,
+      "choose": 0
+    },
+    {
+      "name": "choose 61 -1",
+      "cards": [],
+      "n": 61,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 61 0",
+      "cards": [],
+      "n": 61,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 61 1",
+      "cards": [],
+      "n": 61,
+      "k": 1,
+      "choose": 61
+    },
+    {
+      "name": "choose 61 2",
+      "cards": [],
+      "n": 61,
+      "k": 2,
+      "choose": 1830
+    },
+    {
+      "name": "choose 61 3",
+      "cards": [],
+      "n": 61,
+      "k": 3,
+      "choose": 35990
+    },
+    {
+      "name": "choose 61 7",
+      "cards": [],
+      "n": 61,
+      "k": 7,
+      "choose": 436270780
+    },
+    {
+      "name": "choose 61 12",
+      "cards": [],
+      "n": 61,
+      "k": 12,
+      "choose": 1742058970275
+    },
+    {
+      "name": "choose 61 30",
+      "cards": [],
+      "n": 61,
+      "k": 30,
+      "choose": 232714176627630560
+    },
+    {
+      "name": "choose 61 60",
+      "cards": [],
+      "n": 61,
+      "k": 60,
+      "choose": 60.999999999999986
+    },
+    {
+      "name": "choose 61 61",
+      "cards": [],
+      "n": 61,
+      "k": 61,
+      "choose": 0.9999999999999998
+    },
+    {
+      "name": "choose 61 62",
+      "cards": [],
+      "n": 61,
+      "k": 62,
+      "choose": 0
+    },
+    {
+      "name": "choose 99 -1",
+      "cards": [],
+      "n": 99,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 99 0",
+      "cards": [],
+      "n": 99,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 99 1",
+      "cards": [],
+      "n": 99,
+      "k": 1,
+      "choose": 99
+    },
+    {
+      "name": "choose 99 2",
+      "cards": [],
+      "n": 99,
+      "k": 2,
+      "choose": 4851
+    },
+    {
+      "name": "choose 99 3",
+      "cards": [],
+      "n": 99,
+      "k": 3,
+      "choose": 156849
+    },
+    {
+      "name": "choose 99 7",
+      "cards": [],
+      "n": 99,
+      "k": 7,
+      "choose": 14887031544
+    },
+    {
+      "name": "choose 99 12",
+      "cards": [],
+      "n": 99,
+      "k": 12,
+      "choose": 924370524973896
+    },
+    {
+      "name": "choose 99 49",
+      "cards": [],
+      "n": 99,
+      "k": 49,
+      "choose": 5.0445672272782145e+28
+    },
+    {
+      "name": "choose 99 98",
+      "cards": [],
+      "n": 99,
+      "k": 98,
+      "choose": 99.00000000000014
+    },
+    {
+      "name": "choose 99 99",
+      "cards": [],
+      "n": 99,
+      "k": 99,
+      "choose": 1.0000000000000013
+    },
+    {
+      "name": "choose 99 100",
+      "cards": [],
+      "n": 99,
+      "k": 100,
+      "choose": 0
+    },
+    {
+      "name": "choose 100 -1",
+      "cards": [],
+      "n": 100,
+      "k": -1,
+      "choose": 0
+    },
+    {
+      "name": "choose 100 0",
+      "cards": [],
+      "n": 100,
+      "k": 0,
+      "choose": 1
+    },
+    {
+      "name": "choose 100 1",
+      "cards": [],
+      "n": 100,
+      "k": 1,
+      "choose": 100
+    },
+    {
+      "name": "choose 100 2",
+      "cards": [],
+      "n": 100,
+      "k": 2,
+      "choose": 4950
+    },
+    {
+      "name": "choose 100 3",
+      "cards": [],
+      "n": 100,
+      "k": 3,
+      "choose": 161700
+    },
+    {
+      "name": "choose 100 7",
+      "cards": [],
+      "n": 100,
+      "k": 7,
+      "choose": 16007560800
+    },
+    {
+      "name": "choose 100 12",
+      "cards": [],
+      "n": 100,
+      "k": 12,
+      "choose": 1050421051106700
+    },
+    {
+      "name": "choose 100 50",
+      "cards": [],
+      "n": 100,
+      "k": 50,
+      "choose": 1.0089134454556418e+29
+    },
+    {
+      "name": "choose 100 99",
+      "cards": [],
+      "n": 100,
+      "k": 99,
+      "choose": 99.99999999999999
+    },
+    {
+      "name": "choose 100 100",
+      "cards": [],
+      "n": 100,
+      "k": 100,
+      "choose": 0.9999999999999999
+    },
+    {
+      "name": "choose 100 101",
+      "cards": [],
+      "n": 100,
+      "k": 101,
+      "choose": 0
+    }
+  ]
+}

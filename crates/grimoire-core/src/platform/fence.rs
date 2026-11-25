@@ -520,6 +520,7 @@ mod tests {
         assert_eq!(
             tests,
             [
+                "src/deck_golden.rs",
                 "src/scratch.rs",
                 "src/sync/run_tests.rs",
                 "src/sync_engine/apply/emission_tests.rs",

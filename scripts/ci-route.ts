@@ -277,10 +277,13 @@ export const ARMS = [
   // page imports (`crossWindow.ts`), and the other two ride along rather than earning an arm
   // each. The widget catalogue's `catalog.contract.json` joined them with user schema v68: the
   // desktop's MCP tool `widget_create` checks a spec against it (`mcp::tools`, `include_str!`);
-  // the widget-state golden followed with the authoring tools (`widget_preview`'s state).
+  // the widget-state golden followed with the authoring tools (`widget_preview`'s state). The deck
+  // goldens hold the core's port of the deck page's validation, bracket and stats
+  // (`deck_rules`, `deck_stats`, `include_str!`) to the TypeScript that writes them.
   {
     match: [
       "packages/ui/features/transfer/__golden__/*",
+      "packages/ui/features/decks/__golden__/*",
       "packages/ui/lib/userTables.json",
       "packages/ui/lib/syncedTables.json",
       "packages/ui/features/home/generated/catalog.contract.json",
