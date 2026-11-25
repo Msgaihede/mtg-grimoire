@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SearchHandoff } from "@/lib/ipc";
 import { parseQuery } from "./queryLanguage";
-import { chipsOf } from "./searchHandoff";
+import { chipsOf, handoffReport, type HandoffWall } from "./searchHandoff";
 
 describe("chipsOf", () => {
   it("turns the agent's tags into include chips", () => {
@@ -18,5 +18,44 @@ describe("the text an agent's search puts in the box", () => {
       expect(parseQuery(text).text).toBe("");
       expect(parseQuery(text).predicates).toHaveLength(1);
     }
+  });
+});
+
+describe("handoffReport", () => {
+  const wall = (over: Partial<HandoffWall> = {}): HandoffWall => ({
+    total: 143,
+    totalIsCapped: false,
+    keywords: ["t:creature"],
+    words: "",
+    unknownTags: [],
+    failure: null,
+    resolving: false,
+    settled: true,
+    ...over,
+  });
+
+  it("waits while tags resolve or the rows are the last search's", () => {
+    expect(handoffReport(wall({ resolving: true }))).toBeNull();
+    expect(handoffReport(wall({ settled: false }))).toBeNull();
+  });
+
+  it("reports the wall once it has answered", () => {
+    expect(handoffReport(wall())).toEqual({
+      total: 143,
+      totalIsCapped: false,
+      keywords: ["t:creature"],
+      words: "",
+      unknownTags: [],
+      failure: null,
+    });
+  });
+
+  it("reports at once when a typed tag names none or a lookup failed, rows or not", () => {
+    expect(
+      handoffReport(wall({ settled: false, unknownTags: ["nonesuch"], total: 0 }))?.unknownTags,
+    ).toEqual(["nonesuch"]);
+    expect(
+      handoffReport(wall({ settled: false, failure: "The tag list could not be read." }))?.failure,
+    ).toMatch(/could not/);
   });
 });

@@ -37,11 +37,14 @@ const wishlistAdd = vi.hoisted(() => vi.fn());
  * default, which would make every currency assertion below pass for the wrong reason.
  */
 const getMarketplace = vi.hoisted(() => vi.fn());
+/** The page's report to the MCP tool `show_search` waiting on an agent's search. */
+const mcpSearchShown = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     searchCards,
     getMarketplace,
+    mcpSearchShown,
     // The filter row asks for facet counts beside every page. Answered **cold** — `ready:
     // false`, every map empty — which leaves every control live and every accessible name
     // plain, so this file's queries say what they always said. The greying itself is
@@ -281,6 +284,7 @@ beforeEach(() => {
   viewportHeight = 600;
   scrollTo.mockClear();
   searchCards.mockReset().mockResolvedValue(page([BOLT]));
+  mcpSearchShown.mockReset().mockResolvedValue(undefined);
   listSets.mockReset().mockResolvedValue([ALPHA]);
   prefetchImages.mockReset().mockResolvedValue(undefined);
   collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
@@ -2000,6 +2004,61 @@ describe("SearchPage — a search handed over by an agent", () => {
     expect(lastRequest().colors).toBeUndefined();
     expect(lastRequest().artTags).toBeUndefined();
     expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("t:creature");
+  });
+
+  it("reports the wall's answer once, for the latest hand-off only", async () => {
+    wrap(<SearchPage />);
+    act(() => {
+      useAppStore.getState().showSearchHandoff(handoff({ id: 3 }));
+      useAppStore.getState().showSearchHandoff(handoff({ id: 4, text: "t:instant" }));
+    });
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledTimes(1));
+    expect(mcpSearchShown).toHaveBeenCalledWith(
+      4,
+      expect.objectContaining({ keywords: expect.arrayContaining(["t:instant"]) }),
+    );
+  });
+
+  it("reports a hand-off that changes nothing on screen", async () => {
+    wrap(<SearchPage />);
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 5 })));
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledWith(5, expect.anything()));
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 6 })));
+    await waitFor(() => expect(mcpSearchShown).toHaveBeenCalledWith(6, expect.anything()));
+  });
+
+  it("waits for the hand-off's own rows, not the last search's left on screen", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    let answer: (response: SearchResponse) => void = () => {};
+    searchCards.mockImplementationOnce(
+      () =>
+        new Promise<SearchResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 7 })));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ rarities: ["rare"] }));
+    // The browse's rows stay drawn while the agent's search is in flight; they are not its answer.
+    expect(mcpSearchShown).not.toHaveBeenCalled();
+    await act(async () => answer(page([BOLT], 42)));
+    await waitFor(() =>
+      expect(mcpSearchShown).toHaveBeenCalledWith(7, expect.objectContaining({ total: 42 })),
+    );
+    expect(mcpSearchShown).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a search that failed, in the backend's own sentence", async () => {
+    wrap(<SearchPage />);
+    await screen.findByText("Lightning Bolt");
+    searchCards.mockRejectedValue("database is locked");
+    act(() => useAppStore.getState().showSearchHandoff(handoff({ id: 8 })));
+    await waitFor(() =>
+      expect(mcpSearchShown).toHaveBeenCalledWith(
+        8,
+        expect.objectContaining({ failure: "database is locked" }),
+      ),
+    );
   });
 });
 

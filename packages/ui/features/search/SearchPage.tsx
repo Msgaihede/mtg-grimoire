@@ -37,7 +37,7 @@ import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
 import { FilterQuickBar } from "./FilterQuickBar";
 import { countOf } from "./resultCount";
-import { chipsOf } from "./searchHandoff";
+import { chipsOf, useHandoffReport } from "./searchHandoff";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
 /**
@@ -431,6 +431,8 @@ export function SearchPage() {
   useEffect(() => {
     if (pendingHandoff !== null) clearPendingHandoff();
   }, [pendingHandoff, clearPendingHandoff]);
+  // And what that search shows, told to the tool waiting on it — once, when the wall has answered.
+  useHandoffReport(search, appliedHandoffId);
 
   // **The filter quick bar** (spec 2026-09-29): a one-row copy of the page's filters that docks at
   // the top of `main` once the whole `FilterBar` block — row, open tray, stated filters — has
