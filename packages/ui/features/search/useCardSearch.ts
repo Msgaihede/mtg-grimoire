@@ -10,6 +10,7 @@ import {
   ipc,
   ipcError,
   type QueryPredicate,
+  type SearchHandoff,
   type SearchRequest,
   type SearchResponse,
   type SearchSortKey,
@@ -713,6 +714,15 @@ export interface CardSearchOptions {
    */
   initialText?: string | null;
   /**
+   * An agent's search to **open** on — `SearchPage` passing the MCP tool `show_search`'s hand-off
+   * (`store.ts`'s `pendingSearchHandoff`) when that is what mounted it. {@link initialText}'s seed
+   * with the agent's filters in place of the clean slate: the box, the format (`Tokens & extras`
+   * when it names none) and every filter are the hand-off's, and the sort and printings mode are
+   * too where it names them. Read once and ignored after; {@link showHandoff} is the same answer
+   * for a page already mounted, and {@link handoffFilters} is the one mapping both read.
+   */
+  initialHandoff?: SearchHandoff | null;
+  /**
    * Remember this search's filters under this name, so the view opens on them again when the
    * reader comes back to it (issue #908) — `SearchPage` and the light app's phone search pass
    * `"search"`. Absent remembers nothing, which is the deck builder's docked panels: they open on
@@ -750,6 +760,37 @@ interface RememberedSearch {
   allPrintings: boolean;
 }
 
+/**
+ * An agent's search as the filter half of {@link RememberedSearch} — every control the Search page
+ * draws, set from the hand-off. **One mapping for both ways in**: the seed when the hand-off is
+ * what mounted the page (`initialHandoff`) and `showHandoff` on a page already mounted, so the two
+ * cannot disagree about what the agent asked for.
+ *
+ * Every filter is the hand-off's whether it names it or not: an empty list or a `null` is that
+ * control cleared, never the reader's last answer left standing, for `showOnlyText`'s reason — the
+ * agent asked this question and nothing narrower. `format: null` is `Tokens & extras`, no format
+ * filter at all. The sort and the printings mode are views rather than filters and are not here:
+ * they change only where the hand-off names them.
+ */
+function handoffFilters(h: SearchHandoff): Omit<RememberedSearch, "sort" | "allPrintings"> {
+  return {
+    text: h.text,
+    format: h.format ?? ANY_CARD,
+    colorFilter: { picked: h.colors, strict: h.colorsStrict },
+    types: h.types,
+    borders: h.borders,
+    finishes: h.finishes,
+    universe: h.universe ?? undefined,
+    sets: h.sets,
+    manaValues: h.manaValues,
+    manaX: h.manaX,
+    owned: h.owned ?? undefined,
+    rarities: h.rarities,
+    priceMin: h.priceMin ?? undefined,
+    priceMax: h.priceMax ?? undefined,
+  };
+}
+
 export function useCardSearch(options: CardSearchOptions = {}) {
   const { rememberAs } = options;
   /**
@@ -762,7 +803,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const [recalled] = useState(() =>
     rememberAs === undefined ? undefined : viewMemory<RememberedSearch>(rememberAs).recall(),
   );
-  const seed = options.initialSet || options.initialText ? undefined : recalled;
+  // An agent's search, when one mounted the page: its filters are the seed in place of the
+  // remembered ones — the set and text hand-offs' clean slate with the agent's answers on it. Only
+  // one hand-off is ever pending at a mount (`setActiveView` spends the others before each writes).
+  const handed = options.initialHandoff ? handoffFilters(options.initialHandoff) : undefined;
+  const seed = handed ?? (options.initialSet || options.initialText ? undefined : recalled);
   // A hand-off's box text, when one mounted the page — the seed for both `text` and the debounced
   // copy the request reads, so the first request is already the hand-off's.
   const seededText = options.initialText || (seed?.text ?? "");
@@ -868,9 +913,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const [priceMin, setPriceMin] = useState<number | undefined>(seed?.priceMin);
   const [priceMax, setPriceMax] = useState<number | undefined>(seed?.priceMax);
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
-  // should not also throw away the order you chose to read it in.
+  // should not also throw away the order you chose to read it in. An agent's search that names an
+  // order opens in it, `initialSort`'s rule.
+  const handedSort = options.initialHandoff?.sort;
   const [sort, setSort] = useState<SortSpec<SearchSortKey>>(
-    options.initialSort ?? recalled?.sort ?? [],
+    handedSort ? [handedSort] : (options.initialSort ?? recalled?.sort ?? []),
   );
   // A **view mode**, and outside `resetAll` for the same reason the sort is: clearing what
   // you are looking at should not also change *how* you are looking at it.
@@ -886,9 +933,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   //
   // Seeded from the caller rather than pinned `false` since the Tags page landed — see
   // {@link CardSearchOptions.defaultAllPrintings} for why that page opens uncollapsed. A seed
-  // and not a lock: the toggle on the filter row is still the reader's.
+  // and not a lock: the toggle on the filter row is still the reader's. An agent's search that
+  // names a mode opens in it; `null` there keeps the reader's.
   const [allPrintings, setAllPrintings] = useState(
-    recalled?.allPrintings ?? options.defaultAllPrintings ?? false,
+    options.initialHandoff?.allPrintings ??
+      recalled?.allPrintings ??
+      options.defaultAllPrintings ??
+      false,
   );
   // The printings no format allows used to be a chip of their own here, `unplayable`, defaulting
   // to off-and-hidden. It is the format select's `Tokens & extras` row now — one control, because the
@@ -1544,6 +1595,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   return {
     text,
     setText,
+    /**
+     * The box's plain words — the debounced text with its keyword terms and tag names lifted out,
+     * which is the free text the request's `text` carries. `""` when the box holds syntax alone.
+     */
+    plainWords: parsed.text,
     fetchMore,
     /**
      * The tags the reader typed into the box, resolved — what the chip row under it draws.
@@ -1992,6 +2048,34 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setRarities([]);
       setPriceMin(undefined);
       setPriceMax(undefined);
+    },
+    /**
+     * Show an agent's search and nothing else — the MCP tool `show_search`, arriving through
+     * `store.ts`'s `pendingSearchHandoff` on a page already mounted ({@link
+     * CardSearchOptions.initialHandoff} is the mount's seed). {@link showOnlyText}'s clean slate
+     * with the agent's answers on it: the box flushed past the debounce, then every filter set
+     * from {@link handoffFilters} — one the hand-off leaves empty is cleared, not left standing.
+     * The sort and the printings mode change only where the hand-off names them, `showOnlySet`'s
+     * `order` rule.
+     */
+    showHandoff: (h: SearchHandoff) => {
+      const next = handoffFilters(h);
+      rewrite(next.text);
+      setFormat(next.format);
+      setColorFilter(next.colorFilter);
+      setSets(next.sets);
+      setTypes(next.types);
+      setBorders(next.borders);
+      setFinishes(next.finishes);
+      setUniverse(next.universe);
+      setManaValues(next.manaValues);
+      setManaX(next.manaX);
+      setOwned(next.owned);
+      setRarities(next.rarities);
+      setPriceMin(next.priceMin);
+      setPriceMax(next.priceMax);
+      if (h.sort) setSort([h.sort]);
+      if (h.allPrintings !== null) setAllPrintings(h.allPrintings);
     },
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of

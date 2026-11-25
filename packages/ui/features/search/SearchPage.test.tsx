@@ -10,7 +10,14 @@ import { readDragData } from "@/features/decks/dnd";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { viewMemory } from "@/lib/viewMemory";
 import { WALL_CARD_VARIANT } from "@/lib/images";
-import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
+import type {
+  CardSummary,
+  SearchHandoff,
+  SearchRequest,
+  SearchResponse,
+  SetSummary,
+  WishInput,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
@@ -1906,6 +1913,93 @@ describe("SearchPage — text handed over by the quick search", () => {
     await waitFor(() => expect(lastRequest()).toMatchObject({ text: "bolt" }));
     expect(box).toHaveValue("bolt");
     await waitFor(() => expect(useAppStore.getState().pendingSearchText).toBeNull());
+  });
+});
+
+/**
+ * The MCP tool `show_search`: an agent's search reaches the page as `pendingSearchHandoff`, which
+ * is answered the way the quick search's text is above — a seed on a mount, a render-phase
+ * adjustment on a page already mounted — with the agent's filters, tag chips and sort in place
+ * of the clean slate.
+ */
+describe("SearchPage — a search handed over by an agent", () => {
+  const handoff = (over: Partial<SearchHandoff> = {}): SearchHandoff => ({
+    id: 1,
+    text: "t:creature",
+    format: "commander",
+    colors: ["U", "R"],
+    colorsStrict: true,
+    types: [],
+    rarities: ["rare"],
+    sets: [],
+    manaValues: [2],
+    manaX: false,
+    owned: null,
+    priceMin: null,
+    priceMax: 5,
+    borders: ["borderless"],
+    finishes: [],
+    universe: null,
+    tags: [{ slug: "ramp", label: "Ramp", namespace: "oracle" }],
+    sort: { key: "price", dir: "desc" },
+    allPrintings: null,
+    ...over,
+  });
+  afterEach(() => useAppStore.setState({ pendingSearchHandoff: null }));
+
+  it("opens on the agent's text, filters, chips and sort, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingSearchHandoff: handoff() });
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    for (const [req] of searchCards.mock.calls) {
+      expect(req).toMatchObject({
+        format: "commander",
+        colors: "UR",
+        colorsStrict: true,
+        rarities: ["rare"],
+        borders: ["borderless"],
+        priceMax: 5,
+      });
+      expect(req.oracleTags?.include).toEqual(["ramp"]);
+    }
+    expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("t:creature");
+    expect(lastRequest().sort).toEqual([{ key: "price", dir: "desc" }]);
+    // The chips row draws the agent's tag by its label.
+    expect(screen.getAllByText("Ramp").length).toBeGreaterThan(0);
+    await waitFor(() => expect(useAppStore.getState().pendingSearchHandoff).toBeNull());
+  });
+
+  it("replaces what the reader had, leftover tag chips included, on a page already open", async () => {
+    // A chip picked in the sidebar on an earlier visit, which the agent's search does not name.
+    viewMemory("searchTags").keep({
+      selection: {
+        chips: [{ slug: "dragon", label: "Dragon", namespace: "art", mode: "include" }],
+        namespace: "both",
+        floor: "any",
+      },
+      text: "",
+    });
+    wrap(<SearchPage />);
+    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "goblin");
+    await waitFor(() => expect(lastRequest().text).toBe("goblin"));
+    expect(lastRequest().artTags).toEqual({ include: ["dragon"], exclude: [] });
+    act(() =>
+      useAppStore
+        .getState()
+        .showSearchHandoff(
+          handoff({ id: 2, format: null, colors: [], colorsStrict: false, tags: [], sort: null }),
+        ),
+    );
+    // The agent's request, by a filter only it names. `Tokens & extras` sends no `format` and no
+    // `playableOnly` key at all (`formatParams`), so they are read one by one rather than matched.
+    await waitFor(() =>
+      expect(lastRequest()).toMatchObject({ rarities: ["rare"], text: undefined }),
+    );
+    expect(lastRequest().format).toBeUndefined();
+    expect(lastRequest().playableOnly).toBeUndefined();
+    expect(lastRequest().colors).toBeUndefined();
+    expect(lastRequest().artTags).toBeUndefined();
+    expect(screen.getByPlaceholderText(/search cards/i)).toHaveValue("t:creature");
   });
 });
 
