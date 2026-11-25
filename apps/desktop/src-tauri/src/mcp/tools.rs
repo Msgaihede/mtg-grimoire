@@ -1631,14 +1631,22 @@ fn combo_data(status: &Value) -> Value {
     json!({ "downloadedAt": status.get("fetchedAt").cloned().unwrap_or(Value::Null) })
 }
 
+/// The "never downloaded" note's last sentence for a feed Settings can fetch: the combos, whose
+/// *Refresh combos* is in Settings → local cache.
+const FETCH_AT_LAUNCH_OR_IN_SETTINGS: &str =
+    "The app fetches it weekly when it starts, and Settings can fetch it now.";
+
+/// The same for a feed Settings has no button for: the oracle tags and the rulings.
+const FETCH_AT_LAUNCH: &str = "The app fetches it weekly when it starts.";
+
 /// Put `comboData` on an answer, with the sentence that says so when nothing was downloaded.
 fn with_combo_data(answer: &mut Value, status: &Value, notes: Vec<String>) {
     with_feed_data(
         answer,
         "comboData",
         combo_data(status),
-        "combo list",
-        "no combos",
+        ("combo list", "no combos"),
+        FETCH_AT_LAUNCH_OR_IN_SETTINGS,
         notes,
     );
 }
@@ -1654,21 +1662,21 @@ fn with_tag_data(answer: &mut Value, status: &Value) {
         answer,
         "tagData",
         tag_data(status),
-        "oracle tag list",
-        "no tags",
+        ("oracle tag list", "no tags"),
+        FETCH_AT_LAUNCH,
         Vec::new(),
     );
 }
 
 /// Put a downloaded feed's `{ downloadedAt }` on an answer under `key`. When nothing was ever
-/// downloaded the answer also carries `note`, one sentence saying the `list` is missing, so an
-/// empty answer does not read as `nothing`, and where to fetch it; `notes` are joined after it.
+/// downloaded the answer also carries `note`: the `list` is missing, so an empty answer does not
+/// read as `nothing`, then `fetch`, where it comes from; `notes` are joined after it.
 fn with_feed_data(
     answer: &mut Value,
     key: &str,
     data: Value,
-    list: &str,
-    nothing: &str,
+    (list, nothing): (&str, &str),
+    fetch: &str,
     mut notes: Vec<String>,
 ) {
     if data["downloadedAt"].is_null() {
@@ -1677,11 +1685,11 @@ fn with_feed_data(
             format!(
                 concat!(
                     "The {list} has not been downloaded yet, so an empty answer does not mean ",
-                    "there are {nothing}. The app fetches it weekly when it starts, and ",
-                    "Settings can fetch it now."
+                    "there are {nothing}. {fetch}"
                 ),
                 list = list,
-                nothing = nothing
+                nothing = nothing,
+                fetch = fetch
             ),
         );
     }
@@ -3706,7 +3714,11 @@ mod tests {
         assert_eq!(found["tags"], json!([]));
         assert!(found["tagData"]["downloadedAt"].is_null(), "{found}");
         let note = found["note"].as_str().unwrap();
-        assert!(note.contains("Settings"), "{found}");
+        assert!(note.contains("weekly when it starts"), "{found}");
+        assert!(
+            !note.contains("Settings"),
+            "Settings has no button for the tag list: {found}"
+        );
         assert!(!note.contains("  "), "{note}");
     }
 
