@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import { AnimatePresence } from "motion/react";
 import { PageBar } from "@/components/PageBar";
 import { BELOW_CAPTION } from "@/components/TitleBar";
 import { LAYER } from "@/lib/layers";
@@ -29,30 +30,36 @@ import { LifeSetupScreen, type LifeGame } from "./setup/LifeSetupScreen";
 export function LifePage(): JSX.Element {
   const [game, setGame] = useState<LifeGame | null>(null);
   const [returned, setReturned] = useState(false);
-  if (game !== null) {
-    return (
-      <BoardFrame
-        // **Below the header band whatever the edition says about caption buttons.** The light
-        // edition has no window verbs (`caption: false`) but `TitleBar` still draws its 34px band
-        // at `LAYER.caption`, above this frame — at `top-0` the band covered the board's top edge
-        // and half of its menu button (measured at 1280 × 800, 2026-11-20).
-        className={cn("fixed inset-x-0 bottom-0", BELOW_CAPTION, LAYER.stage)}
-        game={game}
-        onLeave={() => {
-          setGame(null);
-          setReturned(true);
-        }}
-      />
-    );
-  }
   return (
-    <section className="flex h-full min-h-0 flex-col">
-      <LifeSetupScreen
-        frame="page"
-        head={<PageBar title="Life" />}
-        focusStart={returned}
-        onPlay={setGame}
-      />
-    </section>
+    <>
+      {/* The board rises over the setup and sinks back to it — `BoardFrame`. */}
+      <AnimatePresence>
+        {game !== null && (
+          <BoardFrame
+            key="board"
+            // **Below the header band whatever the edition says about caption buttons.** The light
+            // edition has no window verbs (`caption: false`) but `TitleBar` still draws its 34px band
+            // at `LAYER.caption`, above this frame — at `top-0` the band covered the board's top edge
+            // and half of its menu button (measured at 1280 × 800, 2026-11-20).
+            className={cn("fixed inset-x-0 bottom-0", BELOW_CAPTION, LAYER.stage)}
+            game={game}
+            onLeave={() => {
+              setGame(null);
+              setReturned(true);
+            }}
+          />
+        )}
+      </AnimatePresence>
+      {game === null && (
+        <section className="flex h-full min-h-0 flex-col">
+          <LifeSetupScreen
+            frame="page"
+            head={<PageBar title="Life" />}
+            focusStart={returned}
+            onPlay={setGame}
+          />
+        </section>
+      )}
+    </>
   );
 }
