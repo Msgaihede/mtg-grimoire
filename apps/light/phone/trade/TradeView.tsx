@@ -41,6 +41,7 @@ import type { Currency } from "@grimoire/ui/lib/marketplace";
 import { PRESS } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
 import { DimNote, ReadError } from "../pages/parts";
+import { useSwipeBack } from "../PageStack";
 import { navigate, up, upLinkTo } from "../router";
 import { AddCardsSheet } from "./AddCardsSheet";
 import { EditLineSheet } from "./EditLineSheet";
@@ -97,6 +98,8 @@ function HeaderRow({
   nameRef?: Ref<HTMLHeadingElement>;
   children?: ReactNode;
 }) {
+  // A swipe right goes where the `‹` below goes.
+  useSwipeBack(TRADES_PLACE);
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-1 py-1">
       <a

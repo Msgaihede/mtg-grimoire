@@ -19,6 +19,7 @@ import type { WallItem } from "./CardWall";
 import { CollectionPage } from "./pages/CollectionPage";
 import { DeckPage } from "./pages/DeckPage";
 import { DecksPage } from "./pages/DecksPage";
+import { PageStack } from "./PageStack";
 import { LifePage } from "./pages/LifePage";
 import { ScannerPage } from "./pages/ScannerPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -36,7 +37,7 @@ import { useTouchShell } from "./touchShell";
  * closes it, and a header a finger can drag down. One object for the face's life, so no dialog
  * re-claims its step on a render.
  */
-const PHONE_DIALOGS: DialogHost = { claimBack, swipeToClose: true };
+const PHONE_DIALOGS: DialogHost = { claimBack, swipeToClose: true, sheets: true };
 
 /**
  * **Where the phone's toasts stand** — `Toaster`'s `className`, measured at 360 and 412px wide.
@@ -189,7 +190,12 @@ export function PhoneFace() {
           inboxOpen={inbox}
           onInbox={() => setInbox(true)}
         >
-          <Pages place={place} picks={picks} onPick={pick} />
+          {/* Each page arrives and leaves as a phone's do, and one with a way up can be swiped
+              back — `PageStack.tsx`. The page beneath a swipe is drawn by the same function. */}
+          <PageStack
+            place={place}
+            render={(at) => <Pages place={at} picks={picks} onPick={pick} />}
+          />
         </Shell>
         {/* A sibling of the shell, not a child of a page: `Dialog`'s scrim is `fixed inset-0`, and
           nothing that covers the window may mount inside a box that could become its containing

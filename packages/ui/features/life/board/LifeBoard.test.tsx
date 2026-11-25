@@ -37,9 +37,18 @@ function mount(setup: LifeSetup = setupFromFormat("commander"), host?: DialogHos
 }
 
 /** The turn of a seat's panel: its content's frame, turned to face whoever reads it. */
+/**
+ * Which way a panel faces, as its transform says it — the angle brought into (−180°, 180°], because
+ * a panel turns the short way round and keeps its angle unwrapped (`nearestTurn`): −270° faces
+ * where 90° does.
+ */
 const turnOf = (player: number) =>
-  (screen.getByRole("region", { name: `Player ${player}` }).firstElementChild as HTMLElement).style
-    .transform;
+  (
+    screen.getByRole("region", { name: `Player ${player}` }).firstElementChild as HTMLElement
+  ).style.transform.replace(/rotate\((-?\d+)deg\)/, (_, deg: string) => {
+    const a = ((((Number(deg) + 180) % 360) + 360) % 360) - 180;
+    return `rotate(${a === -180 ? 180 : a}deg)`;
+  });
 
 const openCommanderDamage = (player: number) =>
   fireEvent.click(

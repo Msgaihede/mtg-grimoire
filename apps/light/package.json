@@ -9,6 +9,7 @@
     "@grimoire/ui": "workspace:*",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-virtual": "catalog:",
+    "@use-gesture/react": "catalog:",
     "keyrune": "catalog:",
     "lucide-react": "catalog:",
     "mana-font": "catalog:",

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AnimatePresence } from "motion/react";
 import { BoardFrame } from "@grimoire/ui/features/life/BoardFrame";
 import { LifeSetupScreen, type LifeGame } from "@grimoire/ui/features/life/setup/LifeSetupScreen";
 import { setImmersive } from "@grimoire/ui/lib/core/hostImmersive";
@@ -53,31 +54,38 @@ export function LifePage() {
     };
   }, [playing]);
 
-  if (game !== null) {
-    return (
-      <BoardFrame
-        className={cn(
-          "fixed inset-0",
-          "pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]",
-          LAYER.stage,
-        )}
-        game={game}
-        onLeave={() => {
-          setGame(null);
-          setReturned(true);
-        }}
-      />
-    );
-  }
   return (
-    <LifeSetupScreen
-      frame="phone"
-      focusStart={returned}
-      onPlay={(next) => {
-        // Inside the press: a browser's Fullscreen API answers only to one.
-        setImmersive(true);
-        setGame(next);
-      }}
-    />
+    <>
+      {/* The board rises over the setup and sinks back to it (`BoardFrame`): held in a presence,
+          so the setup is drawn again beneath it as it goes. */}
+      <AnimatePresence>
+        {game !== null && (
+          <BoardFrame
+            key="board"
+            className={cn(
+              "fixed inset-0",
+              "pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]",
+              LAYER.stage,
+            )}
+            game={game}
+            onLeave={() => {
+              setGame(null);
+              setReturned(true);
+            }}
+          />
+        )}
+      </AnimatePresence>
+      {game === null && (
+        <LifeSetupScreen
+          frame="phone"
+          focusStart={returned}
+          onPlay={(next) => {
+            // Inside the press: a browser's Fullscreen API answers only to one.
+            setImmersive(true);
+            setGame(next);
+          }}
+        />
+      )}
+    </>
   );
 }

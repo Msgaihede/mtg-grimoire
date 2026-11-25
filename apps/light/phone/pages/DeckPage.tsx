@@ -33,6 +33,7 @@ import { AddCards } from "../deck/AddCards";
 import { CardActions, slotOf, type Acting } from "../deck/CardActions";
 import { shownList } from "../deck/list";
 import { ReceiptBar, useReceipt } from "../deck/receipt";
+import { useSwipeBack } from "../PageStack";
 import { upLinkTo } from "../router";
 import { phoneDeckDestination } from "../transfer/destinations";
 import { ExportSheet } from "../transfer/ExportSheet";
@@ -104,6 +105,8 @@ export function DeckPage({
     cardId: null,
     folderId: row?.folderId ?? null,
   } as const;
+  // A swipe right goes where the `‹` below goes.
+  useSwipeBack(back);
 
   return (
     <>
