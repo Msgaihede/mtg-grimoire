@@ -50,9 +50,20 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "Milled Island",
     "move",
   ],
+  // A card from the library to the hand that is not a draw is a search's find (a tutor).
   [
     { type: "moved", seat: "you", name: "Forest", from: "libraryTop", to: "hand" },
-    "Drew Forest",
+    "Put Forest from your library into your hand",
+    "draw",
+  ],
+  [
+    { type: "moved", seat: "opponent", name: null, from: "libraryTop", to: "hand" },
+    "The opponent put a card from their library into their hand",
+    "draw",
+  ],
+  [
+    { type: "moved", seat: "opponent", name: "Lightning Bolt", from: "libraryTop", to: "hand" },
+    "The opponent put Lightning Bolt from their library into their hand",
     "draw",
   ],
   [
@@ -297,6 +308,53 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "tap",
   ],
   [
+    { type: "revealed", seat: "opponent", names: ["Lightning Bolt", "Forest"] },
+    "The opponent revealed Lightning Bolt and Forest",
+    "reveal",
+  ],
+  [{ type: "revealed", seat: "you", names: ["Island"] }, "Revealed Island", "reveal"],
+  [
+    { type: "countered", seat: "you", name: "Counterspell", by: "Mana Leak" },
+    "Your Counterspell was countered by Mana Leak",
+    "cast",
+  ],
+  [
+    { type: "countered", seat: "opponent", name: "Lightning Bolt", by: null },
+    "The opponent's Lightning Bolt was countered",
+    "cast",
+  ],
+  [
+    { type: "countered", seat: "opponent", name: null, by: "Counterspell" },
+    "The opponent's face-down spell was countered by Counterspell",
+    "cast",
+  ],
+  [{ type: "flipped", seat: "you", won: true }, "You won the flip", "chance"],
+  [{ type: "flipped", seat: "opponent", won: false }, "The opponent lost the flip", "chance"],
+  [
+    { type: "rolled", seat: "opponent", sides: 6, result: 4 },
+    "The opponent rolled 4 on a d6",
+    "chance",
+  ],
+  [{ type: "rolled", seat: "you", sides: 20, result: 17 }, "You rolled 17 on a d20", "chance"],
+  [{ type: "rolled", seat: "you", sides: 6, result: null }, "You rolled the planar die", "chance"],
+  [{ type: "named", seat: "you", name: "Lightning Bolt" }, "You named Lightning Bolt", "reveal"],
+  [{ type: "named", seat: "opponent", name: "Ragavan" }, "The opponent named Ragavan", "reveal"],
+  [{ type: "became", seat: "you", what: "monarch" }, "You became the monarch", "status"],
+  [
+    { type: "became", seat: "opponent", what: "initiative" },
+    "The opponent took the initiative",
+    "status",
+  ],
+  [{ type: "became", seat: "you", what: "cityBlessing" }, "You got the city's blessing", "status"],
+  [{ type: "became", seat: "you", what: "ringTempted" }, "The Ring tempted you", "status"],
+  [
+    { type: "became", seat: "opponent", what: "ringTempted" },
+    "The Ring tempted the opponent",
+    "status",
+  ],
+  [{ type: "dayNight", now: "night" }, "It became night", "turn"],
+  [{ type: "dayNight", now: "day" }, "It became day", "turn"],
+  [
     { type: "chose", what: "TargetSelection" },
     "The engine chose for you: Choose a target",
     "engine",
@@ -326,6 +384,12 @@ describe("playtestSentence", () => {
     ).toBe("Opponent 3's Ragavan was exiled");
     expect(at4({ type: "life", seat: "opponent2", amount: -4, total: 36 })).toBe(
       "Opponent 2 lost 4, down to 36",
+    );
+    expect(at4({ type: "became", seat: "opponent3", what: "ringTempted" })).toBe(
+      "The Ring tempted Opponent 3",
+    );
+    expect(at4({ type: "countered", seat: "opponent2", name: "Opt", by: "Counterspell" })).toBe(
+      "Opponent 2's Opt was countered by Counterspell",
     );
     expect(
       at4({
@@ -428,7 +492,7 @@ describe("playtestLines", () => {
         { type: "turnBegan", turn: 2, seat: "opponent" },
         { type: "drew", seat: "opponent", name: null },
         { type: "turnBegan", turn: 3, seat: "you" },
-        { type: "moved", seat: "you", name: "Forest", from: "libraryTop", to: "hand" },
+        { type: "drew", seat: "you", name: "Forest" },
       ],
       3,
       1,

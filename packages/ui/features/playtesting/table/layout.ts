@@ -99,7 +99,9 @@ export interface Pile {
  * What makes two cards one pile: the picture, the name, the state, the counters, the P/T and the
  * effects on it — a Bear under Giant Growth is not its untouched twin (issue #1327) — and whether
  * the rules let it tap for mana, so a click on a pile's top card always taps one that can (a
- * summoning-sick Llanowar Elves is not its ready twin).
+ * summoning-sick Llanowar Elves is not its ready twin) — or activate it. The rules' other marks
+ * part twins too (`effects.ts`' `cardStates`): face down, damage, sickness, phasing, a Class's
+ * level, what was chosen, goad and its kin.
  */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
@@ -114,6 +116,14 @@ function pileKey(c: GameCard): string {
     c.isToken ? "t" : "",
     effects,
     c.canTapForMana ? "m" : "",
+    c.canActivate ? "a" : "",
+    c.faceDown ? "d" : "",
+    c.phasedOut ? "p" : "",
+    c.sick ? "s" : "",
+    c.damage,
+    c.classLevel ?? "",
+    c.chosen.join(","),
+    c.marks.join(","),
   ].join("|");
 }
 

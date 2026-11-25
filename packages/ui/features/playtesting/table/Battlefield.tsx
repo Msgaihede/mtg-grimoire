@@ -12,8 +12,8 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { EFFECT_CHIPS, effectChip, effectLine } from "./effects";
-import { CardFace, StatsChip, changedStats, counterLabel, pointerAt } from "./Inspect";
+import { EFFECT_CHIPS, cardStates, effectChip, effectLine, type CardState } from "./effects";
+import { CardFace, StatsChip, changedStats, counterLabel, pointerAt, shownName } from "./Inspect";
 import {
   tableDraggable,
   useAimTarget,
@@ -124,7 +124,13 @@ export interface BattlefieldProps {
   label?: string;
   marks?: ReadonlyMap<number, CardMark>;
   pick?: TablePick;
-  /** Heads a permanent's menu with "Activate ability" (`cardMenu`'s `onActivate`). */
+  /**
+   * Heads a permanent's menu with "Activate ability" (`cardMenu`'s `onActivate`), and is what a
+   * click on a permanent the rules let the reader activate ({@link GameCard.canActivate}) does
+   * when the click has nothing else to do (no pick, no mana, no sandbox tap). On a `readOnly`
+   * table — an opponent's — it reaches only the permanents whose `canActivate` is set: an "any
+   * player may activate" ability the rules offer the reader now.
+   */
   onActivate?: (id: number) => void;
   /**
    * Who this table's permanents can be put under the control of by hand (`cardMenu`'s
@@ -460,16 +466,24 @@ function PileView({
   // A card turned on its centre spills 0.2 of its width past its left edge; this puts it back
   // inside the pile's box, which `pileWidth` sized for the card as it lies.
   const turn = Math.round(w * 0.2);
-  const word = count > 1 ? `${count} ${plural(card.name)}` : card.name;
+  const name = shownName(card);
+  const word = count > 1 ? `${count} ${plural(name)}` : name;
   const counters = card.counters.map(counterLabel).join(" · ");
   const effects = card.effects.map((e) => effectLine(e, card.name)).join("; ");
   const stats = changedStats(card);
+  const states = cardStates(card);
   /** Carried off and tapped by a click: the reader's own card, with the sandbox's moves working. */
   const handled = sandbox && !readOnly;
   /** Tapped for mana by a click, by the rules: sandbox or not. */
   const makesMana = !readOnly && card.canTapForMana && !tapped;
   /** Picked up at all: the sandbox's carry, or the rules' (`carry`) — an attack, a target. */
   const carried = !readOnly && (handled || (carry?.(card) ?? false));
+  /** The reader's way to activate this card: their own table's, or an opponent's permanent the
+   *  rules let them activate ({@link GameCard.canActivate}) — never during a replay, whose
+   *  frames offer nothing. */
+  const activate = readOnly && !card.canActivate ? undefined : onActivate;
+  /** Activated by a click, by the rules — the click has nothing else to do. */
+  const activates = activate !== undefined && card.canActivate && !handled && !makesMana;
   const aimed = useAimTarget({ ref: top, aim: aim?.card(ids[0]), overlay: true });
 
   useEffect(() => {
@@ -497,8 +511,8 @@ function PileView({
   const markX = Math.round(w * (tapped ? 0.7 : 0.5));
   const markY = lift + under * PILE + (tapped ? turn + w : h);
 
-  // Activate ability is the reader's own permanents' (never during a replay); the sandbox's rows
-  // are any card's the table shows.
+  // Activate ability is the reader's own permanents' (never during a replay) and an opponent's the
+  // rules let them activate; the sandbox's rows are any card's the table shows.
   const build = () =>
     cardMenu({
       card,
@@ -506,7 +520,7 @@ function PileView({
       place: "battlefield",
       sandbox,
       onAct,
-      onActivate: readOnly ? undefined : onActivate,
+      onActivate: activate,
       control,
     });
   const openMenu = menu(build);
@@ -516,9 +530,15 @@ function PileView({
     <div
       ref={ref}
       data-land={ids.join(" ")}
+      data-phased-out={card.phasedOut || undefined}
       // `isolate`: a lifted attachment comes over its own card and competes with nothing else on
-      // the board — the inspect preview, the hand and the arrows stay above it.
-      className={cn("relative isolate flex-none", carried ? "cursor-grab" : "cursor-default")}
+      // the board — the inspect preview, the hand and the arrows stay above it. A phased-out
+      // permanent is treated as though it does not exist (CR 702.26): it is drawn faded.
+      className={cn(
+        "relative isolate flex-none",
+        carried ? "cursor-grab" : "cursor-default",
+        card.phasedOut && "opacity-40",
+      )}
       style={{
         width: pileWidth(pile, w),
         height: pileHeight(pile, w),
@@ -546,7 +566,7 @@ function PileView({
             onUnpoint={onUnpoint}
             mark={marks?.get(a.id)}
             onPick={pick?.ids.has(a.id) ? pick.onPick : undefined}
-            onActivate={readOnly || !own.has(a.id) ? undefined : onActivate}
+            onActivate={(readOnly || !own.has(a.id)) && !a.canActivate ? undefined : onActivate}
             control={own.has(a.id) ? control : undefined}
             lifted={lifted === a.id}
             onLift={setLifted}
@@ -571,10 +591,11 @@ function PileView({
           tapped ? "tapped" : null,
           card.isToken ? "token" : null,
           card.gaps.length > 0 ? "played only in part" : null,
+          ...states.map((state) => state.line),
           counters === "" ? null : counters,
           effects === "" ? null : effects,
           stats === null ? null : `${stats.power}/${stats.toughness}`,
-          pile.attached.length > 0 ? `with ${pile.attached.map((a) => a.name).join(", ")}` : null,
+          pile.attached.length > 0 ? `with ${pile.attached.map(shownName).join(", ")}` : null,
           mark?.word ?? null,
         ]
           .filter((part) => part !== null)
@@ -584,12 +605,14 @@ function PileView({
         // mana into the pool (issue #1326). Otherwise click taps the top card and Shift the pile —
         // the artboard's help, and the sandbox's: with it off a click taps nothing. A card that
         // can be picked is picked instead, and an opponent's card is tapped only through its
-        // menu, so a click meant as a look never turns it.
+        // menu, so a click meant as a look never turns it. A click with none of those to do on a
+        // card the rules let the reader activate activates it — an opponent's too.
         onClick={(e) => {
           if (onPick !== undefined) onPick(ids[0]);
           else if (makesMana) onAct({ type: "tapForMana", id: ids[0] });
           else if (handled)
             onAct({ type: "tap", ids: e.shiftKey ? ids : [ids[0]], tapped: !tapped });
+          else if (activates) activate?.(ids[0]);
         }}
         onContextMenu={(e) => {
           // An empty menu opens nothing, and neither does the browser's own over the table.
@@ -604,17 +627,18 @@ function PileView({
             card,
             ids,
             place: "battlefield",
-            line: count > 1 ? `${word} on the battlefield` : card.name,
+            line: count > 1 ? `${word} on the battlefield` : name,
             at: pointerAt(e),
           })
         }
         onMouseLeave={onUnpoint}
         data-point={card.id}
+        data-activatable={card.canActivate && activate !== undefined ? "" : undefined}
         className={cn(
           "absolute cursor-pointer rounded-md p-0",
           "transition-[left,transform] duration-150 ease-out motion-reduce:transition-none",
           FOCUS,
-          !carried && !picks && !makesMana && "cursor-default",
+          !carried && !picks && !makesMana && !activates && "cursor-default",
           aimed
             ? MARK_RING.chosen
             : mark !== undefined
@@ -632,8 +656,8 @@ function PileView({
             {mark.badge}
           </span>
         )}
-        {(counters !== "" || card.effects.length > 0) && (
-          <CardChips counters={counters} effects={card.effects.map(effectChip)} />
+        {(counters !== "" || card.effects.length > 0 || states.length > 0) && (
+          <CardChips counters={counters} effects={card.effects.map(effectChip)} states={states} />
         )}
         <StatsChip card={card} />
       </button>
@@ -651,41 +675,78 @@ function PileView({
 }
 
 /**
- * What a card on the table carries, drawn over its art's top left corner: its counters, then one
- * chip per effect on it — what happened and where from, `+Demon · Clavileño` (issue #1327). A
- * chip too long for the card is cut short; the preview and the card's name for a screen reader
- * have each in full. Past {@link EFFECT_CHIPS} the rest are counted in one more chip.
+ * What a card on the table carries, drawn over its art's top left corner: the rules' marks on it
+ * ({@link cardStates}: face down, phased out, summoning sick, a Class's level, goaded and its kin,
+ * what was chosen), its counters, then one chip per effect on it — what happened and where from,
+ * `+Demon · Clavileño` (issue #1327). A chip too long for the card is cut short; the preview and
+ * the card's name for a screen reader have each in full. Past {@link EFFECT_CHIPS} the rest of the
+ * effects are counted in one more chip. The damage marked on it is apart, red in the bottom-left
+ * corner, across from its P/T.
  *
  * Decorative and inert: it is inside the card's own button, which names all of it.
  */
-function CardChips({ counters, effects }: { counters: string; effects: string[] }): JSX.Element {
+function CardChips({
+  counters,
+  effects,
+  states,
+}: {
+  counters: string;
+  effects: string[];
+  states: readonly CardState[];
+}): JSX.Element {
   const shown = effects.length > EFFECT_CHIPS ? effects.slice(0, EFFECT_CHIPS - 1) : effects;
   const more = effects.length - shown.length;
+  const damage = states.find((s) => s.key === "damage");
   return (
-    <span
-      aria-hidden="true"
-      className="pointer-events-none absolute top-1 right-1 left-1 flex flex-col items-start gap-0.5"
-    >
-      {counters !== "" && (
-        <span className="max-w-full truncate rounded border border-border bg-bg px-[5px] font-mono text-[11px] text-text">
-          {counters}
-        </span>
-      )}
-      {shown.map((chip, i) => (
+    <>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute top-1 right-1 left-1 flex flex-col items-start gap-0.5"
+      >
+        {states
+          .filter((s) => s !== damage)
+          .map((state) => (
+            <span
+              key={state.key}
+              data-state={state.key}
+              className={cn(
+                "max-w-full truncate rounded border bg-bg/90 px-[5px] text-[10px]/4",
+                state.tone === "dim" ? "border-border text-dim" : "border-border text-text",
+              )}
+            >
+              {state.chip}
+            </span>
+          ))}
+        {counters !== "" && (
+          <span className="max-w-full truncate rounded border border-border bg-bg px-[5px] font-mono text-[11px] text-text">
+            {counters}
+          </span>
+        )}
+        {shown.map((chip, i) => (
+          <span
+            key={i}
+            data-effect=""
+            className="max-w-full truncate rounded border border-accent/60 bg-bg/90 px-[5px] text-[10px]/4 text-text"
+          >
+            {chip}
+          </span>
+        ))}
+        {more > 0 && (
+          <span className="rounded border border-accent/60 bg-bg/90 px-[5px] text-[10px]/4 text-dim">
+            +{more} more
+          </span>
+        )}
+      </span>
+      {damage !== undefined && (
         <span
-          key={i}
-          data-effect=""
-          className="max-w-full truncate rounded border border-accent/60 bg-bg/90 px-[5px] text-[10px]/4 text-text"
+          aria-hidden="true"
+          data-state="damage"
+          className="pointer-events-none absolute bottom-1 left-1 rounded border border-white/25 bg-black/80 px-[5px] font-mono text-[11px] font-semibold text-destructive tabular-nums"
         >
-          {chip}
-        </span>
-      ))}
-      {more > 0 && (
-        <span className="rounded border border-accent/60 bg-bg/90 px-[5px] text-[10px]/4 text-dim">
-          +{more} more
+          {damage.chip}
         </span>
       )}
-    </span>
+    </>
   );
 }
 
@@ -752,6 +813,9 @@ function AttachedView({
   // Tapped for mana by a click when it is the reader's to activate (`onActivate`): never another
   // table's guest, never during a replay.
   const makesMana = onActivate !== undefined && card.canTapForMana && !card.tapped;
+  /** Activated by a click (an equip, say) when the click has nothing else to do. */
+  const activates = onActivate !== undefined && card.canActivate && !handled && !makesMana;
+  const name = shownName(card);
   const aimed = useAimTarget({ ref, aim, overlay: true });
 
   useEffect(() => {
@@ -778,10 +842,11 @@ function AttachedView({
         ref={ref}
         type="button"
         aria-label={[
-          card.name,
-          `attached to ${host.name}`,
+          name,
+          `attached to ${shownName(host)}`,
           card.tapped ? "tapped" : null,
           card.isToken ? "token" : null,
+          ...cardStates(card).map((state) => state.line),
           counters === "" ? null : counters,
           mark?.word ?? null,
         ]
@@ -793,6 +858,7 @@ function AttachedView({
           if (onPick !== undefined) onPick(card.id);
           else if (makesMana) onAct({ type: "tapForMana", id: card.id });
           else if (handled) onAct({ type: "tap", ids, tapped: !card.tapped });
+          else if (activates) onActivate?.(card.id);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -807,7 +873,7 @@ function AttachedView({
             card,
             ids,
             place: "battlefield",
-            line: `${card.name}, attached to ${host.name}`,
+            line: `${name}, attached to ${shownName(host)}`,
             at: pointerAt(e),
           });
         }}
@@ -816,11 +882,12 @@ function AttachedView({
           onUnpoint();
         }}
         data-point={card.id}
+        data-activatable={activates ? "" : undefined}
         className={cn(
           "absolute rounded-md p-0",
           "transition-[left,top,transform] duration-150 ease-out motion-reduce:transition-none",
           FOCUS,
-          carried ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
+          carried ? "cursor-grab" : picks || activates ? "cursor-pointer" : "cursor-default",
           ring,
         )}
         style={style}
@@ -862,6 +929,13 @@ export function emblemCard(emblem: PlaytestEmblem): GameCard {
     tax: 0,
     attachedTo: null,
     foretold: false,
+    faceDown: false,
+    damage: 0,
+    sick: false,
+    phasedOut: false,
+    classLevel: null,
+    chosen: [],
+    marks: [],
     canForetell: false,
     canActivate: false,
     castable: false,

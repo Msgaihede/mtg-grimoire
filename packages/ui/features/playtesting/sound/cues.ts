@@ -136,6 +136,16 @@ export function soundOf(h: PlaytestHappened): SoundId | null {
       return "shuffle";
     case "chose":
       return "choose";
+    case "countered":
+      return "graveyard";
+    // A reveal, a coin, a die, a name, a designation and the day are read, not heard.
+    case "revealed":
+    case "flipped":
+    case "rolled":
+    case "named":
+    case "became":
+    case "dayNight":
+      return null;
     case "eliminated":
       return "eliminated";
     case "gameOver":

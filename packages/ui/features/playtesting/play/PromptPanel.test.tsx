@@ -25,6 +25,37 @@ function setup(prompt: PlaytestPrompt, disabled = false) {
   return { onAct, onPoint };
 }
 
+/** A question of `kind` with no listed answers but those in `over`. */
+function question(kind: string, over: Partial<PlaytestPrompt>): PlaytestPrompt {
+  return {
+    kind,
+    source: null,
+    sourceText: null,
+    cause: null,
+    options: [],
+    cancellable: false,
+    pick: null,
+    keyword: null,
+    damage: null,
+    shown: [],
+    distribute: null,
+    nameEntry: false,
+    ...over,
+  };
+}
+
+const ref = (id: number, name: string) => ({ id, name, cardId: null, text: null, cause: null });
+
+const named = (index: number, label: string) => ({
+  index,
+  kind: "ChooseOption",
+  cards: [],
+  players: [],
+  number: null,
+  yes: null,
+  label,
+});
+
 describe("PromptPanel", () => {
   it("titles the question, names its source and sends the answer picked", () => {
     const prompt = targetPrompt().view.prompt!;
@@ -113,6 +144,9 @@ describe("PromptPanel", () => {
       pick: null,
       keyword: null,
       damage: null,
+      shown: [],
+      distribute: null,
+      nameEntry: false,
     });
     expect(screen.getByRole("heading", { name: "Choose ring bearer" })).toBeInTheDocument();
     expect(screen.getByText(/can’t show this choice/)).toBeInTheDocument();
@@ -124,5 +158,88 @@ describe("PromptPanel", () => {
     const { onAct } = setup(targetPrompt().view.prompt!, true);
     fireEvent.click(screen.getByRole("button", { name: /Ragavan/ }));
     expect(onAct).not.toHaveBeenCalled();
+  });
+
+  it("draws the cards a question shows, each pointed while hovered", () => {
+    const { onPoint } = setup(
+      question("OptionalEffectChoice", {
+        shown: [ref(31, "Ponder")],
+        options: [
+          { ...named(0, "No"), kind: "DecideOptionalEffect", label: null, yes: false },
+          { ...named(1, "Yes"), kind: "DecideOptionalEffect", label: null, yes: true },
+        ],
+      }),
+    );
+    const shown = screen.getByRole("list", { name: "Cards shown" });
+    fireEvent.mouseEnter(within(shown).getByTitle("Ponder"));
+    expect(onPoint).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 31, name: "Ponder" }),
+      expect.anything(),
+    );
+    expect(screen.getByRole("button", { name: "Yes" })).toBeInTheDocument();
+    expect(screen.queryByText(/can’t show this choice/)).not.toBeInTheDocument();
+  });
+
+  it("takes a typed name, and narrows the listed names to it", () => {
+    const { onAct } = setup(
+      question("NamedChoice", {
+        nameEntry: true,
+        options: [named(0, "Lightning Bolt"), named(1, "Lightning Helix"), named(2, "Forest")],
+      }),
+    );
+    const name = screen.getByRole("button", { name: "Name it" });
+    expect(name).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "light" },
+    });
+    expect(screen.getByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lightning Helix" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Forest" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Lightning Helix" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "choose", index: 1 });
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "  Pithing Needle " },
+    });
+    fireEvent.click(name);
+    expect(onAct).toHaveBeenLastCalledWith({ type: "name", text: "Pithing Needle" });
+  });
+
+  it("names on Enter, and offers the typed name even with nothing listed", () => {
+    const { onAct } = setup(question("NamedChoice", { nameEntry: true }));
+    expect(screen.queryByText(/can’t show this choice/)).not.toBeInTheDocument();
+    const box = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.change(box, { target: { value: "Goblin" } });
+    fireEvent.submit(box.closest("form")!);
+    expect(onAct).toHaveBeenCalledWith({ type: "name", text: "Goblin" });
+  });
+
+  it("divides an amount among its targets, the engine's own division behind Other answers", () => {
+    const { onAct } = setup(
+      question("DistributeAmong", {
+        source: "Forked Bolt",
+        distribute: {
+          total: 2,
+          unit: "Damage",
+          targets: [
+            { card: ref(7, "Grizzly Bears"), player: null, min: 1 },
+            { card: null, player: "opponent", min: 1 },
+          ],
+        },
+        options: [{ ...named(0, "x"), kind: "DistributeAmong", label: null }],
+      }),
+    );
+    expect(screen.getByRole("heading", { name: "Divide" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Divide 2 damage" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Distribute among" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Other answers" }));
+    expect(screen.getByRole("button", { name: "Distribute among" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Divide" }));
+    expect(onAct).toHaveBeenCalledWith({
+      type: "distribute",
+      shares: [
+        { id: 7, player: null, amount: 1 },
+        { id: null, player: "opponent", amount: 1 },
+      ],
+    });
   });
 });

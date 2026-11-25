@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameCard } from "@/lib/ipc";
-import { INSPECT_MAX, INSPECT_MIN, changedStats, placePreview, wheelWidth } from "./Inspect";
+import { gameCard } from "./fixtures";
+import {
+  INSPECT_DELAY,
+  INSPECT_MAX,
+  INSPECT_MIN,
+  Inspect,
+  changedStats,
+  placePreview,
+  shownName,
+  wheelWidth,
+} from "./Inspect";
 
 describe("placePreview", () => {
   const box = { width: 1440, height: 900 };
@@ -61,5 +73,60 @@ describe("changedStats", () => {
       powerTone: "same",
       toughnessTone: "same",
     });
+  });
+});
+
+describe("Inspect", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function open(card: GameCard) {
+    render(
+      createElement(Inspect, {
+        pointed: {
+          card,
+          ids: [card.id],
+          place: "battlefield",
+          line: shownName(card),
+          at: { x: 0, y: 0 },
+        },
+        width: 320,
+        onResize: () => {},
+      }),
+    );
+    act(() => {
+      vi.advanceTimersByTime(INSPECT_DELAY);
+    });
+    return screen.getByTestId("card-inspect");
+  }
+
+  it("lists the rules' marks on the card under its caption, the damage in red", () => {
+    open(gameCard("Grizzly Bears", { damage: 2, sick: true, chosen: ["Elf"], marks: ["goaded"] }));
+    const lines = screen.getByTestId("card-state").querySelectorAll("li");
+    expect(Array.from(lines, (li) => li.textContent)).toEqual([
+      "2 damage marked",
+      "Summoning sick",
+      "Goaded",
+      "Chosen: Elf",
+    ]);
+    expect(lines[0]).toHaveClass("text-destructive");
+  });
+
+  it("has no list for a card the rules have marked nothing on", () => {
+    open(gameCard("Grizzly Bears"));
+    expect(screen.queryByTestId("card-state")).toBeNull();
+  });
+
+  it("shows a face-down card the reader may not see as a card back, by what it is", () => {
+    const preview = open(gameCard("", { faceDown: true, cardId: null }));
+    expect(preview.querySelector("[data-face-down]")).not.toBeNull();
+    expect(preview).toHaveTextContent("Face-down card");
+  });
+});
+
+describe("shownName", () => {
+  it("is the card's own name, or what a face-down card is", () => {
+    expect(shownName(gameCard("Den Protector"))).toBe("Den Protector");
+    expect(shownName(gameCard("", { faceDown: true, cardId: null }))).toBe("Face-down card");
   });
 });

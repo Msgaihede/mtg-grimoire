@@ -123,7 +123,10 @@ export function DamagePanel({
                 const amount = amountOf(split, blocker.card.id);
                 const lethal = amount >= blocker.lethal;
                 return (
-                  <li key={blocker.card.id} className="flex flex-none flex-col items-center gap-1.5">
+                  <li
+                    key={blocker.card.id}
+                    className="flex flex-none flex-col items-center gap-1.5"
+                  >
                     <span
                       className={cn(
                         "text-[11px] tracking-[0.08em] uppercase",
@@ -247,14 +250,16 @@ export function DamagePanel({
   );
 }
 
-/** − amount +, one point a press. */
-function Stepper({
+/** − amount +, one point a press — a blocker's share here, a target's in a division
+ *  (`DistributePanel`). `noun` is what is given, for the buttons' names ("damage", "counters"). */
+export function Stepper({
   label,
   value,
   disabled,
   canLess,
   canMore,
   onStep,
+  noun = "damage",
 }: {
   label: string;
   value: number;
@@ -262,12 +267,13 @@ function Stepper({
   canLess: boolean;
   canMore: boolean;
   onStep: (delta: number) => void;
+  noun?: string;
 }): JSX.Element {
   return (
     <span className="flex items-center gap-1">
       <button
         type="button"
-        aria-label={`Less damage to ${label}`}
+        aria-label={`Less ${noun} to ${label}`}
         disabled={disabled || !canLess}
         onClick={() => onStep(-1)}
         className={STEP_BUTTON}
@@ -275,14 +281,14 @@ function Stepper({
         <Minus className="size-3.5" aria-hidden="true" />
       </button>
       <output
-        aria-label={`Damage to ${label}`}
+        aria-label={`${noun.charAt(0).toUpperCase()}${noun.slice(1)} to ${label}`}
         className="w-6 text-center font-mono text-[13px] tabular-nums"
       >
         {value}
       </output>
       <button
         type="button"
-        aria-label={`More damage to ${label}`}
+        aria-label={`More ${noun} to ${label}`}
         disabled={disabled || !canMore}
         onClick={() => onStep(1)}
         className={STEP_BUTTON}
