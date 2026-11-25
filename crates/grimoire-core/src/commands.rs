@@ -2554,6 +2554,18 @@ mod tests {
             // `blocking`. A ticket that is still good and a copy that is really there, so
             // each reaches the write it decides on.
             "bulk_undo" => json!({ "undoId": seeded.undo }),
+            // An enum argument (`mode`) the made-up ones cannot spell, and a question the body
+            // answers rather than refuses: a selector and a hand in bounds, on the seeded deck.
+            "deck_draw_odds" => json!({
+                "deckId": seeded.deck,
+                "variant": "live",
+                "cards": ["Lightning Bolt"],
+                "want": 1,
+                "mode": "atLeast",
+                "hand": 7,
+                "turns": 2,
+                "onThePlay": true,
+            }),
             // An add that lands and a live removal, so the `owned` arm and its refresh run.
             "deck_apply" => json!({
                 "deckId": seeded.deck,
