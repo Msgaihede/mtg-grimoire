@@ -8,3 +8,9 @@ crates/grimoire-graph/schema.graphql
 # held byte for byte; Prettier would turn that test red.
 packages/ui/features/home/generated/catalog.prompt.md
 packages/ui/features/home/generated/catalog.contract.json
+
+# The query-language golden — written by `vitest -u` from `queryLanguage.golden.test.ts` and read by
+# the Rust port's golden test (`crates/grimoire-core/src/query_language.rs`). Its one-case-per-line
+# layout and ASCII escapes are the test's, byte for byte; Prettier would reflow it and turn the
+# TypeScript test red.
+packages/ui/features/search/__golden__/query-language.json

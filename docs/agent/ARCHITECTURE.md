@@ -49,6 +49,14 @@ has the binding rules for that area (the index is in the root file).
   golden set, both suites asserting byte equality against it. **Parsing did not follow** — there
   is no Rust parser, because the mirror never reads a file back. Full record:
   [text-mirror.md](../reference/text-mirror.md).
+- **The Scryfall query grammar lives on both sides too, by the owner's rule (2026-11-24) that
+  TypeScript logic the MCP server needs is ported to Rust, not called through a window.** The page
+  parses with `packages/ui/features/search/queryLanguage.ts`; the MCP tools parse with its port,
+  `crates/grimoire-core/src/query_language.rs`; and
+  `packages/ui/features/search/__golden__/query-language.json` (written by the TypeScript, read by
+  both suites) is the fence. The widget state is the same pattern
+  (`packages/ui/features/home/generated/__golden__/widget-state.json`). See
+  [search-syntax.md](../reference/search-syntax.md#the-rust-port-project-c).
 
 ## Design documents
 

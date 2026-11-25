@@ -12,7 +12,7 @@
 //! own op. Nothing leaves the computer, and nothing is gated on a membership: it costs the service
 //! nothing (issue #1396, knob 5).
 //!
-//! Five files:
+//! The files:
 //!
 //! - this one: the setting (`app_meta` `mcp_server`), the [`McpSlot`] holding the one listener, the
 //!   five `#[tauri::command]`s behind the panel, and [`resume`] at launch;
@@ -20,6 +20,8 @@
 //!   origin, the method, the token, the size;
 //! - [`rpc`]: JSON-RPC 2.0 and MCP's lifecycle — `initialize`, `ping`, `tools/list`, `tools/call`;
 //! - [`tools`]: the ten tools, each a short translation into one or two table commands;
+//! - [`syntax`]: the Scryfall syntax three of the tools take, read with the core's port of the
+//!   page's parser, and the keyword reference its prompt closes with;
 //! - [`claude_desktop`]: Claude Desktop's one-click install — an MCP Bundle naming this server,
 //!   opened or saved by the panel's two buttons.
 //!
@@ -36,6 +38,7 @@ pub mod http;
 pub mod prompts;
 pub mod rpc;
 pub mod show;
+pub mod syntax;
 pub mod tools;
 
 use crate::sync::AppState;

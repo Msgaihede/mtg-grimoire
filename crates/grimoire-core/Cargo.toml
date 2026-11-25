@@ -66,6 +66,12 @@ card-scanner = { path = "../card-scanner", features = ["corpus"] }
 # tables and no dependencies of its own. `schema::label_name_key` is its one caller, and it
 # moved here from `apps/desktop/src-tauri/Cargo.toml` with it.
 unicode-normalization = "0.1"
+# A character's general category, for `query_language`'s port of the page's `/[\p{L}\p{N}]/u` —
+# "is there a word in this value". `char::is_alphanumeric` is the near miss: it also takes every
+# Other_Alphabetic mark (circled letters, combining vowel signs), so the port and the page would
+# disagree on a value made only of those, and the shared golden holds them to one answer. The
+# general-category tables only, from the same unicode-rs family as the line above.
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 flate2 = "1"
 # `platform::http`, on every target: natively the client this app has always used, and in a
 # browser `reqwest`'s own `fetch` backend — which is why it is one line and not two. rustls,
