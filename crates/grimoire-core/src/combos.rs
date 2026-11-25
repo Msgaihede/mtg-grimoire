@@ -62,7 +62,7 @@
 //! # What survives the reduction
 //!
 //! Per variant: its id, its `bracketTag`, its colour identity, its popularity, how many
-//! `requires[]` templates it also needs, its `produces[]` feature names joined with `\n`, and
+//! `requires[]` templates it also needs (the count, and since corpus schema 9 their names joined with `\n`), its `produces[]` feature names joined with `\n`, and
 //! **four prose fields** — `description`, `easyPrerequisites`, `notablePrerequisites` and
 //! `manaNeeded`. Per `uses[]` entry: an oracle id, a name, a quantity and whether the card must
 //! be the commander. Everything else is read and dropped.
@@ -83,6 +83,7 @@
 //! of its own and neither is Spellbook's), and the per-`uses` `zoneLocations` and `*CardState`
 //! strings — "on the battlefield, tapped" is a fact about *playing* the combo that the
 //! description already spells out in prose.
+use crate::filters::{push_card_filters, CardFilters, Predicates};
 use crate::platform::files::aio;
 use crate::platform::http;
 use crate::state::State;
@@ -252,11 +253,10 @@ struct RawVariant {
     mana_needed: Option<String>,
     #[serde(default)]
     uses: Vec<RawUse>,
-    /// **Read for its length and nothing else.** `IgnoredAny` parses each template and builds
-    /// nothing from it, and a `Vec` of a zero-sized type allocates nothing — so this counts the
-    /// entries without ever holding one.
+    /// The templates ("a creature with flying"). Counted for [`Combo::template_count`] and,
+    /// since corpus schema 9, read for their names, which [`Combo::requires`] keeps.
     #[serde(default)]
-    requires: Vec<IgnoredAny>,
+    requires: Vec<RawRequire>,
     #[serde(default)]
     produces: Vec<RawProduces>,
 }
@@ -296,6 +296,19 @@ struct RawCard {
 struct RawProduces {
     #[serde(default)]
     feature: Option<RawFeature>,
+}
+
+/// One `requires[]` entry: `{ template: { name, … } }`.
+#[derive(Debug, Deserialize)]
+struct RawRequire {
+    #[serde(default)]
+    template: Option<RawTemplate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTemplate {
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,6 +360,8 @@ pub struct Combo {
     pub identity: String,
     /// Feature names, `\n`-joined.
     pub produces: String,
+    /// The templates' names ("a creature with flying"), `\n`-joined; `""` when there are none.
+    pub requires: String,
     /// How the combo is actually played: the numbered steps, `\n`-separated.
     ///
     /// **`""` is a value and not a skip reason**, for all four of these. The file writes an
@@ -452,13 +467,24 @@ fn reduce(raw: RawVariant) -> Option<Combo> {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let template_count = (raw.requires.len() + unidentified) as i64;
+    let requires = raw
+        .requires
+        .into_iter()
+        .filter_map(|r| r.template.and_then(|t| t.name))
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
     Some(Combo {
         id,
         bracket_tag,
         card_count,
-        template_count: (raw.requires.len() + unidentified) as i64,
+        template_count,
         identity: raw.identity.unwrap_or_default(),
         produces,
+        requires,
         // **Verbatim, and untrimmed.** These are the only fields here whose *formatting* is
         // part of the value: `description`'s newlines are the numbered steps, and a trim would
         // be this crate concluding something about prose it is only carrying. `unwrap_or_default`
@@ -956,8 +982,8 @@ fn store_batch(db: &Mutex<Connection>, chunk: &[Combo]) -> Result<usize, ComboEr
             "INSERT INTO combos_staging
                 (id, bracket_tag, card_count, template_count, identity, produces,
                  popularity, description, easy_prerequisites, notable_prerequisites,
-                 mana_needed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 mana_needed, requires)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )?;
         let mut card = tx.prepare_cached(
             "INSERT INTO combo_cards_staging
@@ -976,7 +1002,8 @@ fn store_batch(db: &Mutex<Connection>, chunk: &[Combo]) -> Result<usize, ComboEr
                 c.description,
                 c.easy_prerequisites,
                 c.notable_prerequisites,
-                c.mana_needed
+                c.mana_needed,
+                c.requires
             ])?;
             // **In the file's order, and that is load-bearing**: `combo_cards` has no
             // ordinal column, so insert order is rowid order and rowid order is what
@@ -1460,15 +1487,9 @@ pub fn match_combos(conn: &Connection, card_ids: &[String]) -> Result<Vec<DeckCo
     // **`ORDER BY rowid` is the file's order**: `combo_cards` carries no ordinal column, the
     // ingest inserts in the order the file listed, and a staging swap is a rename, which keeps
     // rowids.
-    let mut names = conn
-        .prepare_cached("SELECT name FROM combo_cards WHERE combo_id = ?1 ORDER BY rowid")
-        .map_err(|e| format!("could not look for combos: {e}"))?;
     let mut out = Vec::with_capacity(matched.len());
     for (id, bracket_tag, template_count, produces, popularity) in matched {
-        let cards: Vec<String> = names
-            .query_map(params![id], |r| r.get::<_, String>(0))
-            .and_then(|rows| rows.collect())
-            .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+        let cards = combo_card_names(conn, &id)?;
         out.push(DeckCombo {
             id,
             bracket_tag,
@@ -1548,6 +1569,8 @@ pub struct CardCombo {
     pub identity: String,
     /// What it does — feature names, one per line.
     pub produces: String,
+    /// The templates' names ("a creature with flying"), one per line. `""` where there are none.
+    pub requires: String,
     /// How it is played — the numbered steps, `\n`-separated. `""` where the feed carries none.
     pub description: String,
     /// `""` where the feed carries none, which is the common case for all three of these.
@@ -1669,6 +1692,12 @@ const HIT_CTE: &str =
 /// that holds neither folded. Measured at no cost — 58.3 ms against 59.2 ms for a needle
 /// pre-lowered in Rust, median of 15 over the real corpus.
 ///
+/// # `?6` is what the combo must produce
+///
+/// A JSON array of lower-cased words, `[]` for no filter: the combo stays only if **no** word is
+/// missing from its `produces` text, so the words match in any order and across lines.
+/// [`card_combos`] builds it; every statement that composes `sel` binds it.
+///
 /// # `?2 = ''` is *no search*
 ///
 /// [`card_combos`] trims the needle and binds `''` for `None`, for a blank and for a string
@@ -1680,10 +1709,13 @@ const HIT_CTE: &str =
 const SEL_CTE: &str = "sel(combo_id) AS (
         SELECT h.combo_id
           FROM hit h
-         WHERE ?2 = ''
-            OR EXISTS (SELECT 1 FROM combo_cards s
-                        WHERE s.combo_id = h.combo_id
-                          AND instr(lower(s.name), lower(?2)) > 0))";
+         WHERE (?2 = ''
+                OR EXISTS (SELECT 1 FROM combo_cards s
+                            WHERE s.combo_id = h.combo_id
+                              AND instr(lower(s.name), lower(?2)) > 0))
+           AND NOT EXISTS (SELECT 1 FROM json_each(?6) w
+                             JOIN combos pc ON pc.id = h.combo_id
+                            WHERE instr(lower(pc.produces), lower(w.value)) = 0))";
 
 /// Which oracle cards the reader owns at least one copy of.
 ///
@@ -1835,7 +1867,8 @@ fn page_sql(owned_only: bool) -> String {
     // The columns, in the order `card_combos` reads them back by index.
     const COLUMNS: &str = "SELECT c.id, c.bracket_tag, c.card_count, c.template_count,
                                   c.identity, c.produces, c.description, c.easy_prerequisites,
-                                  c.notable_prerequisites, c.mana_needed, c.popularity";
+                                  c.notable_prerequisites, c.mana_needed, c.popularity,
+                                  c.requires";
     const TAIL: &str = "ORDER BY c.card_count, c.popularity DESC, c.id LIMIT ?4 OFFSET ?5";
     if owned_only {
         // `grp` is already one row per searched combo, so it stands in for `sel` here rather
@@ -1900,13 +1933,10 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
         "SELECT p.combo_id, p.oracle_id, p.name, p.quantity, p.must_be_commander,
                 {owned}, d.id
            FROM combo_cards p
-           LEFT JOIN cards d
-             ON d.id = (SELECT n.id FROM cards n WHERE n.oracle_id = p.oracle_id
-                         ORDER BY n.released_at DESC, n.set_code ASC,
-                                  n.collector_number ASC, n.id ASC
-                         LIMIT 1)
+           LEFT JOIN cards d ON d.id = {printing}
           WHERE p.combo_id IN ({holes})
           ORDER BY p.rowid",
+        printing = newest_printing_sql("p.oracle_id"),
         owned = crate::collection_source::copies_of_oracle(
             conn,
             "p.oracle_id",
@@ -1965,10 +1995,12 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
 /// which is [`match_combos`]' documented rule and holds here for its reason: the caller tells
 /// those two apart from [`ComboStatus::fetched_at`], and a reader shown "this card is in no
 /// combos" when the truth is "we have no combos at all" has been told something false.
+#[allow(clippy::too_many_arguments)]
 pub fn card_combos(
     conn: &Connection,
     oracle_id: &str,
     search: Option<&str>,
+    produces: Option<&str>,
     card_count: Option<i64>,
     owned_only: bool,
     limit: i64,
@@ -1984,6 +2016,16 @@ pub fn card_combos(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
+    // **What the combo produces, as a JSON array of lower-cased words** for `?6`: every word
+    // must be found in the combo's `produces` text, in any order and across its lines, so
+    // `"infinite mana"` finds a combo producing "Infinite mana" and one producing "Infinite
+    // colorless mana". `[]` is no filter, and so are `None` and a blank string.
+    let words: Vec<String> = produces
+        .unwrap_or("")
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect();
+    let words = serde_json::to_string(&words).map_err(|e| e.to_string())?;
     // Clamped rather than refused: every one of these is a number a page composed and none is
     // a reader's answer to anything, so a bound this app can meet quietly is worth more than a
     // sentence nobody will read. `limit` is clamped *up* as well — a `0` asked for by a page
@@ -2003,16 +2045,19 @@ pub fn card_combos(
         .prepare_cached(&counts_sql())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
     let buckets: Vec<(i64, i64, i64)> = counts
-        .query_map(params![oracle_id, needle], |r| {
-            // `sum()` over a group is never NULL here — every group has a row and `all_owned`
-            // is a 0 or a 1 — but a count read as an `Option` costs nothing and cannot panic a
-            // reader's window over an arithmetic surprise.
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-            ))
-        })
+        .query_map(
+            params![oracle_id, needle, Option::<i64>::None, 0, 0, words],
+            |r| {
+                // `sum()` over a group is never NULL here — every group has a row and `all_owned`
+                // is a 0 or a 1 — but a count read as an `Option` costs nothing and cannot panic a
+                // reader's window over an arithmetic surprise.
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                ))
+            },
+        )
         .and_then(|rows| rows.collect())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
 
@@ -2040,22 +2085,26 @@ pub fn card_combos(
         .prepare_cached(&page_sql(owned_only))
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
     let mut combos: Vec<CardCombo> = page
-        .query_map(params![oracle_id, needle, card_count, limit, offset], |r| {
-            Ok(CardCombo {
-                id: r.get(0)?,
-                bracket_tag: r.get(1)?,
-                card_count: r.get(2)?,
-                template_count: r.get(3)?,
-                identity: r.get(4)?,
-                produces: r.get(5)?,
-                description: r.get(6)?,
-                easy_prerequisites: r.get(7)?,
-                notable_prerequisites: r.get(8)?,
-                mana_needed: r.get(9)?,
-                popularity: r.get(10)?,
-                pieces: Vec::new(),
-            })
-        })
+        .query_map(
+            params![oracle_id, needle, card_count, limit, offset, words],
+            |r| {
+                Ok(CardCombo {
+                    id: r.get(0)?,
+                    bracket_tag: r.get(1)?,
+                    card_count: r.get(2)?,
+                    template_count: r.get(3)?,
+                    identity: r.get(4)?,
+                    produces: r.get(5)?,
+                    description: r.get(6)?,
+                    easy_prerequisites: r.get(7)?,
+                    notable_prerequisites: r.get(8)?,
+                    mana_needed: r.get(9)?,
+                    popularity: r.get(10)?,
+                    requires: r.get(11)?,
+                    pieces: Vec::new(),
+                })
+            },
+        )
         .and_then(|rows| rows.collect())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
 
@@ -2080,17 +2129,7 @@ pub fn card_combos(
             .map_err(|e| format!("could not read a combo's cards: {e}"))?;
         let rows: Vec<(String, ComboPiece)> = stmt
             .query_map(params_from_iter(ids.iter()), |r| {
-                Ok((
-                    r.get(0)?,
-                    ComboPiece {
-                        oracle_id: r.get(1)?,
-                        name: r.get(2)?,
-                        quantity: r.get(3)?,
-                        must_be_commander: r.get(4)?,
-                        owned: r.get(5)?,
-                        card_id: r.get(6)?,
-                    },
-                ))
+                Ok((r.get(0)?, piece_at(r, 1)?))
             })
             .and_then(|rows| rows.collect())
             .map_err(|e| format!("could not read a combo's cards: {e}"))?;
@@ -2108,6 +2147,351 @@ pub fn card_combos(
         by_card_count,
         combos,
     })
+}
+
+/// One combo whole, by its id: the page's own columns and [`pieces_sql`] for that one id, so it
+/// answers exactly the [`CardCombo`] [`card_combos`] lists for it. `Ok(None)` for an id this
+/// database does not hold.
+pub fn combo_by_id(conn: &Connection, id: &str) -> Result<Option<CardCombo>, String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT c.id, c.bracket_tag, c.card_count, c.template_count,
+                    c.identity, c.produces, c.description, c.easy_prerequisites,
+                    c.notable_prerequisites, c.mana_needed, c.popularity,
+                    c.requires
+               FROM combos c WHERE c.id = ?1",
+        )
+        .map_err(|e| format!("could not read a combo: {e}"))?;
+    let mut combo = match stmt
+        .query_row(params![id], |r| {
+            Ok(CardCombo {
+                id: r.get(0)?,
+                bracket_tag: r.get(1)?,
+                card_count: r.get(2)?,
+                template_count: r.get(3)?,
+                identity: r.get(4)?,
+                produces: r.get(5)?,
+                description: r.get(6)?,
+                easy_prerequisites: r.get(7)?,
+                notable_prerequisites: r.get(8)?,
+                mana_needed: r.get(9)?,
+                popularity: r.get(10)?,
+                requires: r.get(11)?,
+                pieces: Vec::new(),
+            })
+        })
+        .optional()
+        .map_err(|e| format!("could not read a combo: {e}"))?
+    {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let mut stmt = conn
+        .prepare_cached(&pieces_sql(conn, "?"))
+        .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+    combo.pieces = stmt
+        .query_map(params![id], |r| piece_at(r, 1))
+        .and_then(|rows| rows.collect())
+        .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+    Ok(Some(combo))
+}
+
+// ---------------------------------------------------------------------------------------
+// One card away
+// ---------------------------------------------------------------------------------------
+
+/// One combo a deck or a collection holds, whole or all but one card.
+///
+/// Serialised `camelCase`. The short shape [`DeckCombo`] has, plus [`Self::missing`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldCombo {
+    pub id: String,
+    /// One of [`BRACKET_TAGS`].
+    pub bracket_tag: String,
+    /// Card names, the file's order.
+    pub cards: Vec<String>,
+    pub template_count: i64,
+    pub produces: String,
+    pub popularity: Option<i64>,
+    /// The one card that is not held: its name, the printing this app draws it as and how many
+    /// copies the reader owns. `None` for a combo that is held whole.
+    pub missing: Option<ComboPiece>,
+}
+
+/// One page of [`HeldCombo`]s; `total` counts the whole filtered set, not the page.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldCombosPage {
+    pub total: i64,
+    pub combos: Vec<HeldCombo>,
+}
+
+/// The printing this app draws one oracle card as, as a scalar subquery over `oracle_col`.
+///
+/// **[`crate::deck_tokens`]' `newest_printing`, verbatim**, and written once: [`pieces_sql`], the
+/// combos one card away and anything else that has to name "the" printing of an oracle card use
+/// this, so two orderings that mean to be the same cannot drift. Binds the alias `n`.
+pub(crate) fn newest_printing_sql(oracle_col: &str) -> String {
+    format!(
+        "(SELECT n.id FROM cards n WHERE n.oracle_id = {oracle_col}
+           ORDER BY n.released_at DESC, n.set_code ASC, n.collector_number ASC, n.id ASC
+           LIMIT 1)"
+    )
+}
+
+/// The cards a held-combo statement starts from, and what its first parameters bind.
+struct Held {
+    /// A CTE defining [`Self::name`] over `oracle_id`.
+    cte: String,
+    name: &'static str,
+    binds: Vec<String>,
+}
+
+impl Held {
+    /// The distinct oracle ids of the given printings. A placeholder per id, never interpolated.
+    fn deck(ids: Vec<String>) -> Held {
+        let holes = vec!["?"; ids.len()].join(",");
+        Held {
+            cte: format!(
+                "held(oracle_id) AS (SELECT DISTINCT oracle_id FROM cards
+                                      WHERE id IN ({holes}) AND oracle_id IS NOT NULL)"
+            ),
+            name: "held",
+            binds: ids,
+        }
+    }
+
+    /// Every oracle card the reader owns any copy of ([`OWNED_CTE`]).
+    fn collection() -> Held {
+        Held {
+            cte: OWNED_CTE.to_owned(),
+            name: "owned",
+            binds: Vec::new(),
+        }
+    }
+}
+
+/// One `combo_cards` row as a [`ComboPiece`], its six columns starting at `first`.
+fn piece_at(r: &rusqlite::Row, first: usize) -> rusqlite::Result<ComboPiece> {
+    Ok(ComboPiece {
+        oracle_id: r.get(first)?,
+        name: r.get(first + 1)?,
+        quantity: r.get(first + 2)?,
+        must_be_commander: r.get(first + 3)?,
+        owned: r.get(first + 4)?,
+        card_id: r.get(first + 5)?,
+    })
+}
+
+/// A combo's card names in the file's order — `ORDER BY rowid`, [`match_combos`]' reasoning.
+fn combo_card_names(conn: &Connection, combo_id: &str) -> Result<Vec<String>, String> {
+    conn.prepare_cached("SELECT name FROM combo_cards WHERE combo_id = ?1 ORDER BY rowid")
+        .and_then(|mut s| {
+            s.query_map(params![combo_id], |r| r.get::<_, String>(0))
+                .and_then(|rows| rows.collect())
+        })
+        .map_err(|e| format!("could not read a combo's cards: {e}"))
+}
+
+/// The combos `held` holds whole (`near` false) or all but one card of (`near` true), paged.
+///
+/// **[`MATCH_SQL`]'s shape, driven from the held set**: `hit` is `held CROSS JOIN combo_cards`
+/// through `idx_combo_cards_oracle`, never a walk of `combo_cards` and never a scan of
+/// `combos`. (Left to itself the planner walks all ~394 000 `combo_cards` rows for the `GROUP
+/// BY`; the `CROSS JOIN` pins the outer loop to the small side, as [`OWNED_CTE`] does.)
+///
+/// For `near` the missing piece is **exactly one** `combo_cards` row: the first (by rowid) whose
+/// oracle id is not held — the store keeps two rows for a card a combo names twice, and a join
+/// would list that combo twice. It is narrowed by [`push_card_filters`] over an `EXISTS` on the
+/// missing card's printings, so a card no `cards` row resolves leaves its combo out, and `format`
+/// and `identity` (both oracle-level facts) are asked of any printing. **`paper_only: Some(false)`**:
+/// a digital-only printing of a card does not make it unplayable, and the filter's default would
+/// drop combos whose newest printing happens to be digital. A held combo has no missing piece to
+/// filter and so ignores both.
+///
+/// **One statement**: `total` rides along as `count(*) OVER ()`, and the page's printing
+/// ([`newest_printing_sql`]) and owned count are resolved only for the page's rows, in the outer
+/// query. A page past the end answers no row to read the total from, so that case asks again at
+/// offset 0.
+fn held_combos(
+    conn: &Connection,
+    held: Held,
+    near: bool,
+    format: Option<&str>,
+    identity: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<HeldCombosPage, String> {
+    let limit = limit.clamp(1, MAX_PAGE);
+    let offset = offset.max(0);
+    let h = held.name;
+    let mut filters = Predicates::default();
+    let (from, missing) = if near {
+        push_card_filters(
+            &mut filters,
+            &CardFilters {
+                format: format.map(str::to_owned),
+                colors: identity.map(str::to_owned),
+                paper_only: Some(false),
+                ..Default::default()
+            },
+            "d",
+            None,
+        );
+        (
+            format!(
+                "FROM hit JOIN combos c ON c.id = hit.combo_id
+                   JOIN combo_cards m ON m.rowid =
+                        (SELECT min(x.rowid) FROM combo_cards x
+                          WHERE x.combo_id = c.id
+                            AND x.oracle_id NOT IN (SELECT oracle_id FROM {h}))
+                  WHERE hit.have = c.card_count - 1 AND c.card_count >= 2
+                    AND EXISTS (SELECT 1 FROM cards d
+                                 WHERE d.oracle_id = m.oracle_id AND {filters})",
+                filters = filters.where_sql(),
+            ),
+            "m.oracle_id AS mo, m.name AS mn, m.quantity AS mq, m.must_be_commander AS mm",
+        )
+    } else {
+        (
+            "FROM hit JOIN combos c ON c.id = hit.combo_id WHERE hit.have = c.card_count"
+                .to_owned(),
+            "NULL AS mo, NULL AS mn, NULL AS mq, NULL AS mm",
+        )
+    };
+    let sql = format!(
+        "WITH {cte},
+              hit AS (SELECT cc.combo_id, count(DISTINCT cc.oracle_id) AS have
+                        FROM {h} CROSS JOIN combo_cards cc ON cc.oracle_id = {h}.oracle_id
+                       GROUP BY cc.combo_id)
+         SELECT p.id, p.bracket_tag, p.template_count, p.produces, p.popularity,
+                p.mo, p.mn, p.mq, p.mm, {owned}, {printing}, p.total
+           FROM (SELECT c.id, c.bracket_tag, c.template_count, c.produces, c.popularity,
+                        {missing}, count(*) OVER () AS total
+                   {from}
+                  ORDER BY c.template_count, c.popularity DESC, c.id
+                  LIMIT ? OFFSET ?) p
+          ORDER BY p.template_count, p.popularity DESC, p.id",
+        cte = held.cte,
+        owned = crate::collection_source::copies_of_oracle(
+            conn,
+            "p.mo",
+            crate::collection_source::Availability::Everything,
+        ),
+        printing = newest_printing_sql("p.mo"),
+    );
+    // The held cards bind first, the filters' parameters next: the order they appear in the text.
+    let mut binds: Vec<Box<dyn rusqlite::ToSql>> = held
+        .binds
+        .into_iter()
+        .map(|b| Box::new(b) as Box<dyn rusqlite::ToSql>)
+        .collect();
+    binds.append(&mut filters.params);
+    let fail = |e: rusqlite::Error| format!("could not look for combos: {e}");
+
+    let run = |limit: i64, offset: i64| -> Result<(i64, Vec<HeldCombo>), String> {
+        let mut args: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        args.push(&limit);
+        args.push(&offset);
+        let mut page = conn.prepare_cached(&sql).map_err(fail)?;
+        let rows: Vec<(HeldCombo, i64)> = page
+            .query_map(params_from_iter(args), |r| {
+                Ok((
+                    HeldCombo {
+                        id: r.get(0)?,
+                        bracket_tag: r.get(1)?,
+                        cards: Vec::new(),
+                        template_count: r.get(2)?,
+                        produces: r.get(3)?,
+                        popularity: r.get(4)?,
+                        missing: match r.get::<_, Option<String>>(5)? {
+                            Some(_) => Some(piece_at(r, 5)?),
+                            None => None,
+                        },
+                    },
+                    r.get(11)?,
+                ))
+            })
+            .and_then(|rows| rows.collect())
+            .map_err(fail)?;
+        let total = rows.first().map_or(0, |(_, t)| *t);
+        Ok((total, rows.into_iter().map(|(c, _)| c).collect()))
+    };
+    let (mut total, mut combos) = run(limit, offset)?;
+    if combos.is_empty() && offset > 0 {
+        total = run(1, 0)?.0;
+    }
+    for combo in &mut combos {
+        combo.cards = combo_card_names(conn, &combo.id)?;
+    }
+    Ok(HeldCombosPage { total, combos })
+}
+
+/// Every combo `card_ids` holds all but one card of, with the missing card named.
+///
+/// **Offered only if the deck could play the missing card**: `format` (a legality key) must be
+/// one it is legal in and `identity` (colour letters, `"C"` for colourless, blank for neither)
+/// must contain its colour identity. A combo whose missing card no `cards` row resolves is left
+/// out — nothing can be said about it. Ordered as [`match_combos`] is.
+pub fn near_combos(
+    conn: &Connection,
+    card_ids: &[String],
+    format: Option<&str>,
+    identity: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<HeldCombosPage, String> {
+    let mut wanted: Vec<String> = Vec::with_capacity(card_ids.len());
+    let mut seen: HashSet<&str> = HashSet::new();
+    for id in card_ids {
+        let id = id.trim();
+        if !id.is_empty() && seen.insert(id) {
+            wanted.push(id.to_owned());
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(HeldCombosPage {
+            total: 0,
+            combos: Vec::new(),
+        });
+    }
+    if wanted.len() > MAX_CARD_IDS {
+        return Err(TOO_MANY_CARDS.to_owned());
+    }
+    held_combos(
+        conn,
+        Held::deck(wanted),
+        true,
+        format,
+        identity,
+        limit,
+        offset,
+    )
+}
+
+/// The combos the reader's whole collection holds (`near` false) or is one card away from
+/// (`near` true), the filters of [`near_combos`] applying to the missing card.
+///
+/// Ownership is **presence across every printing, finish and folder** ([`OWNED_CTE`]), and the
+/// missing piece's `owned` is the same count [`ComboPiece::owned`] reads.
+pub fn collection_combos(
+    conn: &Connection,
+    near: bool,
+    format: Option<&str>,
+    identity: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<HeldCombosPage, String> {
+    held_combos(
+        conn,
+        Held::collection(),
+        near,
+        format,
+        identity,
+        limit,
+        offset,
+    )
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2630,7 +3014,7 @@ fn nothing_is_held_across_a_turn(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::Write;
 
@@ -2758,6 +3142,7 @@ mod tests {
                 template_count: 0,
                 identity: "UB".into(),
                 produces: "Infinite mana".into(),
+                requires: String::new(),
                 // The fixture carries a `description` and no other prose, so this is also the
                 // assertion that an **absent** key lands as `""` rather than as anything else.
                 description: "Long prose.".into(),
@@ -3048,6 +3433,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(blanks, 2, "`empty` and `absent`, stored the same way");
+    }
+
+    /// **The template text is kept, not just counted.** `requires[]` was read for its length
+    /// alone; the names ("a creature with flying") are what an agent reading a combo needs, and
+    /// they come back through [`card_combos`] `\n`-joined, the way `produces` does.
+    #[test]
+    fn a_combo_keeps_its_template_text() {
+        let with = r#"{"id":"with","status":"OK","bracketTag":"C","identity":"U",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],
+            "requires":[{"template":{"name":"a creature with flying"}},
+                        {"template":{"name":"an artifact"}}],
+            "produces":[]}"#;
+        let without = r#"{"id":"without","status":"OK","bracketTag":"C","identity":"U",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],
+            "requires":[],"produces":[]}"#;
+        let file = parse(&document(&[with.to_owned(), without.to_owned()]));
+        let db = mem_db();
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
+
+        let by_id = |id: &str| page.combos.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(
+            by_id("with").requires,
+            "a creature with flying\nan artifact"
+        );
+        assert_eq!(by_id("with").template_count, 2);
+        assert_eq!(by_id("without").requires, "");
+        assert_eq!(by_id("without").template_count, 0);
     }
 
     // ---- the write --------------------------------------------------------------------
@@ -3765,6 +4182,346 @@ mod tests {
         db
     }
 
+    // ---- one card away ----------------------------------------------------------------
+
+    /// A printing with the two columns a filter reads: its colour identity and its legality
+    /// mask (`commander` is the only format these tests turn on).
+    fn seed_legal_card(
+        conn: &Connection,
+        id: &str,
+        oracle: &str,
+        name: &str,
+        identity: &str,
+        commander_legal: bool,
+    ) {
+        seed_card(conn, id, oracle, name);
+        let mask = if commander_legal {
+            crate::legalities::bit("commander").unwrap() as i64
+        } else {
+            0
+        };
+        conn.execute(
+            "UPDATE cards SET color_identity = ?2, legal_mask = ?3 WHERE id = ?1",
+            params![id, identity, mask],
+        )
+        .unwrap();
+    }
+
+    fn stored(variants: &[String]) -> Mutex<Connection> {
+        let db = mem_db();
+        let file = parse(&document(variants));
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        db
+    }
+
+    fn held_ids(page: &HeldCombosPage) -> Vec<&str> {
+        page.combos.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    /// `(printing id, oracle id, name, colour identity, legal in commander)` rows.
+    fn legal_cards(conn: &Connection, rows: &[(&str, &str, &str, &str, bool)]) {
+        for (id, oracle, name, identity, legal) in rows {
+            seed_legal_card(conn, id, oracle, name, identity, *legal);
+        }
+    }
+
+    const A: (&str, &str) = ("Card A", "o-a");
+    const B: (&str, &str) = ("Card B", "o-b");
+    const C: (&str, &str) = ("Card C", "o-c");
+
+    fn abc(conn: &Connection) {
+        legal_cards(
+            conn,
+            &[
+                ("p-a", "o-a", "Card A", "U", true),
+                ("p-b", "o-b", "Card B", "U", true),
+                ("p-c", "o-c", "Card C", "U", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_deck_one_card_away_is_told_the_missing_card() {
+        let db = stored(&[ranked_variant("tri", Some(5), &[A, B, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        let deck = vec!["p-a".to_owned(), "p-b".to_owned()];
+        let page = near_combos(&conn, &deck, None, None, 20, 0).unwrap();
+
+        assert_eq!(page.total, 1);
+        let got = &page.combos[0];
+        assert_eq!(got.id, "tri");
+        assert_eq!(got.cards, vec!["Card A", "Card B", "Card C"]);
+        assert_eq!(got.produces, "Infinite mana");
+        assert_eq!(got.popularity, Some(5));
+        let missing = got
+            .missing
+            .as_ref()
+            .expect("a near combo names its missing card");
+        assert_eq!(missing.oracle_id, "o-c");
+        assert_eq!(missing.name, "Card C");
+        assert_eq!(missing.card_id.as_deref(), Some("p-c"));
+        assert_eq!(missing.owned, 0);
+
+        own(&conn, "p-c", "foil", 2, None);
+        let page = near_combos(&conn, &deck, None, None, 20, 0).unwrap();
+        assert_eq!(page.combos[0].missing.as_ref().unwrap().owned, 2);
+    }
+
+    #[test]
+    fn a_complete_combo_is_not_one_card_away() {
+        let db = stored(&[
+            ranked_variant("tri", Some(5), &[A, B, C]),
+            ranked_variant("solo", Some(9), &[A]),
+        ]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        let all = vec!["p-a".to_owned(), "p-b".to_owned(), "p-c".to_owned()];
+        assert_eq!(
+            near_combos(&conn, &all, None, None, 20, 0).unwrap().total,
+            0
+        );
+        // A one-card combo has no "one away": a deck holding none of it is not one short.
+        let page = near_combos(&conn, &["p-b".to_owned()], None, None, 20, 0).unwrap();
+        assert_eq!(page.total, 0, "{:?}", held_ids(&page));
+        assert_eq!(near_combos(&conn, &[], None, None, 20, 0).unwrap().total, 0);
+    }
+
+    #[test]
+    fn a_missing_card_the_deck_cannot_play_is_not_offered() {
+        let db = stored(&[ranked_variant("tri", Some(5), &[A, B, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        legal_cards(
+            &conn,
+            &[
+                ("p-a", "o-a", "Card A", "U", true),
+                ("p-b", "o-b", "Card B", "U", true),
+                ("p-c", "o-c", "Card C", "R", false),
+            ],
+        );
+        let deck = vec!["p-a".to_owned(), "p-b".to_owned()];
+        let total = |f: Option<&str>, i: Option<&str>| {
+            near_combos(&conn, &deck, f, i, 20, 0).unwrap().total
+        };
+        assert_eq!(total(None, None), 1, "no filter, no refusal");
+        assert_eq!(total(Some("commander"), None), 0, "not legal in commander");
+        conn.execute(
+            "UPDATE cards SET legal_mask = ?1 WHERE id = 'p-c'",
+            [crate::legalities::bit("commander").unwrap() as i64],
+        )
+        .unwrap();
+        assert_eq!(total(Some("commander"), None), 1);
+        assert_eq!(total(Some("commander"), Some("UB")), 0, "red is outside UB");
+        assert_eq!(total(Some("commander"), Some("UR")), 1);
+        assert_eq!(total(None, Some("")), 1, "a blank identity is no filter");
+        assert_eq!(total(None, Some("C")), 0, "red is not colourless");
+        conn.execute("UPDATE cards SET color_identity = '' WHERE id = 'p-c'", [])
+            .unwrap();
+        assert_eq!(total(None, Some("C")), 1);
+    }
+
+    #[test]
+    fn a_combo_whose_missing_card_is_not_in_the_corpus_is_left_out() {
+        let db = stored(&[ranked_variant("tri", Some(5), &[A, B, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        legal_cards(
+            &conn,
+            &[
+                ("p-a", "o-a", "Card A", "U", true),
+                ("p-b", "o-b", "Card B", "U", true),
+            ],
+        );
+        let deck = vec!["p-a".to_owned(), "p-b".to_owned()];
+        let page = near_combos(&conn, &deck, None, None, 20, 0).unwrap();
+        assert_eq!((page.total, page.combos.len()), (0, 0));
+    }
+
+    #[test]
+    fn the_collection_holds_complete_and_near_combos() {
+        let db = stored(&[
+            ranked_variant("whole", Some(1), &[A, B]),
+            ranked_variant("near", Some(1), &[A, C]),
+        ]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        own(&conn, "p-a", "nonfoil", 1, None);
+        own(&conn, "p-b", "nonfoil", 1, None);
+
+        let whole = collection_combos(&conn, false, None, None, 20, 0).unwrap();
+        assert_eq!(held_ids(&whole), vec!["whole"]);
+        assert_eq!(whole.total, 1);
+        assert_eq!(whole.combos[0].missing, None);
+
+        let near = collection_combos(&conn, true, None, None, 20, 0).unwrap();
+        assert_eq!(held_ids(&near), vec!["near"]);
+        let missing = near.combos[0].missing.as_ref().unwrap();
+        assert_eq!((missing.oracle_id.as_str(), missing.owned), ("o-c", 0));
+        assert_eq!(missing.card_id.as_deref(), Some("p-c"));
+
+        let none = collection_combos(&conn, true, Some("modern"), None, 20, 0).unwrap();
+        assert_eq!(none.total, 0, "p-c is legal in commander alone");
+        let some = collection_combos(&conn, true, Some("commander"), Some("U"), 20, 0).unwrap();
+        assert_eq!(some.total, 1);
+    }
+
+    /// A digital printing newer than the paper one is the "newest printing", and that must not
+    /// make the card unplayable: `paper_only` stays off for the missing card.
+    #[test]
+    fn a_missing_card_whose_newest_printing_is_digital_is_still_offered() {
+        let db = stored(&[ranked_variant("tri", Some(5), &[A, B, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        conn.execute(
+            "UPDATE cards SET released_at = '2000-01-01' WHERE id = 'p-c'",
+            [],
+        )
+        .unwrap();
+        seed_legal_card(&conn, "p-c-arena", "o-c", "Card C", "U", true);
+        conn.execute(
+            "UPDATE cards SET is_paper = 0, released_at = '2020-01-01' WHERE id = 'p-c-arena'",
+            [],
+        )
+        .unwrap();
+        let deck = vec!["p-a".to_owned(), "p-b".to_owned()];
+        let page = near_combos(&conn, &deck, Some("commander"), Some("U"), 20, 0).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(
+            page.combos[0].missing.as_ref().unwrap().card_id.as_deref(),
+            Some("p-c-arena"),
+            "the piece still names the newest printing"
+        );
+    }
+
+    /// The store keeps two rows for a card a combo names twice; one combo is one answer.
+    #[test]
+    fn a_combo_naming_the_missing_card_twice_is_offered_once() {
+        let db = stored(&[ranked_variant("twice", Some(5), &[A, C, C])]);
+        let conn = crate::db::lock_blocking(&db);
+        abc(&conn);
+        let page = near_combos(&conn, &["p-a".to_owned()], None, None, 20, 0).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(held_ids(&page), vec!["twice"]);
+        assert_eq!(page.combos[0].missing.as_ref().unwrap().oracle_id, "o-c");
+    }
+
+    #[test]
+    fn a_long_list_pages_without_repeats() {
+        let variants: Vec<String> = (0..30)
+            .map(|i| {
+                let id = format!("n{i:02}");
+                let oracle = format!("o-x{i:02}");
+                let name = format!("Extra {i:02}");
+                ranked_variant(&id, Some(i % 4), &[A, (name.as_str(), oracle.as_str())])
+            })
+            .collect();
+        let db = stored(&variants);
+        let conn = crate::db::lock_blocking(&db);
+        legal_cards(&conn, &[("p-a", "o-a", "Card A", "U", true)]);
+        for i in 0..30 {
+            seed_legal_card(
+                &conn,
+                &format!("p-x{i:02}"),
+                &format!("o-x{i:02}"),
+                &format!("Extra {i:02}"),
+                "U",
+                true,
+            );
+        }
+        let deck = vec!["p-a".to_owned()];
+        let mut seen = Vec::new();
+        for offset in [0, 10, 20] {
+            let page = near_combos(&conn, &deck, None, None, 10, offset).unwrap();
+            assert_eq!(page.total, 30);
+            assert_eq!(page.combos.len(), 10);
+            seen.extend(page.combos.iter().map(|c| c.id.clone()));
+        }
+        let mut distinct = seen.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 30, "{seen:?}");
+        // `popularity DESC`, then the id: the 3s come first.
+        assert_eq!(seen[0], "n03");
+
+        let too_many: Vec<String> = (0..=MAX_CARD_IDS).map(|i| format!("p{i}")).collect();
+        assert_eq!(
+            near_combos(&conn, &too_many, None, None, 10, 0).unwrap_err(),
+            TOO_MANY_CARDS
+        );
+    }
+
+    /// A card's combos produce different things, so the filter has something to separate.
+    fn produces_db() -> Mutex<Connection> {
+        let db = mem_db();
+        let combo = |id: &str, produces: &str| {
+            format!(
+                r#"{{"id":"{id}","status":"OK","bracketTag":"P","identity":"C",
+                     "legalities":{{"commander":true}},
+                     "uses":[{{"card":{{"name":"Ashnod's Altar","oracleId":"o-altar"}}}}],
+                     "requires":[],"produces":[{produces}]}}"#
+            )
+        };
+        let feature = |n: &str| format!(r#"{{"feature":{{"name":"{n}"}},"quantity":1}}"#);
+        let file = parse(&document(&[
+            combo("mana", &feature("Infinite mana")),
+            combo(
+                "colorless",
+                &format!(
+                    "{},{}",
+                    feature("Infinite colorless mana"),
+                    feature("Win the game")
+                ),
+            ),
+            combo("etb", &feature("Infinite ETB")),
+            combo(
+                "storm",
+                &format!("{},{}", feature("Mana"), feature("Infinite storm")),
+            ),
+        ]));
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        db
+    }
+
+    #[test]
+    fn one_combo_reads_whole_with_its_pieces_and_owned_counts() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        let listed = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
+        for want in &listed.combos {
+            assert_eq!(combo_by_id(&conn, &want.id).unwrap().as_ref(), Some(want));
+        }
+        let c4 = combo_by_id(&conn, "c4").unwrap().unwrap();
+        assert_eq!(c4.pieces.len(), 4);
+        assert_eq!(c4.pieces[0].name, "Ashnod's Altar");
+        assert_eq!(c4.pieces[1].owned, 4, "Basalt: 3 + 1 across printings");
+        assert_eq!(combo_by_id(&conn, "nope").unwrap(), None);
+    }
+
+    #[test]
+    fn a_card_s_combos_narrow_to_what_they_produce() {
+        let db = produces_db();
+        let conn = crate::db::lock_blocking(&db);
+        let ask =
+            |p: Option<&str>| card_combos(&conn, "o-altar", None, p, None, false, 25, 0).unwrap();
+        let mut got: Vec<String> = ask(Some("infinite mana"))
+            .combos
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            ["colorless", "mana", "storm"],
+            "any order, across lines, case-folded"
+        );
+        let page = ask(Some("INFINITE   Mana"));
+        assert_eq!(page.matching, 3);
+        assert_eq!(page.total, 4, "total is the card's own census");
+        assert_eq!(page.by_card_count.iter().map(|b| b.combos).sum::<i64>(), 3);
+        assert_eq!(ask(None).combos.len(), 4);
+        assert_eq!(ask(Some("  ")).combos.len(), 4);
+        assert_eq!(ask(Some("zzz")).combos.len(), 0);
+    }
+
     fn ids(page: &CardCombosPage) -> Vec<&str> {
         page.combos.iter().map(|c| c.id.as_str()).collect()
     }
@@ -3781,7 +4538,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
 
         assert_eq!(
             ids(&page),
@@ -3810,7 +4567,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(2), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(2), false, 25, 0).unwrap();
 
         assert_eq!(page.total, 6, "every combo naming the Altar, unfiltered");
         assert_eq!(page.matching, 3, "the three two-card ones");
@@ -3835,7 +4592,7 @@ mod tests {
 
         // Asked with a filter on, deliberately: the histogram describes the whole set whatever
         // the page is showing, or the chips would empty themselves as soon as one was pressed.
-        let page = card_combos(&conn, "o-altar", None, Some(4), true, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(4), true, 25, 0).unwrap();
 
         assert_eq!(
             page.by_card_count,
@@ -3868,7 +4625,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         let ask = |cards: Option<i64>, owned: bool| {
-            let page = card_combos(&conn, "o-altar", None, cards, owned, 25, 0).unwrap();
+            let page = card_combos(&conn, "o-altar", None, None, cards, owned, 25, 0).unwrap();
             assert_eq!(
                 page.matching as usize,
                 page.combos.len(),
@@ -3903,12 +4660,12 @@ mod tests {
     fn paging_walks_the_order_with_no_gap_and_no_repeat_and_clamps_the_limit() {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
-        let all = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
+        let all = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
         let whole: Vec<String> = ids(&all).iter().map(|s| s.to_string()).collect();
 
         let mut walked: Vec<String> = Vec::new();
         for offset in [0, 2, 4, 6] {
-            let page = card_combos(&conn, "o-altar", None, None, false, 2, offset).unwrap();
+            let page = card_combos(&conn, "o-altar", None, None, None, false, 2, offset).unwrap();
             assert_eq!(page.total, 6, "the counts do not move as the page does");
             assert!(page.combos.len() <= 2, "the limit is a limit");
             walked.extend(ids(&page).iter().map(|s| s.to_string()));
@@ -3919,7 +4676,7 @@ mod tests {
         // as *nothing*, so an unclamped `limit` fails loudly in one direction and silently in
         // the other; `MAX_PAGE + 50` is the ceiling the caller does not get to raise.
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, 0, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, 0, 0)
                 .unwrap()
                 .combos
                 .len(),
@@ -3927,14 +4684,14 @@ mod tests {
             "a zero is clamped up to one row, not down to none"
         );
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, -1, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, -1, 0)
                 .unwrap()
                 .combos
                 .len(),
             1
         );
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, MAX_PAGE + 50, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, MAX_PAGE + 50, 0)
                 .unwrap()
                 .combos
                 .len(),
@@ -3954,7 +4711,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(3), false, 25, 0).unwrap();
         let c3b = page.combos.iter().find(|c| c.id == "c3b").unwrap();
 
         assert_eq!(
@@ -3980,7 +4737,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(4), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(4), false, 25, 0).unwrap();
         let pieces = &page.combos[0].pieces;
         let by_oracle = |o: &str| pieces.iter().find(|p| p.oracle_id == o).unwrap();
 
@@ -4006,7 +4763,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(3), false, 25, 0).unwrap();
 
         assert_eq!(ids(&page), vec!["c3a", "c3b"]);
         assert_eq!(
@@ -4045,7 +4802,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(2), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(2), false, 25, 0).unwrap();
         let c3 = page.combos.iter().find(|c| c.id == "c3a");
         assert!(c3.is_none(), "the size filter is on");
         let pieces = &page.combos.iter().find(|c| c.id == "c2a").unwrap().pieces;
@@ -4058,7 +4815,7 @@ mod tests {
             vec![("o-altar", 2), ("o-basalt", 4)],
             "two in a locked case, and four across two printings and two finishes"
         );
-        let curio = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0)
+        let curio = card_combos(&conn, "o-altar", None, None, Some(3), false, 25, 0)
             .unwrap()
             .combos[0]
             .pieces
@@ -4081,7 +4838,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, 25, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, 25, 0)
                 .unwrap()
                 .owned_total,
             2,
@@ -4097,14 +4854,14 @@ mod tests {
         own(&conn, "p-nameless", "nonfoil", 1, None);
 
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, 25, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, 25, 0)
                 .unwrap()
                 .owned_total,
             2,
             "a NULL oracle id in the collection owns nothing and hides nothing"
         );
         assert_eq!(
-            ids(&card_combos(&conn, "o-altar", None, None, true, 25, 0).unwrap()),
+            ids(&card_combos(&conn, "o-altar", None, None, None, true, 25, 0).unwrap()),
             vec!["c2a", "c2z"],
             "and the owned page is the same two it was"
         );
@@ -4127,7 +4884,7 @@ mod tests {
         store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
 
         let conn = crate::db::lock_blocking(&db);
-        let page = card_combos(&conn, "o-kiki", None, None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-kiki", None, None, None, false, 25, 0).unwrap();
 
         assert_eq!(page.total, 1);
         assert_eq!(ids(&page), vec!["twice"]);
@@ -4162,7 +4919,7 @@ mod tests {
 
         let never = crate::schema::memory_pair();
         assert_eq!(
-            card_combos(&never, "o-altar", None, None, false, 25, 0).unwrap(),
+            card_combos(&never, "o-altar", None, None, None, false, 25, 0).unwrap(),
             empty,
             "never ingested"
         );
@@ -4170,12 +4927,12 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         assert_eq!(
-            card_combos(&conn, "o-who", None, None, false, 25, 0).unwrap(),
+            card_combos(&conn, "o-who", None, None, None, false, 25, 0).unwrap(),
             empty,
             "a card no combo names"
         );
         assert_eq!(
-            card_combos(&conn, "  ", None, None, false, 25, 0).unwrap(),
+            card_combos(&conn, "  ", None, None, None, false, 25, 0).unwrap(),
             empty,
             "and a blank is a card nothing names, rather than a match on everything"
         );
@@ -4270,7 +5027,7 @@ mod tests {
         cards: Option<i64>,
         owned_only: bool,
     ) -> CardCombosPage {
-        card_combos(conn, "o-altar", search, cards, owned_only, 25, 0).unwrap()
+        card_combos(conn, "o-altar", search, None, cards, owned_only, 25, 0).unwrap()
     }
 
     fn bucket_sum(page: &CardCombosPage) -> i64 {
@@ -4518,8 +5275,17 @@ mod tests {
 
         let mut walked: Vec<String> = Vec::new();
         for offset in [0, 2, 4] {
-            let page =
-                card_combos(&conn, "o-altar", Some("basalt"), None, false, 2, offset).unwrap();
+            let page = card_combos(
+                &conn,
+                "o-altar",
+                Some("basalt"),
+                None,
+                None,
+                false,
+                2,
+                offset,
+            )
+            .unwrap();
             assert_eq!(page.total, 7, "the counts do not move as the page does");
             assert_eq!(page.matching, 4);
             assert!(page.combos.len() <= 2, "the limit is a limit");
@@ -4553,6 +5319,7 @@ mod tests {
                 template_count: 1,
                 identity: "B".into(),
                 produces: "Infinite colorless mana".into(),
+                requires: "a creature with flying".into(),
                 description: "Sacrifice a token.\nRepeat.".into(),
                 easy_prerequisites: "All permanents are untapped.".into(),
                 notable_prerequisites: String::new(),
@@ -4583,6 +5350,7 @@ mod tests {
                     "templateCount": 1,
                     "identity": "B",
                     "produces": "Infinite colorless mana",
+                    "requires": "a creature with flying",
                     "description": "Sacrifice a token.\nRepeat.",
                     "easyPrerequisites": "All permanents are untapped.",
                     "notablePrerequisites": "",
@@ -4723,6 +5491,7 @@ mod tests {
     /// the reader out of refreshing until they restarted the app.
     #[test]
     fn a_second_refresh_is_refused_and_the_claim_always_clears() {
+        let _serial = PAGE_REFRESHES.blocking_lock();
         {
             let held = RefreshGuard::claim().expect("first claim");
             assert!(RefreshGuard::claim().is_none(), "no second");
@@ -5295,8 +6064,11 @@ mod tests {
     // no files, and the response headers a cross-origin `fetch` hides hidden. The state is
     // the browser's too — one connection.
 
-    /// Held by every test here that runs a refresh: the claim is process-wide.
-    static PAGE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    /// Held by every test in this binary that claims the refresh — these that run one, the
+    /// claim's own test, and `commands`' every-command test, whose `combos_refresh` claims it in
+    /// passing. The claim is process-wide, so a claimer without this lock fails another at
+    /// random: the claim's own test lost its first claim to these on two runs in three.
+    pub(crate) static PAGE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn gzipped(body: &str) -> Vec<u8> {
         use flate2::{write::GzEncoder, Compression};

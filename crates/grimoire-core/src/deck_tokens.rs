@@ -100,7 +100,7 @@ use std::collections::{HashMap, HashSet};
 /// `meld_result` 81 — and emblems are *not* in the `token` half: `Elspeth, Sun's Champion` names
 /// her emblem as a `combo_piece` with `type_line: "Emblem — Elspeth"`. The other half of the rule
 /// is [`EXTRA_LAYOUTS`], tested against the row the entry resolves to.
-const TOKEN_COMPONENTS: [&str; 1] = ["token"];
+pub(crate) const TOKEN_COMPONENTS: [&str; 1] = ["token"];
 
 /// Layouts that make a resolved `all_parts` target one of the reader's extras whatever its
 /// component said. Only `emblem` — a token already arrives as `component: "token"`.
@@ -108,7 +108,7 @@ const TOKEN_COMPONENTS: [&str; 1] = ["token"];
 /// **Not an allow-list for the component half.** The layouts a `component: "token"` entry resolves
 /// to are `token` 16 216, `double_faced_token` 79, **`flip` 75** and `reversible_card` 3, so
 /// gating the component half on layout would silently drop 78 real token relationships.
-const EXTRA_LAYOUTS: [&str; 1] = ["emblem"];
+pub(crate) const EXTRA_LAYOUTS: [&str; 1] = ["emblem"];
 
 /// The layouts that make a printing a token or an emblem **by themselves** — the first half of
 /// [`is_token_printing`], and not the whole of it.
@@ -167,15 +167,15 @@ const DUNGEON_FACE: &str = "Dungeon";
 /// rule to every `combo_piece` helper would also derive Morph for 402 cards and every Plot,
 /// Foretell and Adventure reminder. The mechanics a player tracks *with* a card, as they track a
 /// Treasure, are the ones listed here, and a card's text is what says it plays one.
-struct Marker {
+pub(crate) struct Marker {
     /// Lower-case phrases; a maker whose text holds any one of them, on any face, plays the
     /// mechanic. Matched against [`rules_text`], which folds case and the curly apostrophe.
-    words: &'static [&'static str],
+    pub(crate) words: &'static [&'static str],
     /// The helper cards' **whole** names, as `cards.name` holds them — ` // ` and all for a
     /// two-faced helper. Every name that resolves is kept: venturing brings all three dungeons.
     /// **A name the corpus does not hold resolves to nothing**, never an error, so a guessed
     /// spelling costs a missing tile and not a deck that will not open.
-    helpers: &'static [&'static str],
+    pub(crate) helpers: &'static [&'static str],
 }
 
 /// Every [`Marker`] the resolver reads a maker's text for, in no order that matters.
@@ -186,7 +186,7 @@ struct Marker {
 /// dungeons' spellings were not measured** — this module was written without corpus access — so
 /// The Ring carries every spelling its reminder card goes by, and a spelling that matches nothing
 /// costs nothing.
-const MARKERS: [Marker; 7] = [
+pub(crate) const MARKERS: [Marker; 7] = [
     Marker {
         words: &["become the monarch", "becomes the monarch"],
         helpers: &["The Monarch"],
@@ -391,11 +391,11 @@ pub struct DeckTokenRow {
 /// One `cards` row as this module needs it: the display fields, plus the three the tie-break
 /// orders by and the `oracle_id` that is the grain.
 #[derive(Debug, Clone)]
-struct Printing {
-    id: String,
-    oracle_id: String,
-    name: String,
-    type_line: Option<String>,
+pub(crate) struct Printing {
+    pub(crate) id: String,
+    pub(crate) oracle_id: String,
+    pub(crate) name: String,
+    pub(crate) type_line: Option<String>,
     layout: String,
     power: Option<String>,
     toughness: Option<String>,
@@ -708,7 +708,7 @@ fn credit(groups: &mut HashMap<String, Group>, target: &Printing, maker: &str, o
 /// every face's, lower-cased, with the curly apostrophe folded to the straight one Scryfall
 /// writes. **Off the blob and not the `oracle_text` column**, because a two-faced card keeps
 /// its text on its faces and the column is NULL for one — a daybound werewolf, most of all.
-fn rules_text(card: &Value) -> String {
+pub(crate) fn rules_text(card: &Value) -> String {
     let mut text = String::new();
     let faces = card
         .get("card_faces")
@@ -733,7 +733,7 @@ fn rules_text(card: &Value) -> String {
 /// `name IN (…)` rides `idx_cards_name`, so the cost is a handful of index probes rather than the
 /// full scan a face-name match would pay. Empty when no name resolves — the corpus has not
 /// downloaded yet, or Scryfall spells it otherwise — never an error for that.
-fn marker_printings(conn: &Connection, names: &[&str]) -> Result<Vec<Printing>, String> {
+pub(crate) fn marker_printings(conn: &Connection, names: &[&str]) -> Result<Vec<Printing>, String> {
     let marks = vec!["?"; names.len()].join(", ");
     let sql = format!(
         "SELECT {PRINTING_COLUMNS} FROM cards c

@@ -371,6 +371,8 @@ commands! {
         card_image_uri_inner(conn, &card_id, &variant)
     };
     read card_meld_parts in card(id: String) = |conn| meld_parts(conn, &id);
+    read card_raw in card(ids: Vec<String>) = |conn| raw_cards(conn, &ids);
+    read card_related in card_related(id: String) = |conn| related_cards(conn, &id);
     read card_printings in card(oracle_id: String, marketplace: Option<String>, limit: Option<i64>) = |conn| {
         let market = Marketplace::from_opt(marketplace.as_deref());
         list_printings(conn, &oracle_id, market, limit)
@@ -464,10 +466,17 @@ commands! {
     };
 
     // combos
-    read combos_for_card in combos(oracle_id: String, search: Option<String>, card_count: Option<i64>, owned_only: bool, limit: i64, offset: i64) = |conn| {
-        card_combos(conn, &oracle_id, search.as_deref(), card_count, owned_only, limit, offset)
+    read combos_for_card in combos(oracle_id: String, search: Option<String>, produces: Option<String>, card_count: Option<i64>, owned_only: bool, limit: i64, offset: i64) = |conn| {
+        card_combos(conn, &oracle_id, search.as_deref(), produces.as_deref(), card_count, owned_only, limit, offset)
     };
+    read combo_get in combos(id: String) = |conn| combo_by_id(conn, &id);
     read combos_for_cards in combos(card_ids: Vec<String>) = |conn| match_combos(conn, &card_ids);
+    read combos_near in combos(card_ids: Vec<String>, format: Option<String>, identity: Option<String>, limit: i64, offset: i64) = |conn| {
+        near_combos(conn, &card_ids, format.as_deref(), identity.as_deref(), limit, offset)
+    };
+    read combos_in_collection in combos(near: bool, format: Option<String>, identity: Option<String>, limit: i64, offset: i64) = |conn| {
+        collection_combos(conn, near, format.as_deref(), identity.as_deref(), limit, offset)
+    };
     blocking combos_status in combos() = |state| Ok(status_of(&state));
     task combos_refresh in combos(force: bool) = |state| async move {
         refresh(&state, force, &mut |phase, done, total| emit(&state, phase, done, total)).await
@@ -1259,6 +1268,10 @@ commands! {
     read oracle_tags_for_cards in tags::oracle(oracle_ids: Vec<String>) = |conn| {
         read_card_tags(conn, &oracle_ids).map_err(|e| format!("could not read the tags: {e}"))
     };
+    read card_oracle_tags in tags::oracle(card_id: String) = |conn| direct_tags(conn, &card_id);
+    read cards_similar in similar(oracle_id: String, format: Option<String>, identity: Option<String>, limit: i64) = |conn| {
+        similar_cards(conn, &oracle_id, format.as_deref(), identity.as_deref(), limit)
+    };
     read oracle_tags_for_printings in tags::oracle(card_ids: Vec<String>) = |conn| {
         read_printing_tags(conn, &card_ids).map_err(|e| format!("could not read the tags: {e}"))
     };
@@ -1679,6 +1692,7 @@ mod tests {
         let expected = json!(crate::combos::card_combos(
             &state.lock_db_read(),
             "none",
+            None,
             None,
             None,
             false,
@@ -2671,6 +2685,8 @@ mod tests {
     /// `marketplace_feed`'s. Those are where a lock held across a chunk would fail by name.
     #[test]
     fn every_command_answers_on_one_connection_and_one_thread() {
+        // `combos_refresh` below claims the combo refresh, which is process-wide.
+        let _refreshes = crate::combos::tests::PAGE_REFRESHES.blocking_lock();
         let nowhere = httpmock::MockServer::start();
         let dir = crate::scratch::path("commands-alone");
         let _ = std::fs::remove_dir_all(&dir);

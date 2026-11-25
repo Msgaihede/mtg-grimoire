@@ -348,8 +348,10 @@ remarks to itself), `manaValueNeeded` (derivable from `manaNeeded` and read by n
 app draws no conclusion from), `spoiler`, `prices` (this app has two price feeds of its own and
 neither is Spellbook's), and the per-`uses` `zoneLocations` and `*CardState` strings — "on the
 battlefield, tapped" is a fact about *playing* the combo that the description already spells out
-in prose. **`requires[]` is still a count and nothing more**: resolving "a creature with flying"
-is not something this app can do, which is the same sentence `template_count` has always carried.
+in prose. **`requires[]` is a count, and since corpus schema 9 (2026-11-24) its template names are stored
+too** (`combos.requires`, `\n`-joined, carried on `CardCombo.requires`): resolving "a creature
+with flying" is still not something this app can do, which is the same sentence `template_count`
+has always carried, but an agent reading a combo can read the words.
 
 A variant is **kept** only when `status == "OK"` — the rest of that enum (`N` New, `D` Draft,
 `NR` Needs Review, `E` Example, `R` Restore, `NW` Not Working) is Spellbook's editorial pipeline

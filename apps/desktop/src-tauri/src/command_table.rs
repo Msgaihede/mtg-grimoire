@@ -251,12 +251,48 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
 /// reason — [`DESKTOP_ONLY`], read from the other side. A host of the table needs them and
 /// this one does not, so there is no wrapper, and a page here that invoked one would be told
 /// the command does not exist.
-const TABLE_ONLY: &[(&str, &str)] = &[(
-    "card_image_source",
-    "where a card's picture is, for a host whose page fetches pictures itself — a web \
+const TABLE_ONLY: &[(&str, &str)] = &[
+    (
+        "card_image_source",
+        "where a card's picture is, for a host whose page fetches pictures itself — a web \
      host's service worker. This app's `mtgimg://` handler asks the image cache, which \
      resolves, fetches and stores in one call (`images::answer`)",
-)];
+    ),
+    (
+        "combo_get",
+        "one combo whole, for the MCP server's get_combo tool; the page reads combos a page at a \
+     time through combos_for_card",
+    ),
+    (
+        "combos_near",
+        "combos a deck is one card away from, for the MCP server's held_combos tool",
+    ),
+    (
+        "combos_in_collection",
+        "combos the reader's whole collection holds or is one card away from, for the MCP \
+     server's held_combos tool",
+    ),
+    (
+        "card_raw",
+        "a printing's whole Scryfall record, for the MCP server's card_scryfall tool",
+    ),
+    (
+        "card_related",
+        "what one card brings with it, for the MCP server's get_card",
+    ),
+    (
+        "card_oracle_tags",
+        "a card's own oracle tags with labels, for the MCP server's get_card; the page reads \
+     the tag closure through oracle_tags_for_printings",
+    ),
+    (
+        "cards_similar",
+        concat!(
+            "cards that do what a card does, ranked by shared oracle tags, for the MCP ",
+            "server's similar_cards tool"
+        ),
+    ),
+];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
 /// table came to cover the light app (phase 4, step 4.2, 2026-10-03), each group here says what

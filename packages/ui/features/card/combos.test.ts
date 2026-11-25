@@ -34,6 +34,7 @@ function combo(pieces: ComboPiece[]): CardCombo {
     templateCount: 0,
     identity: "RW",
     produces: "Infinite damage",
+    requires: "",
     description: "",
     easyPrerequisites: "",
     notablePrerequisites: "",

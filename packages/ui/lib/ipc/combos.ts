@@ -197,6 +197,10 @@ export interface CardCombo {
    * more thing the combo needs, said in words, and the honest drawing is to say so.
    */
   templateCount: number;
+  /** The templates' names ("a creature with flying"), one per line — the text behind
+   *  {@link CardCombo.templateCount}. `""` where the combo needs none. Stored since corpus
+   *  schema 9; nothing on the page draws it. */
+  requires: string;
   /** The combo's colour identity as the feed publishes it — WUBRG letters, `""` for colourless.
    *  A string rather than an array because nothing here does anything to it but draw pips. */
   identity: string;

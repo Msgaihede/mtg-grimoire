@@ -3135,6 +3135,8 @@ export interface FakeCombo {
   /** Feature names, `\n`-joined at the ingest because nothing does anything to them but print
    *  them. */
   produces: string;
+  /** Template names, `\n`-joined; `""` for none. Corpus schema 9. */
+  requires: string;
   /**
    * **The four columns corpus schema 2 added**, in the order and the spelling
    * `schema::COMBO_TABLES_SQL` gives them — `mana_needed`, `easy_prerequisites`,
@@ -5388,6 +5390,8 @@ interface ComboFixture {
   templateCount: number;
   identity: string;
   produces: string;
+  /** Template names, `\n`-joined — absent meaning `""`. */
+  requires?: string;
   /** The four corpus-schema-2 columns, **absent meaning `""`** — {@link FakeCombo.manaNeeded}'s
    *  note. A combo with nothing to say about its mana is the common case in the real feed, so
    *  writing `""` seven times would be noise standing in for a fact. */
@@ -5937,6 +5941,7 @@ export function comboRows(cards: readonly FakeCard[]): FakeCombo[] {
       templateCount: fixture.templateCount,
       identity: fixture.identity,
       produces: fixture.produces,
+      requires: fixture.requires ?? "",
       // Absent is `''`, which is the column's own default and the feed's own answer — never
       // `null`. See {@link FakeCombo.manaNeeded}.
       manaNeeded: fixture.manaNeeded ?? "",
@@ -6318,6 +6323,7 @@ function cardCombosPage(
           templateCount: combo.templateCount,
           identity: combo.identity,
           produces: combo.produces,
+          requires: combo.requires,
           description: combo.description,
           easyPrerequisites: combo.easyPrerequisites,
           notablePrerequisites: combo.notablePrerequisites,

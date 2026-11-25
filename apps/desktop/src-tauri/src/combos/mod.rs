@@ -132,10 +132,12 @@ pub async fn combos_for_cards(
 /// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
 /// [`card_combos`].
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn combos_for_card(
     state: tauri::State<'_, Arc<AppState>>,
     oracle_id: String,
     search: Option<String>,
+    produces: Option<String>,
     card_count: Option<i64>,
     owned_only: bool,
     limit: i64,
@@ -148,6 +150,7 @@ pub async fn combos_for_card(
             &conn,
             &oracle_id,
             search.as_deref(),
+            produces.as_deref(),
             card_count,
             owned_only,
             limit,
