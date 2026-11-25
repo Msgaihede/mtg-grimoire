@@ -687,6 +687,7 @@ mod tests {
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             mirror_pass: std::sync::Mutex::new(()),
             changes: Default::default(),
+            show_search: std::sync::Arc::new(crate::mcp::show::ShowSearch::detached()),
         }
     }
 

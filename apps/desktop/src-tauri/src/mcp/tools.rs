@@ -107,6 +107,13 @@ pub fn list() -> Vec<Value> {
         "idempotentHint": false,
         "openWorldHint": false,
     });
+    // Changes what one window shows, never any data.
+    let show = json!({
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+    });
     let widget_id = json!({ "type": "integer", "description": "From widget_list." });
     let widget_name = json!({ "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_NAME_CHARS, "description": "The widget's title." });
     let widget_description = json!({ "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_DESCRIPTION_CHARS, "description": "What it shows, in a sentence (default empty)." });
@@ -185,26 +192,47 @@ pub fn list() -> Vec<Value> {
                 "filters": {
                     "type": "object",
                     "description": "The Search page's filter bar. Every field is optional; a card must pass all of them.",
-                    "properties": {
-                        "format": { "type": "string", "description": "A format key with legality data (see format_rules): only cards playable in it." },
-                        "colors": { "type": "array", "items": { "type": "string" }, "description": "Colour letters W, U, B, R, G, or just C for colourless: cards whose colour identity fits inside them." },
-                        "colorsExact": { "type": "boolean", "description": "With colors: exactly those colours, not a subset." },
-                        "types": { "type": "array", "items": { "type": "string" }, "description": "Card types: Artifact, Battle, Creature, Enchantment, Instant, Land, Planeswalker, Sorcery. Any one of them." },
-                        "rarities": { "type": "array", "items": { "type": "string" }, "description": "common, uncommon, rare, mythic, special or bonus. Any one of them." },
-                        "sets": { "type": "array", "items": { "type": "string" }, "description": "Set codes. Any one of them." },
-                        "manaValues": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 8 }, "description": "Mana values; 8 means 8 or more." },
-                        "manaX": { "type": "boolean", "description": "Also cards with {X} in their cost." },
-                        "owned": { "type": "boolean", "description": "true: only cards the user owns; false: only cards they do not." },
-                        "priceMin": { "type": "number", "minimum": 0, "description": "In the user's marketplace currency." },
-                        "priceMax": { "type": "number", "minimum": 0, "description": "In the user's marketplace currency." },
-                        "oracleTags": { "type": "array", "items": { "type": "string" }, "description": "Oracle tag slugs (from find_tags); a card must hold all of them." },
-                        "gameChanger": { "type": "boolean", "description": "true: only Commander game changers." },
-                    },
+                    "properties": filter_properties(),
                     "additionalProperties": false,
                 },
             }),
             &[],
             &read,
+        ),
+        tool(
+            "show_search",
+            "Show a search in the app",
+            "Show a search on the MTG Grimoire app's Search page, in the window the user last \
+             used, and bring that window forward. Ask the user in chat first (\"Want to see \
+             these in the app?\") and call this only after they say yes, once per yes. Changes \
+             no data. text is the Search box's text in Scryfall syntax (t:, o:, kw:, pow>=4, \
+             otag:, -, or, parentheses); filters are find_cards' filters plus borders, finishes \
+             and universe, and find_cards with the same filters previews the count. Answers \
+             what the page shows: total, the keywords it read, the words it searched as plain \
+             text (words) and any unknownTags; cameForward false means Windows kept the app \
+             behind and its taskbar button is flashing.",
+            json!({
+                "text": { "type": "string", "maxLength": super::show::MAX_TEXT_CHARS, "description": "The Search box's text, in Scryfall syntax." },
+                "filters": {
+                    "type": "object",
+                    "description": "The Search page's filter bar. Every field is optional; the page applies all of them.",
+                    "properties": show_filter_properties(),
+                    "additionalProperties": false,
+                },
+                "sort": {
+                    "type": "object",
+                    "description": "How the page orders the results (default: the page's own).",
+                    "properties": {
+                        "key": { "type": "string", "enum": super::show::SORT_KEYS },
+                        "descending": { "type": "boolean", "description": "Largest first (default false)." },
+                    },
+                    "required": ["key"],
+                    "additionalProperties": false,
+                },
+                "allPrintings": { "type": "boolean", "description": "Every printing rather than one per card." },
+            }),
+            &[],
+            &show,
         ),
         tool(
             "get_card",
@@ -430,7 +458,8 @@ pub fn list() -> Vec<Value> {
             concat!(
                 "How to do a kind of task with these tools: the text of this server's prompt of ",
                 "that name, for when the user has not picked it. search_cards: finding cards by ",
-                "name and by filters in the database, the collection and the wishlist; ",
+                "name and by filters in the database, the collection and the wishlist, and ",
+                "showing a search in the app; ",
                 "create_widget: building a custom home-page widget; graphql_discovery: the read ",
                 "graph, for anything else in the user's data; card_interactions: what a card does, ",
                 "its combos, oracle tags, related and similar cards, its Scryfall record and format ",
@@ -573,6 +602,36 @@ pub fn list() -> Vec<Value> {
     ]
 }
 
+/// `find_cards`' thirteen filter fields as JSON Schema properties — `show_search` adds three to them,
+/// and building both from this keeps the two schemas from drifting.
+fn filter_properties() -> Value {
+    json!({
+        "format": { "type": "string", "description": "A format key with legality data (see format_rules): only cards playable in it." },
+        "colors": { "type": "array", "items": { "type": "string" }, "description": "Colour letters W, U, B, R, G, or just C for colourless: cards whose colour identity fits inside them." },
+        "colorsExact": { "type": "boolean", "description": "With colors: exactly those colours, not a subset." },
+        "types": { "type": "array", "items": { "type": "string" }, "description": "Card types: Artifact, Battle, Creature, Enchantment, Instant, Land, Planeswalker, Sorcery. Any one of them." },
+        "rarities": { "type": "array", "items": { "type": "string" }, "description": "common, uncommon, rare, mythic, special or bonus. Any one of them." },
+        "sets": { "type": "array", "items": { "type": "string" }, "description": "Set codes. Any one of them." },
+        "manaValues": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 8 }, "description": "Mana values; 8 means 8 or more." },
+        "manaX": { "type": "boolean", "description": "Also cards with {X} in their cost." },
+        "owned": { "type": "boolean", "description": "true: only cards the user owns; false: only cards they do not." },
+        "priceMin": { "type": "number", "minimum": 0, "description": "In the user's marketplace currency." },
+        "priceMax": { "type": "number", "minimum": 0, "description": "In the user's marketplace currency." },
+        "oracleTags": { "type": "array", "items": { "type": "string" }, "description": "Oracle tag slugs (from find_tags); a card must hold all of them." },
+        "gameChanger": { "type": "boolean", "description": "true: only Commander game changers." },
+    })
+}
+
+/// [`filter_properties`] and the three more `show_search` takes (the page's border, finish and
+/// universe chips).
+fn show_filter_properties() -> Value {
+    let mut properties = filter_properties();
+    properties["borders"] = json!({ "type": "array", "items": { "type": "string" }, "description": "regular, borderless or fullart. Any one of them." });
+    properties["finishes"] = json!({ "type": "array", "items": { "type": "string" }, "description": "nonfoil, foil or etched. Any one of them." });
+    properties["universe"] = json!({ "type": "string", "description": "beyond (Universes Beyond only) or within (Magic's own universe only)." });
+    properties
+}
+
 fn tool(
     name: &str,
     title: &str,
@@ -608,6 +667,7 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "graph_validate" => graph_validate(&args),
         "graph_query" => graph_query(state, &args).await,
         "find_cards" => find_cards(state, &args).await,
+        "show_search" => show_search(state, &args).await,
         "get_card" => get_card(state, &args).await,
         "search_collection" => search_collection(state, &args).await,
         "search_wishlist" => search_wishlist(state, &args).await,
@@ -667,11 +727,11 @@ async fn graph_query(state: &Arc<AppState>, args: &Args) -> Result<Value, String
 }
 
 /// A tool's arguments, read with the refusal a wrong one deserves.
-struct Args(Map<String, Value>);
+pub(super) struct Args(pub(super) Map<String, Value>);
 
 impl Args {
     /// A string, trimmed; blank is absent.
-    fn text(&self, name: &str) -> Result<Option<String>, String> {
+    pub(super) fn text(&self, name: &str) -> Result<Option<String>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(s)) => {
@@ -713,7 +773,7 @@ impl Args {
     }
 
     /// A list of strings, trimmed, blanks dropped; absent is empty.
-    fn texts(&self, name: &str) -> Result<Vec<String>, String> {
+    pub(super) fn texts(&self, name: &str) -> Result<Vec<String>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(Vec::new()),
             Some(Value::Array(items)) => {
@@ -734,7 +794,7 @@ impl Args {
     }
 
     /// A number of zero or more; absent is `None`.
-    fn amount(&self, name: &str) -> Result<Option<f64>, String> {
+    pub(super) fn amount(&self, name: &str) -> Result<Option<f64>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(v) => v
@@ -746,7 +806,7 @@ impl Args {
     }
 
     /// True or false; absent is `None`, unlike [`Args::flag`], which reads absent as false.
-    fn switch(&self, name: &str) -> Result<Option<bool>, String> {
+    pub(super) fn switch(&self, name: &str) -> Result<Option<bool>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -754,7 +814,7 @@ impl Args {
         }
     }
 
-    fn flag(&self, name: &str) -> Result<bool, String> {
+    pub(super) fn flag(&self, name: &str) -> Result<bool, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(false),
             Some(Value::Bool(b)) => Ok(*b),
@@ -781,7 +841,11 @@ impl Args {
 }
 
 /// One table command, by name.
-async fn run(state: &Arc<AppState>, command: &str, args: Value) -> Result<Value, String> {
+pub(super) async fn run(
+    state: &Arc<AppState>,
+    command: &str,
+    args: Value,
+) -> Result<Value, String> {
     dispatch(&state.core, command, args, None).await
 }
 
@@ -845,170 +909,72 @@ fn matches_words(name: &str, query: Option<&str>) -> bool {
     })
 }
 
-/// The fields `find_cards`' `filters` object may hold.
-const FILTER_FIELDS: [&str; 13] = [
-    "format",
-    "colors",
-    "colorsExact",
-    "types",
-    "rarities",
-    "sets",
-    "manaValues",
-    "manaX",
-    "owned",
-    "priceMin",
-    "priceMax",
-    "oracleTags",
-    "gameChanger",
-];
+/// `show_search`'s refusal of a call that narrows nothing — no text, no filter, or filters that are
+/// all empty (`{"colors": []}`): shown, it would put the reader's page down for every card.
+const SHOW_SEARCH_NEEDS: &str = concat!(
+    "show_search needs text (the Search box's words, in Scryfall syntax) ",
+    "or at least one field in filters."
+);
 
-/// `filters` read into the `SearchRequest` fields it sets, every value checked against its
-/// field's vocabulary first.
-async fn filter_fields(
-    state: &Arc<AppState>,
-    filters: &Args,
-) -> Result<Map<String, Value>, String> {
-    if let Some(key) = filters
-        .0
-        .keys()
-        .find(|k| !FILTER_FIELDS.contains(&k.as_str()))
+/// `show_search`: the search checked as `find_cards` checks it, then handed to the app's window.
+/// Every refusal comes before any window changes.
+async fn show_search(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let text = args.text("text")?;
+    if text
+        .as_deref()
+        .is_some_and(|t| t.chars().count() > super::show::MAX_TEXT_CHARS)
     {
         return Err(format!(
-            "filters has no field {key:?}; its fields are: {}.",
-            FILTER_FIELDS.join(", ")
+            "text is longer than {} characters.",
+            super::show::MAX_TEXT_CHARS
         ));
     }
-    let mut req = Map::new();
-    if let Some(typed) = filters.text("format")? {
-        let specs = run(state, "format_specs_list", json!({})).await?;
-        req.insert(
-            "format".into(),
-            json!(format_key(Some(typed), "filters.format", &specs)?),
-        );
+    let filters = match args.0.get("filters") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(map)) if !map.is_empty() => Some(Args(map.clone())),
+        Some(Value::Object(_)) => None,
+        Some(_) => return Err("filters must be an object.".to_owned()),
+    };
+    if text.is_none() && filters.is_none() {
+        return Err(SHOW_SEARCH_NEEDS.to_owned());
     }
-    let colors: Vec<String> = filters
-        .texts("colors")?
-        .iter()
-        .map(|c| c.to_uppercase())
-        .collect();
-    if let Some(bad) = colors
-        .iter()
-        .find(|c| !["W", "U", "B", "R", "G", "C"].contains(&c.as_str()))
-    {
-        return Err(format!(
-            "filters.colors cannot hold {bad:?}; use W, U, B, R, G, or C alone for colourless."
-        ));
-    }
-    if colors.iter().any(|c| c == "C") && colors.len() > 1 {
-        return Err(
-            "filters.colors cannot mix C (colourless) with other colours; use C alone.".to_owned(),
-        );
-    }
-    if !colors.is_empty() {
-        req.insert("colors".into(), json!(colors.concat()));
-    }
-    if let Some(exact) = filters.switch("colorsExact")? {
-        req.insert("colorsStrict".into(), json!(exact));
-    }
-    let mut types = Vec::new();
-    for typed in filters.texts("types")? {
-        let Some(key) = grimoire_core::cardtypes::TYPE_KEYS
-            .iter()
-            .find(|k| k.eq_ignore_ascii_case(&typed))
-        else {
-            return Err(format!(
-                "filters.types cannot hold {typed:?}; use any of: {}.",
-                grimoire_core::cardtypes::TYPE_KEYS.join(", ")
-            ));
-        };
-        types.push(*key);
-    }
-    if !types.is_empty() {
-        req.insert("types".into(), json!(types));
-    }
-    let mut rarities = Vec::new();
-    for typed in filters.texts("rarities")? {
-        let typed = typed.to_lowercase();
-        if !grimoire_core::filters::ALL_RARITIES.contains(&typed.as_str()) {
-            return Err(format!(
-                "filters.rarities cannot hold {typed:?}; use any of: {}.",
-                grimoire_core::filters::ALL_RARITIES.join(", ")
-            ));
-        }
-        rarities.push(typed);
-    }
-    if !rarities.is_empty() {
-        req.insert("rarities".into(), json!(rarities));
-    }
-    let sets: Vec<String> = filters
-        .texts("sets")?
-        .iter()
-        .map(|s| s.to_lowercase())
-        .collect();
-    if !sets.is_empty() {
-        req.insert("sets".into(), json!(sets));
-    }
-    match filters.0.get("manaValues") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(values)) => {
-            let mut mana = Vec::new();
-            for v in values {
-                let Some(n) = v.as_u64().filter(|n| *n <= 8) else {
-                    return Err(format!(
-                        "filters.manaValues cannot hold {v}; use whole numbers from 0 to 8 (8 means 8 or more)."
-                    ));
-                };
-                mana.push(n);
-            }
-            if !mana.is_empty() {
-                req.insert("manaValues".into(), json!(mana));
-            }
-        }
-        Some(_) => return Err("filters.manaValues must be a list of whole numbers.".to_owned()),
-    }
-    if filters.flag("manaX")? {
-        req.insert("manaX".into(), json!(true));
-    }
-    if let Some(owned) = filters.switch("owned")? {
-        req.insert("owned".into(), json!(owned));
-    }
-    for field in ["priceMin", "priceMax"] {
-        if let Some(n) = filters.amount(field)? {
-            req.insert(field.into(), json!(n));
-        }
-    }
-    let tags = filters.texts("oracleTags")?;
-    if !tags.is_empty() {
-        if tags.len() > 64 {
-            return Err("filters.oracleTags takes at most 64 tags.".to_owned());
-        }
-        let asks: Vec<Value> = tags
-            .iter()
-            .map(|t| json!({ "namespace": "oracle", "value": t }))
-            .collect();
-        let resolved = run(state, "tag_resolve", json!({ "asks": asks })).await?;
-        let resolved = resolved.as_array().cloned().unwrap_or_default();
-        let mut slugs = Vec::new();
-        for (typed, hit) in tags.iter().zip(resolved.iter()) {
-            let Some(slug) = hit.get("slug").and_then(Value::as_str) else {
+    let sort = match args.0.get("sort") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(map)) => {
+            let sort = Args(map.clone());
+            let key = sort
+                .text("key")?
+                .ok_or_else(|| "sort.key is required.".to_owned())?;
+            if !super::show::SORT_KEYS.contains(&key.as_str()) {
                 return Err(format!(
-                    "filters.oracleTags has no tag {typed:?}; look slugs up with find_tags."
+                    "sort.key cannot be {key:?}; use one of: {}.",
+                    super::show::SORT_KEYS.join(", ")
                 ));
+            }
+            let dir = if sort.flag("descending")? {
+                "desc"
+            } else {
+                "asc"
             };
-            slugs.push(slug.to_owned());
+            Some(super::show::HandoffSort {
+                key,
+                dir: dir.to_owned(),
+            })
         }
-        req.insert(
-            "oracleTags".into(),
-            json!({ "include": slugs, "exclude": [] }),
-        );
+        Some(_) => return Err("sort must be an object.".to_owned()),
+    };
+    let all_printings = args.switch("allPrintings")?;
+    let checked = match &filters {
+        Some(filters) => {
+            super::filters::checked(state, filters, &super::filters::SHOW_FIELDS).await?
+        }
+        None => super::filters::CheckedFilters::default(),
+    };
+    let handoff = super::show::handoff(text.as_deref(), &checked, sort, all_printings);
+    if !handoff.narrows() {
+        return Err(SHOW_SEARCH_NEEDS.to_owned());
     }
-    if filters.flag("gameChanger")? {
-        req.insert(
-            "predicates".into(),
-            json!([{ "field": "is", "op": "colon", "value": "gamechanger" }]),
-        );
-    }
-    Ok(req)
+    state.show_search.show(handoff).await
 }
 
 async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
@@ -1030,7 +996,11 @@ async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
     let limit = args.bounded("limit", 10, 1, 50)?;
     let all = args.flag("allPrintings")?;
     let mut req = match &filters {
-        Some(filters) => filter_fields(state, filters).await?,
+        Some(filters) => {
+            let checked =
+                super::filters::checked(state, filters, &super::filters::FIND_FIELDS).await?;
+            super::filters::search_request(&checked)
+        }
         None => Map::new(),
     };
     req.insert("text".into(), json!(query));
@@ -1349,7 +1319,11 @@ async fn find_tags(state: &Arc<AppState>, args: &Args) -> Result<Value, String> 
 /// The searchable format key `args` names, lower-cased; `None` when it names none. A key with no
 /// legality data (`casual`, `limited`, `unspecified`) would silently match nothing, so it is
 /// refused with the keys that do work. `specs` is `format_specs_list`'s answer.
-fn format_key(typed: Option<String>, field: &str, specs: &Value) -> Result<Option<String>, String> {
+pub(super) fn format_key(
+    typed: Option<String>,
+    field: &str,
+    specs: &Value,
+) -> Result<Option<String>, String> {
     let Some(key) = typed else {
         return Ok(None);
     };
@@ -2646,7 +2620,8 @@ fn spec_problems(spec: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::testing::state;
+    use crate::mcp::show::{HandoffSort, SearchShownReport};
+    use crate::mcp::testing::{state, state_with, FakeWindows};
 
     fn seed(state: &AppState, f: impl FnOnce(&rusqlite::Connection)) {
         let conn = state.db.lock().unwrap();
@@ -2672,14 +2647,150 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn show_search_hands_the_window_the_checked_search_and_answers_the_page() {
+        let fake = Arc::new(FakeWindows::forward(true));
+        let state = state_with("show-search", fake.clone());
+        seed(&state, |c| {
+            filter_cards(c);
+            tag(c, "ramp", "Ramp", &["o-f-drake"]);
+            tags_downloaded(c);
+        });
+        let call = tokio::spawn({
+            let state = state.clone();
+            async move {
+                done(
+                    &state,
+                    "show_search",
+                    json!({
+                        "text": "t:creature",
+                        "filters": { "format": "commander", "oracleTags": ["ramp"], "gameChanger": true, "borders": ["borderless"] },
+                        "sort": { "key": "price", "descending": true },
+                    }),
+                )
+                .await
+            }
+        });
+        let sent = fake.wait_for_one().await;
+        assert_eq!(sent.text, "t:creature is:gamechanger");
+        assert_eq!(sent.format.as_deref(), Some("commander"));
+        assert_eq!(sent.tags[0].label, "Ramp");
+        assert_eq!(sent.borders, ["borderless"]);
+        assert_eq!(
+            sent.sort,
+            Some(HandoffSort {
+                key: "price".into(),
+                dir: "desc".into()
+            })
+        );
+        assert_eq!(sent.all_printings, None);
+        state.show_search.report(
+            sent.id,
+            SearchShownReport {
+                total: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(call.await.unwrap()["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn show_search_refuses_before_any_window_changes() {
+        let fake = Arc::new(FakeWindows::forward(true));
+        let state = state_with("show-search-refusals", fake.clone());
+        seed(&state, filter_cards);
+        let long = "a".repeat(1001);
+        for (args, word) in [
+            (json!({}), "text"),
+            (json!({ "filters": {} }), "text"),
+            // Filters that narrow nothing are the empty call, and would wipe the reader's page.
+            (json!({ "filters": { "colors": [] } }), "text"),
+            (
+                json!({ "text": "  ", "filters": { "colorsExact": true, "gameChanger": false }, "sort": { "key": "price" } }),
+                "text",
+            ),
+            (json!({ "text": long }), "1000"),
+            (
+                json!({ "text": "x", "sort": { "key": "power" } }),
+                "sort.key",
+            ),
+            (
+                json!({ "filters": { "rarities": ["epic"] } }),
+                "filters.rarities",
+            ),
+            (
+                json!({ "filters": { "oracleTags": ["nonesuch"] } }),
+                "find_tags",
+            ),
+            (
+                json!({ "filters": { "universe": "outer" } }),
+                "filters.universe",
+            ),
+        ] {
+            let why = refused(&state, "show_search", args.clone()).await;
+            assert!(why.contains(word), "{args}: {why}");
+            assert!(!why.contains("  "), "{args}: {why}");
+        }
+        assert!(
+            fake.shown.lock().unwrap().is_empty(),
+            "a refused call sent nothing"
+        );
+    }
+
+    #[test]
+    fn show_search_asks_first_and_is_not_a_read() {
+        let tool = list()
+            .into_iter()
+            .find(|t| t["name"] == "show_search")
+            .unwrap();
+        let d = tool["description"].as_str().unwrap();
+        assert!(
+            d.contains("Ask the user in chat first") && d.contains("only after they say yes"),
+            "{d}"
+        );
+        assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        assert_eq!(tool["annotations"]["destructiveHint"], false);
+        assert_eq!(tool["annotations"]["idempotentHint"], true);
+        assert_eq!(
+            tool["inputSchema"]["properties"]["filters"]["additionalProperties"],
+            false
+        );
+    }
+
+    /// The `filters` each schema describes are the fields each tool's check accepts, and
+    /// `show_search`'s are `find_cards`' thirteen and then its own three.
+    #[test]
+    fn the_filters_schemas_describe_the_fields_the_checks_accept() {
+        use std::collections::BTreeSet;
+        let keys = |name: &str| -> BTreeSet<String> {
+            let tools = list();
+            let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+            tool["inputSchema"]["properties"]["filters"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
+        };
+        let set = |fields: &[&str]| -> BTreeSet<String> {
+            fields.iter().map(|f| (*f).to_owned()).collect()
+        };
+        assert_eq!(keys("find_cards"), set(&crate::mcp::filters::FIND_FIELDS));
+        assert_eq!(keys("show_search"), set(&crate::mcp::filters::SHOW_FIELDS));
+        assert_eq!(
+            crate::mcp::filters::SHOW_FIELDS[..13],
+            crate::mcp::filters::FIND_FIELDS
+        );
+    }
+
     #[test]
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 27);
+        assert_eq!(names.len(), 28);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 27, "names are unique");
+        assert_eq!(names.len(), 28, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -2696,7 +2807,8 @@ mod tests {
 
     /// The custom widget's three writes are the only tools that write at all, and only a widget —
     /// the reader's cards, decks and wishlists take no write from here (the owner's decision,
-    /// 2026-10-31).
+    /// 2026-10-31). `show_search` is not read-only either, but it changes only what a window shows:
+    /// it is neither destructive nor a write of any data.
     #[test]
     fn only_a_widget_s_writes_say_they_write() {
         let writes: Vec<(String, bool)> = list()
@@ -2713,6 +2825,7 @@ mod tests {
         assert_eq!(
             writes,
             [
+                ("show_search", false),
                 ("widget_create", false),
                 ("widget_update", true),
                 ("widget_delete", true),

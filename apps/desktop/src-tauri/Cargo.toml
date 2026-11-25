@@ -195,13 +195,16 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 
-# Waiting for the process an update replaced to actually terminate, which is the one thing
-# std cannot express: there is no portable "is this PID alive". `0.61` is already in the
-# tree via tauri/tao, so this adds no build. Two functions, hence two features.
+# Two jobs. Waiting for the process an update replaced to actually terminate, which is the one
+# thing std cannot express: there is no portable "is this PID alive" (two functions, the first
+# two features). And `show_search`'s `GetForegroundWindow` (the third). `0.61` is already in the
+# tree via tauri/tao, so this adds no build.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
+    # `GetForegroundWindow`: whether a search shown to an agent's window actually came forward.
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # The `ICoreWebView2::add_PermissionRequested` handler `camera.rs` installs, so the QR
 # scanner's camera prompt is answered instead of falling through to WebView2's own default

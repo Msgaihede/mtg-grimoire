@@ -29046,6 +29046,8 @@ export function applyMcpFault(db: FakeDb): void {
 export function mcpHandlers(db: FakeDb) {
   return {
     mcp_status: (): McpStatus => mcpStatus(db),
+    // The page's answer to a hand-off nobody sends here: nothing is waiting for it.
+    mcp_search_shown: () => null,
     mcp_enable: (): McpStatus => {
       // Refused with nothing changed, as the desktop does: the switch is stored only once the
       // socket is open, so a press that could not open one leaves what was there — off, or a

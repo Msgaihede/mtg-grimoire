@@ -37,6 +37,7 @@ import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
 import { FilterQuickBar } from "./FilterQuickBar";
 import { countOf } from "./resultCount";
+import { chipsOf, useHandoffReport } from "./searchHandoff";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
 /**
@@ -364,14 +365,24 @@ export function SearchPage() {
   // card asked for by name must not be hidden by a tag chip left standing from the last search.
   const pendingText = useAppStore((s) => s.pendingSearchText);
   const clearPendingText = useAppStore((s) => s.clearPendingSearchText);
+  // An agent's search (the MCP tool `show_search`) — `pendingSearchHandoff`, answered as the text
+  // is: a seed on a mount, a render-phase adjustment on a page already mounted, spent by an effect.
+  // Its tags are the picked chips, in place of whatever chips were standing.
+  const pendingHandoff = useAppStore((s) => s.pendingSearchHandoff);
+  const clearPendingHandoff = useAppStore((s) => s.clearPendingSearchHandoff);
   // Seeded without the picked chips when the page mounts on a hand-off, as `initialSet` and
   // `initialText` seed the rest: the first request is built from the first render's terms, so
-  // putting the chips down in render (below) would still have sent the set with them.
-  const tags = useTagSelection({ withoutChips: pendingSet !== null || pendingText !== null });
+  // putting the chips down in render (below) would still have sent the set with them. An agent's
+  // search seeds its own chips instead, for the same reason.
+  const tags = useTagSelection({
+    withoutChips: pendingSet !== null || pendingText !== null,
+    initialChips: pendingHandoff ? chipsOf(pendingHandoff) : null,
+  });
   const search = useCardSearch({
     initialSet: pendingSet,
     initialSort: pendingSort,
     initialText: pendingText,
+    initialHandoff: pendingHandoff,
     rememberAs: "search",
     tagTerms: tags.tagTerms,
   });
@@ -406,6 +417,22 @@ export function SearchPage() {
   useEffect(() => {
     if (pendingText !== null) clearPendingText();
   }, [pendingText, clearPendingText]);
+  // The agent's search, guarded by its `id` rather than by its contents: every hand-off has an id
+  // of its own, so the same search asked twice still lands, and one asked while another waits
+  // replaces it. Seeded with the hand-off the page mounted on, which the seeds above have applied,
+  // and **never put back to `null`** once the store is spent, unlike `appliedText`: it names the
+  // search this wall now shows, which is what the report to the waiting tool is about.
+  const [appliedHandoffId, setAppliedHandoffId] = useState(pendingHandoff?.id ?? null);
+  if (pendingHandoff !== null && pendingHandoff.id !== appliedHandoffId) {
+    setAppliedHandoffId(pendingHandoff.id);
+    tags.replaceChips(chipsOf(pendingHandoff));
+    search.showHandoff(pendingHandoff);
+  }
+  useEffect(() => {
+    if (pendingHandoff !== null) clearPendingHandoff();
+  }, [pendingHandoff, clearPendingHandoff]);
+  // And what that search shows, told to the tool waiting on it — once, when the wall has answered.
+  useHandoffReport(search, appliedHandoffId);
 
   // **The filter quick bar** (spec 2026-09-29): a one-row copy of the page's filters that docks at
   // the top of `main` once the whole `FilterBar` block — row, open tray, stated filters — has

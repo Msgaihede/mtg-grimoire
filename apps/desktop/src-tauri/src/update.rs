@@ -2358,6 +2358,7 @@ mod tests {
                 mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
                 mirror_pass: std::sync::Mutex::new(()),
+                show_search: Arc::new(crate::mcp::show::ShowSearch::detached()),
                 changes,
             }),
             dir,
