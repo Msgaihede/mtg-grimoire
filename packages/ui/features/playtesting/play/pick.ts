@@ -1,11 +1,15 @@
 /**
  * The multi-card picker's words and rules, with nothing drawn — a scry's, a surveil's, a discard's,
- * a search's, a sacrifice's, a cast's (`PlaytestPrompt.pick`, answered by `pickCards`).
+ * a search's, a sacrifice's, a cast's, an order's, a cost's, a separation into piles'
+ * (`PlaytestPrompt.pick`, answered by `pickCards`).
  *
  * **The engine sends the bounds, the board keeps to them**: `min` and `max` say how many may be
  * picked, `eligible` which, and `ordered` whether the order is the answer (a scry's or surveil's
- * picked cards stay on top, the first picked on top). Confirm is offered only within the bounds,
- * rather than letting the reader send a set the engine will only refuse. A keep within a total
+ * picked cards stay on top, the first picked on top; an order's every card is picked, in the
+ * order it goes, and a split order's first `split` picked go on top, the rest on the bottom).
+ * A separation into piles (Fact or Fiction) picks pile A; the cards left are pile B. Confirm
+ * is offered only within the bounds, rather than letting the reader send a set the engine will
+ * only refuse. A keep within a total
  * power (`powerCap`, issue #1079) is bounded by the picked creatures' power as well: a creature
  * that would pass the cap is not picked.
  *
@@ -47,7 +51,23 @@ export function pickTitle(pick: PlaytestPick): string {
       return `Sacrifice ${bound(pick)}`;
     case "cast":
       return `Choose ${bound(pick)} to cast`;
+    case "order": {
+      const top = splitOf(pick);
+      if (top === null) return "Put on the bottom in order";
+      return top >= pick.cards.length
+        ? "Put them on top in order"
+        : `Put ${top} on top and the rest on the bottom`;
+    }
+    case "pay":
+      return `Choose ${bound(pick)} to pay the cost`;
+    case "pile":
+      return "Separate into two piles: picked cards are pile A";
   }
+}
+
+/** How many of an `order` pick go on top (Telling Time), or `null` for one place alone. */
+function splitOf(pick: Pick<PlaytestPick, "purpose" | "split">): number | null {
+  return pick.purpose === "order" && pick.split !== null && pick.split > 0 ? pick.split : null;
 }
 
 /** Where an offered cast is from, as its question says it. */
@@ -87,11 +107,80 @@ export function pickOffer(
   };
 }
 
-/** The two zones a scry or surveil sorts into; `null` for a picker that is one row. */
+/** The two zones a scry, a surveil or a separation into piles sorts into; `null` for a picker
+ *  that is one row. */
 export function pickZones(pick: PlaytestPick): { picked: string; rest: string } | null {
   if (pick.purpose === "scry") return { picked: "Keep on top", rest: "Bottom" };
   if (pick.purpose === "surveil") return { picked: "Top", rest: "Graveyard" };
+  if (pick.purpose === "pile") return { picked: "Pile A", rest: "Pile B" };
   return null;
+}
+
+/** One row of a sorting picker: its heading, the cards in it in order, and what an empty one
+ *  says. */
+export interface PickRow {
+  label: string;
+  ids: number[];
+  empty: string;
+}
+
+/**
+ * The rows a sorting picker lays its cards in, given the cards `picked` so far: a scry's, a
+ * surveil's or a pile's two (the picked ones in the order picked, then the rest), and a split
+ * order's three — the first `split` picked on top, the picked after them on the bottom, and the
+ * cards not yet placed. `null` for a picker that is one row.
+ */
+export function pickRows(pick: PlaytestPick, picked: readonly number[]): PickRow[] | null {
+  const rest = pick.cards.map((c) => c.id).filter((id) => !picked.includes(id));
+  const top = splitOf(pick);
+  if (top !== null)
+    return [
+      {
+        label: "On top",
+        ids: picked.slice(0, top),
+        empty: "Click a card to put it on top. The first click is the top card.",
+      },
+      {
+        label: "On the bottom",
+        ids: picked.slice(top),
+        empty: `Once ${top} ${top === 1 ? "is" : "are"} on top, the next cards clicked go on the bottom.`,
+      },
+      { label: "To place", ids: rest, empty: "Every card is placed." },
+    ];
+  const zones = pickZones(pick);
+  if (zones === null) return null;
+  const pile = pick.purpose === "pile";
+  return [
+    {
+      label: zones.picked,
+      ids: [...picked],
+      empty: pile
+        ? "Click a card to put it in pile A."
+        : "Click a card to keep it here. The first click goes on top.",
+    },
+    {
+      label: zones.rest,
+      ids: rest,
+      empty: pile ? "Every card is in pile A." : "Every card stays on top.",
+    },
+  ];
+}
+
+/**
+ * Where the card picked `at` (from 0) goes, for its badge and its name: its place in order
+ * (`1`), and in a split order its place on top or on the bottom (`top 1`, `bottom 2`). `null`
+ * for a pick whose order is not the answer.
+ */
+export function pickPosition(
+  pick: PlaytestPick,
+  at: number,
+): { badge: number; words: string } | null {
+  if (!pick.ordered || at < 0) return null;
+  const top = splitOf(pick);
+  if (top === null) return { badge: at + 1, words: String(at + 1) };
+  return at < top
+    ? { badge: at + 1, words: `top ${at + 1}` }
+    : { badge: at - top + 1, words: `bottom ${at - top + 1}` };
 }
 
 /** "2 of up to 3", "1 of 2"; under a power cap, "2 kept, power 3 of 4". */
@@ -139,6 +228,12 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return `Sacrifice ${n}`;
     case "cast":
       return n === 0 ? "Cast nothing" : n === 1 ? "Cast it" : `Cast ${n}`;
+    case "order":
+      return "Done";
+    case "pay":
+      return "Pay";
+    case "pile":
+      return "Make piles";
   }
 }
 

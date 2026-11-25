@@ -17,10 +17,20 @@
  * knocked out is told as `eliminated` — "Opponent 3 is out", and "You are out", which ends the
  * reader's game.
  *
+ * **What only the game itself does is said with its subject, the reader's too**: "You won the
+ * flip", "You rolled 4 on a d6", "You named Lightning Bolt", "You became the monarch", "The Ring
+ * tempted you", "It became night" — there is no action of the reader's for the line to echo.
+ *
  * `turn` on a line is the game's turn (`PlaytestView.turn`, every seat's turns counted), so the
  * log's headings follow the table's own "Turn 5".
  */
-import type { GameManaKind, GamePlace, PlaytestHappened, PlaytestPlayer } from "@/lib/ipc";
+import type {
+  GameManaKind,
+  GamePlace,
+  PlaytestDesignation,
+  PlaytestHappened,
+  PlaytestPlayer,
+} from "@/lib/ipc";
 import { lifeSentence, type LogKind, type LogLine } from "../table/log";
 import { playerName, playerPossessive } from "./players";
 import { promptTitle } from "./prompt";
@@ -105,7 +115,14 @@ function movedSentence(
   const who = playerName(seat, opponents);
   const whose = playerPossessive(seat, opponents);
   const name = named ?? "face-down card";
-  if (from === "libraryTop" && to === "hand") return you ? `Drew ${name}` : `${who} drew a card`;
+  // A draw is told as `drew`; a card from the library to the hand otherwise is a search's find
+  // (a tutor), named for an opponent's only when it was revealed.
+  if (from === "libraryTop" && to === "hand") {
+    const card = named ?? "a card";
+    return you
+      ? `Put ${card} from your library into your hand`
+      : `${who} put ${card} from their library into their hand`;
+  }
   if (from === "libraryTop" && to === "graveyard")
     return you ? `Milled ${name}` : `${who} milled ${name}`;
   if (from === "hand" && to === "graveyard")
@@ -197,6 +214,46 @@ function manaSentence(kind: GameManaKind, delta: number) {
   return delta >= 0
     ? `Added ${n} ${kind} mana to your pool`
     : `Took ${n} ${kind} mana from your pool`;
+}
+
+/** A spell countered, by whose spell it was: "Your Counterspell was countered by Mana Leak",
+ *  "The opponent's face-down spell was countered". */
+function counteredSentence(
+  seat: PlaytestPlayer,
+  name: string | null,
+  by: string | null,
+  opponents: number,
+) {
+  const spell = `${playerPossessive(seat, opponents)} ${name ?? "face-down spell"}`;
+  return by === null ? `${spell} was countered` : `${spell} was countered by ${by}`;
+}
+
+/** A die rolled: "You rolled 4 on a d6", "The opponent rolled the planar die". */
+function rolledSentence(
+  seat: PlaytestPlayer,
+  sides: number,
+  result: number | null,
+  opponents: number,
+) {
+  const who = playerName(seat, opponents);
+  return result === null
+    ? `${who} rolled the planar die`
+    : `${who} rolled ${result} on a d${sides}`;
+}
+
+/** A designation taken: "You became the monarch", "The Ring tempted Opponent 2". */
+function becameSentence(seat: PlaytestPlayer, what: PlaytestDesignation, opponents: number) {
+  const who = playerName(seat, opponents);
+  switch (what) {
+    case "monarch":
+      return `${who} became the monarch`;
+    case "initiative":
+      return `${who} took the initiative`;
+    case "cityBlessing":
+      return `${who} got the city's blessing`;
+    case "ringTempted":
+      return `The Ring tempted ${playerName(seat, opponents, "mid")}`;
+  }
 }
 
 /**
@@ -296,6 +353,22 @@ export function playtestSentence(
       const what = h.source === null ? "an emblem" : `an emblem from ${h.source}`;
       return h.seat === "you" ? `Got ${what}` : `${playerName(h.seat, opponents)} got ${what}`;
     }
+    case "revealed":
+      return h.seat === "you"
+        ? `Revealed ${listed(h.names)}`
+        : `${playerName(h.seat, opponents)} revealed ${listed(h.names)}`;
+    case "countered":
+      return counteredSentence(h.seat, h.name, h.by, opponents);
+    case "flipped":
+      return `${playerName(h.seat, opponents)} ${h.won ? "won" : "lost"} the flip`;
+    case "rolled":
+      return rolledSentence(h.seat, h.sides, h.result, opponents);
+    case "named":
+      return `${playerName(h.seat, opponents)} named ${h.name}`;
+    case "became":
+      return becameSentence(h.seat, h.what, opponents);
+    case "dayNight":
+      return `It became ${h.now}`;
     case "chose":
       return `The engine chose for you: ${promptTitle(h.what)}`;
     case "eliminated":
@@ -357,6 +430,18 @@ export function playtestKind(h: PlaytestHappened): LogKind {
     case "tokensCreated":
     case "emblem":
       return "token";
+    case "revealed":
+    case "named":
+      return "reveal";
+    case "countered":
+      return "cast";
+    case "flipped":
+    case "rolled":
+      return "chance";
+    case "became":
+      return "status";
+    case "dayNight":
+      return "turn";
     case "chose":
       return "engine";
     case "eliminated":

@@ -13,9 +13,11 @@
  * takes them only while the sandbox is on and the reader is playing or declaring
  * (`play/sandbox.ts`). So each builder takes `sandbox` as the board works it out (on, that stage,
  * nothing with the engine) and, off, offers only what the rules do: a hand card's Play (and its
- * Foretell and Activate ability — cycling), a commander's Cast, a foretold or flashback card's
- * Cast, a graveyard card's Activate ability (unearth, embalm, scavenge), a permanent's Activate
- * ability and its Tap for mana. A row the engine would only refuse is not offered.
+ * Foretell and Activate ability — cycling), a commander's Cast (and its Activate ability —
+ * commander ninjutsu), a foretold or flashback card's Cast, a graveyard card's Activate ability
+ * (unearth, embalm, scavenge), a permanent's Activate ability and its Tap for mana, and the
+ * library's top card's Cast or Activate ability (Future Sight, plot). A row the engine would only
+ * refuse is not offered.
  */
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat, PlaytestView } from "@/lib/ipc";
@@ -23,6 +25,18 @@ import { FELTS } from "./playmats";
 import type { ControlSeat, Playmat, ZoneLook } from "./types";
 
 type Act = (a: PlaytestAction) => void;
+
+/**
+ * The rules' play of a card where it lies, as a double-click sends it: its cast (or a land's
+ * play, CR 305.1) when the rules offer one ({@link GameCard.castable}), else an ability of it that
+ * works from there ({@link GameCard.canActivate}: plot from the library's top, CR 702.170;
+ * commander ninjutsu, CR 702.49d). `null` when the rules offer neither.
+ */
+export function rulesPlay(card: GameCard): PlaytestAction | null {
+  if (card.castable) return { type: "play", id: card.id };
+  if (card.canActivate) return { type: "activate", id: card.id };
+  return null;
+}
 
 function action(id: string, label: string, onSelect: () => void, disabled = false): MenuAction {
   return disabled
@@ -49,18 +63,22 @@ function counted(card: GameCard, kind: string): number {
  * engine ids, `ids[0]` its top). Everything but "Tap all" acts on the top card alone: moving a
  * pile of seven Forests to the graveyard by one row would be a misclick nobody could take back.
  *
- * `onActivate` heads a permanent's menu with "Activate ability" — the rules engine's, for the
- * reader's own permanents. An opponent's card is handed no `onActivate`: only its controller
- * activates it.
+ * **"Activate ability" heads a permanent's menu only when the rules offer one**
+ * ({@link GameCard.canActivate}, CR 602.1): one of the reader's own, or an opponent's whose
+ * ability "any player may activate" (CR 602.2) — whichever table it lies on. It is sent through
+ * `onActivate`, the board's own for the reader's permanents, or as an `activate` through `onAct`
+ * for a card handed none (an opponent's). A permanent with no ability to activate now has no row
+ * to earn the engine's refusal.
  *
  * **`sandbox` off leaves only the rules' rows**: Play on a hand card (and Foretell and Activate
- * ability, {@link GameCard.canActivate}, when the rules offer them), Cast on a commander, and
- * Activate ability and Tap for mana ({@link GameCard.canTapForMana}) on a permanent — and on a
+ * ability, {@link GameCard.canActivate}, when the rules offer them), Cast on a commander (and its
+ * Activate ability — commander ninjutsu), and Activate ability and Tap for mana
+ * ({@link GameCard.canTapForMana}) on a permanent when the rules offer them — and on a
  * graveyard or exile card only its Cast ({@link GameCard.castable}) and Activate ability
  * ({@link GameCard.canActivate}: unearth, issue #1714) when the rules offer them, and on an
- * opponent's permanent nothing at all (an empty menu, which the caller does not open). On, every
- * hand move follows, on whichever seat's card it is: the engine puts an opponent's card in its
- * owner's zones.
+ * opponent's permanent nothing but an ability any player may activate (else an empty menu, which
+ * the caller does not open). On, every hand move follows, on whichever seat's card it is: the
+ * engine puts an opponent's card in its owner's zones.
  *
  * **`control` is who a permanent can be handed to** (the sandbox's `control`, issue #1713): every
  * player still in the game but the one whose table it lies on. The reader among them is "Gain
@@ -99,8 +117,12 @@ export function cardMenu({
       const counter = (kind: string, delta: number) => () =>
         onAct({ type: "counters", id, kind, delta });
       const items: MenuItem[] = [];
-      if (onActivate !== undefined) {
-        items.push(action("activate", "Activate ability", () => onActivate(id)));
+      if (card.canActivate) {
+        items.push(
+          action("activate", "Activate ability", () =>
+            onActivate !== undefined ? onActivate(id) : onAct({ type: "activate", id }),
+          ),
+        );
       }
       // The rules' tap, which makes the mana; the sandbox's Tap below only turns the card.
       if (card.canTapForMana && !card.tapped) {
@@ -187,10 +209,15 @@ export function cardMenu({
       ];
     }
     case "command": {
-      const cast = action("cast", "Cast", () => onAct({ type: "play", id }));
-      if (!sandbox) return [cast];
+      // Cast is always the commander's (the sandbox's unpaid cast when the rules offer none), and
+      // an ability that works from the command zone (commander ninjutsu, CR 702.49d) follows it.
+      const rules = [action("cast", "Cast", () => onAct({ type: "play", id }))];
+      if (card.canActivate) {
+        rules.push(action("activate", "Activate ability", () => onAct({ type: "activate", id })));
+      }
+      if (!sandbox) return rules;
       return [
-        cast,
+        ...rules,
         { kind: "separator", id: "sep" },
         submenu("move", "Move to", [
           action("hand", "Hand", move("hand")),
@@ -269,19 +296,51 @@ function capitalised(name: string): string {
 }
 
 /**
- * The library's menu, on a right-click of the pile (a left click draws). **Every row is a sandbox
- * move**, a draw or a look as much as a mill, so the pile offers it only while those work
- * (`LibraryZone`'s `sandbox`) and it has no rows of the rules' to keep when they do not.
+ * The library's menu, on a right-click of the pile (a left click draws). **Every row but the top
+ * card's is a sandbox move**, a draw or a look as much as a mill, so they are offered only while
+ * those work (`sandbox`, `LibraryZone`'s).
+ *
+ * **The top card the reader may see heads it with the rules' rows** (`libraryTop`): its Cast — a
+ * land's Play — when the rules let the reader play it from there (Future Sight, Mystic Forge), and
+ * its Activate ability when one works from there (plot, CR 702.170), sandbox or not. With the
+ * sandbox off and neither offered the menu is empty, and the pile opens none.
  */
 export function libraryMenu({
   view,
+  sandbox,
   onAct,
   onLook,
 }: {
-  view: Pick<PlaytestSeat, "library">;
+  view: Pick<PlaytestSeat, "library" | "libraryTop">;
+  /** The sandbox's moves work now: it is on, the reader is playing or declaring, nothing is out. */
+  sandbox: boolean;
   onAct: Act;
   onLook: (l: ZoneLook) => void;
 }): MenuItem[] {
+  const top = view.libraryTop;
+  const rules: MenuItem[] = [];
+  if (top?.castable) {
+    const word = top.isLand ? "Play" : "Cast";
+    rules.push(action("castTop", `${word} ${top.name}`, () => onAct({ type: "play", id: top.id })));
+  }
+  if (top?.canActivate) {
+    rules.push(
+      action("activateTop", `Activate ${top.name}'s ability`, () =>
+        onAct({ type: "activate", id: top.id }),
+      ),
+    );
+  }
+  if (!sandbox) return rules;
+  const head: MenuItem[] = rules.length > 0 ? [...rules, { kind: "separator", id: "sepTop" }] : [];
+  return [...head, ...sandboxLibraryRows(view, onAct, onLook)];
+}
+
+/** The library's sandbox rows: draws, looks, mills, a search and a shuffle. */
+function sandboxLibraryRows(
+  view: Pick<PlaytestSeat, "library">,
+  onAct: Act,
+  onLook: (l: ZoneLook) => void,
+): MenuItem[] {
   const empty = view.library === 0;
   const look = (mode: ZoneLook["mode"], count: number) => () =>
     onLook({ zone: "library", mode, count });

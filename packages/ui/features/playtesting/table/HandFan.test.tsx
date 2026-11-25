@@ -6,6 +6,7 @@ import { startPointerDrag } from "@/test-drag";
 import { gameCard } from "./fixtures";
 import { HandFan } from "./HandFan";
 import { HAND_CARD_H, HAND_CARD_W, handRow } from "./layout";
+import { CASTABLE_RING } from "./ZonePile";
 
 /** Four cards that are not lands, so the hand is held in the order they come. */
 function four(): GameCard[] {
@@ -114,5 +115,20 @@ describe("HandFan's order (issue #1330)", () => {
     expect(held()).toEqual(["Bravo", "Charlie", "Alpha", "Delta"]);
     expect(onDrop).toHaveBeenCalledWith(expect.objectContaining({ from: "hand" }), "hand");
     expect(onAct).not.toHaveBeenCalled();
+  });
+});
+
+describe("HandFan's playable cards", () => {
+  it("rings a card the rules let the reader cast now, and says so, on its face alone", () => {
+    const bolt = gameCard("Lightning Bolt", { castable: true });
+    setup([bolt, gameCard("Counterspell")]);
+    const castable = cardOf("Lightning Bolt");
+    expect(castable).toHaveAccessibleName(/\. Playable now$/);
+    // On the face, which rises with the card pointed at, not on the button that stays put.
+    expect(castable.className).not.toContain(CASTABLE_RING);
+    expect(castable.lastElementChild?.className).toContain(CASTABLE_RING);
+    const other = cardOf("Counterspell");
+    expect(other).not.toHaveAccessibleName(/Playable now/);
+    expect(other.lastElementChild?.className).not.toContain(CASTABLE_RING);
   });
 });

@@ -6,6 +6,8 @@ import {
   pickCounter,
   pickedPower,
   pickOffer,
+  pickPosition,
+  pickRows,
   pickTitle,
   pickZones,
   togglePick,
@@ -29,6 +31,7 @@ function pick(over: Partial<PlaytestPick>): PlaytestPick {
     ordered: false,
     powerCap: null,
     zone: null,
+    split: null,
     ...over,
   };
 }
@@ -49,6 +52,57 @@ describe("the picker's words", () => {
     expect(pickZones(pick({ purpose: "scry" }))).toEqual({ picked: "Keep on top", rest: "Bottom" });
     expect(pickZones(pick({ purpose: "surveil" }))).toEqual({ picked: "Top", rest: "Graveyard" });
     expect(pickZones(pick({ purpose: "discard" }))).toBeNull();
+  });
+});
+
+describe("an order, a cost and piles", () => {
+  const all = { min: 3, max: 3, ordered: true };
+
+  it("puts a library's cards on the bottom in the order picked", () => {
+    const order = pick({ purpose: "order", ...all });
+    expect(pickTitle(order)).toBe("Put on the bottom in order");
+    expect(confirmLabel(order, 3)).toBe("Done");
+    expect(pickRows(order, [2])).toBeNull();
+    expect(pickPosition(order, 1)).toEqual({ badge: 2, words: "2" });
+    expect(pickPosition(order, -1)).toBeNull();
+  });
+
+  it("splits an order between the top and the bottom, the first `split` picked on top", () => {
+    const telling = pick({ purpose: "order", ...all, split: 1 });
+    expect(pickTitle(telling)).toBe("Put 1 on top and the rest on the bottom");
+    expect(pickTitle(pick({ purpose: "order", ...all, split: 3 }))).toBe(
+      "Put them on top in order",
+    );
+    expect(pickRows(telling, [3, 1])?.map((r) => [r.label, r.ids])).toEqual([
+      ["On top", [3]],
+      ["On the bottom", [1]],
+      ["To place", [2]],
+    ]);
+    expect(pickRows(telling, [])?.[1].empty).toBe(
+      "Once 1 is on top, the next cards clicked go on the bottom.",
+    );
+    expect(pickPosition(telling, 0)).toEqual({ badge: 1, words: "top 1" });
+    expect(pickPosition(telling, 1)).toEqual({ badge: 1, words: "bottom 1" });
+    expect(pickPosition(telling, 2)).toEqual({ badge: 2, words: "bottom 2" });
+  });
+
+  it("pays a cost with the cards picked", () => {
+    const pay = pick({ purpose: "pay", min: 2, max: 2 });
+    expect(pickTitle(pay)).toBe("Choose 2 to pay the cost");
+    expect(confirmLabel(pay, 2)).toBe("Pay");
+    expect(pickPosition(pay, 0)).toBeNull();
+  });
+
+  it("separates into two piles: the picked are pile A, the rest pile B", () => {
+    const pile = pick({ purpose: "pile" });
+    expect(pickTitle(pile)).toBe("Separate into two piles: picked cards are pile A");
+    expect(confirmLabel(pile, 1)).toBe("Make piles");
+    expect(pickZones(pile)).toEqual({ picked: "Pile A", rest: "Pile B" });
+    expect(pickRows(pile, [2])).toEqual([
+      { label: "Pile A", ids: [2], empty: "Click a card to put it in pile A." },
+      { label: "Pile B", ids: [1, 3], empty: "Every card is in pile A." },
+    ]);
+    expect(pickPosition(pile, 0)).toBeNull();
   });
 });
 

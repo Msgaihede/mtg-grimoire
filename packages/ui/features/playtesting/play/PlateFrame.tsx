@@ -1,10 +1,150 @@
-import { useRef, type JSX, type ReactNode } from "react";
-import { Crown, Skull } from "lucide-react";
+import { useRef, type JSX, type MouseEvent, type ReactNode } from "react";
+import {
+  Castle,
+  CircleDot,
+  Crown,
+  DoorOpen,
+  Gauge,
+  Landmark,
+  Radiation,
+  Skull,
+  Star,
+  Ticket,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 import { CardImage } from "@/components/CardImage";
-import type { PlaytestCommanderDamage, PlaytestPlayer } from "@/lib/ipc";
+import type {
+  GameCard,
+  PlaytestCommanderDamage,
+  PlaytestPlayer,
+  PlaytestSeat,
+  PlaytestView,
+} from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { cn } from "@/lib/utils";
+import { shownName } from "../table/Inspect";
 import { useAimTarget, type DropAim } from "../table/tableDrag";
+import { tableCards } from "./players";
+
+/** What of a seat's standing its plate draws beside poison: the wire's own fields. */
+export type Standing = Pick<
+  PlaytestSeat,
+  | "energy"
+  | "experience"
+  | "rad"
+  | "tickets"
+  | "speed"
+  | "monarch"
+  | "initiative"
+  | "cityBlessing"
+  | "ring"
+  | "dungeon"
+>;
+
+/** One mark of a player's standing on their plate: a glyph, its short text, and its words. */
+export interface StandingMark {
+  key: string;
+  icon: LucideIcon;
+  /** What the badge says beside its glyph: a count, or a word or two. */
+  text: string;
+  /** Its name for a screen reader: "3 energy", "The monarch". */
+  label: string;
+  /** Its words on hover, where they say more than `label` (a dungeon room's text). */
+  title?: string;
+  /** Gold for a designation a player holds (the monarch, the initiative); plain otherwise. */
+  tone: "plain" | "accent";
+}
+
+/**
+ * The marks a player's standing puts on their plate, in the order they are drawn: their counters
+ * (energy, experience, rad, tickets, CR 122.1), speed, the Ring's temptations, the monarch, the
+ * initiative, the city's blessing and the dungeon room they are in. **Only what a player has**:
+ * a count of 0, a speed of `null`, a designation not held draws nothing, so a game without any of
+ * it shows the plate as it always was.
+ */
+export function standingMarks(seat: Standing): StandingMark[] {
+  const marks: StandingMark[] = [];
+  const count = (key: string, icon: LucideIcon, n: number, word: string) => {
+    if (n > 0) marks.push({ key, icon, text: String(n), label: `${n} ${word}`, tone: "plain" });
+  };
+  count("energy", Zap, seat.energy, "energy");
+  count("experience", Star, seat.experience, "experience");
+  count("rad", Radiation, seat.rad, "rad");
+  count("tickets", Ticket, seat.tickets, seat.tickets === 1 ? "ticket" : "tickets");
+  if (seat.speed !== null) {
+    marks.push({
+      key: "speed",
+      icon: Gauge,
+      text: `Speed ${seat.speed}`,
+      label: `Speed ${seat.speed}`,
+      tone: "plain",
+    });
+  }
+  if (seat.ring > 0) {
+    marks.push({
+      key: "ring",
+      icon: CircleDot,
+      text: `Ring ×${seat.ring}`,
+      label: `Tempted by the Ring ${seat.ring === 1 ? "once" : `${seat.ring} times`}`,
+      tone: "plain",
+    });
+  }
+  if (seat.monarch) {
+    marks.push({
+      key: "monarch",
+      icon: Crown,
+      text: "Monarch",
+      label: "The monarch",
+      tone: "accent",
+    });
+  }
+  if (seat.initiative) {
+    marks.push({
+      key: "initiative",
+      icon: Castle,
+      text: "Initiative",
+      label: "Has the initiative",
+      tone: "accent",
+    });
+  }
+  if (seat.cityBlessing) {
+    marks.push({
+      key: "cityBlessing",
+      icon: Landmark,
+      text: "City's blessing",
+      label: "Has the city's blessing",
+      tone: "plain",
+    });
+  }
+  if (seat.dungeon !== null) {
+    const { name, room, roomText } = seat.dungeon;
+    const words = roomText === "" ? "" : ` — ${roomText}`;
+    marks.push({
+      key: "dungeon",
+      icon: DoorOpen,
+      text: room,
+      label: `In ${name}, ${room}`,
+      title: `${name}: ${room}${words}`,
+      tone: "plain",
+    });
+  }
+  return marks;
+}
+
+/**
+ * The permanents attached to a player (`enchantedBy`: a Curse, CR 303.4), found by id on every
+ * seat's battlefield — whoever controls them. An id no battlefield holds (a view between moves)
+ * is left out.
+ */
+export function cursesOn(
+  seat: Pick<PlaytestSeat, "enchantedBy">,
+  view: Pick<PlaytestView, "you" | "opponents">,
+): GameCard[] {
+  if (seat.enchantedBy.length === 0) return [];
+  const table = tableCards(view);
+  return seat.enchantedBy.flatMap((id) => table.filter((c) => c.id === id));
+}
 
 /**
  * A plate's frame: `data-plate`, which the combat's arrows and the life pops find it by (the
@@ -20,6 +160,11 @@ import { useAimTarget, type DropAim } from "../table/tableDrag";
  * **It is the player as a drop target too** (`aim`, issue #1335): a creature carried onto an
  * opponent's plate attacks them, and a spell or an ability carried onto any plate aims at that
  * player. The ring while a card it takes is over it is the click target's dashed one, solid.
+ *
+ * **The rest of the player's standing is beside the poison** (`standing`, {@link standingMarks}):
+ * energy, experience, rad and tickets, speed, the Ring, the monarch, the initiative, the city's
+ * blessing, the dungeon room — each only once the player has it — and the Curses attached to them
+ * (`curses`), each a chip with its name that points at the card for the preview.
  */
 export function PlateFrame({
   seat,
@@ -30,11 +175,22 @@ export function PlateFrame({
   compact = false,
   className,
   aim,
+  standing,
+  curses = NO_CURSES,
+  onPointCard,
+  onUnpoint,
   children,
 }: {
   seat: PlaytestPlayer;
   active: boolean;
   poison: number;
+  /** The player's counters and designations beyond poison; absent, none are drawn. */
+  standing?: Standing | null;
+  /** The permanents attached to the player (a Curse), resolved from `enchantedBy` ({@link cursesOn}). */
+  curses?: readonly GameCard[];
+  /** Point at a Curse's chip: its card in the preview. Without it the chip names it only. */
+  onPointCard?: (card: GameCard, e: MouseEvent) => void;
+  onUnpoint?: () => void;
   /** The commander damage this player has been dealt, one entry a commander. */
   commanderDamage?: readonly PlaytestCommanderDamage[];
   /** The commander damage that loses the game; `null` outside a Commander game. */
@@ -47,7 +203,9 @@ export function PlateFrame({
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const aimed = useAimTarget({ ref, aim });
-  const marked = poison > 0 || commanderDamage.length > 0;
+  const standingShown = standing == null ? NO_MARKS : standingMarks(standing);
+  const marked =
+    poison > 0 || commanderDamage.length > 0 || standingShown.length > 0 || curses.length > 0;
   return (
     <div
       ref={ref}
@@ -81,6 +239,39 @@ export function PlateFrame({
           )}
           {commanderDamage.map((c) => (
             <CommanderDamageMark key={c.id} damage={c} lethal={lethal} />
+          ))}
+          {standingShown.map((m) => (
+            <span
+              key={m.key}
+              data-standing={m.key}
+              aria-label={m.label}
+              title={m.title ?? m.label}
+              className={cn(
+                "inline-flex max-w-[160px] flex-none items-center gap-1 rounded-full border bg-surface px-2 text-xs/6 font-semibold whitespace-nowrap tabular-nums",
+                m.tone === "accent" ? "border-accent text-accent" : "border-border text-text",
+              )}
+            >
+              <m.icon className="size-3.5 flex-none" aria-hidden="true" />
+              <span aria-hidden="true" className="min-w-0 truncate">
+                {m.text}
+              </span>
+            </span>
+          ))}
+          {curses.map((c) => (
+            <span
+              key={c.id}
+              data-curse={c.id}
+              data-point={c.id}
+              aria-label={`Attached: ${shownName(c)}`}
+              title={shownName(c)}
+              onMouseEnter={onPointCard === undefined ? undefined : (e) => onPointCard(c, e)}
+              onMouseLeave={onUnpoint}
+              className="inline-flex max-w-[140px] flex-none cursor-default items-center rounded-full border border-border bg-surface px-2 text-xs/6 whitespace-nowrap text-text"
+            >
+              <span aria-hidden="true" className="min-w-0 truncate">
+                {shownName(c)}
+              </span>
+            </span>
           ))}
         </span>
       )}
@@ -129,3 +320,6 @@ function CommanderDamageMark({
     </span>
   );
 }
+
+const NO_CURSES: readonly GameCard[] = [];
+const NO_MARKS: readonly StandingMark[] = [];

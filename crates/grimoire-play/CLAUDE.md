@@ -54,7 +54,11 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 - **A game never sends what the reader may not see.** Each opponent's hand and library are counts
   in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). In a
   lobby's game that holds for every person: each guest is sent the view from its own seat
-  (`guest_steps`, `view_of`), never the host's.
+  (`guest_steps`, `view_of`), never the host's. **A hidden card is sent only when phase's own
+  projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
+  the reader may look at or that is revealed, an opponent's revealed or known hand card, a
+  face-down exile card they may look at. Never decide that in this crate, and never read a
+  position off the projection (it reorders a library's hidden cards).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
@@ -91,6 +95,11 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   watches mana being made; only `tap_for_mana` does that. The board's `sandboxEditsAt`
   (`packages/ui/features/playtesting/play/sandbox.ts`) mirrors the stages. Never check the sandbox
   action by action, and never let a hand edit reach the engine some other way.
+- **What the rules offer is phase's classification, never ours**: a play or a cast is phase's
+  play-or-cast family (`is_play`), an activation anything else of one object's, by phase's own
+  `GameAction::source_object` (`names_source`) — never a list of field names of this crate's.
+  `castable` and `can_activate` are set in every zone the rules offer from: the hand, the command
+  zone, a graveyard, exile, a library's top (Future Sight), the battlefield.
 - **What the rules let the reader cast is theirs to cast, whoever owns it** (issue #1713): every
   seat is drawn with the reader's `offers`, so an opponent's card in a graveyard or exile is
   `castable` when the rules offer it (Hostage Taker's hostage, a spell "from any graveyard"), and
@@ -105,10 +114,14 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The exceptions are `pick` — the few questions answered by
-  a set of cards, whose fields give the count — and `damage`, the attacker's division of combat
-  damage among its blockers (issue #1448), whose one listed answer is the engine's own split and
-  so never a `sole_answer`. `auto` must answer any prompt (phase-ai for the
-  reader). A question with one answer (`sole_answer`) is taken by `advance`, never asked.
+  a set of cards (or an order of them), whose fields give the count — `damage`, the attacker's
+  division of combat damage among its blockers (issue #1448), whose one listed answer is the
+  engine's own split and so never a `sole_answer`, `distribute`, any other division of an amount
+  among targets (`DistributeAmong`), for the same reason, and `name_entry`, a name the reader
+  types. An index an answer carries is put in words from the question's own data, by phase's
+  field names (`options`, `*_descriptions`), never by the kind of question. `auto` must answer
+  any prompt (phase-ai for the reader). A question with one answer (`sole_answer`) is taken by
+  `advance`, never asked.
 - **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no
   prompt, attack or block (`view_as(true)`), so the opponents' own questions never reach the page.
   The goldfish's steps are never frames of their own.

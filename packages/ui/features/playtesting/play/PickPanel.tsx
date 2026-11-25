@@ -1,4 +1,4 @@
-import { useState, type JSX, type MouseEvent } from "react";
+import { Fragment, useState, type JSX, type MouseEvent } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { GameCard, PlaytestAction, PlaytestCardRef, PlaytestPrompt } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
@@ -13,8 +13,9 @@ import {
   pickCounter,
   pickedPower,
   pickOffer,
+  pickPosition,
+  pickRows,
   pickTitle,
-  pickZones,
   togglePick,
 } from "./pick";
 import { cardOfRef } from "./prompt";
@@ -28,7 +29,10 @@ import { OptionChips } from "./PromptPanel";
  *
  * **A scry or a surveil sorts into two zones** — "Keep on top" and "Bottom", "Top" and
  * "Graveyard" — the picked ones in the order picked, numbered, the first on top: the order is the
- * answer (`ordered`). Any other ordered pick numbers its cards where they lie.
+ * answer (`ordered`). A separation into piles sorts the same way, into "Pile A" (the picked) and
+ * "Pile B". A split order (Telling Time: so many on top, the rest on the bottom) sorts into three
+ * — "On top", "On the bottom" and "To place" — the first `split` picked on top, each numbered in
+ * its own place. Any other ordered pick numbers its cards where they lie.
  *
  * **Over the middle of the board, and folding to its header**: the cards it asks about are drawn
  * in it, so it covers nothing it needs, and "Look at the table" folds it away for a reader who
@@ -66,7 +70,7 @@ export function PickPanel({
   const [folded, setFolded] = useState(false);
   const [others, setOthers] = useState(false);
   const title = pickTitle(pick);
-  const zones = pickZones(pick);
+  const rows = pickRows(pick, picked);
   const byId = new Map(pick.cards.map((c) => [c.id, c]));
   const powerOf = (id: number) => {
     const ref = byId.get(id);
@@ -142,6 +146,7 @@ export function PickPanel({
   const tile = (ref: PlaytestCardRef) => {
     const card = cardOfRef(ref, table);
     const at = picked.indexOf(ref.id);
+    const position = pickPosition(pick, at);
     const eligible = pick.eligible.includes(ref.id);
     const over =
       eligible && at < 0 && pick.powerCap !== null && !hasRoom(picked, ref.id, pick, powerOf);
@@ -151,7 +156,7 @@ export function PickPanel({
           type="button"
           aria-pressed={at >= 0}
           aria-disabled={!eligible || disabled}
-          aria-label={`${ref.name}${at >= 0 && pick.ordered ? `, ${at + 1}` : ""}${eligible ? "" : ", cannot be picked"}`}
+          aria-label={`${ref.name}${position === null ? "" : `, ${position.words}`}${eligible ? "" : ", cannot be picked"}`}
           onClick={() => {
             if (eligible && !disabled) setPicked((p) => togglePick(p, ref.id, pick, powerOf));
           }}
@@ -165,17 +170,17 @@ export function PickPanel({
             !eligible && "cursor-not-allowed opacity-40",
             over && "opacity-60",
             at >= 0 &&
-              !zones &&
+              rows === null &&
               "-translate-y-2 outline-2 outline-offset-2 outline-accent outline-solid",
           )}
         >
           <CardFace card={card} />
-          {at >= 0 && pick.ordered && (
+          {position !== null && (
             <span
               aria-hidden="true"
               className="absolute -top-2 -left-2 inline-flex size-6 items-center justify-center rounded-full bg-accent font-mono text-xs font-semibold text-accent-fg"
             >
-              {at + 1}
+              {position.badge}
             </span>
           )}
         </button>
@@ -228,23 +233,20 @@ export function PickPanel({
 
       {!folded && (
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-3 py-2.5">
-          {zones === null ? (
+          {rows === null ? (
             <ol className="m-0 flex list-none flex-wrap gap-2.5 p-0 pt-2">
               {pick.cards.map(tile)}
             </ol>
           ) : (
-            <>
-              {row(
-                picked.flatMap((id) => byId.get(id) ?? []),
-                zones.picked,
-                "Click a card to keep it here. The first click goes on top.",
-              )}
-              {row(
-                pick.cards.filter((c) => !picked.includes(c.id)),
-                zones.rest,
-                "Every card stays on top.",
-              )}
-            </>
+            rows.map((r) => (
+              <Fragment key={r.label}>
+                {row(
+                  r.ids.flatMap((id) => byId.get(id) ?? []),
+                  r.label,
+                  r.empty,
+                )}
+              </Fragment>
+            ))
           )}
           {others && prompt.options.length > 0 && (
             <OptionChips

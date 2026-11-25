@@ -1220,3 +1220,61 @@ describe("PlaytestBoard in a lobby game", () => {
     expect(screen.getByText("The lobby closed: the host left.")).toBeInTheDocument();
   });
 });
+
+describe("PlaytestBoard's cards the reader may see of hidden zones", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** Turn 5, the opponent's library top revealed and one card of their hand known. */
+  function seen(): { view: PlaytestView; top: GameCard; known: GameCard } {
+    const { view } = turnFive();
+    const top = gameCard("Forest");
+    const known = gameCard("Lightning Bolt");
+    const [opponent, ...rest] = view.opponents;
+    return {
+      top,
+      known,
+      view: {
+        ...view,
+        opponents: [
+          { ...opponent, libraryTop: top, libraryTopRevealed: true, hand: [known] },
+          ...rest,
+        ],
+      },
+    };
+  }
+
+  it("previews the opponent's revealed library top, which only their top is on the wire for", () => {
+    setup(seen().view);
+    const library = screen.getByRole("img", { name: /^The opponent's library, .*Forest on top/ });
+    fireEvent.mouseEnter(library);
+    act(() => vi.advanceTimersByTime(INSPECT_DELAY));
+    expect(screen.getByTestId("card-inspect")).toHaveTextContent(
+      "Forest · on top of the opponent's library",
+    );
+  });
+
+  it("previews a known card of the opponent's hand", () => {
+    const { view, known } = seen();
+    setup(view);
+    expect(
+      screen.getByRole("img", { name: /^The opponent's hand, .*known: Lightning Bolt$/ }),
+    ).toBeInTheDocument();
+    const card = document.querySelector(`[data-point="${known.id}"]`);
+    fireEvent.mouseEnter(card!);
+    act(() => vi.advanceTimersByTime(INSPECT_DELAY));
+    expect(screen.getByTestId("card-inspect")).toHaveTextContent(
+      "Lightning Bolt · in the opponent's hand",
+    );
+  });
+
+  it("casts the reader's castable library top with the sandbox off", () => {
+    const { view } = turnFive();
+    const top = gameCard("Llanowar Elves", { castable: true });
+    const { onAct } = setup({ ...view, you: { ...view.you, libraryTop: top } });
+    fireEvent.doubleClick(
+      screen.getByRole("button", { name: /^Library, .*Llanowar Elves on top/ }),
+    );
+    expect(onAct).toHaveBeenLastCalledWith({ type: "play", id: top.id });
+  });
+});

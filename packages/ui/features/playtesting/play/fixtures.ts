@@ -58,10 +58,23 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     emblems: [],
     library: 0,
     libraryCards: [],
+    libraryTop: null,
+    libraryTopRevealed: false,
     manaOpen: 0,
     mana: manaTable(),
     commanderDamage: [],
     deadOn: null,
+    energy: 0,
+    experience: 0,
+    rad: 0,
+    tickets: 0,
+    speed: null,
+    monarch: false,
+    initiative: false,
+    cityBlessing: false,
+    ring: 0,
+    dungeon: null,
+    enchantedBy: [],
     ...over,
   };
 }
@@ -173,6 +186,8 @@ export function turnFive(): TurnFive {
     canRedo: false,
     lobby: false,
     deciding: null,
+    dayNight: null,
+    landsLeft: 1,
   };
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
@@ -342,6 +357,9 @@ export function targetPrompt(): TurnFive {
         pick: null,
         keyword: null,
         damage: null,
+        shown: [],
+        distribute: null,
+        nameEntry: false,
       },
       stack: [],
     },
@@ -385,6 +403,9 @@ export function orderTriggersPrompt(): TurnFive {
         pick: null,
         keyword: null,
         damage: null,
+        shown: [],
+        distribute: null,
+        nameEntry: false,
       },
       stack: [],
     },
@@ -431,6 +452,9 @@ export function castChoicePrompt(): TurnFive {
         pick: null,
         keyword: null,
         damage: null,
+        shown: [],
+        distribute: null,
+        nameEntry: false,
       },
     },
   };
@@ -466,6 +490,9 @@ export function optionalEffectPrompt(): TurnFive {
         pick: null,
         keyword: null,
         damage: null,
+        shown: [],
+        distribute: null,
+        nameEntry: false,
       },
     },
   };
@@ -666,6 +693,9 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
         pick,
         keyword: null,
         damage: null,
+        shown: [],
+        distribute: null,
+        nameEntry: false,
       },
     },
   };
@@ -712,6 +742,9 @@ export function damagePrompt(trample = false): TurnFive {
         cancellable: false,
         pick: null,
         keyword: null,
+        shown: [],
+        distribute: null,
+        nameEntry: false,
         damage: {
           attacker: ref(t.goyf),
           total,
@@ -743,6 +776,7 @@ export function scryPick(): TurnFive {
     ordered: true,
     powerCap: null,
     zone: "libraryTop",
+    split: null,
   });
 }
 
@@ -765,6 +799,7 @@ export function discardPick(): TurnFive {
     ordered: false,
     powerCap: null,
     zone: "hand",
+    split: null,
   });
 }
 
@@ -791,6 +826,7 @@ export function keepPick(): TurnFive {
     ordered: false,
     powerCap: 4,
     zone: "battlefield",
+    split: null,
   });
 }
 
@@ -812,6 +848,7 @@ export function sacrificePick(): TurnFive {
     ordered: false,
     powerCap: null,
     zone: "battlefield",
+    split: null,
   });
 }
 
@@ -837,6 +874,7 @@ export function castPick(): TurnFive {
     ordered: false,
     powerCap: null,
     zone: "graveyard",
+    split: null,
   });
 }
 
@@ -1198,4 +1236,74 @@ export function playLocally(view: PlaytestView, action: PlaytestAction): Playtes
     default:
       return { ...view, you: playSeat(view.you, action) };
   }
+}
+
+/** {@link parityMarks}'s cards a test names. */
+export interface ParityMarks extends TurnFive {
+  /** The opponent's Curse on the reader. */
+  curse: GameCard;
+  /** The opponent's face-down creature (a morph): no name, no printing. */
+  morph: GameCard;
+  /** The opponent's permanent the rules let the reader activate. */
+  shared: GameCard;
+}
+
+/**
+ * Turn 5 with what phase's own client shows and the board once did not: night, the reader's one
+ * land drop, the reader goaded by nothing but cursed (an opponent's Curse attached to them, CR
+ * 303.4) and tempted once by the Ring, the opponent the monarch with 3 energy in a dungeon's room,
+ * a face-down morph of theirs, a damaged and goaded Ragavan, and a permanent of theirs any player
+ * may activate. Printings the fake lacks draw as tiles by name.
+ */
+export function parityMarks(): ParityMarks {
+  const t = turnFive();
+  const curse = gameCard("Curse of Opulence", {
+    typeLine: "Enchantment — Aura Curse",
+    lane: "other",
+    isToken: false,
+  });
+  const morph = gameCard("", {
+    cardId: null,
+    typeLine: "Creature",
+    lane: "creature",
+    isToken: false,
+    faceDown: true,
+    power: 2,
+    toughness: 2,
+    basePower: 2,
+    baseToughness: 2,
+  });
+  const shared = gameCard("Volrath's Dungeon", {
+    typeLine: "Enchantment",
+    lane: "other",
+    isToken: false,
+    canActivate: true,
+  });
+  const ragavan = { ...t.ragavan, damage: 1, marks: ["goaded" as const] };
+  const view: PlaytestView = {
+    ...t.view,
+    dayNight: "night",
+    landsLeft: 1,
+    you: { ...t.view.you, ring: 1, enchantedBy: [curse.id] },
+    opponents: [
+      {
+        ...t.view.opponents[0],
+        battlefield: [
+          ragavan,
+          morph,
+          ...t.view.opponents[0].battlefield.filter((c) => c.id !== t.ragavan.id),
+          curse,
+          shared,
+        ],
+        monarch: true,
+        energy: 3,
+        dungeon: {
+          name: "Lost Mine of Phandelver",
+          room: "Goblin Lair",
+          roomText: "Create a 1/1 red Goblin creature token.",
+        },
+      },
+    ],
+  };
+  return { ...t, view, ragavan, curse, morph, shared };
 }

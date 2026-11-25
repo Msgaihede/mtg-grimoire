@@ -2,10 +2,11 @@
 //! place a zone is, a seat's mana by type. Kept apart from the game (`playtest/session.rs`) because they read the
 //! engine's state and nothing of a session's — a card looks the same whoever's it is.
 
+use engine::game::combat::has_summoning_sickness;
 use engine::game::commander::commander_tax;
 use engine::game::game_object::GameObject;
 use engine::game::mana_sources::{activatable_mana_options, max_mana_yield};
-use engine::types::ability::ContinuousModification;
+use engine::types::ability::{ChosenAttribute, ContinuousModification};
 use engine::types::card_type::CoreType;
 use engine::types::identifiers::ObjectId;
 use engine::types::mana::ManaType;
@@ -13,7 +14,8 @@ use engine::types::zones::Zone;
 use engine::types::{EffectRef, GameState, Layer, PlayerId};
 
 use crate::view::{
-    CardCounter, CardEffect, EffectKind, GameCard, Lane, ManaByType, ManaKind, ManaTable, Place,
+    CardCounter, CardEffect, CardMark, EffectKind, GameCard, Lane, ManaByType, ManaKind, ManaTable,
+    Place,
 };
 
 /// One object as a board draws it. `card_id` is the printing to draw it by, which only the
@@ -74,6 +76,17 @@ pub(crate) fn game_card(
             .filter(|host| o.zone == Zone::Battlefield && state.battlefield.contains(host))
             .map(|host| host.0),
         foretold: o.zone == Zone::Exile && o.foretold,
+        face_down: o.face_down,
+        damage: if o.zone == Zone::Battlefield {
+            o.damage_marked
+        } else {
+            0
+        },
+        sick: o.zone == Zone::Battlefield && is_creature && has_summoning_sickness(o),
+        phased_out: o.zone == Zone::Battlefield && o.is_phased_out(),
+        class_level: o.class_level,
+        chosen: o.chosen_attributes.iter().filter_map(chosen_word).collect(),
+        marks: marks_of(state, o),
         // What the rules offer is the session's to say: it knows whose view this is.
         can_foretell: false,
         can_activate: false,
@@ -81,6 +94,52 @@ pub(crate) fn game_card(
         can_tap_for_mana: false,
         gaps,
     })
+}
+
+/// A public choice made for a permanent, in the engine's own word for it: `White`, `Elf`,
+/// `Forest`, `Lightning Bolt`. A secret number, a chosen player, a remembered card and the
+/// engine's own bookkeeping are left out — the first is hidden (CR 101.4), the others are not a
+/// word on the card.
+fn chosen_word(chosen: &ChosenAttribute) -> Option<String> {
+    Some(match chosen {
+        ChosenAttribute::Color(c) => format!("{c:?}"),
+        ChosenAttribute::CreatureType(t) | ChosenAttribute::CardName(t) => t.clone(),
+        ChosenAttribute::Label(t) => t.clone(),
+        ChosenAttribute::BasicLandType(t) => format!("{t:?}"),
+        ChosenAttribute::CardType(t) => format!("{t:?}"),
+        ChosenAttribute::OddOrEven(p) => format!("{p:?}"),
+        ChosenAttribute::RevealedNumber(n) => n.to_string(),
+        ChosenAttribute::TwoColors([a, b]) => format!("{a:?} {b:?}"),
+        ChosenAttribute::Keyword(k) => format!("{k:?}"),
+        _ => return None,
+    })
+}
+
+/// The rules' marks on a permanent that are neither counters nor effects.
+fn marks_of(state: &GameState, o: &GameObject) -> Vec<CardMark> {
+    if o.zone != Zone::Battlefield {
+        return Vec::new();
+    }
+    let mut marks = Vec::new();
+    if !o.goaded_by.is_empty() {
+        marks.push(CardMark::Goaded);
+    }
+    if o.monstrous {
+        marks.push(CardMark::Monstrous);
+    }
+    if o.is_renowned {
+        marks.push(CardMark::Renowned);
+    }
+    if o.is_saddled {
+        marks.push(CardMark::Saddled);
+    }
+    if o.is_suspected {
+        marks.push(CardMark::Suspected);
+    }
+    if state.ring_bearer.get(&o.controller) == Some(&Some(o.id)) {
+        marks.push(CardMark::RingBearer);
+    }
+    marks
 }
 
 /// The continuous effects on an object, one per source and kind, in layer order (issue #1327).

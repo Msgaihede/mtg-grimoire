@@ -53,27 +53,33 @@ use std::sync::Arc;
 
 use engine::ai_support::{has_meaningful_priority_action, legal_actions};
 use engine::database::combo_table::ComboTable;
+use engine::game::casting::activated_ability_definitions;
 use engine::game::combat::AttackTarget;
 use engine::game::coverage::card_face_gaps;
+use engine::game::dungeon;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::{activatable_mana_actions_for_player, max_mana_yield};
 use engine::game::printed_cards::intrinsic_etb_counters;
 use engine::game::turn_control::authorized_submitters;
+use engine::game::visibility::filter_state_for_viewer;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
     DeckList, PlayerDeckList,
 };
-use engine::types::ability::{EffectKind, KeywordAction, LibraryPosition, TargetRef};
+use engine::types::ability::{
+    EffectKind, KeywordAction, LibraryPosition, ObjectSelectionCardinality, TargetRef,
+};
 use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
-    CastOfferKind, CombatDamageAssignmentMode, ManaChoice, MulliganDecisionPhase, StackEntry,
-    StackEntryKind, WaitingFor,
+    CastOfferKind, CombatDamageAssignmentMode, DayNight, ManaChoice, MulliganDecisionPhase,
+    PayCostKind, StackEntry, StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
+use engine::types::player::PlayerCounterKind;
 use engine::types::statics::{CastFreeOrigin, CastFrequency, StaticMode};
 use engine::types::zones::Zone;
 use engine::types::{
@@ -96,9 +102,11 @@ use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
     PlaytestCombat, PlaytestCommanderDamage, PlaytestDamage, PlaytestDamageBlocker,
-    PlaytestDamageShare, PlaytestEmblem, PlaytestFrame, PlaytestHappened, PlaytestOption,
-    PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat,
-    PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
+    PlaytestDamageShare, PlaytestDayNight, PlaytestDesignation, PlaytestDistribute,
+    PlaytestDistributeTarget, PlaytestDungeon, PlaytestEmblem, PlaytestFrame, PlaytestHappened,
+    PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer,
+    PlaytestPrompt, PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep,
+    PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -904,7 +912,7 @@ impl Playtest {
         self.printings.retain(|id, p| {
             let alive = objects
                 .get(id)
-                .is_some_and(|o| card_name(names, &o.name) == p.name);
+                .is_some_and(|o| card_name(names, face_name(o)) == p.name);
             if !alive {
                 orphans
                     .entry((p.owner, p.name.clone()))
@@ -924,7 +932,7 @@ impl Playtest {
         bare.sort();
         for id in bare.into_iter().rev() {
             let o = &objects[&id];
-            let name = card_name(names, &o.name).to_string();
+            let name = card_name(names, face_name(o)).to_string();
             if let Some(card_id) = orphans.get_mut(&(o.owner, name.clone())).and_then(Vec::pop) {
                 self.printings.insert(
                     id,
@@ -954,6 +962,7 @@ impl Playtest {
             self.stage()
         };
         let offers = self.offers(watching);
+        let sight = self.sight();
         let combat = s.combat.as_ref().map(|c| {
             let mut blocks: Vec<PlaytestBlockPair> = c
                 .blocker_to_attacker
@@ -1070,14 +1079,14 @@ impl Playtest {
             phase: phase_of(s.phase),
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
-            you: self.seat(self.you, &offers),
+            you: self.seat(self.you, &offers, &sight),
             // The reader's offers on every seat: an opponent's card in a graveyard or exile is
             // castable when the rules let the reader cast it (issue #1713) — Hostage Taker's
             // hostage, Dire Fleet Daredevil's instant, a spell "from any graveyard".
             opponents: self
                 .others()
                 .into_iter()
-                .map(|p| self.seat(p, &offers))
+                .map(|p| self.seat(p, &offers, &sight))
                 .collect(),
             combat,
             attack,
@@ -1126,7 +1135,7 @@ impl Playtest {
                         name: if self.concealed(source) {
                             String::new()
                         } else {
-                            source.name.clone()
+                            face_name(source).to_string()
                         },
                         card_id: self.printing_of(shown),
                         seat: self.seat_of(entry.controller),
@@ -1152,6 +1161,31 @@ impl Playtest {
             deciding: (stage == PlaytestStage::Waiting)
                 .then(|| self.deciding().map(|p| self.seat_of(p)))
                 .flatten(),
+            day_night: s.day_night.map(|d| match d {
+                DayNight::Day => PlaytestDayNight::Day,
+                DayNight::Night => PlaytestDayNight::Night,
+            }),
+            lands_left: (s.active_player == self.you).then(|| {
+                u32::from(s.max_lands_per_turn).saturating_sub(u32::from(s.lands_played_this_turn))
+            }),
+        }
+    }
+
+    /// What phase's own projection for the reader's seat lets them see (`filter_state_for_viewer`,
+    /// the one its own board draws from): every hidden card the rules show them — a library's top
+    /// they may look at or that is revealed (CR 401.5), an opponent's hand card revealed or known
+    /// to them, a face-down card in exile they may look at or play. The board never decides that
+    /// for itself. Positions are read off the game, never off the projection, which reorders a
+    /// library's hidden cards.
+    fn sight(&self) -> Sight {
+        let projected = filter_state_for_viewer(&self.state, self.you);
+        Sight {
+            seen: projected
+                .objects
+                .iter()
+                .filter(|(_, o)| o.display_visible_to_viewer)
+                .map(|(id, _)| *id)
+                .collect(),
         }
     }
 
@@ -1177,11 +1211,10 @@ impl Playtest {
                 GameAction::Foretell { object_id, .. } => {
                     offers.foretell.insert(object_id);
                 }
-                GameAction::CastSpell { object_id, .. }
-                | GameAction::PlayLand { object_id, .. } => {
-                    offers.cast.insert(object_id);
+                ref play if is_play(play) => offers.cast.extend(play.source_object()),
+                ref ability if is_ability(ability) => {
+                    offers.activate.extend(ability.source_object())
                 }
-                ref ability if is_ability(ability) => offers.activate.extend(sources(ability)),
                 _ => {}
             }
         }
@@ -1189,50 +1222,49 @@ impl Playtest {
         offers
     }
 
-    fn seat(&self, seat: PlayerId, offers: &Offers) -> PlaytestSeat {
+    fn seat(&self, seat: PlayerId, offers: &Offers, sight: &Sight) -> PlaytestSeat {
         let s = &self.state;
         let player = &s.players[seat.0 as usize];
         let reader = seat == self.you;
-        // An opponent's face-down exiled cards (a foretold card, a hideaway card) are theirs
-        // alone to look at.
-        let mine = |id: &&ObjectId| {
-            s.objects
-                .get(id)
-                .is_some_and(|o| o.owner == seat && !self.concealed(o))
-        };
+        let mine = |id: &&ObjectId| s.objects.get(id).is_some_and(|o| o.owner == seat);
         let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
             ids.filter_map(|id| self.card(*id))
                 .map(|mut c| {
                     let id = ObjectId(c.id);
+                    c.castable = offers.cast.contains(&id);
+                    // Cycling and ninjutsu from the hand, unearth from the graveyard (issue
+                    // #1714), plot from the library's top, a permanent's own abilities.
+                    c.can_activate = offers.activate.contains(&id);
                     match s.objects.get(&id).map(|o| o.zone) {
-                        Some(Zone::Hand) => {
-                            c.can_foretell = offers.foretell.contains(&id);
-                            c.can_activate = offers.activate.contains(&id);
-                        }
-                        Some(Zone::Graveyard | Zone::Exile) => {
-                            c.castable = offers.cast.contains(&id);
-                            // Unearth, embalm, scavenge: abilities that work only from here
-                            // (issue #1714).
-                            c.can_activate = offers.activate.contains(&id);
-                        }
-                        Some(Zone::Battlefield) => {
-                            c.can_tap_for_mana = offers.mana.contains(&id);
-                        }
+                        Some(Zone::Hand) => c.can_foretell = offers.foretell.contains(&id),
+                        Some(Zone::Battlefield) => c.can_tap_for_mana = offers.mana.contains(&id),
                         _ => {}
                     }
                     c
                 })
                 .collect()
         };
+        // A hidden card in exile — face down, and not one the reader may look at (another
+        // player's foretold or hideaway card, the reader's own Necropotence exile): its back, so
+        // the pile counts it, never its name or printing.
+        let exiled = |id: &ObjectId| -> Option<GameCard> {
+            if sight.seen.contains(id) {
+                return cards(&mut std::iter::once(id)).pop();
+            }
+            game_card(s, *id, None, false, Vec::new()).map(hidden)
+        };
+        let library = s.library_of(seat);
+        let top = library.front().filter(|id| sight.seen.contains(id));
         PlaytestSeat {
             player: self.seat_of(seat),
             out: player.is_eliminated,
             life: player.life,
             poison: player.poison_counters,
+            // An opponent's hand: only the cards the reader may see, revealed or known.
             hand: if reader {
                 cards(&mut player.hand.iter())
             } else {
-                Vec::new()
+                cards(&mut player.hand.iter().filter(|id| sight.seen.contains(id)))
             },
             hand_count: player.hand.len() as u32,
             battlefield: cards(
@@ -1242,7 +1274,7 @@ impl Playtest {
                     .filter(|id| s.objects.get(id).is_some_and(|o| o.controller == seat)),
             ),
             graveyard: cards(&mut player.graveyard.iter()),
-            exile: cards(&mut s.exile.iter().filter(mine)),
+            exile: s.exile.iter().filter(mine).filter_map(exiled).collect(),
             command: cards(&mut s.command_zone.iter().filter(|id| {
                 s.objects
                     .get(id)
@@ -1256,6 +1288,8 @@ impl Playtest {
             } else {
                 Vec::new()
             },
+            library_top: top.and_then(|id| cards(&mut std::iter::once(id)).pop()),
+            library_top_revealed: top.is_some_and(|id| s.revealed_cards.contains(id)),
             mana_open: s
                 .battlefield
                 .iter()
@@ -1287,6 +1321,33 @@ impl Playtest {
             } else {
                 None
             },
+            energy: player.energy,
+            experience: player.player_counter(&PlayerCounterKind::Experience),
+            rad: player.player_counter(&PlayerCounterKind::Rad),
+            tickets: player.player_counter(&PlayerCounterKind::Ticket),
+            speed: player.speed,
+            monarch: s.monarch == Some(seat),
+            initiative: s.initiative == Some(seat),
+            city_blessing: s.city_blessing.contains(&seat),
+            ring: s.ring_level.get(&seat).copied().unwrap_or(0),
+            dungeon: s.dungeon_progress.get(&seat).and_then(|d| {
+                let id = d.current_dungeon?;
+                Some(PlaytestDungeon {
+                    name: dungeon::get_definition(id).name.to_string(),
+                    room: dungeon::room_name(id, d.current_room).to_string(),
+                    room_text: dungeon::room_text(id, d.current_room).to_string(),
+                })
+            }),
+            enchanted_by: s
+                .battlefield
+                .iter()
+                .filter(|id| {
+                    s.objects
+                        .get(id)
+                        .is_some_and(|o| o.attached_to.and_then(|t| t.as_player()) == Some(seat))
+                })
+                .map(|id| id.0)
+                .collect(),
         }
     }
 
@@ -1347,14 +1408,19 @@ impl Playtest {
                 ..c
             });
         }
-        let is_commander = !o.is_token && self.is_commander(o.owner, &o.name);
+        // The reader's own face-down card is the card underneath to them (CR 708.5).
+        let name = face_name(o);
+        let is_commander = !o.is_token && self.is_commander(o.owner, name);
         // A token is phase's preset, never a face of the deck's: its maker's gaps are the maker's.
         let gaps = if o.is_token {
             Vec::new()
         } else {
-            self.gaps.get(&o.name).cloned().unwrap_or_default()
+            self.gaps.get(name).cloned().unwrap_or_default()
         };
-        game_card(&self.state, id, self.printing_of(id), is_commander, gaps)
+        game_card(&self.state, id, self.printing_of(id), is_commander, gaps).map(|c| GameCard {
+            name: name.to_string(),
+            ..c
+        })
     }
 
     /// The printing to draw a card by; none for a card the reader may not see the face of.
@@ -1387,7 +1453,7 @@ impl Playtest {
             })
             .or_else(|| o.token_image_ref.as_ref().map(|r| r.scryfall_id.clone()))
             .or_else(|| {
-                let name = card_name(&self.card_names, &o.name);
+                let name = card_name(&self.card_names, face_name(o));
                 self.by_name.get(&(o.owner, name.to_string())).cloned()
             })
     }
@@ -1405,7 +1471,7 @@ impl Playtest {
             name: if self.concealed(o) {
                 String::new()
             } else {
-                o.name.clone()
+                face_name(o).to_string()
             },
             card_id: self.printing_of(id),
             text: None,
@@ -1429,7 +1495,7 @@ impl Playtest {
             .objects
             .get(&id)
             .filter(|o| self.visible(id) && !self.concealed(o))
-            .map(|o| o.name.clone())
+            .map(|o| face_name(o).to_string())
     }
 
     /// What set a trigger off, read from the event that did — phase's `{ "type": …, "data": { …
@@ -1650,12 +1716,15 @@ impl Playtest {
                     .actions
                     .iter()
                     .enumerate()
-                    .map(|(i, a)| self.option_of(i, a, &[]))
+                    .map(|(i, a)| self.option_of(i, a, &[], &Value::Null))
                     .collect(),
                 cancellable: true,
                 pick: None,
                 keyword: None,
                 damage: None,
+                shown: Vec::new(),
+                distribute: None,
+                name_entry: false,
             };
         }
         // The question's own data names its ability when it is about one — a trigger's targets —
@@ -1664,6 +1733,7 @@ impl Playtest {
         // fallback, and it is not always the trigger being asked about.
         let json = serde_json::to_value(&self.state.waiting_for).unwrap_or(Value::Null);
         let data = json.get("data");
+        let question = data.cloned().unwrap_or(Value::Null);
         let field = |key: &str| data.and_then(|d| d.get(key));
         let named = field("source_id")
             .and_then(Value::as_u64)
@@ -1701,13 +1771,102 @@ impl Playtest {
                 .answers()
                 .iter()
                 .enumerate()
-                .map(|(i, a)| self.option_of(i, a, &abilities))
+                .map(|(i, a)| self.option_of(i, a, &abilities, &question))
                 .collect(),
             cancellable: self.pending.is_some(),
             pick: self.pick().map(|(pick, _)| pick),
             keyword: self.keyword(),
             damage: self.damage(),
+            shown: self.shown(&question),
+            distribute: self.distribute(),
+            name_entry: self.name_entry(),
         }
+    }
+
+    /// The cards the question shows the reader without asking them to pick: the cards they are
+    /// privately looking at as it is asked (phase's `private_look_ids`, "look at the top card;
+    /// you may reveal it"), and the card a cast offer names (a cascade's or a discover's
+    /// `hit_card`), read by that field wherever the question's data has it.
+    fn shown(&self, question: &Value) -> Vec<PlaytestCardRef> {
+        let s = &self.state;
+        let mut ids: Vec<ObjectId> = if s.private_look_player == Some(self.you) {
+            s.private_look_ids.clone()
+        } else {
+            Vec::new()
+        };
+        fn hits(v: &Value, depth: u8, out: &mut Vec<ObjectId>) {
+            if depth == 0 {
+                return;
+            }
+            if let Value::Object(fields) = v {
+                for (key, value) in fields {
+                    match (key.as_str(), value.as_u64()) {
+                        ("hit_card", Some(id)) => out.push(ObjectId(id)),
+                        _ => hits(value, depth - 1, out),
+                    }
+                }
+            }
+        }
+        hits(question, 4, &mut ids);
+        let mut seen = HashSet::new();
+        ids.retain(|id| seen.insert(*id));
+        ids.into_iter().filter_map(|id| self.card_ref(id)).collect()
+    }
+
+    /// An amount the reader divides among targets as they choose (`DistributeAmong`, CR 601.2d):
+    /// a spell's damage among its targets as it is cast, or counters among creatures as it
+    /// resolves. The engine lists only an even split and a lethal-first one, so without this
+    /// the reader could not choose the division (issue #1448's reason, outside combat).
+    fn distribute(&self) -> Option<PlaytestDistribute> {
+        let WaitingFor::DistributeAmong {
+            player,
+            total,
+            targets,
+            unit,
+            scope,
+        } = &self.state.waiting_for
+        else {
+            return None;
+        };
+        if *player != self.you {
+            return None;
+        }
+        // CR 601.2d: each target announced is given at least one; as it resolves, a candidate
+        // left at none is not chosen.
+        let min = u32::from(scope.is_announced_targets());
+        Some(PlaytestDistribute {
+            total: *total,
+            unit: serde_json::to_value(unit)
+                .ok()
+                .as_ref()
+                .and_then(tag_of)
+                .unwrap_or_default(),
+            targets: targets
+                .iter()
+                .map(|t| match t {
+                    TargetRef::Object(id) => PlaytestDistributeTarget {
+                        card: self.card_ref(*id),
+                        player: None,
+                        min,
+                    },
+                    TargetRef::Player(p) => PlaytestDistributeTarget {
+                        card: None,
+                        player: Some(self.seat_of(*p)),
+                        min,
+                    },
+                })
+                .collect(),
+        })
+    }
+
+    /// The question takes a word of the reader's own as well as its listed options: a card's
+    /// name, a creature type (phase's `free_entry`).
+    fn name_entry(&self) -> bool {
+        matches!(
+            &self.state.waiting_for,
+            WaitingFor::NamedChoice { player, choice_type, .. }
+                if *player == self.you && choice_type.free_entry().is_some()
+        )
     }
 
     /// The reader's attacker's combat damage to divide among its blockers (CR 510.1c), and with
@@ -1914,6 +2073,7 @@ impl Playtest {
                 keep_count,
                 up_to,
                 selectable_cards,
+                kept_destination,
                 ..
             } if *player == self.you => {
                 let eligible = if selectable_cards.is_empty() {
@@ -1928,10 +2088,122 @@ impl Playtest {
                     eligible,
                     if *up_to { 0 } else { most },
                     most,
+                    // Kept back on the library (Sensei's Divining Top, "in any order"): the order
+                    // picked is the order they go.
+                    *kept_destination == Some(Zone::Library),
+                    PickAnswer::Cards,
+                )
+            }
+            // "Put the rest on the bottom in any order": every card, in the order picked.
+            WaitingFor::DigBottomOrder { player, cards, .. }
+            | WaitingFor::RevealUntilBottomOrder { player, cards, .. }
+            | WaitingFor::RippleBottomOrder { player, cards, .. }
+                if *player == self.you =>
+            {
+                (
+                    PlaytestPickPurpose::Order,
+                    all(cards),
+                    all(cards),
+                    cards.len(),
+                    cards.len(),
+                    true,
+                    PickAnswer::Cards,
+                )
+            }
+            // "Put N on top and the rest on the bottom, in any order" (Telling Time): every card,
+            // the first `top_count` picked on top. A split already made, whose order alone is
+            // the owner's (`OrderOnly`), keeps its one generic answer.
+            WaitingFor::DigRestSplitChoice {
+                player,
+                cards,
+                scope,
+                ..
+            } if *player == self.you && scope.partition_is_open() => (
+                PlaytestPickPurpose::Order,
+                all(cards),
+                all(cards),
+                cards.len(),
+                cards.len(),
+                true,
+                PickAnswer::Cards,
+            ),
+            // A cost paid with cards: sacrifice two creatures, discard a card, exile five other
+            // cards from the graveyard (escape), return a land. The engine lists only some sets.
+            WaitingFor::PayCost {
+                player,
+                kind,
+                choices,
+                count,
+                min_count,
+                ..
+            } if *player == self.you && pays_with_cards(kind) => {
+                let most = (*count).min(choices.len());
+                (
+                    PlaytestPickPurpose::Pay,
+                    all(choices),
+                    all(choices),
+                    if *min_count > 0 {
+                        (*min_count).min(most)
+                    } else {
+                        most
+                    },
+                    most,
                     false,
                     PickAnswer::Cards,
                 )
             }
+            // Proliferate (CR 701.34) and time travel: any of them, while every one is a
+            // permanent — a player among them is a question the generic options answer.
+            WaitingFor::ProliferateChoice { player, eligible }
+            | WaitingFor::TimeTravelChoice {
+                player, eligible, ..
+            } if *player == self.you
+                && eligible.iter().all(|t| matches!(t, TargetRef::Object(_))) =>
+            {
+                let ids: Vec<u64> = eligible
+                    .iter()
+                    .filter_map(|t| match t {
+                        TargetRef::Object(id) => Some(id.0),
+                        TargetRef::Player(_) => None,
+                    })
+                    .collect();
+                (
+                    PlaytestPickPurpose::Choose,
+                    ids.clone(),
+                    ids.clone(),
+                    0,
+                    ids.len(),
+                    false,
+                    PickAnswer::Targets,
+                )
+            }
+            // Separate into two piles (CR 700.3, Fact or Fiction): the picked cards are one pile.
+            WaitingFor::SeparatePilesPartition {
+                player, eligible, ..
+            } if *player == self.you => {
+                let ids: Vec<u64> = eligible.iter().map(|id| id.0).collect();
+                (
+                    PlaytestPickPurpose::Pile,
+                    ids.clone(),
+                    ids.clone(),
+                    0,
+                    ids.len(),
+                    false,
+                    PickAnswer::PileA,
+                )
+            }
+            // Untap up to so many of a group in the untap step (Winter Orb, Smoke).
+            WaitingFor::ChooseUntapSubset {
+                player, group, max, ..
+            } if *player == self.you => (
+                PlaytestPickPurpose::Choose,
+                all(group),
+                all(group),
+                0,
+                (*max).min(group.len()),
+                false,
+                PickAnswer::Cards,
+            ),
             WaitingFor::ChooseFromZoneChoice {
                 player,
                 cards,
@@ -1947,20 +2219,31 @@ impl Playtest {
                 false,
                 PickAnswer::Cards,
             ),
+            // Reveal one card, so many, or any number (Metalworker).
             WaitingFor::RevealChoice {
                 player,
                 cards,
                 optional,
+                cardinality,
                 ..
-            } if *player == self.you => (
-                PlaytestPickPurpose::Reveal,
-                all(cards),
-                all(cards),
-                usize::from(!*optional),
-                1,
-                false,
-                PickAnswer::Cards,
-            ),
+            } if *player == self.you => {
+                let (least, most) = match cardinality {
+                    ObjectSelectionCardinality::Exactly { count } => {
+                        let n = (*count as usize).min(cards.len());
+                        (if *optional { 0 } else { n }, n)
+                    }
+                    ObjectSelectionCardinality::AnyNumber => (0, cards.len()),
+                };
+                (
+                    PlaytestPickPurpose::Reveal,
+                    all(cards),
+                    all(cards),
+                    least,
+                    most,
+                    false,
+                    PickAnswer::Cards,
+                )
+            }
             WaitingFor::MultiTargetSelection {
                 player,
                 legal_targets,
@@ -2089,6 +2372,14 @@ impl Playtest {
             WaitingFor::KeepWithinTotalPowerChoice { cap, .. } => Some(*cap),
             _ => None,
         };
+        let split = match &self.state.waiting_for {
+            WaitingFor::DigRestSplitChoice { top_count, .. }
+                if purpose == PlaytestPickPurpose::Order =>
+            {
+                Some(*top_count as u32)
+            }
+            _ => None,
+        };
         // Where the cards lie, when they all lie in one place: a cast from the graveyard is
         // offered as one.
         let mut zones = shown
@@ -2112,9 +2403,54 @@ impl Playtest {
                 ordered,
                 power_cap,
                 zone,
+                split,
             },
             answer,
         ))
+    }
+
+    /// A division the reader made (`Distribute`), checked against the question: every share to
+    /// one of its targets, at least each target's least, all of the total and no more.
+    fn distribute_answer(&self, shares: &[PlaytestShare]) -> Result<GameAction, String> {
+        let distribute = self
+            .distribute()
+            .ok_or("This question is not a division of an amount.")?;
+        let mut given: Vec<(TargetRef, u32)> = Vec::new();
+        let eyes = self.eyes();
+        for share in shares {
+            let target = match (share.id, share.player) {
+                (Some(id), None) => TargetRef::Object(ObjectId(id)),
+                (None, Some(p)) => TargetRef::Player(eyes.player(p)),
+                _ => return Err(NOT_IN_GAME.into()),
+            };
+            let listed = distribute.targets.iter().any(|t| match &target {
+                TargetRef::Object(id) => t.card.as_ref().is_some_and(|c| c.id == id.0),
+                TargetRef::Player(p) => t.player == Some(eyes.seat(*p)),
+            });
+            if !listed || given.iter().any(|(t, _)| *t == target) {
+                return Err(NOT_IN_GAME.into());
+            }
+            given.push((target, share.amount));
+        }
+        let sum: u32 = given.iter().map(|(_, n)| n).sum();
+        if sum != distribute.total {
+            return Err(format!(
+                "Divide all {} — {} {} given.",
+                distribute.total,
+                sum,
+                if sum == 1 { "is" } else { "are" }
+            ));
+        }
+        let least = distribute.targets.first().map_or(0, |t| t.min);
+        if least > 0
+            && (given.len() < distribute.targets.len() || given.iter().any(|(_, n)| *n < least))
+        {
+            return Err(format!("Each target is given at least {least}."));
+        }
+        given.retain(|(_, n)| *n > 0);
+        Ok(GameAction::DistributeAmong {
+            distribution: given,
+        })
     }
 
     /// The picked cards' power added up, each its current power (CR 208.3) as the engine counts
@@ -2145,6 +2481,10 @@ impl Playtest {
                 return None;
             }
         }
+        // The engine lists an even split and a lethal-first one; the reader has more.
+        if self.distribute().is_some_and(|d| d.targets.len() > 1) {
+            return None;
+        }
         if let Some((pick, answer)) = self.pick() {
             let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
             return (all && (!pick.ordered || pick.min <= 1))
@@ -2166,11 +2506,15 @@ impl Playtest {
     /// `abilities` is the question's own list (`abilities`): an answer that counts into it —
     /// `order`, a permutation of it; `index`, one of it — names those abilities, each its source
     /// card with the ability's words, rather than bare numbers.
+    /// `question` is the question's own data (`WaitingFor`'s `data`), which names what an index
+    /// counts into: a cast's `options`, a modal spell's `mode_descriptions`, a pile's cards, the
+    /// faces of a modal card — read by those field names, never by the kind of question.
     fn option_of(
         &self,
         index: usize,
         action: &GameAction,
         abilities: &[PlaytestCardRef],
+        question: &Value,
     ) -> PlaytestOption {
         let json = serde_json::to_value(action).unwrap_or(Value::Null);
         let kind = json
@@ -2186,6 +2530,13 @@ impl Playtest {
         let mut label = None;
         let mut named: Vec<PlaytestCardRef> = Vec::new();
         let ability = |v: &Value| v.as_u64().and_then(|i| abilities.get(i as usize)).cloned();
+        let phrases = phrases(question);
+        let phrase = |v: &Value| v.as_u64().and_then(|i| phrases.get(i as usize)).cloned();
+        let player = |v: &Value, players: &mut Vec<PlaytestPlayer>| {
+            if let Some(p) = v.as_u64() {
+                players.push(self.seat_of(PlayerId(p as u8)));
+            }
+        };
         if let Value::Object(fields) = &data {
             for (key, value) in fields {
                 match key.as_str() {
@@ -2197,8 +2548,15 @@ impl Playtest {
                     // target of the spell, `null` for each left as it is (issue #1520).
                     "object_id" | "source_id" | "keep" | "target_id" | "equipment_id"
                     | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept"
-                    | "new_targets" | "selection" => {
+                    | "new_targets" | "selection" | "creature_to_return" | "creature_id"
+                    | "hand_object" | "ninjutsu_object_id" | "partner" | "partner_id"
+                    | "source" | "spacecraft_id" | "mount_id" => {
                         collect_refs(value, self.eyes(), &mut ids, &mut players);
+                    }
+                    // A player the answer names by number: an opponent to choose, a gift's
+                    // recipient, a battle's protector.
+                    "opponent" | "player" | "player_id" | "protector" | "recipient" => {
+                        player(value, &mut players)
                     }
                     "order" if !abilities.is_empty() => {
                         named = value
@@ -2207,14 +2565,68 @@ impl Playtest {
                             .unwrap_or_default();
                     }
                     "index" if !abilities.is_empty() => named.extend(ability(value)),
-                    "value" | "index" | "ability_index" => number = value.as_i64(),
+                    // An index into the question's own list of options (a cast's variants, a
+                    // branch, a mode): the option's words.
+                    "index" => {
+                        number = value.as_i64();
+                        label = value
+                            .as_u64()
+                            .and_then(|i| question.get("options")?.get(i as usize))
+                            .and_then(option_word)
+                            .or_else(|| phrase(value));
+                    }
+                    "value" | "ability_index" | "room_index" | "option_index"
+                    | "candidate_index" | "amount" | "generic" => number = value.as_i64(),
+                    // A modal spell's modes: each chosen mode's words, joined.
                     "indices" => {
                         number = value
                             .as_array()
                             .and_then(|v| v.first())
-                            .and_then(Value::as_i64)
+                            .and_then(Value::as_i64);
+                        let words: Vec<String> = value
+                            .as_array()
+                            .map(|v| v.iter().filter_map(phrase).collect())
+                            .unwrap_or_default();
+                        if !words.is_empty() {
+                            label = Some(words.join(" + "));
+                        }
                     }
-                    "accept" | "pay" | "top" => yes = value.as_bool(),
+                    "accept" | "pay" | "top" | "exert" | "untap" | "creature" | "play_first" => {
+                        yes = value.as_bool()
+                    }
+                    // A modal double-faced card's face (a Pathway): the face's name.
+                    "back_face" => {
+                        let card = question
+                            .get("object_id")
+                            .and_then(Value::as_u64)
+                            .and_then(|id| self.state.objects.get(&ObjectId(id)));
+                        label = match (card, value.as_bool()) {
+                            (Some(o), Some(true)) => o.back_face.as_ref().map(|b| b.name.clone()),
+                            (Some(o), Some(false)) => Some(o.name.clone()),
+                            _ => None,
+                        };
+                        yes = value.as_bool();
+                    }
+                    // A pile (Fact or Fiction's): its name, and the cards in it.
+                    "pile" => {
+                        label = tag_of(value);
+                        let key = match label.as_deref() {
+                            Some("A") => "pile_a",
+                            _ => "pile_b",
+                        };
+                        if let Some(cards) = question.get("current").and_then(|c| c.get(key)) {
+                            collect_refs(cards, self.eyes(), &mut ids, &mut players);
+                        }
+                    }
+                    // A word the answer names: a door and what is done to it, a dungeon, a side,
+                    // a color, a mana type.
+                    "door" | "op" | "dungeon" | "side" | "color" | "mana_type" | "slot" => {
+                        let word = tag_of(value);
+                        label = match (label.take(), word) {
+                            (Some(a), Some(b)) => Some(format!("{a} {b}")),
+                            (a, b) => a.or(b),
+                        };
+                    }
                     // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`. A
                     // mana color's answer is told by its mana (issue #1363): `SingleColor`'s
                     // `Black`, or `Combination`'s types in order, a space between.
@@ -2227,14 +2639,39 @@ impl Playtest {
         if kind == "CastSpell" && ids.len() > 1 {
             ids.remove(0);
         }
+        // An optional cost (kicker, gift, bargain): the first answer pays it, the second declines.
+        if kind == "DecideOptionalCost" {
+            let cost = question.get("cost").and_then(tag_of);
+            if matches!(cost.as_deref(), Some("Optional" | "Kicker")) {
+                yes = number.map(|n| n == 0);
+                number = None;
+            }
+        }
+        // A permanent's ability by its number: the ability's own words, on its card.
+        let text = match action {
+            GameAction::ActivateAbility {
+                source_id,
+                ability_index,
+                ..
+            } => activated_ability_definitions(&self.state, *source_id)
+                .into_iter()
+                .find(|(i, _)| i == ability_index)
+                .and_then(|(_, d)| d.description)
+                .filter(|t| !t.is_empty()),
+            _ => None,
+        };
+        let mut cards: Vec<PlaytestCardRef> = ids
+            .into_iter()
+            .filter_map(|id| self.card_ref(id))
+            .chain(named)
+            .collect();
+        if let (Some(text), [card]) = (text, cards.as_mut_slice()) {
+            card.text = Some(text);
+        }
         PlaytestOption {
             index: index as u32,
             kind,
-            cards: ids
-                .into_iter()
-                .filter_map(|id| self.card_ref(id))
-                .chain(named)
-                .collect(),
+            cards,
             players,
             number,
             yes,
@@ -2563,6 +3000,31 @@ impl Playtest {
                 self.apply(self.you, answer, out)?;
                 self.advance(out)
             }
+            PlaytestAction::Distribute { shares } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() {
+                    return Err(NO_PROMPT.into());
+                }
+                let answer = self.distribute_answer(&shares)?;
+                self.apply(self.you, answer, out)?;
+                self.advance(out)
+            }
+            PlaytestAction::Name { text } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() || !self.name_entry() {
+                    return Err(NO_PROMPT.into());
+                }
+                let text = text.trim().to_string();
+                let accepted = match &self.state.waiting_for {
+                    WaitingFor::NamedChoice { choice_type, .. } => {
+                        choice_type.accepts_free_entry_answer(&text)
+                    }
+                    _ => None,
+                };
+                if accepted != Some(true) {
+                    return Err(format!("“{text}” can't be named here."));
+                }
+                self.apply(self.you, GameAction::ChooseOption { choice: text }, out)?;
+                self.advance(out)
+            }
             PlaytestAction::Cancel => {
                 if choice.is_some() {
                     return Ok(());
@@ -2725,6 +3187,10 @@ impl Playtest {
             }
             return self.activate(id, out);
         }
+        // A command-zone card the rules offer no cast of but an ability (commander ninjutsu).
+        if ways.is_empty() && zone == Zone::Command && !self.abilities_of(id).is_empty() {
+            return self.activate(id, out);
+        }
         if ways.is_empty() && by_hand {
             return self.unpaid(id, out);
         }
@@ -2804,15 +3270,11 @@ impl Playtest {
         }
     }
 
-    /// Every legal play or cast of `id`, from wherever it is.
+    /// Every legal play or cast of `id`, from wherever it is (`is_play`).
     fn plays_of(&self, id: ObjectId) -> Vec<GameAction> {
         self.answers()
             .into_iter()
-            .filter(|a| match a {
-                GameAction::PlayLand { object_id, .. }
-                | GameAction::CastSpell { object_id, .. } => *object_id == id,
-                _ => false,
-            })
+            .filter(|a| is_play(a) && a.source_object() == Some(id))
             .collect()
     }
 
@@ -2839,11 +3301,17 @@ impl Playtest {
         })
     }
 
-    /// The rules only: a permanent's one activated ability, a question about which, or a
-    /// refusal.
+    /// The rules only: a card's one activated ability, a question about which, or a refusal. A
+    /// card the reader neither owns nor controls is activated only when the rules offer it — an
+    /// opponent's permanent "any player may activate" (Oft-Nabbed Goat), as `play` takes an
+    /// opponent's card the rules let the reader cast.
     fn activate(&mut self, id: ObjectId, out: &mut Log) -> Result<(), String> {
-        let name = self.own(id)?.name.clone();
         let ways = self.abilities_of(id);
+        let name = if self.own(id).is_err() && !ways.is_empty() {
+            self.editable(id)?.name.clone()
+        } else {
+            self.own(id)?.name.clone()
+        };
         self.take_one(ways, "AbilityChoice", name.clone(), out, || {
             format!("{name} has no ability you can activate right now.")
         })
@@ -3873,6 +4341,35 @@ fn is_sandbox(action: &PlaytestAction) -> bool {
     )
 }
 
+/// The name of the card an object is: a face-down card's is the card underneath (`back_face`,
+/// as phase writes it for whoever may look, CR 708.5) — the session decides who that is.
+fn face_name(o: &engine::game::GameObject) -> &str {
+    match (&o.back_face, o.face_down) {
+        (Some(back), true) => &back.name,
+        _ => &o.name,
+    }
+}
+
+/// A card the reader may not look at: its back alone, with no name, printing or gaps.
+fn hidden(c: GameCard) -> GameCard {
+    GameCard {
+        name: String::new(),
+        card_id: None,
+        type_line: String::new(),
+        face_down: true,
+        counters: Vec::new(),
+        effects: Vec::new(),
+        chosen: Vec::new(),
+        gaps: Vec::new(),
+        ..c
+    }
+}
+
+/// What the reader's seat may see of the hidden cards (`Playtest::sight`).
+struct Sight {
+    seen: HashSet<ObjectId>,
+}
+
 /// The card an object of this name is a face of (`Playtest::card_names`): the card's own name
 /// for a back face, `name` itself otherwise.
 fn card_name<'a>(card_names: &'a HashMap<String, String>, name: &'a str) -> &'a str {
@@ -3942,6 +4439,8 @@ enum PickAnswer {
     KeptPermanents,
     /// `FreeCastWindowChoice`: the one card cast, or none to close the window.
     FreeCast,
+    /// `SubmitPilePartition`: the cards of the first pile.
+    PileA,
 }
 
 /// A pick's answer: the cards, as the question takes them.
@@ -3960,7 +4459,25 @@ fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
         PickAnswer::FreeCast => GameAction::FreeCastWindowChoice {
             selection: ids.first().copied().map(ObjectId),
         },
+        PickAnswer::PileA => GameAction::SubmitPilePartition { pile_a: objects() },
     }
+}
+
+/// A cost whose payment is a set of the cards it lists (`PayCost`'s `choices`), which a pick
+/// answers: sacrificed, discarded, exiled, returned or revealed. A cost counted otherwise — a
+/// total of power to tap, counters to remove, mana — keeps its generic answers.
+fn pays_with_cards(kind: &PayCostKind) -> bool {
+    matches!(
+        kind,
+        PayCostKind::Discard
+            | PayCostKind::Sacrifice
+            | PayCostKind::ReturnToHand
+            | PayCostKind::ExileFromZone { .. }
+            | PayCostKind::ExilePermanent { .. }
+            | PayCostKind::Reveal {
+                shared_quality: None
+            }
+    )
 }
 
 /// What an attack is at, by id: a planeswalker's or a battle's, `None` for a player.
@@ -4035,6 +4552,50 @@ fn mana_source(action: &GameAction) -> Option<ObjectId> {
     }
 }
 
+/// The phrases a question lists for its options, by phase's naming: its first list of words
+/// under a key ending `_descriptions` — a modal spell's `mode_descriptions`, a branch's
+/// `branch_descriptions` — searched two levels into its data.
+fn phrases(question: &Value) -> Vec<String> {
+    fn find(v: &Value, depth: u8) -> Option<Vec<String>> {
+        let Value::Object(fields) = v else {
+            return None;
+        };
+        let words = fields
+            .iter()
+            .filter(|(key, _)| key.ends_with("_descriptions"))
+            .find_map(|(_, value)| {
+                let items = value.as_array()?;
+                let words: Vec<String> = items
+                    .iter()
+                    .filter_map(|w| w.as_str().map(str::to_string))
+                    .collect();
+                (!words.is_empty() && words.len() == items.len()).then_some(words)
+            });
+        if words.is_some() || depth == 0 {
+            return words;
+        }
+        fields.values().find_map(|value| find(value, depth - 1))
+    }
+    find(question, 2).unwrap_or_default()
+}
+
+/// One of a question's `options`, in words: a cast's variant and the face it casts (`Omen`,
+/// `Normal Back`), a named option's name, or a plain word.
+fn option_word(option: &Value) -> Option<String> {
+    if let Some(variant) = option.get("variant").and_then(tag_of) {
+        let face = option.get("face").and_then(tag_of);
+        return Some(match face.as_deref() {
+            None | Some("Current" | "Front") => variant,
+            Some(face) => format!("{variant} {face}"),
+        });
+    }
+    option
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| tag_of(option))
+}
+
 /// A word on the wire: a string, or the tag of one of phase's `#[serde(tag = "type")]` enums.
 fn tag_of(value: &Value) -> Option<String> {
     value
@@ -4061,44 +4622,35 @@ fn mana_of(value: &Value) -> Option<String> {
     }
 }
 
-/// Whether a legal action is an activation (`abilities_of`): anything but passing, a play, a
-/// cast or a foretelling, which the board offers rows of their own.
-fn is_ability(action: &GameAction) -> bool {
-    !matches!(
+/// Whether a legal action plays or casts its card — phase's own play-or-cast family, as its
+/// board's `isPlayOrCastAction` reads it: a land, a cast, a free cast (Zaffai), a miracle, madness,
+/// a sneak or web-slinging cast, a face-down cast (morph, disguise).
+fn is_play(action: &GameAction) -> bool {
+    matches!(
         action,
-        GameAction::PassPriority
-            | GameAction::PlayLand { .. }
+        GameAction::PlayLand { .. }
             | GameAction::CastSpell { .. }
-            | GameAction::Foretell { .. }
+            | GameAction::CastSpellForFree { .. }
+            | GameAction::CastSpellAsMiracle { .. }
+            | GameAction::CastSpellAsMadness { .. }
+            | GameAction::CastSpellAsSneak { .. }
+            | GameAction::CastSpellAsWebSlinging { .. }
+            | GameAction::PlayFaceDown { .. }
     )
 }
 
-/// Whether an action is something `id` does: its data names `id` as the source, the equipment,
-/// the vehicle or the object acted on.
-fn names_source(action: &GameAction, id: ObjectId) -> bool {
-    sources(action).contains(&id)
+/// Whether a legal action is an activation (`abilities_of`): anything of one object's (phase's
+/// `source_object`) but a play, a cast or a foretelling, which the board offers rows of their own.
+fn is_ability(action: &GameAction) -> bool {
+    action.source_object().is_some()
+        && !is_play(action)
+        && !matches!(action, GameAction::Foretell { .. })
 }
 
-/// The objects an action is something of (`names_source`): whatever its data names as the
-/// source, the equipment, the vehicle or the object acted on.
-fn sources(action: &GameAction) -> Vec<ObjectId> {
-    let Ok(json) = serde_json::to_value(action) else {
-        return Vec::new();
-    };
-    let Some(Value::Object(data)) = json.get("data") else {
-        return Vec::new();
-    };
-    [
-        "source_id",
-        "equipment_id",
-        "vehicle_id",
-        "spacecraft_id",
-        "mount_id",
-        "object_id",
-    ]
-    .iter()
-    .filter_map(|key| data.get(*key).and_then(Value::as_u64).map(ObjectId))
-    .collect()
+/// Whether an action is something `id` does — phase's own `source_object`, which classifies every
+/// answer: the source, the equipment, the vehicle, the ninjutsu card, the object acted on.
+fn names_source(action: &GameAction, id: ObjectId) -> bool {
+    action.source_object() == Some(id)
 }
 
 /// What a run of the engine's events comes to, as the log's facts. `state` is the game after
@@ -4150,6 +4702,23 @@ pub(super) fn tell(
             GameEvent::LandPlayed { object_id, .. } => Some(*object_id),
             _ => None,
         })
+        .collect();
+    // A card that goes from a library to a hand is a draw only when it was drawn (CR 121.1); a
+    // tutor's find is told as a move, and named only to its owner or once it was revealed.
+    let drawn: BTreeSet<ObjectId> = events
+        .iter()
+        .filter_map(|e| match e {
+            GameEvent::CardDrawn { object_id, .. } => Some(*object_id),
+            _ => None,
+        })
+        .collect();
+    let revealed: BTreeSet<&str> = events
+        .iter()
+        .flat_map(|e| match e {
+            GameEvent::CardsRevealed { card_names, .. } => card_names.as_slice(),
+            _ => &[],
+        })
+        .map(String::as_str)
         .collect();
     // A foretold card's move to exile is told as its foretelling, which hides an opponent's card.
     let foretold: BTreeSet<ObjectId> = events
@@ -4240,9 +4809,18 @@ pub(super) fn tell(
                 let whose = eyes.seat(owner);
                 let hidden = whose != PlaytestPlayer::You;
                 match (from, to) {
-                    (Zone::Library, Zone::Hand) => out.push(PlaytestHappened::Drew {
+                    (Zone::Library, Zone::Hand) if drawn.contains(object_id) => {
+                        out.push(PlaytestHappened::Drew {
+                            seat: whose,
+                            name: (!hidden).then(|| record.name.clone()),
+                        })
+                    }
+                    (Zone::Library, Zone::Hand) => out.push(PlaytestHappened::Moved {
                         seat: whose,
-                        name: (!hidden).then(|| record.name.clone()),
+                        name: (!hidden || revealed.contains(record.name.as_str()))
+                            .then(|| record.name.clone()),
+                        from: from_place,
+                        to: to_place,
                     }),
                     // A card going back to a hidden zone the reader cannot follow.
                     (Zone::Hand, Zone::Library) if hidden => {}
@@ -4376,6 +4954,70 @@ pub(super) fn tell(
                     out.push(PlaytestHappened::Emblem {
                         seat: eyes.seat(o.controller),
                         source: o.emblem_source.as_ref().map(|e| e.name.clone()),
+                    });
+                }
+            }
+            GameEvent::CardsRevealed {
+                player, card_names, ..
+            } if !card_names.is_empty() => out.push(PlaytestHappened::Revealed {
+                seat: eyes.seat(*player),
+                names: card_names.clone(),
+            }),
+            GameEvent::SpellCountered {
+                object_id,
+                countered_by,
+                ..
+            } => {
+                let o = state.objects.get(object_id);
+                out.push(PlaytestHappened::Countered {
+                    seat: o.map_or(PlaytestPlayer::Opponent, |o| eyes.seat(o.owner)),
+                    name: name(object_id),
+                    by: name(countered_by),
+                });
+            }
+            GameEvent::CoinFlipped { player_id, won } => out.push(PlaytestHappened::Flipped {
+                seat: eyes.seat(*player_id),
+                won: *won,
+            }),
+            GameEvent::DieRolled {
+                player_id,
+                sides,
+                result,
+                ..
+            } => out.push(PlaytestHappened::Rolled {
+                seat: eyes.seat(*player_id),
+                sides: u32::from(*sides),
+                result: result.map(u32::from),
+            }),
+            GameEvent::CardNamed {
+                player_id, name, ..
+            } => out.push(PlaytestHappened::Named {
+                seat: eyes.seat(*player_id),
+                name: name.clone(),
+            }),
+            GameEvent::MonarchChanged { player_id } => out.push(PlaytestHappened::Became {
+                seat: eyes.seat(*player_id),
+                what: PlaytestDesignation::Monarch,
+            }),
+            GameEvent::InitiativeTaken { player_id } => out.push(PlaytestHappened::Became {
+                seat: eyes.seat(*player_id),
+                what: PlaytestDesignation::Initiative,
+            }),
+            GameEvent::CityBlessingGained { player_id } => out.push(PlaytestHappened::Became {
+                seat: eyes.seat(*player_id),
+                what: PlaytestDesignation::CityBlessing,
+            }),
+            GameEvent::RingTemptsYou { player_id, .. } => out.push(PlaytestHappened::Became {
+                seat: eyes.seat(*player_id),
+                what: PlaytestDesignation::RingTempted,
+            }),
+            GameEvent::DayNightChanged { .. } => {
+                if let Some(now) = state.day_night {
+                    out.push(PlaytestHappened::DayNight {
+                        now: match now {
+                            DayNight::Day => PlaytestDayNight::Day,
+                            DayNight::Night => PlaytestDayNight::Night,
+                        },
                     });
                 }
             }

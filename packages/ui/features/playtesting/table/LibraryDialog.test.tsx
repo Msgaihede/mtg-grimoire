@@ -3,9 +3,10 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { PlaytestAction, PlaytestSeat } from "@/lib/ipc";
-import { gameCard, playLocally, turnNineSeat } from "./fixtures";
+import { gameCard, hiddenCard, playLocally, turnNineSeat } from "./fixtures";
 import { LibraryDialog } from "./LibraryDialog";
 import type { ZoneLook } from "./types";
+import { CASTABLE_RING } from "./ZonePile";
 
 /** Six cards of six names, top first, so every card's group is named once. */
 const NAMES = ["Forest", "Island", "Sol Ring", "Counterspell", "Rhystic Study", "Tarmogoyf"];
@@ -400,6 +401,49 @@ describe("LibraryDialog", () => {
       const { onUnpoint } = point({ zone: "graveyard", mode: "browse", count: "all" });
       fireEvent.scroll(screen.getByRole("list").parentElement!);
       expect(onUnpoint).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("face-down cards in exile (CR 708)", () => {
+    it("draws one the reader may not look at as a back, counted and never previewed", () => {
+      const onPoint = vi.fn();
+      render(
+        <LibraryDialog
+          look={{ zone: "exile", mode: "browse", count: "all" }}
+          view={{ ...tableView(), exile: [gameCard("Counterspell"), hiddenCard()] }}
+          opponent
+          readOnly
+          onAct={vi.fn()}
+          onClose={() => {}}
+          onPoint={onPoint}
+        />,
+      );
+      expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
+        "A face-down card",
+        "Counterspell",
+      ]);
+      const back = screen.getByRole("group", { name: "A face-down card" });
+      expect(back.querySelector("[data-back]")).not.toBeNull();
+      expect(back.querySelector("img")).toBeNull();
+      fireEvent.mouseEnter(back.firstElementChild!);
+      expect(onPoint).not.toHaveBeenCalled();
+    });
+
+    it("draws one the reader may look at face up, said to be face down, and rings it castable", () => {
+      const hidden = gameCard("Lightning Bolt", { faceDown: true, castable: true });
+      render(
+        <LibraryDialog
+          look={{ zone: "exile", mode: "browse", count: "all" }}
+          view={{ ...tableView(), exile: [hidden] }}
+          readOnly
+          onAct={vi.fn()}
+          onClose={() => {}}
+        />,
+      );
+      const card = screen.getByRole("group", { name: "Lightning Bolt" });
+      expect(within(card).getByText("Face down")).toBeInTheDocument();
+      expect(within(card).getByRole("button", { name: "Cast" })).toBeInTheDocument();
+      expect((card.firstElementChild as HTMLElement).className).toContain(CASTABLE_RING);
     });
   });
 });

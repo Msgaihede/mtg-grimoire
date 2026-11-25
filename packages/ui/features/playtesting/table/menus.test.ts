@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuAction, MenuItem, MenuRadio, MenuSubmenu } from "@/components/menu/types";
+import type { GameCard } from "@/lib/ipc";
 import { gameCard, turnNineSeat, turnNineTokens } from "./fixtures";
-import { cardMenu, gameMenu, libraryMenu, type GameMenuView } from "./menus";
+import { cardMenu, gameMenu, libraryMenu, rulesPlay, type GameMenuView } from "./menus";
 
 /** The row with this label, at this level of the menu. */
 function row(items: MenuItem[], label: string): MenuAction | MenuSubmenu | MenuRadio {
@@ -262,10 +263,11 @@ describe("cardMenu", () => {
   it("keeps only the rules' rows with the sandbox off", () => {
     const onAct = vi.fn();
     const onActivate = vi.fn();
-    const ring = gameCard("Sol Ring");
+    const ring = gameCard("Sol Ring", { canActivate: true });
+    const idle = gameCard("Sol Ring");
     const commander = gameCard("Kenrith, the Returned King", { isCommander: true });
     const off = { sandbox: false, onAct };
-    expect(labels(cardMenu({ ...off, card: ring, ids: [ring.id], place: "hand" }))).toEqual([
+    expect(labels(cardMenu({ ...off, card: idle, ids: [idle.id], place: "hand" }))).toEqual([
       "Play",
     ]);
     expect(
@@ -281,10 +283,48 @@ describe("cardMenu", () => {
     expect(labels(permanent)).toEqual(["Activate ability"]);
     act(permanent, "Activate ability").onSelect();
     expect(onActivate).toHaveBeenCalledWith(ring.id);
-    // An opponent's permanent (no ability of the reader's to activate) and a graveyard card have
-    // nothing left to offer.
-    expect(cardMenu({ ...off, card: ring, ids: [ring.id], place: "battlefield" })).toEqual([]);
-    expect(cardMenu({ ...off, card: ring, ids: [ring.id], place: "graveyard" })).toEqual([]);
+    // A permanent with no ability the rules let the reader activate now, and a graveyard card
+    // with none, have nothing left to offer.
+    expect(
+      cardMenu({ ...off, card: idle, ids: [idle.id], place: "battlefield", onActivate }),
+    ).toEqual([]);
+    expect(cardMenu({ ...off, card: idle, ids: [idle.id], place: "graveyard" })).toEqual([]);
+  });
+
+  it("offers Activate ability on a permanent only when the rules offer one", () => {
+    // It was offered on every permanent of the reader's, and the engine refused most of them.
+    const onActivate = vi.fn();
+    const base = { place: "battlefield" as const, onAct: vi.fn(), onActivate };
+    const idle = gameCard("Llanowar Elves");
+    expect(labels(cardMenu({ ...base, card: idle, ids: [idle.id], sandbox: false }))).toEqual([]);
+    expect(labels(cardMenu({ ...base, card: idle, ids: [idle.id], sandbox: true }))[0]).toBe("Tap");
+  });
+
+  it("activates an opponent's permanent any player may activate, by the rules (CR 602.2)", () => {
+    // An opponent's card is handed no `onActivate`: the row sends its `activate` itself.
+    const onAct = vi.fn();
+    const relic = gameCard("Sol Ring", { canActivate: true });
+    const items = cardMenu({
+      card: relic,
+      ids: [relic.id],
+      place: "battlefield",
+      sandbox: false,
+      onAct,
+    });
+    expect(labels(items)).toEqual(["Activate ability"]);
+    act(items, "Activate ability").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "activate", id: relic.id });
+  });
+
+  it("offers Activate ability on a commander with commander ninjutsu, sandbox or not", () => {
+    const onAct = vi.fn();
+    const ninja = gameCard("Kenrith, the Returned King", { isCommander: true, canActivate: true });
+    const menu = (sandbox: boolean) =>
+      cardMenu({ card: ninja, ids: [ninja.id], place: "command", sandbox, onAct });
+    expect(labels(menu(false))).toEqual(["Cast", "Activate ability"]);
+    act(menu(false), "Activate ability").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "activate", id: ninja.id });
+    expect(labels(menu(true))).toEqual(["Cast", "Activate ability", "Move to"]);
   });
 
   it("offers Foretell on a hand card the rules let the reader foretell, sandbox or not", () => {
@@ -367,7 +407,7 @@ describe("cardMenu", () => {
   });
 
   it("heads a permanent's sandbox rows with Activate ability when the reader may activate it", () => {
-    const ring = gameCard("Sol Ring");
+    const ring = gameCard("Sol Ring", { canActivate: true });
     const items = cardMenu({
       card: ring,
       ids: [ring.id],
@@ -390,7 +430,7 @@ describe("libraryMenu", () => {
   it("draws, mills and opens the top cards", () => {
     const onAct = vi.fn();
     const onLook = vi.fn();
-    const items = libraryMenu({ view: turnNineSeat(), onAct, onLook });
+    const items = libraryMenu({ view: turnNineSeat(), sandbox: true, onAct, onLook });
 
     act(items, "Draw a card").onSelect();
     expect(onAct).toHaveBeenLastCalledWith({ type: "draw", count: 1 });
@@ -409,7 +449,12 @@ describe("libraryMenu", () => {
   });
 
   it("greys drawing, milling and scrying from an empty library", () => {
-    const items = libraryMenu({ view: { library: 0 }, onAct: vi.fn(), onLook: vi.fn() });
+    const items = libraryMenu({
+      view: { library: 0, libraryTop: null },
+      sandbox: true,
+      onAct: vi.fn(),
+      onLook: vi.fn(),
+    });
     for (const label of [
       "Draw a card",
       "Draw",
@@ -422,6 +467,65 @@ describe("libraryMenu", () => {
     }
     expect(act(items, "Search the library…").disabled).toBeUndefined();
     expect(act(items, "Shuffle").disabled).toBeUndefined();
+  });
+});
+
+describe("libraryMenu's top card", () => {
+  it("offers nothing with the sandbox off and no top card to play", () => {
+    const menu = (libraryTop: GameCard | null) =>
+      libraryMenu({
+        view: { library: 40, libraryTop },
+        sandbox: false,
+        onAct: vi.fn(),
+        onLook: vi.fn(),
+      });
+    expect(menu(null)).toEqual([]);
+    // Seen, but not playable from there: still nothing.
+    expect(menu(gameCard("Llanowar Elves"))).toEqual([]);
+  });
+
+  it("casts the top card the rules let the reader cast from there, sandbox or not (Future Sight)", () => {
+    const onAct = vi.fn();
+    const elves = gameCard("Llanowar Elves", { castable: true });
+    const menu = (sandbox: boolean) =>
+      libraryMenu({ view: { library: 40, libraryTop: elves }, sandbox, onAct, onLook: vi.fn() });
+    expect(labels(menu(false))).toEqual(["Cast Llanowar Elves"]);
+    act(menu(false), "Cast Llanowar Elves").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "play", id: elves.id });
+    // The sandbox's rows follow the rules' own.
+    expect(labels(menu(true)).slice(0, 3)).toEqual(["Cast Llanowar Elves", "Draw a card", "Draw"]);
+  });
+
+  it("plays a land from the top, and activates an ability that works from there (plot)", () => {
+    const onAct = vi.fn();
+    const forest = gameCard("Forest", { castable: true });
+    const land = libraryMenu({
+      view: { library: 40, libraryTop: forest },
+      sandbox: false,
+      onAct,
+      onLook: vi.fn(),
+    });
+    expect(labels(land)).toEqual(["Play Forest"]);
+    const plotted = gameCard("Llanowar Elves", { canActivate: true });
+    const plot = libraryMenu({
+      view: { library: 40, libraryTop: plotted },
+      sandbox: false,
+      onAct,
+      onLook: vi.fn(),
+    });
+    expect(labels(plot)).toEqual(["Activate Llanowar Elves's ability"]);
+    act(plot, "Activate Llanowar Elves's ability").onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "activate", id: plotted.id });
+  });
+});
+
+describe("rulesPlay", () => {
+  it("casts when the rules offer it, else activates, else nothing", () => {
+    const both = gameCard("Forest", { castable: true, canActivate: true });
+    expect(rulesPlay(both)).toEqual({ type: "play", id: both.id });
+    const plot = gameCard("Forest", { canActivate: true });
+    expect(rulesPlay(plot)).toEqual({ type: "activate", id: plot.id });
+    expect(rulesPlay(gameCard("Forest"))).toBeNull();
   });
 });
 

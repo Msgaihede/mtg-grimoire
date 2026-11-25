@@ -67,6 +67,13 @@ export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
     tax: 0,
     attachedTo: null,
     foretold: false,
+    faceDown: false,
+    damage: 0,
+    sick: false,
+    phasedOut: false,
+    classLevel: null,
+    chosen: [],
+    marks: [],
     canForetell: false,
     canActivate: false,
     castable: false,
@@ -105,10 +112,23 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     emblems: [],
     library: 0,
     libraryCards: [],
+    libraryTop: null,
+    libraryTopRevealed: false,
     manaOpen: 0,
     mana: manaTable(),
     commanderDamage: [],
     deadOn: null,
+    energy: 0,
+    experience: 0,
+    rad: 0,
+    tickets: 0,
+    speed: null,
+    monarch: false,
+    initiative: false,
+    cityBlessing: false,
+    ring: 0,
+    dungeon: null,
+    enchantedBy: [],
     ...over,
   };
 }
@@ -284,4 +304,12 @@ export function playLocally(seat: PlaytestSeat, action: PlaytestAction): Playtes
       break;
   }
   return { ...v, handCount: v.hand.length, library: v.libraryCards.length };
+}
+
+/**
+ * A face-down card the reader may not look at (CR 708) — another player's foretold or hideaway
+ * card in exile — as the engine sends it: no name, no printing.
+ */
+export function hiddenCard(over: Partial<GameCard> = {}): GameCard {
+  return gameCard("", { cardId: null, typeLine: "", isToken: false, faceDown: true, ...over });
 }
