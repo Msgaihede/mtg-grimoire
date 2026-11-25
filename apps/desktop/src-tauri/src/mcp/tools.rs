@@ -140,6 +140,16 @@ pub fn list() -> Vec<Value> {
         "type": "string",
         "description": "A GraphQL query document over the schema graph_schema answers.",
     });
+    let syntax = json!({
+        "type": "string",
+        "maxLength": grimoire_core::query_language::MAX_SYNTAX_CHARS,
+        "description": concat!(
+            "A Scryfall search, e.g. \"t:goblin cmc<=2 -is:token\" or ",
+            "\"(o:draw or o:scry) id<=ur\"; ANDed with the other arguments. read_guide's ",
+            "scryfall_syntax has the keywords; a term this app cannot apply as written is ",
+            "refused, naming it."
+        ),
+    });
     vec![
         tool(
             "graph_schema",
@@ -182,10 +192,12 @@ pub fn list() -> Vec<Value> {
             "Search the card database (every Magic card, not just the user's) by name and by the \
              Search page's filters. Answers printings with their Scryfall ids (cardId), which \
              get_card takes. By default one printing per card; set allPrintings to choose a \
-             specific set's printing. Give query, filters, or both. Oracle tag slugs for \
-             filters.oracleTags come from find_tags; format keys from format_rules.",
+             specific set's printing. Give query, syntax (a Scryfall search), filters, or any \
+             of them together. Oracle tag slugs for filters.oracleTags come from find_tags; \
+             format keys from format_rules.",
             json!({
                 "query": { "type": "string", "description": "Words of the card's name." },
+                "syntax": syntax.clone(),
                 "set": { "type": "string", "description": "Only this set code, e.g. \"lea\"." },
                 "allPrintings": { "type": "boolean", "description": "Every printing rather than one per card." },
                 "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many to answer (default 10)." },
@@ -253,10 +265,12 @@ pub fn list() -> Vec<Value> {
         tool(
             "search_collection",
             "Search collection",
-            "The cards the user owns, filtered by name words and optionally one folder. Each \
-             row is one printing, finish and condition in one folder, with its quantity.",
+            "The cards the user owns, filtered by name words, a Scryfall search (syntax) and \
+             optionally one folder. Each row is one printing, finish and condition in one \
+             folder, with its quantity.",
             json!({
                 "query": { "type": "string", "description": "Words of the card's name; omit for everything." },
+                "syntax": syntax.clone(),
                 "folderId": { "type": "integer", "description": "Only this collection folder (from list_folders)." },
                 "limit": limit,
                 "offset": offset,
@@ -267,9 +281,11 @@ pub fn list() -> Vec<Value> {
         tool(
             "search_wishlist",
             "Search wishlist",
-            "The cards the user wants, filtered by name words and optionally one wishlist folder.",
+            "The cards the user wants, filtered by name words, a Scryfall search (syntax) and \
+             optionally one wishlist folder. Free text here matches part of the card's name.",
             json!({
                 "query": { "type": "string", "description": "Words of the card's name; omit for everything." },
+                "syntax": syntax,
                 "folderId": { "type": "integer", "description": "Only this wishlist folder (from list_folders)." },
                 "limit": limit,
                 "offset": offset,
@@ -463,7 +479,8 @@ pub fn list() -> Vec<Value> {
                 "create_widget: building a custom home-page widget; graphql_discovery: the read ",
                 "graph, for anything else in the user's data; card_interactions: what a card does, ",
                 "its combos, oracle tags, related and similar cards, its Scryfall record and format ",
-                "rules. Read the one that fits before a task of its kind."
+                "rules; scryfall_syntax: writing a Scryfall search for syntax, and every keyword. ",
+                "Read the one that fits before a task of its kind."
             ),
             json!({
                 "topic": { "type": "string", "enum": super::prompts::names(), "description": "Which guide." },
@@ -985,9 +1002,10 @@ async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
         Some(Value::Object(_)) => None,
         Some(_) => return Err("filters must be an object.".to_owned()),
     };
-    if query.is_none() && filters.is_none() {
+    let syntax = args.text("syntax")?;
+    if query.is_none() && filters.is_none() && syntax.is_none() {
         return Err(concat!(
-            "find_cards needs a query (words of the card's name) ",
+            "find_cards needs a query (words of the card's name), a syntax (a Scryfall search) ",
             "or at least one field in filters."
         )
         .to_owned());
@@ -1004,6 +1022,9 @@ async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
         None => Map::new(),
     };
     req.insert("text".into(), json!(query));
+    if let Some(syntax) = &syntax {
+        super::syntax::apply(state, syntax, &mut req).await?;
+    }
     req.insert("setCode".into(), json!(set));
     req.insert("collapse".into(), json!(!all));
     req.insert("paperOnly".into(), json!(true));
@@ -1454,17 +1475,16 @@ fn read_guide(args: &Args) -> Result<Value, String> {
 }
 
 async fn search_collection(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
-    let page = run(
-        state,
-        "collection_list",
-        json!({ "query": {
-            "text": args.text("query")?,
-            "folderId": args.int("folderId")?,
-            "limit": args.bounded("limit", 50, 1, MAX_LIMIT)?,
-            "offset": args.bounded("offset", 0, 0, i64::from(u32::MAX))?,
-        }}),
-    )
-    .await?;
+    let mut query = json!({
+        "text": args.text("query")?,
+        "folderId": args.int("folderId")?,
+        "limit": args.bounded("limit", 50, 1, MAX_LIMIT)?,
+        "offset": args.bounded("offset", 0, 0, i64::from(u32::MAX))?,
+    });
+    if let (Some(syntax), Some(query)) = (args.text("syntax")?, query.as_object_mut()) {
+        super::syntax::apply(state, &syntax, query).await?;
+    }
+    let page = run(state, "collection_list", json!({ "query": query })).await?;
     let entries: Vec<Value> = rows(&page, "items")
         .iter()
         .map(|e| {
@@ -1494,20 +1514,19 @@ async fn search_collection(state: &Arc<AppState>, args: &Args) -> Result<Value, 
 
 async fn search_wishlist(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
     let folder = args.int("folderId")?;
-    let page = run(
-        state,
-        "wishlist_list",
-        // `folderId: null` is the wishlist's root there, so a search across every folder says
-        // `flatten` — `WishlistQuery`'s own convention, the opposite of the collection's.
-        json!({ "query": {
-            "text": args.text("query")?,
-            "folderId": folder,
-            "flatten": folder.is_none(),
-            "limit": args.bounded("limit", 50, 1, MAX_LIMIT)?,
-            "offset": args.bounded("offset", 0, 0, i64::from(u32::MAX))?,
-        }}),
-    )
-    .await?;
+    // `folderId: null` is the wishlist's root there, so a search across every folder says
+    // `flatten` — `WishlistQuery`'s own convention, the opposite of the collection's.
+    let mut query = json!({
+        "text": args.text("query")?,
+        "folderId": folder,
+        "flatten": folder.is_none(),
+        "limit": args.bounded("limit", 50, 1, MAX_LIMIT)?,
+        "offset": args.bounded("offset", 0, 0, i64::from(u32::MAX))?,
+    });
+    if let (Some(syntax), Some(query)) = (args.text("syntax")?, query.as_object_mut()) {
+        super::syntax::apply(state, &syntax, query).await?;
+    }
+    let page = run(state, "wishlist_list", json!({ "query": query })).await?;
     let folders = run(state, "wishlist_folder_list", json!({})).await?;
     let folder_name = |id: &Value| {
         folders

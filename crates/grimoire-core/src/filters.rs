@@ -19,7 +19,7 @@
 //! pattern — is bound as a parameter although it comes out of a `const`. A closed vocabulary
 //! decides *which* fragment is emitted; it never writes one.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The five colour-identity letters, in WUBRG order. Interpolated into SQL, so it must
 /// stay a hard-coded list.
@@ -150,7 +150,7 @@ pub const ART_WEIGHT_FLOOR_STRONG: &str = "strong";
 ///
 /// Closed, so the boundary is type-checked rather than stringly typed; the camelCase serde
 /// names are the contract `packages/ui/lib/ipc.ts` mirrors and `ipc.test.ts` fences.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateField {
     /// The card's name and nothing else — Scryfall's `-bolt`, `-"lightning bolt"` (issue #571)
@@ -260,7 +260,7 @@ pub enum PredicateField {
 /// anywhere. The grammar in `packages/ui/features/search/queryLanguage.ts` resolves it at the edge for
 /// every field but the four whose default really *is* `:`, so a `Colon` arriving on a numeric
 /// field is a hand-built payload and is answered as that field's default rather than refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateOp {
     Colon,
@@ -274,16 +274,21 @@ pub enum PredicateOp {
 
 /// One term of a query box — `t:goblin`, `cmc>=3`, `-a:rebecca`.
 ///
-/// **Parsed in TypeScript and never here.** `packages/ui/features/search/queryLanguage.ts` reads the
-/// box into free text, tag tokens and a list of these; this crate receives closed enums and
-/// emits SQL from them. Rust supplies facts and TypeScript draws conclusions, and a query
-/// grammar is a conclusion — it is also the half that has to answer *while the reader is still
-/// typing*, which is a question about a text box rather than about a database.
+/// **Parsed on both sides, to one answer.** The page's search boxes parse in TypeScript
+/// (`packages/ui/features/search/queryLanguage.ts`), because that half answers *while the reader
+/// is still typing*; a host with no window (the MCP server's tools, the planned remote tier)
+/// parses with [`crate::query_language`], its port. The owner ruled the port (2026-11-24) and
+/// `packages/ui/features/search/__golden__/query-language.json` holds the two to the same list of
+/// these for every query it carries. Either way this module receives closed enums and emits SQL
+/// from them.
+///
+/// `Serialize` is the port's: a parse is handed to `search_cards` as JSON, in the shape the
+/// page's `wirePredicate` sends — `terms` absent unless the term is a group.
 ///
 /// **One list on [`CardFilters`] rather than ten scalar fields**, because a list carries three
 /// things no field can spell: negation, repetition (`t:creature t:goblin` is two terms and
 /// both must hold) and an operator per term.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryPredicate {
     pub field: PredicateField,
@@ -298,7 +303,7 @@ pub struct QueryPredicate {
     /// payload nested past its own recursion limit (128) before this crate sees it, so a
     /// hand-built request cannot walk [`group_clause`] off the stack. The grammar unwraps a
     /// single-child group and drops an empty one, so what a reader types is far shallower.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub terms: Vec<QueryPredicate>,
 }
 
@@ -1236,11 +1241,11 @@ const PRODUCED_LETTERS: [&str; 6] = ["W", "U", "B", "R", "G", "C"];
 /// **Checked before the letters, and that is not a nicety** — see [`color_value`]: `grixis`
 /// scanned letter by letter is G and R, `bant` is B, and `green` is G *and* R. The guilds, the
 /// Strixhaven colleges, the shards, the wedges and the four-colour Nephilim names (short and
-/// long) are Scryfall's own list; `packages/ui/features/search/queryLanguage.ts` validates
-/// against the same names and resolves none of them, so this table is the one place a name
-/// becomes letters. `packages/ui/lib/ipc.test.ts` reads this table and holds the two together
+/// long) are Scryfall's own list; `packages/ui/features/search/queryLanguage.ts` and its port,
+/// [`crate::query_language`] (which reads this table), validate against the same names and
+/// resolve none of them, so this table is the one place a name becomes letters. `packages/ui/lib/ipc.test.ts` reads this table and holds the two together
 /// (issue #1564, when the plain colour names were here and not there).
-const COLOR_NAMES: [(&str, &str); 45] = [
+pub(crate) const COLOR_NAMES: [(&str, &str); 45] = [
     ("white", "W"),
     ("blue", "U"),
     ("black", "B"),

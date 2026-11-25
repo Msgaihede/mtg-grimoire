@@ -15,6 +15,7 @@ the app.
 | "Do I have…", "what's in my Trade binder?" — the collection by name | `search_collection` (and `list_folders` with `list: "collection"`) |
 | "What's on my wishlist?" — wishes by name | `search_wishlist` (and `list_folders` with `list: "wishlist"`) |
 | "Red creatures under 3 mana", any search by type, colour, mana value, rarity, set, tags or price | `find_cards` with `filters` (`find_tags` for a tag's slug) |
+| A Scryfall search (`t:goblin cmc<=2`, `is:fetchland`), or what the filters cannot say: keywords, rules text, power, `or` | `find_cards`, `search_collection` or `search_wishlist` with `syntax` (the `scryfall_syntax` prompt) |
 | "My rares worth over $10", the collection or wishlist by structured filters, art tags, sort | `graph_query` with structured filters (below) |
 | "Show me these in the app", "let me look through them" | `show_search`, only after the user says yes (below) |
 
@@ -28,7 +29,9 @@ the app.
 
 `find_cards` takes the Search page's `filters` over the whole card database: arrays and flags such as
 `colors: ["U","R"]` with `colorsExact: true`, `types`, `manaValues`, `rarities`, `sets`, `format`,
-`oracleTags: ["ramp"]` (slugs from `find_tags`) and the price filters. Reach for it first.
+`oracleTags: ["ramp"]` (slugs from `find_tags`) and the price filters. Reach for it first. For
+anything else a card search can say, all three search tools take Scryfall's syntax in `syntax`;
+read the `scryfall_syntax` prompt before writing one.
 
 `graph_query` does what only it does: the collection and wishlist filters, `artTags`, `predicates`
 and `sort`. It runs a GraphQL query over the user's data. Three root fields search cards, and all
@@ -120,9 +123,9 @@ or the wishlist, which no tool here does.
 - **Ask in chat first** ("Want to see these in the app?") and call `show_search` only after the user
   says yes, once per yes. It replaces what that window shows, the user's own filters included, so
   never call it because a search merely could be shown, and never call it again unasked.
-- **Preview with `find_cards`** and the same `filters` when the count matters ("about 140 cards —
-  want to see them in the app?"). Its `query` reads plain words, not the box's keywords, so with
-  keywords in `text` the preview counts more cards than the page will show.
+- **Preview with `find_cards`** when the count matters ("about 140 cards — want to see them in
+  the app?"): the same `filters`, and the box's `text` as its `syntax`, so it counts what the page
+  will show. A term `syntax` refuses is one the page would search as plain words; fix it first.
 
 **Split the request between `filters` and `text`.** A card must pass both.
 
