@@ -1056,7 +1056,12 @@ export function PlaytestBoard({
         {!four && (
           <>
             <div className={cn(OPPONENT_COLUMN, "left-3")}>
-              <OpponentLibrary seat={opponent} size={zone} />
+              <OpponentLibrary
+                seat={opponent}
+                size={zone}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+              />
               <OpponentPile
                 seat={opponent}
                 zone="graveyard"
@@ -1125,6 +1130,8 @@ export function PlaytestBoard({
             onAct={offer}
             onDrop={drop}
             onLook={lookYou}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
             size={zone}
           />
         </div>
@@ -1647,6 +1654,11 @@ function zoneOf(seat: PlaytestSeat, place: GamePlace): readonly GameCard[] {
       return seat.exile;
     case "command":
       return seat.command;
+    case "libraryTop":
+      // An opponent's library is no cards on the wire but a revealed top (issue #1722).
+      return seat.libraryCards.length > 0 || seat.libraryTop === null
+        ? seat.libraryCards
+        : [seat.libraryTop];
     default:
       return seat.libraryCards;
   }

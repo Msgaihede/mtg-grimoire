@@ -105,6 +105,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     emblems: [],
     library: 0,
     libraryCards: [],
+    libraryTop: null,
     manaOpen: 0,
     mana: manaTable(),
     commanderDamage: [],
@@ -277,5 +278,11 @@ export function playLocally(seat: PlaytestSeat, action: PlaytestAction): Playtes
     default:
       break;
   }
-  return { ...v, handCount: v.hand.length, library: v.libraryCards.length };
+  return {
+    ...v,
+    handCount: v.hand.length,
+    library: v.libraryCards.length,
+    // A shown top stays shown, and is whatever is on top now.
+    libraryTop: v.libraryTop === null ? null : (v.libraryCards[0] ?? null),
+  };
 }

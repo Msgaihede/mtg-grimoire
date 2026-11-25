@@ -52,7 +52,9 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   holds each struct field for field, and every `PlaytestAction` / `PlaytestHappened` variant and
   field. A change to either side is one commit with the other.
 - **A game never sends what the reader may not see.** Each opponent's hand and library are counts
-  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). In a
+  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). A
+  library's top is sent (`library_top`, issue #1722) only when phase's statics show it to the
+  reader — their own under `MayLookAtTopOfLibrary`, anyone's under `RevealTopOfLibrary`. In a
   lobby's game that holds for every person: each guest is sent the view from its own seat
   (`guest_steps`, `view_of`), never the host's.
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of

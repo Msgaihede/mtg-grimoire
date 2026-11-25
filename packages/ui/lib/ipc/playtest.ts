@@ -179,6 +179,13 @@ export interface PlaytestSeat {
   library: number;
   /** The reader's library, top first; empty for the opponent. */
   libraryCards: GameCard[];
+  /**
+   * The top of this seat's library while the reader may see it, drawn face up on the pile
+   * (issue #1722): the reader's own under a "you may look at the top card of your library any
+   * time" static (CR 701.20e), or any seat's played with the top card revealed (CR 400.2).
+   * phase's statics decide; `null` otherwise, and for an empty library.
+   */
+  libraryTop: GameCard | null;
   manaOpen: number;
   /** The same open mana by type, and what is floating in the pool. */
   mana: ManaTable;
