@@ -256,6 +256,56 @@ pub fn list() -> Vec<Value> {
             &read,
         ),
         tool(
+            "card_combos",
+            "A card's combos",
+            "Combos that name a card, from Commander Spellbook's list (Commander-legal combos \
+             only: a combo needing a card banned in Commander is not in it). Each is short: \
+             comboId, the cards, what it produces, its bracket, how many unnamed cards (templates) \
+             it also needs and its popularity; get_combo has the steps. Answers total, matching \
+             (after the filters), ownedTotal, sizes (combos by number of cards) and comboData.",
+            json!({
+                "cardId": card_id.clone(),
+                "search": { "type": "string", "description": "A piece's name, or part of it." },
+                "produces": { "type": "string", "description": "Words in what the combo produces, e.g. \"infinite mana\"." },
+                "cardCount": { "type": "integer", "minimum": 1, "description": "Only combos of this many cards." },
+                "ownedOnly": { "type": "boolean", "description": "Only combos whose every card the user owns." },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many to answer (default 10)." },
+                "offset": offset.clone(),
+            }),
+            &["cardId"],
+            &read,
+        ),
+        tool(
+            "get_combo",
+            "Get combo",
+            "One combo from Commander Spellbook's list (Commander-legal combos only) whole: its \
+             cards, the steps, the prerequisites, the templates it also needs, the mana, what it \
+             produces and a link to its page.",
+            json!({ "comboId": { "type": "string", "description": "From card_combos or held_combos." } }),
+            &["comboId"],
+            &read,
+        ),
+        tool(
+            "held_combos",
+            "Combos a deck or the collection holds",
+            "Combos (Commander Spellbook's list, Commander-legal combos only) a deck holds whole \
+             and, by default, the ones it is one card short of, with the missing card. A deck is \
+             read by its active piles; with no deckId, the user's whole collection. A deck's \
+             missing cards are only ones the deck could play (its format, its commanders' colours). \
+             limit and offset apply to each of the two lists. Short shape; get_combo has the steps.",
+            json!({
+                "deckId": { "type": "integer", "description": "From list_decks; omit for the whole collection." },
+                "list": list_variant.clone(),
+                "oneCardAway": { "type": "boolean", "description": "Also answer combos one card short (default true)." },
+                "format": { "type": "string", "description": "Collection only: the missing card must be legal in this format key." },
+                "identity": { "type": "string", "description": "Collection only: the missing card must fit this colour identity (WUBRG letters, C for colourless)." },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "How many of each list (default 20)." },
+                "offset": offset.clone(),
+            }),
+            &[],
+            &read,
+        ),
+        tool(
             "widget_vocabulary",
             "Read the widget catalogue",
             "Everything a custom home widget may be built from, for writing one: the prompt — the \
@@ -427,6 +477,9 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "list_folders" => list_folders(state, &args).await,
         "list_decks" => list_decks(state, &args).await,
         "get_deck" => get_deck(state, &args).await,
+        "card_combos" => card_combos(state, &args).await,
+        "get_combo" => get_combo(state, &args).await,
+        "held_combos" => held_combos(state, &args).await,
         "widget_vocabulary" => widget_vocabulary(&args),
         "widget_check" => widget_check(&args),
         "widget_preview" => widget_preview(state, &args).await,
@@ -919,6 +972,323 @@ async fn get_deck(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
     deck["list"] = json!(variant);
     deck["piles"] = Value::Array(piles);
     Ok(deck)
+}
+
+/// The word for a Commander Spellbook bracket letter; an unknown letter is passed through.
+fn bracket_word(letter: &str) -> String {
+    match letter {
+        "R" => "Ruthless",
+        "S" => "Spicy",
+        "P" => "Powerful",
+        "O" => "Oddball",
+        "C" => "Core",
+        "E" => "Exhibition",
+        "B" => "Banned",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// A newline-joined column as a list, empty lines dropped.
+fn lines(value: &Value, field: &str) -> Vec<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .split('\n')
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `comboData`: when the combo list was last downloaded (Unix seconds, null if never).
+fn combo_data(status: &Value) -> Value {
+    json!({ "downloadedAt": status.get("fetchedAt").cloned().unwrap_or(Value::Null) })
+}
+
+/// Put `comboData` on an answer, with the sentence that says so when nothing was downloaded.
+fn with_combo_data(answer: &mut Value, status: &Value, mut notes: Vec<String>) {
+    let data = combo_data(status);
+    if data["downloadedAt"].is_null() {
+        notes.insert(
+            0,
+            "The combo list has not been downloaded yet, so an empty answer does not mean there \
+             are no combos. The app fetches it weekly when it starts, and Settings can fetch it \
+             now."
+                .to_owned(),
+        );
+    }
+    answer["comboData"] = data;
+    if !notes.is_empty() {
+        answer["note"] = json!(notes.join(" "));
+    }
+}
+
+/// The short shape of a `CardCombo`, `DeckCombo` or `HeldCombo`.
+fn short_combo(v: &Value) -> Value {
+    let cards: Vec<Value> = match v.get("cards").and_then(Value::as_array) {
+        Some(names) => names.clone(),
+        None => rows(v, "pieces")
+            .iter()
+            .filter_map(|p| p.get("name").cloned())
+            .collect(),
+    };
+    let letter = v
+        .get("bracketTag")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut out = json!({
+        "comboId": v.get("id"),
+        "cards": cards,
+        "produces": lines(v, "produces"),
+        "bracketTag": bracket_word(letter),
+        "templatesNeeded": v.get("templateCount"),
+        "popularity": v.get("popularity"),
+    });
+    if let Some(m) = v.get("missing").filter(|m| !m.is_null()) {
+        out["missing"] = pick(
+            m,
+            &[("name", "name"), ("cardId", "cardId"), ("owned", "owned")],
+        );
+    }
+    out
+}
+
+/// The full shape of a `CardCombo`.
+fn full_combo(v: &Value) -> Value {
+    let mut out = short_combo(v);
+    out["identity"] = v.get("identity").cloned().unwrap_or(Value::Null);
+    out["pieces"] = Value::Array(
+        rows(v, "pieces")
+            .iter()
+            .map(|p| {
+                pick(
+                    p,
+                    &[
+                        ("name", "name"),
+                        ("cardId", "cardId"),
+                        ("quantity", "quantity"),
+                        ("mustBeCommander", "mustBeCommander"),
+                        ("owned", "owned"),
+                    ],
+                )
+            })
+            .collect(),
+    );
+    out["requires"] = json!(lines(v, "requires"));
+    out["steps"] = json!(lines(v, "description"));
+    out["prerequisites"] = json!({
+        "easy": lines(v, "easyPrerequisites"),
+        "notable": lines(v, "notablePrerequisites"),
+    });
+    out["manaNeeded"] = v.get("manaNeeded").cloned().unwrap_or(Value::Null);
+    out["url"] = json!(format!(
+        "https://commanderspellbook.com/combo/{}/",
+        v.get("id").and_then(Value::as_str).unwrap_or_default()
+    ));
+    out
+}
+
+fn short_list(list: &[Value]) -> Vec<Value> {
+    list.iter().map(short_combo).collect()
+}
+
+async fn card_combos(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let card_id = args.required_text("cardId")?;
+    let limit = args.bounded("limit", 10, 1, 50)?;
+    let offset = args.bounded("offset", 0, 0, i64::from(u32::MAX))?;
+    let detail = run(state, "card_detail", json!({ "id": card_id })).await?;
+    let Some(oracle) = detail.get("oracleId").and_then(Value::as_str) else {
+        return Err(format!(
+            "No card has the id {card_id}. Use find_cards to look one up."
+        ));
+    };
+    let page = run(
+        state,
+        "combos_for_card",
+        json!({
+            "oracleId": oracle,
+            "search": args.text("search")?,
+            "produces": args.text("produces")?,
+            "cardCount": args.int("cardCount")?,
+            "ownedOnly": args.flag("ownedOnly")?,
+            "limit": limit,
+            "offset": offset,
+        }),
+    )
+    .await?;
+    let status = run(state, "combos_status", json!({})).await?;
+    let mut answer = json!({
+        "total": page.get("total"),
+        "matching": page.get("matching"),
+        "ownedTotal": page.get("ownedTotal"),
+        "sizes": page.get("byCardCount"),
+        "combos": short_list(&rows(&page, "combos")),
+    });
+    with_combo_data(&mut answer, &status, Vec::new());
+    Ok(answer)
+}
+
+async fn get_combo(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let id = args.required_text("comboId")?;
+    let combo = run(state, "combo_get", json!({ "id": id })).await?;
+    if combo.is_null() {
+        return Err(format!(
+            "No combo has the id {id}. Use card_combos or held_combos to find one."
+        ));
+    }
+    let status = run(state, "combos_status", json!({})).await?;
+    let mut answer = full_combo(&combo);
+    with_combo_data(&mut answer, &status, Vec::new());
+    Ok(answer)
+}
+
+/// A deck's combos: every complete one (sliced to the page) and, when asked, the ones one card
+/// away, filtered by what the deck could play.
+async fn deck_combos(
+    state: &Arc<AppState>,
+    deck_id: i64,
+    variant: &str,
+    near: bool,
+    (limit, offset): (i64, i64),
+    notes: &mut Vec<String>,
+) -> Result<(Vec<Value>, Value, Option<Value>), String> {
+    let detail = run(
+        state,
+        "deck_get",
+        json!({ "id": deck_id, "variant": variant }),
+    )
+    .await?;
+    if detail.is_null() {
+        return Err(format!(
+            "No deck has the id {deck_id}. Use list_decks to look one up."
+        ));
+    }
+    // The deck's cards are the printings of its active piles, once each.
+    let mut card_ids: Vec<String> = Vec::new();
+    for card in rows(&detail, "cards") {
+        if card.get("categoryActive").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        if let Some(id) = card.get("cardId").and_then(Value::as_str) {
+            if !card_ids.iter().any(|c| c == id) {
+                card_ids.push(id.to_owned());
+            }
+        }
+    }
+    let format_key = detail["deck"]["formatKey"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    if format_key != "commander" {
+        notes.push(
+            "The combo list covers Commander-legal combos only, so none found here does not \
+             mean none exist in this deck's format."
+                .to_owned(),
+        );
+    }
+    let all = run(state, "combos_for_cards", json!({ "cardIds": card_ids })).await?;
+    let all = all.as_array().cloned().unwrap_or_default();
+    let total = json!(all.len());
+    let complete: Vec<Value> = all
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
+    if !near {
+        return Ok((complete, total, None));
+    }
+    let specs = run(state, "format_specs_list", json!({})).await?;
+    let has_data = specs.as_array().into_iter().flatten().any(|s| {
+        s.get("key").and_then(Value::as_str) == Some(format_key.as_str())
+            && s.get("hasLegalityData").and_then(Value::as_bool) == Some(true)
+    });
+    let identities = run(state, "deck_commander_identities", json!({})).await?;
+    let field = if variant == "theory" {
+        "theoryIdentity"
+    } else {
+        "identity"
+    };
+    // `""` is a colourless commander, which `combos_near` reads as `"C"` (an empty identity
+    // there is no filter); null is no commander, so no filter.
+    let identity = identities
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|i| i.get("deckId").and_then(Value::as_i64) == Some(deck_id))
+        .and_then(|i| i.get(field))
+        .and_then(Value::as_str)
+        .map(|s| if s.is_empty() { "C" } else { s }.to_owned());
+    let away = run(
+        state,
+        "combos_near",
+        json!({
+            "cardIds": card_ids,
+            "format": has_data.then_some(format_key),
+            "identity": identity,
+            "limit": limit,
+            "offset": offset,
+        }),
+    )
+    .await?;
+    Ok((complete, total, Some(away)))
+}
+
+async fn held_combos(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let limit = args.bounded("limit", 20, 1, 100)?;
+    let offset = args.bounded("offset", 0, 0, i64::from(u32::MAX))?;
+    let near = match args.0.get("oneCardAway") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("oneCardAway must be true or false.".to_owned()),
+    };
+    let variant = args
+        .choice("list", &["live", "theory"], Some("live"))?
+        .unwrap_or_default();
+    let format = args.text("format")?;
+    let identity = args.text("identity")?;
+    let mut notes = Vec::new();
+    let (complete, complete_total, away) = match args.int("deckId")? {
+        None => {
+            let held = |near: bool| {
+                run(
+                    state,
+                    "combos_in_collection",
+                    json!({ "near": near, "format": format, "identity": identity,
+                            "limit": limit, "offset": offset }),
+                )
+            };
+            let complete = held(false).await?;
+            let away = if near { Some(held(true).await?) } else { None };
+            (
+                rows(&complete, "combos"),
+                complete.get("total").cloned().unwrap_or(json!(0)),
+                away,
+            )
+        }
+        Some(deck_id) => {
+            if format.is_some() || identity.is_some() {
+                return Err(
+                    "format and identity are for the whole collection; a deck's own \
+                            format and commanders are used."
+                        .to_owned(),
+                );
+            }
+            deck_combos(state, deck_id, &variant, near, (limit, offset), &mut notes).await?
+        }
+    };
+    let status = run(state, "combos_status", json!({})).await?;
+    let mut answer = json!({
+        "complete": short_list(&complete),
+        "completeTotal": complete_total,
+    });
+    if let Some(away) = away {
+        answer["oneCardAway"] = json!(short_list(&rows(&away, "combos")));
+        answer["oneCardAwayTotal"] = away.get("total").cloned().unwrap_or(json!(0));
+    }
+    with_combo_data(&mut answer, &status, notes);
+    Ok(answer)
 }
 
 async fn widget_list(state: &Arc<AppState>) -> Result<Value, String> {
@@ -1486,10 +1856,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 18);
+        assert_eq!(names.len(), 21);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 18, "names are unique");
+        assert_eq!(names.len(), 21, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -2071,5 +2441,305 @@ mod tests {
             call(&state, "drop_tables", json!({})).await,
             Called::NoSuchTool
         ));
+    }
+
+    // ---- the combo tools ----------------------------------------------------------------
+
+    /// A printing named `name` of the oracle card `o-<id>`, with the two columns the one-away
+    /// filters read.
+    fn combo_card(c: &rusqlite::Connection, id: &str, name: &str, identity: &str, legal: bool) {
+        grimoire_core::schema::fixtures::seed_card(c, id, "lea", "1");
+        let mask = if legal {
+            grimoire_core::legalities::bit("commander").unwrap() as i64
+        } else {
+            0
+        };
+        c.execute(
+            "UPDATE cards SET name = ?2, color_identity = ?3, legal_mask = ?4 WHERE id = ?1",
+            rusqlite::params![id, name, identity, mask],
+        )
+        .unwrap();
+    }
+
+    /// One stored combo naming `pieces` (`(oracle id, name)`), every column spelled out.
+    fn combo(c: &rusqlite::Connection, id: &str, bracket: &str, pieces: &[(&str, &str)]) {
+        c.execute(
+            "INSERT INTO combos (id, bracket_tag, card_count, template_count, identity, produces,
+                                 mana_needed, easy_prerequisites, notable_prerequisites,
+                                 description, popularity, requires)
+             VALUES (?1, ?2, ?3, 1, 'U', 'Infinite mana\nInfinite life', '{U}{U}',
+                     'Both on the battlefield.\n', 'Mana from elsewhere.',
+                     'Tap A.\nTap B.\n', 7, 'a creature with flying\n')",
+            rusqlite::params![id, bracket, pieces.len() as i64],
+        )
+        .unwrap();
+        for (oracle, name) in pieces {
+            c.execute(
+                "INSERT INTO combo_cards (combo_id, oracle_id, name, quantity, must_be_commander)
+                 VALUES (?1, ?2, ?3, 1, 0)",
+                rusqlite::params![id, oracle, name],
+            )
+            .unwrap();
+        }
+    }
+
+    fn downloaded(c: &rusqlite::Connection) {
+        c.execute(
+            "INSERT INTO combo_meta (id, checked_at, fetched_at) VALUES (1, 1700000100, 1700000000)",
+            [],
+        )
+        .unwrap();
+    }
+
+    const CA: (&str, &str) = ("o-p-a", "Card A");
+    const CB: (&str, &str) = ("o-p-b", "Card B");
+    const CC: (&str, &str) = ("o-p-c", "Card C");
+
+    #[tokio::test]
+    async fn card_combos_lists_a_card_s_combos_short() {
+        let state = state("card-combos");
+        seed(&state, |c| {
+            combo_card(c, "p-a", "Card A", "U", true);
+            combo_card(c, "p-b", "Card B", "U", true);
+            combo(c, "c1", "R", &[CA, CB]);
+            downloaded(c);
+        });
+        let got = done(&state, "card_combos", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["total"], 1);
+        let one = &got["combos"][0];
+        assert_eq!(one["comboId"], "c1");
+        assert_eq!(one["bracketTag"], "Ruthless");
+        assert_eq!(one["cards"], json!(["Card A", "Card B"]));
+        assert_eq!(one["produces"], json!(["Infinite mana", "Infinite life"]));
+        assert_eq!(one["templatesNeeded"], 1);
+        assert_eq!(one["popularity"], 7);
+        assert!(one.get("steps").is_none(), "the short shape has no steps");
+        assert_eq!(got["comboData"]["downloadedAt"], 1_700_000_000);
+        assert!(got.get("note").is_none());
+        assert_eq!(got["sizes"][0]["cards"], 2);
+
+        let found = done(
+            &state,
+            "card_combos",
+            json!({ "cardId": "p-a", "produces": "infinite mana" }),
+        )
+        .await;
+        assert_eq!(found["matching"], 1);
+
+        let why = refused(&state, "card_combos", json!({ "cardId": "nope" })).await;
+        assert!(why.contains("find_cards"), "{why}");
+        let why = refused(
+            &state,
+            "card_combos",
+            json!({ "cardId": "p-a", "limit": 51 }),
+        )
+        .await;
+        assert!(why.contains("limit"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn get_combo_answers_one_combo_whole() {
+        let state = state("get-combo");
+        seed(&state, |c| {
+            combo_card(c, "p-a", "Card A", "U", true);
+            combo(c, "c1", "S", &[CA, CB]);
+            downloaded(c);
+        });
+        let got = done(&state, "get_combo", json!({ "comboId": "c1" })).await;
+        assert_eq!(got["bracketTag"], "Spicy");
+        assert_eq!(got["steps"], json!(["Tap A.", "Tap B."]));
+        assert_eq!(
+            got["prerequisites"]["easy"],
+            json!(["Both on the battlefield."])
+        );
+        assert_eq!(
+            got["prerequisites"]["notable"],
+            json!(["Mana from elsewhere."])
+        );
+        assert_eq!(got["requires"], json!(["a creature with flying"]));
+        assert_eq!(got["manaNeeded"], "{U}{U}");
+        assert_eq!(got["identity"], "U");
+        assert_eq!(got["url"], "https://commanderspellbook.com/combo/c1/");
+        assert_eq!(got["pieces"][0]["name"], "Card A");
+        assert_eq!(got["pieces"][0]["cardId"], "p-a");
+        assert_eq!(got["comboData"]["downloadedAt"], 1_700_000_000);
+
+        let why = refused(&state, "get_combo", json!({ "comboId": "nope" })).await;
+        assert!(why.contains("nope"), "{why}");
+    }
+
+    /// A deck (`format`) with `main` in its main pile, `maybe` in a switched-off one, and
+    /// `commander` in the command zone when given.
+    fn combo_deck(
+        c: &rusqlite::Connection,
+        format: &str,
+        main: &[&str],
+        maybe: &[&str],
+        commander: Option<&str>,
+    ) -> i64 {
+        use grimoire_core::schema::fixtures::{category, deck, deck_card};
+        let id = deck(c, "Combo deck");
+        c.execute(
+            "UPDATE decks SET format_key = ?2 WHERE id = ?1",
+            rusqlite::params![id, format],
+        )
+        .unwrap();
+        let pile = category(c, id, "main", "Main");
+        for card in main {
+            deck_card(c, id, card, pile, 1);
+        }
+        let pile = category(c, id, "maybe", "Maybe");
+        for card in maybe {
+            deck_card(c, id, card, pile, 1);
+        }
+        if let Some(card) = commander {
+            let pile = category(c, id, "commander", "Commander");
+            deck_card(c, id, card, pile, 1);
+        }
+        id
+    }
+
+    fn ids(list: &Value, key: &str) -> Vec<String> {
+        list[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["comboId"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn held_combos_reads_a_deck_s_active_piles_only() {
+        let state = state("held-active");
+        let mut deck = 0;
+        seed(&state, |c| {
+            for (card, name) in [("p-a", "Card A"), ("p-b", "Card B"), ("p-c", "Card C")] {
+                combo_card(c, card, name, "U", true);
+            }
+            combo(c, "x", "R", &[CA, CB]);
+            combo(c, "y", "P", &[CA, CC]);
+            downloaded(c);
+            deck = combo_deck(c, "casual", &["p-a", "p-c"], &["p-b"], None);
+        });
+        let got = done(&state, "held_combos", json!({ "deckId": deck })).await;
+        assert_eq!(ids(&got, "complete"), ["y"]);
+        assert_eq!(got["completeTotal"], 1);
+        assert_eq!(ids(&got, "oneCardAway"), ["x"]);
+        assert_eq!(got["oneCardAwayTotal"], 1);
+        assert_eq!(got["oneCardAway"][0]["missing"]["name"], "Card B");
+        assert_eq!(got["oneCardAway"][0]["missing"]["cardId"], "p-b");
+        assert_eq!(got["oneCardAway"][0]["missing"]["owned"], 0);
+        assert_eq!(got["comboData"]["downloadedAt"], 1_700_000_000);
+
+        let only = done(
+            &state,
+            "held_combos",
+            json!({ "deckId": deck, "oneCardAway": false }),
+        )
+        .await;
+        assert!(only.get("oneCardAway").is_none());
+        let why = refused(&state, "held_combos", json!({ "deckId": 9999 })).await;
+        assert!(why.contains("list_decks"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn held_combos_offers_only_missing_cards_the_deck_can_play() {
+        let state = state("held-playable");
+        let mut deck = 0;
+        seed(&state, |c| {
+            combo_card(c, "p-a", "Card A", "U", true);
+            combo_card(c, "p-cmd", "Commander", "U", true);
+            combo_card(c, "p-blue", "Blue", "U", true);
+            combo_card(c, "p-red", "Red", "R", true);
+            combo_card(c, "p-banned", "Banned", "U", false);
+            combo(c, "blue", "R", &[CA, ("o-p-blue", "Blue")]);
+            combo(c, "red", "R", &[CA, ("o-p-red", "Red")]);
+            combo(c, "banned", "R", &[CA, ("o-p-banned", "Banned")]);
+            downloaded(c);
+            deck = combo_deck(c, "commander", &["p-a"], &[], Some("p-cmd"));
+        });
+        let got = done(&state, "held_combos", json!({ "deckId": deck })).await;
+        assert_eq!(ids(&got, "oneCardAway"), ["blue"], "{got}");
+        assert!(
+            got.get("note").is_none(),
+            "a Commander deck needs no note: {got}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_colourless_commander_offers_only_colourless_missing_cards() {
+        let state = state("held-colourless");
+        let mut deck = 0;
+        seed(&state, |c| {
+            combo_card(c, "p-a", "Card A", "", true);
+            combo_card(c, "p-cmd", "Commander", "", true);
+            combo_card(c, "p-grey", "Grey", "", true);
+            combo_card(c, "p-blue", "Blue", "U", true);
+            combo(c, "grey", "R", &[CA, ("o-p-grey", "Grey")]);
+            combo(c, "blue", "R", &[CA, ("o-p-blue", "Blue")]);
+            downloaded(c);
+            deck = combo_deck(c, "commander", &["p-a"], &[], Some("p-cmd"));
+        });
+        let got = done(&state, "held_combos", json!({ "deckId": deck })).await;
+        assert_eq!(ids(&got, "oneCardAway"), ["grey"], "{got}");
+    }
+
+    #[tokio::test]
+    async fn held_combos_without_a_deck_reads_the_collection() {
+        let state = state("held-collection");
+        seed(&state, |c| {
+            for (card, name) in [("p-a", "Card A"), ("p-b", "Card B"), ("p-c", "Card C")] {
+                combo_card(c, card, name, "U", true);
+            }
+            combo(c, "ab", "R", &[CA, CB]);
+            combo(c, "ac", "P", &[CA, CC]);
+            downloaded(c);
+            grimoire_core::schema::fixtures::entry(c, "p-a", 1);
+            grimoire_core::schema::fixtures::entry(c, "p-b", 1);
+        });
+        let got = done(&state, "held_combos", json!({})).await;
+        assert_eq!(ids(&got, "complete"), ["ab"]);
+        assert_eq!(ids(&got, "oneCardAway"), ["ac"]);
+        assert_eq!(got["oneCardAway"][0]["missing"]["name"], "Card C");
+        assert!(got.get("note").is_none(), "{got}");
+
+        let why = refused(&state, "held_combos", json!({ "limit": 101 })).await;
+        assert!(why.contains("limit"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_non_commander_deck_is_told_the_list_is_commander_s() {
+        let state = state("held-note");
+        let mut deck = 0;
+        seed(&state, |c| {
+            combo_card(c, "p-a", "Card A", "U", true);
+            combo(c, "x", "R", &[CA, CB]);
+            downloaded(c);
+            deck = combo_deck(c, "casual", &["p-a"], &[], None);
+        });
+        let got = done(&state, "held_combos", json!({ "deckId": deck })).await;
+        assert!(got["note"].as_str().unwrap().contains("Commander"), "{got}");
+    }
+
+    #[tokio::test]
+    async fn a_combo_list_never_downloaded_says_so() {
+        let state = state("combos-never");
+        seed(&state, |c| {
+            combo_card(c, "p-a", "Card A", "U", true);
+            combo(c, "c1", "R", &[CA, CB]);
+        });
+        let calls = [
+            ("card_combos", json!({ "cardId": "p-a" })),
+            ("get_combo", json!({ "comboId": "c1" })),
+            ("held_combos", json!({})),
+        ];
+        for (name, args) in calls {
+            let got = done(&state, name, args).await;
+            assert!(got["comboData"]["downloadedAt"].is_null(), "{name}: {got}");
+            assert!(
+                got["note"].as_str().unwrap().contains("Settings"),
+                "{name}: {got}"
+            );
+        }
     }
 }
