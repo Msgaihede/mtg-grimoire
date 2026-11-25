@@ -63,8 +63,9 @@ pub mod archive;
 pub mod boosters;
 pub mod bulk_undo;
 pub mod card;
-/// **One Scryfall card object as the `cards` row it becomes**, and `raw`'s gzip.
+/// The cards a printing refers to (tokens, emblems, meld parts), read from its Scryfall `all_parts`.
 pub mod card_related;
+/// **One Scryfall card object as the `cards` row it becomes**, and `raw`'s gzip.
 pub mod card_row;
 pub mod cardtypes;
 pub mod collection;
