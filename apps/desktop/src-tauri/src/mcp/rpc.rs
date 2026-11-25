@@ -43,8 +43,8 @@ const INSTRUCTIONS: &str = concat!(
     "read graph answers (graph_schema, graph_query). ",
     "For how cards work together: card_combos, get_combo and held_combos read Commander ",
     "Spellbook's combo list (Commander-legal combos only); find_tags and similar_cards read ",
-    "Scryfall's community oracle tags; card_scryfall answers a printing's raw Scryfall record; ",
-    "format_rules a format's rules. ",
+    "Scryfall's community oracle tags; card_rulings reads a card's official rulings; ",
+    "card_scryfall answers a printing's raw Scryfall record; format_rules a format's rules. ",
     "When an answer's note says a list has not been downloaded, tell the user so rather than ",
     "concluding there is nothing. ",
     "The one thing these tools write is the user's custom home-page widgets (widget_create, ",
@@ -276,6 +276,7 @@ mod tests {
             "find_tags",
             "similar_cards",
             "card_scryfall",
+            "card_rulings",
             "format_rules",
         ] {
             assert!(INSTRUCTIONS.contains(tool), "the instructions omit {tool}");
