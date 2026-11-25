@@ -746,6 +746,12 @@ mod tests {
             .unwrap();
         let after = user_counts(&conn, "main");
 
+        // The launch's corpus climb, which a converted file always meets before anything reads
+        // it (`prepare_database`): corpus schema 10 adds two tables the frozen ladder that
+        // `convert` runs never builds, so without it the corpus would lack `rulings` and
+        // `ruling_meta` here and nowhere a launch can reach.
+        crate::schema::migrate_corpus(&conn).unwrap();
+
         // Every table is in its own file and nowhere else. This is the assertion the whole
         // conversion exists to make true.
         for (table, side) in crate::schema::TABLES {

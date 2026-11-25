@@ -45,8 +45,8 @@ const INSTRUCTIONS: &str = concat!(
     "read graph answers (graph_schema, graph_query). ",
     "For how cards work together: card_combos, get_combo and held_combos read Commander ",
     "Spellbook's combo list (Commander-legal combos only); find_tags and similar_cards read ",
-    "Scryfall's community oracle tags; card_scryfall answers a printing's raw Scryfall record; ",
-    "format_rules a format's rules. ",
+    "Scryfall's community oracle tags; card_rulings reads a card's official rulings; ",
+    "card_scryfall answers a printing's raw Scryfall record; format_rules a format's rules. ",
     "When an answer's note says a list has not been downloaded, tell the user so rather than ",
     "concluding there is nothing. ",
     "show_search puts a search on the app's Search page and brings its window forward: offer it ",
@@ -280,6 +280,7 @@ mod tests {
             "find_tags",
             "similar_cards",
             "card_scryfall",
+            "card_rulings",
             "format_rules",
             "show_search",
         ] {
