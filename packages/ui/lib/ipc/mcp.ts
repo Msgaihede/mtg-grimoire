@@ -17,7 +17,58 @@
  * `mcp/claude_desktop.rs`); the light app's hosts have
  * no socket to open, and its Settings leaves the panel out (`LIGHT_SETTINGS`).
  */
+import type { Border } from "../border";
+import type { Finish } from "../finish";
+import type { ManaKey } from "../mana";
+import type { SortDir } from "../sort";
+import type { Universe } from "../universe";
+import type { SearchSortKey } from "./cards";
 import { invoke } from "./invoke";
+import type { TagRef } from "./tags";
+
+/**
+ * A search an agent asked the app to show — `apps/desktop/src-tauri/src/mcp/show.rs`'
+ * `SearchHandoff`, emitted to one window as `search:show` (`onSearchShow`). Every field is the
+ * Search page's own control; `null` and empty lists mean "leave it as the page has it".
+ */
+export interface SearchHandoff {
+  /** Which hand-off this is; the page answers with it through `mcpSearchShown`. */
+  id: number;
+  text: string;
+  format: string | null;
+  colors: ManaKey[];
+  colorsStrict: boolean;
+  types: string[];
+  rarities: string[];
+  sets: string[];
+  manaValues: number[];
+  manaX: boolean;
+  owned: boolean | null;
+  priceMin: number | null;
+  priceMax: number | null;
+  borders: Border[];
+  finishes: Finish[];
+  universe: Universe | null;
+  tags: TagRef[];
+  sort: HandoffSort | null;
+  allPrintings: boolean | null;
+}
+
+/** A sort the agent asked for — `show.rs`' `HandoffSort`. */
+export interface HandoffSort {
+  key: SearchSortKey;
+  dir: SortDir;
+}
+
+/** What the page tells the waiting tool once it has run the search — `show.rs`' `SearchShownReport`. */
+export interface SearchShownReport {
+  total: number;
+  totalIsCapped: boolean;
+  keywords: string[];
+  words: string;
+  unknownTags: string[];
+  failure: string | null;
+}
 
 /**
  * What the panel's local part draws — `apps/desktop/src-tauri/src/mcp/mod.rs`' `McpStatus`.
@@ -92,4 +143,10 @@ export const mcpCommands = {
    * desktop's own save dialog, so no path crosses IPC. `false` for Cancel.
    */
   mcpClaudeDesktopSave: () => invoke<boolean>("mcp_claude_desktop_save"),
+  /**
+   * The page's answer to a `search:show` hand-off — `mcp_search_shown`. `id` and `report` under
+   * their own names: `invoke` drops a misspelt key and the waiting tool would time out.
+   */
+  mcpSearchShown: (id: number, report: SearchShownReport) =>
+    invoke<void>("mcp_search_shown", { id, report }),
 };

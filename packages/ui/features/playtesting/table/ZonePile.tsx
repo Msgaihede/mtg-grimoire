@@ -428,7 +428,8 @@ export interface LibraryZoneProps {
 
 /**
  * The library, face down: a click draws, a right-click opens everything else it can do
- * (`libraryMenu`), and a card let go over it goes on top.
+ * (`libraryMenu`), and a card let go over it goes on top. Its top card is drawn face up while the
+ * reader may see it (`libraryTop`), and pointed at for the preview.
  *
  * **Every one of those is a sandbox move**, so with `sandbox` off it is a pile and a count and
  * nothing more: a disabled button, so it still says what it is, with no draw, no menu and no drop.

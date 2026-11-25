@@ -27,8 +27,17 @@ export interface DialogHost {
    * its release does nothing. A dialog that refuses the close is still open, and claims again.
    */
   claimBack: (onBack: () => void) => () => void;
-  /** Whether a dialog's header may be dragged down to close it. */
+  /**
+   * Whether a dialog may be dragged down to close it — by its header always, and by its body
+   * wherever what is under the finger is scrolled to its top.
+   */
   swipeToClose: boolean;
+  /**
+   * Whether a dialog is presented as a **bottom sheet**: it rises from the foot of the glass and
+   * sinks back to it (`motion.ts`'s `sheet`), instead of the desktop's centred scale. Optional so
+   * a host that says nothing keeps the modal it always had.
+   */
+  sheets?: boolean;
 }
 
 export const DialogHostContext = createContext<DialogHost | null>(null);

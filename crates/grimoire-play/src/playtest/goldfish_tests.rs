@@ -3108,3 +3108,72 @@ fn a_sandbox_edit_waits_for_the_question_to_be_answered() {
     assert!(refused.contains("Answer the question first"), "{refused}");
     assert_eq!(after, asked.view);
 }
+
+#[test]
+fn the_top_of_the_library_is_shown_while_a_static_lets_the_reader_look_at_it_or_reveals_it() {
+    // Issue #1722: "you may look at the top card of your library any time" (Vizier of the
+    // Menagerie's wording) and "play with the top card of your library revealed" (Future
+    // Sight's), each read by phase's parser as its static.
+    let mut cards = deck();
+    cards.push(card(
+        "Lookout Sage",
+        Some("{1}{G}"),
+        "Creature — Elf Druid",
+        "You may look at the top card of your library any time.",
+        Some(("1", "1")),
+        6,
+    ));
+    cards.push(card(
+        "Open Almanac",
+        Some("{2}{G}"),
+        "Enchantment",
+        "Play with the top card of your library revealed.",
+        None,
+        6,
+    ));
+    let (before, looked, gone, revealed) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        in_hand(&mut game, "Lookout Sage");
+        in_hand(&mut game, "Open Almanac");
+        let before = game.view();
+        let sage = put_down(&mut game, "Lookout Sage");
+        let looked = game.view();
+        game.act(A::Move {
+            id: sage,
+            to: Place::Graveyard,
+        })
+        .expect("the sage leaves");
+        let gone = game.view();
+        put_down(&mut game, "Open Almanac");
+        (before, looked, gone, game.view())
+    });
+    assert_eq!(before.you.library_top, None, "no static, a face-down pile");
+    let top = looked
+        .you
+        .library_top
+        .as_ref()
+        .expect("the sage shows the top");
+    assert_eq!(
+        top.id, looked.you.library_cards[0].id,
+        "the top, the library's first"
+    );
+    assert_eq!(
+        looked.opponents[0].library_top, None,
+        "the reader's own library only"
+    );
+    assert_eq!(
+        gone.you.library_top, None,
+        "the sage gone, the pile face down again"
+    );
+    let top = revealed
+        .you
+        .library_top
+        .as_ref()
+        .expect("revealed, the top shows");
+    assert_eq!(top.id, revealed.you.library_cards[0].id);
+    assert_eq!(
+        revealed.opponents[0].library_top, None,
+        "the goldfish's own is not revealed"
+    );
+}

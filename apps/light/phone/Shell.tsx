@@ -67,7 +67,15 @@ export function Shell({
     <div className="flex h-dvh flex-col overflow-hidden bg-bg text-text select-none">
       <header className="shrink-0 bg-surface pt-[env(safe-area-inset-top)]">
         <div className="flex h-12 items-center gap-3 pr-[calc(1rem+env(safe-area-inset-right))] pl-[calc(1rem+env(safe-area-inset-left))]">
-          <h1 className="min-w-0 flex-1 truncate font-heading text-lg">{title}</h1>
+          {/* Keyed by the words, so a new title fades in as its page arrives rather than snapping
+              over a page still sliding (`PageStack`). A CSS fade, not a presence: one heading is
+              ever in the document, and the old one has nothing to say on its way out. */}
+          <h1
+            key={title}
+            className="min-w-0 flex-1 truncate font-heading text-lg animate-in fade-in duration-[var(--duration-slow)] motion-reduce:animate-none"
+          >
+            {title}
+          </h1>
           <InboxBell open={inboxOpen} onOpen={onInbox} />
           {/* A link, for the tab bar's reason: it changes the URL. A destination of its own, so it
               is switched to as a tab is (`switchTo`), and a second press scrolls it up. */}

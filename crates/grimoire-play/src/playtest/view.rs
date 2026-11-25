@@ -208,8 +208,8 @@ pub struct PlaytestSeat {
     /// The reader's library, **top first**, for the library menu's look and search; empty for the
     /// opponent.
     pub library_cards: Vec<GameCard>,
-    /// The top card of this seat's library when the reader may see it (CR 401.5): revealed to
-    /// everyone (Courser of Kruphix, "play with the top card of your library revealed"), or the
+    /// The top card of this seat's library when the reader may see it (CR 401.5, issue #1722):
+    /// revealed to everyone (Courser of Kruphix, "play with the top card of your library revealed"), or the
     /// reader's own that they may look at any time (Future Sight, Bolas's Citadel). `castable`
     /// and `can_activate` say what the rules let the reader do with it there. `None` while it is
     /// hidden, as phase's own projection for the reader's seat has it.

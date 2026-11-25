@@ -42,6 +42,9 @@ catalogs:
     "@types/react-dom":
       specifier: ^19.1.6
       version: 19.2.4
+    "@use-gesture/react":
+      specifier: ^10.3.1
+      version: 10.3.1
     jsqr:
       specifier: ^1.4.0
       version: 1.4.0
@@ -240,6 +243,9 @@ importers:
       "@tanstack/react-virtual":
         specifier: "catalog:"
         version: 3.14.9(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      "@use-gesture/react":
+        specifier: "catalog:"
+        version: 10.3.1(react@19.2.8)
       keyrune:
         specifier: "catalog:"
         version: 3.19.0
@@ -460,6 +466,9 @@ importers:
       "@tiptap/starter-kit":
         specifier: ^3.31.3
         version: 3.31.3
+      "@use-gesture/react":
+        specifier: "catalog:"
+        version: 10.3.1(react@19.2.8)
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -2942,6 +2951,20 @@ packages:
         integrity: sha512-dkKR8q+lKciskj1Y3vthHktl+3cMLWGyVUP23bRiPZ5O9BRT++4EqDDV+TVeIKBL1VXVEqrJlz8MYbcnvJcAlg==,
       }
     engines: { node: ^18.18.0 || ^20.9.0 || >=21.1.0 }
+
+  "@use-gesture/core@10.3.1":
+    resolution:
+      {
+        integrity: sha512-WcINiDt8WjqBdUXye25anHiNxPc0VOrlT8F6LLkU6cycrOGUDyY/yyFmsg3k8i5OLvv25llc0QC45GhR/C8llw==,
+      }
+
+  "@use-gesture/react@10.3.1":
+    resolution:
+      {
+        integrity: sha512-Yy19y6O2GJq8f7CHf7L0nxL8bf4PZCPaVOCgJrusOeFHY1LvHgYXnmnXg6N5iwAnbgbZCDjo60SiM6IPJi9C5g==,
+      }
+    peerDependencies:
+      react: ">= 16.8.0"
 
   "@valibot/to-json-schema@1.8.0":
     resolution:
@@ -7904,6 +7927,13 @@ snapshots:
     dependencies:
       "@typescript-eslint/types": 8.66.0
       eslint-visitor-keys: 5.0.1
+
+  "@use-gesture/core@10.3.1": {}
+
+  "@use-gesture/react@10.3.1(react@19.2.8)":
+    dependencies:
+      "@use-gesture/core": 10.3.1
+      react: 19.2.8
 
   "@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@6.0.3))":
     dependencies:

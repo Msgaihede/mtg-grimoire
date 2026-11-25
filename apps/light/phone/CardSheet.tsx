@@ -141,10 +141,9 @@ export function CardSheet({
       open={cardId !== null}
       title={card?.name ?? "Card"}
       closeLabel="Close card"
-      // Below 640px `Dialog` fills the window, and the window here runs under a cutout and the
-      // status bar (`viewport-fit=cover`), so the sheet takes the top inset itself — the shell's
-      // header, which takes it everywhere else, is underneath.
-      size="w-[28rem] pt-[env(safe-area-inset-top)] sm:pt-0"
+      // Below 640px `Dialog` draws this as a page sheet: the scrim keeps the top inset and a 12px
+      // sliver of the page above it (`DialogHost.sheets`), so the sheet takes no inset of its own.
+      size="w-[28rem]"
       onDismiss={close}
       onClose={close}
       // The sheet *is* an entry — `?card=` — so Back closes it by the place, and the shell must

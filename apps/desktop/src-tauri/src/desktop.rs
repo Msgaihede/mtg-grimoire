@@ -466,6 +466,8 @@ pub fn run() {
             // Claude Desktop's one-click install: the server as an MCP Bundle, opened or saved.
             mcp::claude_desktop::mcp_claude_desktop_install,
             mcp::claude_desktop::mcp_claude_desktop_save,
+            // The Search page's answer to `show_search`: what the wall shows for the agent's search.
+            mcp::show::mcp_search_shown,
             // The review list (issue #1396, the PR 3 plan §3.5): the intents this device's policy
             // parks, Apply and Decline, and the per-kind switches — each the core's command of the
             // same name on a worker, through the sync lane.
@@ -945,6 +947,7 @@ pub fn run() {
             // The local MCP server's one listener — empty until `start` resumes a switched-on
             // server or the panel switches one on.
             app.manage(Arc::new(mcp::McpSlot::default()));
+            app.manage(Arc::new(window::LastFocused::default()));
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("startup".to_owned())
@@ -1010,6 +1013,16 @@ pub fn run() {
                 });
             }
             tauri::RunEvent::Exit => checkpoint_on_exit(app),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Focused(true),
+                ..
+            } => app.state::<Arc<window::LastFocused>>().record(&label),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } => app.state::<Arc<window::LastFocused>>().forget(&label),
             _ => {}
         });
 }
@@ -1518,6 +1531,10 @@ fn init_state(
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         mirror_pass: Mutex::new(()),
         changes,
+        show_search: Arc::new(mcp::show::ShowSearch::new(
+            Arc::new(window::DesktopWindows::new(app.clone())),
+            mcp::show::WAIT,
+        )),
     })
 }
 

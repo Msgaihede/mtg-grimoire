@@ -56,7 +56,7 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   lobby's game that holds for every person: each guest is sent the view from its own seat
   (`guest_steps`, `view_of`), never the host's. **A hidden card is sent only when phase's own
   projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
-  the reader may look at or that is revealed, an opponent's revealed or known hand card, a
+  the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
   face-down exile card they may look at. Never decide that in this crate, and never read a
   position off the projection (it reorders a library's hidden cards).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of

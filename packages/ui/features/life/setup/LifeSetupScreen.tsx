@@ -216,6 +216,7 @@ export function LifeSetupScreen({
               </div>
               <JoinedChoices
                 label="Players"
+                slide
                 className="h-11"
                 choices={[1, 2, 3, 4, 5, 6].map((n) => ({
                   value: String(n),
@@ -240,6 +241,7 @@ export function LifeSetupScreen({
               </div>
               <JoinedChoices<Seating>
                 label="Seating"
+                slide
                 // 13px and less padding in the phone's row, where two choices share 236px.
                 className="h-11 shrink-0 basis-[236px] [&>button]:px-1 [&>button]:text-[13px] min-[600px]:basis-auto min-[600px]:[&>button]:text-sm"
                 choices={(
@@ -456,6 +458,7 @@ function StartingLife({
       <div className="flex gap-2">
         <JoinedChoices
           label="Starting life"
+          slide
           className="h-11 flex-1"
           choices={LIFE_CHOICES.map((n) => ({
             value: String(n),

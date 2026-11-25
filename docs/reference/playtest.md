@@ -565,7 +565,8 @@ seat — the projection phase's own client draws from — and sends a hidden car
 the reader may see it (`display_visible_to_viewer`). Positions are read off the game, never off
 the projection, which reorders a library's hidden cards. From it:
 
-- **A library's top** (`libraryTop`, `libraryTopRevealed`): the reader's own they may look at any
+- **A library's top** (`libraryTop`, `libraryTopRevealed`, issue #1722), drawn face up on the
+  pile and pointed at for the preview, sandbox or not: the reader's own they may look at any
   time (Future Sight, Vizier of the Menagerie, Bolas's Citadel), or anyone's played with the top
   card revealed (Courser of Kruphix). Its `castable` and `canActivate` are the rules' offers there
   — a land, a cast, a plot — taken by `play` and `activate` with the sandbox off.
