@@ -946,6 +946,7 @@ pub fn run() {
             // The local MCP server's one listener — empty until `start` resumes a switched-on
             // server or the panel switches one on.
             app.manage(Arc::new(mcp::McpSlot::default()));
+            app.manage(Arc::new(window::LastFocused::default()));
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("startup".to_owned())
@@ -1011,6 +1012,16 @@ pub fn run() {
                 });
             }
             tauri::RunEvent::Exit => checkpoint_on_exit(app),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Focused(true),
+                ..
+            } => app.state::<Arc<window::LastFocused>>().record(&label),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } => app.state::<Arc<window::LastFocused>>().forget(&label),
             _ => {}
         });
 }
@@ -1519,7 +1530,10 @@ fn init_state(
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         mirror_pass: Mutex::new(()),
         changes,
-        show_search: Arc::new(mcp::show::ShowSearch::detached()),
+        show_search: Arc::new(mcp::show::ShowSearch::new(
+            Arc::new(window::DesktopWindows::new(app.clone())),
+            mcp::show::WAIT,
+        )),
     })
 }
 

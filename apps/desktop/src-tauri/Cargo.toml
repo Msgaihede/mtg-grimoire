@@ -202,6 +202,8 @@ bytes = "1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
+    # `GetForegroundWindow`: whether a search shown to an agent's window actually came forward.
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # The `ICoreWebView2::add_PermissionRequested` handler `camera.rs` installs, so the QR
 # scanner's camera prompt is answered instead of falling through to WebView2's own default
