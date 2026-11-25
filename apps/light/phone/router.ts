@@ -118,6 +118,38 @@ function pushedOver(state: unknown): string | null {
     : null;
 }
 
+/**
+ * Which way the reader is moving — what the page stack (`PageStack.tsx`) animates a change of
+ * page by: `forward` slides the new page in over the old one, `back` slides the old one away off
+ * the new, and `switch` (a tab, Settings) cross-fades two siblings.
+ */
+export type Move = "forward" | "back" | "switch";
+
+/**
+ * The move the verb being made is, read by {@link moveSnapshot} once the address it writes has
+ * moved. **Set by every verb before it writes and taken by the first change of address after it**,
+ * so one verb names one change. A change no verb named is a traversal the reader made — Android's
+ * back gesture, a browser's Back — and reads as `back`.
+ */
+let pendingMove: Move | null = null;
+
+/** The address the reader is on and the move that brought them there. */
+let moved: { href: string; move: Move } = { href: "", move: "switch" };
+
+/**
+ * {@link moved}, renewed the first time it is asked after the address changed. Memoised on the
+ * address, so every read in one render — and StrictMode's second — gets the same object.
+ */
+function moveSnapshot(): { href: string; move: Move } {
+  const now = href();
+  if (now !== moved.href) {
+    // The first read is the app opening: nothing moved, and nothing should animate.
+    moved = { href: now, move: moved.href === "" ? "switch" : (pendingMove ?? "back") };
+    pendingMove = null;
+  }
+  return moved;
+}
+
 /** The walk back a tab switch is waiting on, and what it writes once it lands. */
 let traversal: (() => void) | null = null;
 let traversalTimer: ReturnType<typeof setTimeout> | undefined;
@@ -208,11 +240,17 @@ function write(how: "push" | "replace", next: string): void {
  * *replace* while holding only moves the hold: the place on screen has no entry of its own, so
  * the entry a replace would rename is the one beneath it.
  */
-export function navigate(place: Place, { replace = false }: { replace?: boolean } = {}): void {
+export function navigate(
+  place: Place,
+  { replace = false, as }: { replace?: boolean; as?: Move } = {},
+): void {
   if (isHere(place)) return;
+  // A push goes deeper; a replace is named by the verb that made it (`up`, `back`, `switchTo`).
+  if (as !== undefined) pendingMove = as;
+  else if (!replace) pendingMove = "forward";
   // A sheet's entry on top is taken off first, so this write lands where the sheet's was
   // (`sheetHistory.ts`, rule 3) — a push over it would leave the sheet one Back beneath the page.
-  if (uncover(() => navigate(place, { replace }))) return;
+  if (uncover(() => navigate(place, { replace, as }))) return;
   const next = placeHref(place);
   if (landed(next)) hold = null;
   else if (held() !== null && replace) holdOver(next);
@@ -299,6 +337,7 @@ export const BACK_WAIT_MS = 500;
  */
 export function back(fallback: Place): void {
   if (leaving || isHere(fallback)) return;
+  pendingMove = "back";
   if (uncover(() => back(fallback))) return;
   const entry = placeAt(actual());
   const beneath =
@@ -306,7 +345,7 @@ export function back(fallback: Place): void {
     (held() === null ||
       (entry.cardId !== null && placeHref({ ...entry, cardId: null }) === placeHref(fallback)));
   if (!beneath) {
-    navigate(fallback, { replace: true });
+    navigate(fallback, { replace: true, as: "back" });
     return;
   }
   goBack(fallback);
@@ -328,13 +367,13 @@ function goBack(fallback: Place): void {
   const timer = setTimeout(() => {
     release();
     // Only for a reader still where they pressed: anything else has moved them since.
-    if (href() === from) navigate(fallback, { replace: true });
+    if (href() === from) navigate(fallback, { replace: true, as: "back" });
   }, BACK_WAIT_MS);
   try {
     window.history.back();
   } catch {
     release();
-    navigate(fallback, { replace: true });
+    navigate(fallback, { replace: true, as: "back" });
   }
 }
 
@@ -361,8 +400,9 @@ function goBack(fallback: Place): void {
 export function up(parent: Place): void {
   if (leaving || isHere(parent)) return;
   if (uncover(() => up(parent))) return;
+  pendingMove = "back";
   if (held() === null && pushedOver(window.history.state) === placeHref(parent)) goBack(parent);
-  else navigate(parent, { replace: true });
+  else navigate(parent, { replace: true, as: "back" });
 }
 
 /**
@@ -445,11 +485,12 @@ const isRoot = (place: Place): boolean =>
 export function switchTo(place: Place): void {
   if (uncover(() => switchTo(place))) return;
   if (traversal !== null) return;
+  pendingMove = "switch";
   const depth = depthOf(window.history.state);
   const land = () => {
     const base = placeAt(href());
     const fromStart = base.view === LIGHT_START && isRoot(base);
-    navigate(place, { replace: !fromStart });
+    navigate(place, { replace: !fromStart, as: "switch" });
   };
   if (depth === 0) {
     land();
@@ -486,3 +527,15 @@ export function usePlace(): Place {
   const current = useSyncExternalStore(subscribe, href, () => "/");
   return useMemo(() => placeAt(current), [current]);
 }
+
+/**
+ * The place's address and the {@link Move} that brought the reader to it — what the page stack
+ * reads to decide how a new page arrives. Same subscription as {@link usePlace}, so the two agree
+ * in every render.
+ */
+export function useMove(): { href: string; move: Move } {
+  return useSyncExternalStore(subscribe, moveSnapshot, () => STILL);
+}
+
+/** The server's answer, and a first render's: nothing has moved. */
+const STILL: { href: string; move: Move } = { href: "/", move: "switch" };

@@ -113,6 +113,41 @@ in the middle of its half, and `placeNumber`'s `under` gives the number the pane
 `HUB_SIDE_KEEP` at either side — on such a panel the menu button can sit on a side edge, which
 `hubRoom` does not answer for. Facing one way changes nothing: every panel is upright already.
 
+### Motion and touch (2026-11-25)
+
+The light app's "feel like an iPhone app" pass ([light-app.md](light-app.md) §7.10), carried onto
+the board. Everything here is the shared feature's, so both faces have it; the timings are
+`motion.ts`'s and nothing on the board writes a number of its own.
+
+- **The board rises into place and sinks away** (`BoardFrame`, the `dialog` preset): each face's
+  page holds it in a presence, so the setup is already drawn beneath it as it goes, and the frame
+  is `aria-hidden` and takes no press on its way out.
+- **A hold is seen being counted**: the panel's body sinks to `holdSqueeze`'s scale over the hold's
+  own 500ms (`HOLD_MS`), so the calculator opens from a panel already pressed in; let go early and it
+  springs back (`SPRING.press`).
+- **A commander swipe moves the panel with the finger** — once the move is more along "up" (in the
+  panel's own frame) than across, the body follows it, rubber-banded (`pulled`: at most 28px), and
+  springs home on the let-go whatever the let-go decides. The rules that decide are unchanged
+  (`SWIPE_PX`, `SWIPE_MS`, `swipeable` in `LifeBoard`).
+- **The panels turn**: facing the counted seat is a CSS tween of the turned frame on the `slow`
+  tier, the short way round — `nearestTurn` keeps the angle unwrapped, so 180° to −90° is a quarter
+  turn and the transform may read −270° where the seating says 90°.
+- **The total pops** to `NUMBER_POP` and springs back each time it moves — a tap counted where it
+  was made, from across the table. Scale only.
+- **The calculator and the game menu rise out of the board's scrim** (`popup` over `scrim`), each
+  in a presence of its own; the calculator scales from a 0-size box at the board's centre so its
+  own turn and centring are untouched.
+- **The setup's one-of-many choices** (Players, Seating, Starting life) slide one marker between
+  segments (`JoinedChoices`' `slide`, `SPRING.marker`).
+- Under reduced motion the squeeze, the pop, the follow and the turn are gone; the fades stay.
+- **Nothing at rest moved — the board's look is the design's** (the owner's ask, 2026-11-25).
+  Measured by pixel against the commit before this pass (`a48e0b5`), over the fake at 390 × 844
+  and 1280 × 800: the board, a total moved, the calculator and the game menu are identical; commander
+  damage open and closed differ only in sub-threshold antialiasing; the setup's pressed segments
+  differ by a pixel of antialiasing on their corner curve (the marker takes its segment's own
+  corners, `rounded-[inherit]`). The one visible change on the phone's setup is the app-wide tab
+  bar's marker, which is the shell's and not the tracker's.
+
 ## 5. Immersive: the bars, the rotation and the screen
 
 The owner asked (2026-11-20) that the tracker fill an Android phone's screen properly; a reader
@@ -172,6 +207,10 @@ platform probe (`phone/fence.test.ts`):
 - The web road has not been driven in a phone's browser: full screen, the rotation lock or the wake
   lock. The suites (`hostImmersive.test.ts`) stand each API in for itself.
 - The tab bar's seven-tab figures are arithmetic from the classes (§2), not a measurement.
+- The board's motion and touch (§4) were driven in headless Chromium at 390 × 844 under touch
+  emulation: a 300ms hold read `scale(0.96)` on the panel's body, a 72px swipe along Player 1's "up"
+  `translateY(-15.4px)` in its frame, and the far side turned to −270° (90°). Not on a phone, whose
+  touch timing a held press depends on.
 - Commander damage facing the counted seat (§4) was seen in headless Chromium over the fake
   (`mobile:dev`) at 390×844, 844×390 and 800×1280, three to six players, A and B; not on a
   phone.

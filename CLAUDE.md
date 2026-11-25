@@ -95,6 +95,7 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 
 - **`worktree-setup`** — Rules for secondary checkouts, base branches, and shared stashes.
 - **`running-the-app`** — Lock management (`.git/locks/app` and `storybook`). Only one app and one Storybook instance may run across all worktrees.
+- **`motion`** — Motion's AI kit (`npx motion-ai`, project scope: the skill, `.claude/agents/motion-reviewer.md`, and the hosted `motion` / `motion-plus` servers in `.mcp.json`). Its advice yields to `packages/ui/lib/motion.ts` and [`docs/reference/motion.md`](docs/reference/motion.md) wherever they differ — the CSP bans and the tiers are this repo's.
 
 ---
 

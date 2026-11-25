@@ -409,6 +409,119 @@ export const press: PressFeedback = {
 export const stackCard: Transition = TRANSITION.slow;
 
 /**
+ * Springs, for motion a **finger** starts or can interrupt — the phone face's sheets, its pages
+ * and the tab bar's marker (the owner's "feel like an iPhone app" pass, 2026-11-25).
+ *
+ * **A tween cannot take a velocity and a spring can**, which is the whole reason these exist
+ * beside the tiers. A sheet let go mid-drag, a page let go mid-swipe, a tab pressed while the
+ * marker is still travelling: each is already moving when the animation starts, and a tween
+ * restarts from rest — the visible hitch every web app has and no native one does.
+ *
+ * **Timed in the same four tiers, never in stiffness and damping.** `visualDuration` is the time
+ * a spring takes to *look* arrived, which is the number the scale above is about, so a spring
+ * here is "`slow`, and physical" rather than a second vocabulary nobody can compare with the
+ * first. `motion.test.ts` holds every `visualDuration` to the tier set, as it holds `duration`.
+ *
+ * **`bounce: 0` on anything that is docked to an edge.** A sheet that overshoots lifts off the
+ * foot of the glass and shows a strip of scrim under it; a page that overshoots shows a strip of
+ * the page beneath. Overshoot is kept for the one thing that floats free — the tab marker.
+ */
+export const SPRING = {
+  /** A surface docked to an edge, crossing the window: a sheet rising, a page sliding. */
+  surface: { type: "spring", visualDuration: seconds(DURATION.slow), bounce: 0 },
+  /** A small thing moving between two places it can be: the tab bar's marker. */
+  marker: { type: "spring", visualDuration: seconds(DURATION.base), bounce: 0.2 },
+  /** A control's press and release — {@link pressSpring}. Quick, with a felt rebound. */
+  press: { type: "spring", visualDuration: seconds(DURATION.fast), bounce: 0.3 },
+} satisfies Record<string, Transition>;
+
+/**
+ * **A bottom sheet**: the phone face's dialogs rise from the foot of the glass and sink back to
+ * it, which is what tells a reader the panel is a layer they can pull down rather than a page
+ * (`Dialog`, when the host lends `sheets`).
+ *
+ * It is {@link dialog} for a finger: the desktop's centred modal scales up out of nowhere, which
+ * on a phone reads as a zoom with no direction and no handle. `100%` of the panel's own height,
+ * so a short action sheet and a full-glass card sheet both start exactly out of sight.
+ *
+ * Arrives on {@link SPRING.surface} and leaves on a `base` tween — the same asymmetry as
+ * {@link popup}: the reader dismissed it and has looked away. `y` is a transform, so
+ * `MotionConfig reducedMotion="user"` takes the travel away and the scrim's fade is what is left.
+ */
+export const sheet: EnterExit = {
+  initial: { y: "100%" },
+  animate: { y: 0, transition: SPRING.surface },
+  exit: { y: "100%", transition: leaving(DURATION.base) },
+};
+
+/**
+ * The phone face's page stack (`apps/light/phone/PageStack.tsx`): how far the page *beneath* a
+ * push travels, and how much it dims.
+ *
+ * **A push slides the new page in over the old one, which drifts left by {@link PAGE.parallax}
+ * of the width and dims** — the navigation idiom a phone reader's thumb already knows, and the one
+ * that says *deeper* without a word. Back is the same picture played the other way, and the swipe
+ * back is that picture under a finger. Numbers rather than a preset because the stack drives
+ * them by hand: a swipe sets them every frame, and only the let-go is an animation.
+ */
+export const PAGE = {
+  /** The page beneath travels this fraction of the width while the page above crosses all of it. */
+  parallax: 0.28,
+  /** The page beneath sits at this opacity under the page above — dimmed, against the dark ground. */
+  dim: 0.55,
+  /** Let go past this fraction of the width and a swipe back goes through. */
+  commit: 0.35,
+  /** …or this fast, in px per ms, towards the edge — a flick. */
+  flick: 0.5,
+  /** A tab switch: a cross-fade on this tier, with no travel — two tabs are siblings, not depths. */
+  swap: TRANSITION.base,
+} as const;
+
+/**
+ * **A held press, made visible**: the Life tracker's panel sinks to this scale over the length of
+ * the hold that opens its calculator (`LifeBoard`'s `HOLD_MS`), so the reader sees the hold being
+ * counted rather than waiting on nothing — and lets go early to a spring back.
+ *
+ * A function, because the duration is **the gesture's and not a tier**: it is however long the
+ * hold is, the way `CardStack`'s `STACK_CLOSE_DELAY_MS` is gesture intent and never derived from a
+ * tween. `standard`, because the panel ends where it would have ended had the reader let go: the
+ * calculator takes over from a panel already sunk.
+ */
+export function holdSqueeze(holdMs: number): { scale: number; transition: Transition } {
+  return { scale: 0.955, transition: { duration: seconds(holdMs), ease: EASE.standard } };
+}
+
+/**
+ * **A number that changed, felt**: the Life tracker's total grows to this scale the instant it
+ * moves and springs back on {@link SPRING.press} — a tap counted under the finger that made it,
+ * at a glance, from across a table. Scale only: a total that jumped sideways would be misread.
+ */
+export const NUMBER_POP = 1.08;
+
+/**
+ * **A swipe the board is listening to**: how far a Life tracker panel follows a finger swiping it
+ * to open or close commander damage, before the swipe is decided on its let-go. Rubber-banded —
+ * `reach × (1 − e^(−travel / give))` — so it answers at once and never runs away from the panel.
+ */
+export const PULL = { reach: 28, give: 90 } as const;
+
+/** {@link PULL}'s band: the drawn offset for `travel` px of finger along the swipe. */
+export const pulled = (travel: number): number =>
+  travel <= 0 ? 0 : PULL.reach * (1 - Math.exp(-travel / PULL.give));
+
+/**
+ * Press feedback for a `motion` element under a finger: a tile on a card wall, a tab.
+ *
+ * {@link press} with a spring under it rather than the `fast` tween, so a press released before
+ * the dip finished rebounds from where it got to rather than restarting. No `whileHover` — a
+ * finger has none, and a sticky hover after a tap is the bug a phone shows first.
+ */
+export const pressSpring: Pick<PressFeedback, "whileTap" | "transition"> = {
+  whileTap: { scale: 0.97 },
+  transition: SPRING.press,
+};
+
+/**
  * An {@link EnterExit} as `Variants`, for the one case a prop bag cannot do: a parent that
  * drives its children by label.
  *

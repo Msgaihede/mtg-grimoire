@@ -42,6 +42,12 @@ export interface CardTileProps {
   /** Grow the art very slightly while the tile is hovered — `CardArt`'s own prop, handed on. A
    *  wall of tiles wants it, as `CardGrid`'s do; a static tile does not. */
   hoverZoom?: boolean;
+  /**
+   * Classes for the art's button alone — the phone wall's press dip (`PRESS`), which a finger needs
+   * to feel the tap land and a desktop wall, under a pointer with a hover, does not. Absent, the
+   * button is as it always was.
+   */
+  pressClassName?: string;
   loading?: "eager" | "lazy";
   className?: string;
 }
@@ -77,6 +83,7 @@ export function CardTile({
   onPress,
   pressLabel,
   hoverZoom = false,
+  pressClassName,
   loading,
   className,
 }: CardTileProps): ReactElement {
@@ -104,7 +111,7 @@ export function CardTile({
           type="button"
           aria-label={pressLabel ?? name}
           onClick={onPress}
-          className={cn("relative block w-full rounded-lg text-left", FOCUS)}
+          className={cn("relative block w-full rounded-lg text-left", FOCUS, pressClassName)}
         >
           {art}
         </button>

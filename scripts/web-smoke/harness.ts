@@ -1025,8 +1025,19 @@ async function openPage(
   const forget = () => browser.send("Network.clearBrowserCache", {}, sessionId);
   /**
    * A real press — the pointer down and up at the middle of the element `find` answers — once
-   * that element is on the page with a box. Not `element.click()`: the phone router takes only
-   * a primary click nothing else handled, and a press is what a reader makes.
+   * that element is on the page with a box **that has stopped moving, and is the thing under that
+   * point**. Not `element.click()`: the phone router takes only a primary click nothing else
+   * handled, and a press is what a reader makes.
+   *
+   * **Why both, since the phone face moves things** (2026-11-25): a sheet rises the height of the
+   * glass on a spring and a page slides in from the right edge. The first tab here is not the
+   * browser's front one, so its animation frames are rationed and a rise can take seconds: the
+   * first runs after that pass measured the new deck's name field while its sheet was still below
+   * the window's foot (y 413 of 600, the field under the edge), pressed a point nothing was at,
+   * typed into nothing, and Create deck refused a deck with no name. So the press waits for two
+   * polls in a row to find the box in the same place, and for `elementFromPoint` at its middle to
+   * be the element or inside it — off the glass, under a scrim or a leaving page (an `inert` one
+   * is not hit), it is not yet something a reader could press.
    */
   const press = async (what: string, find: string) => {
     const at = await until<Point>(
@@ -1036,9 +1047,18 @@ async function openPage(
         if (!el) return null;
         el.scrollIntoView({ block: "center" });
         const box = el.getBoundingClientRect();
-        return box.width > 0 && box.height > 0
-          ? { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-          : null;
+        if (!(box.width > 0 && box.height > 0)) return null;
+        const here = [box.x, box.y, box.width, box.height].map(Math.round).join(",");
+        if (window.__smokePressBox !== here) {
+          window.__smokePressBox = here;
+          return null;
+        }
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        if (hit === null || !(hit === el || el.contains(hit))) return null;
+        delete window.__smokePressBox;
+        return { x, y };
       })()`,
     );
     for (const type of ["mousePressed", "mouseReleased"] as const) {

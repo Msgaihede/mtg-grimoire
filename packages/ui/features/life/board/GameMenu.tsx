@@ -1,4 +1,5 @@
 import { useRef, type ReactNode } from "react";
+import { motion, useIsPresent } from "motion/react";
 import {
   Crown,
   Minus,
@@ -11,7 +12,7 @@ import {
 } from "lucide-react";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
-import { PRESS_SOFT } from "@/lib/motion";
+import { popup, PRESS_SOFT, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { cn } from "@/lib/utils";
 import {
@@ -94,6 +95,8 @@ export function GameMenu({
   onPickFirst: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // On its way out the menu is a picture: `CalculatorDialog`'s rule.
+  const present = useIsPresent();
   const close = () => dispatch({ type: "menu", open: false });
   useOverlayFocus(panelRef, close);
 
@@ -102,15 +105,22 @@ export function GameMenu({
   const toggle = (name: GameSwitch) => () => dispatch({ type: "switch", name });
 
   return (
-    <div className={cn("absolute inset-0", LAYER.popup)}>
-      <button
+    <div
+      className={cn("absolute inset-0", LAYER.popup, !present && "pointer-events-none")}
+      aria-hidden={present ? undefined : true}
+    >
+      <motion.button
+        {...scrim}
         type="button"
         tabIndex={-1}
         aria-label="Close the menu"
         onClick={close}
         className="absolute inset-0 size-full cursor-default border-0 bg-[color-mix(in_oklab,var(--color-bg)_72%,transparent)] p-0"
       />
-      <div
+      {/* Rises out of the scrim (`popup`). Its centring is Tailwind's `translate`, a property of its
+          own, so the scale the tween writes to `transform` composes with it. */}
+      <motion.div
+        {...popup}
         ref={panelRef}
         role="dialog"
         aria-modal="true"
@@ -293,7 +303,7 @@ export function GameMenu({
         >
           Back to the game
         </button>
-      </div>
+      </motion.div>
     </div>
   );
 }
