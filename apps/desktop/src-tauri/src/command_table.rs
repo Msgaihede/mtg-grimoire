@@ -277,6 +277,10 @@ const TABLE_ONLY: &[(&str, &str)] = &[
         "a printing's whole Scryfall record, for the MCP server's card_scryfall tool",
     ),
     (
+        "card_related",
+        "what one card brings with it, for the MCP server's get_card",
+    ),
+    (
         "card_oracle_tags",
         "a card's own oracle tags with labels, for the MCP server's get_card; the page reads \
      the tag closure through oracle_tags_for_printings",

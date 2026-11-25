@@ -372,6 +372,7 @@ commands! {
     };
     read card_meld_parts in card(id: String) = |conn| meld_parts(conn, &id);
     read card_raw in card(ids: Vec<String>) = |conn| raw_cards(conn, &ids);
+    read card_related in card_related(id: String) = |conn| related_cards(conn, &id);
     read card_printings in card(oracle_id: String, marketplace: Option<String>, limit: Option<i64>) = |conn| {
         let market = Marketplace::from_opt(marketplace.as_deref());
         list_printings(conn, &oracle_id, market, limit)
