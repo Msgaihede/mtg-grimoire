@@ -178,6 +178,9 @@ pub mod recent_cards;
 /// behind the capture guard, because every device derives them for itself.
 pub mod reconcile;
 pub mod reset;
+/// **Scryfall's rulings** — the bulk file as a weekly desktop feed (corpus schema 10) and the
+/// read the local MCP server's `card_rulings` answers from.
+pub mod rulings;
 /// **Scan history** — every pile the scanner's tray filed or archived, kept as a record a reader
 /// can go back to. User schema v64; neither of its tables syncs.
 pub mod scan_history;
