@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
-import type { StartupStatus } from "@grimoire/ui/lib/ipc";
+import type { SearchHandoff, StartupStatus } from "@grimoire/ui/lib/ipc";
 
 /**
  * **Under `ipc.ts`, not in place of it** — `invoke` is the transport and the event module is the
@@ -18,12 +18,21 @@ vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 // The real App mounts the whole product and fires its queries. What this suite is about is
 // *whether* it is mounted, so it stands in for itself.
 vi.mock("@grimoire/ui/App", () => ({ default: () => <div>the app</div> }));
+// The window-scoped listen is captured, so the test can play the part of the desktop's emit.
+const onSearchShow = vi.hoisted(() =>
+  vi.fn<(cb: (handoff: SearchHandoff) => void) => Promise<() => void>>(),
+);
+vi.mock("@grimoire/ui/lib/window", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@grimoire/ui/lib/window")>()),
+  onSearchShow,
+}));
 
 import { DesktopBoot, STARTUP_POLL_MS } from "./DesktopBoot";
 import { STARTUP_LOADING_LABEL } from "./StartupScreen";
 import { ACTIVITY_DELAY_MS } from "@grimoire/ui/lib/activity";
 import { emitFake, resetListeners } from "@grimoire/fake/event";
 import { resetWindow } from "@grimoire/fake/window";
+import { useAppStore } from "@grimoire/ui/lib/store";
 
 const LOADING: StartupStatus = { state: "loading" };
 const READY: StartupStatus = { state: "ready" };
@@ -46,6 +55,8 @@ beforeEach(() => {
   invoke.mockReset();
   resetListeners();
   resetWindow();
+  onSearchShow.mockReset();
+  onSearchShow.mockResolvedValue(() => {});
 });
 
 afterEach(() => {
@@ -148,5 +159,29 @@ describe("the desktop boot", () => {
     unmount();
     await advance(STARTUP_POLL_MS * 10);
     expect(asks()).toBe(before);
+  });
+
+  it("hands a search the MCP server sent this window to the store", async () => {
+    invoke.mockResolvedValue(LOADING);
+    render(<DesktopBoot />);
+    await advance(0);
+    expect(onSearchShow).toHaveBeenCalledTimes(1);
+
+    const send = onSearchShow.mock.calls[0]![0];
+    act(() => send({ id: 9, text: "bolt" } as SearchHandoff));
+    expect(useAppStore.getState().activeView).toBe("search");
+    expect(useAppStore.getState().pendingSearchHandoff?.id).toBe(9);
+  });
+
+  it("stops listening when unmounted, even if the subscription was still pending", async () => {
+    invoke.mockResolvedValue(LOADING);
+    const unlisten = vi.fn();
+    let resolve!: (fn: () => void) => void;
+    onSearchShow.mockReturnValue(new Promise((r) => (resolve = r)));
+    const { unmount } = render(<DesktopBoot />);
+    unmount();
+    resolve(unlisten);
+    await advance(0);
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });
