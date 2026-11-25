@@ -32,7 +32,9 @@ function durationsIn(value: unknown, path: string): [string, number][] {
   if (value === null || typeof value !== "object") return [];
   return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => {
     const here = `${path}.${key}`;
-    if (key === "duration" && typeof child === "number") return [[here, child] as [string, number]];
+    // A spring is timed by `visualDuration` (`SPRING`), and held to the same tiers.
+    if ((key === "duration" || key === "visualDuration") && typeof child === "number")
+      return [[here, child] as [string, number]];
     return durationsIn(child, here);
   });
 }
@@ -68,6 +70,11 @@ describe("the motion scale", () => {
    * a fourth tier is added. The direction doc's 150ms was widened to 260ms only for surfaces
    * that cross the window; anything slower than the slowest tier is a new policy, not a tweak.
    */
+  /** The springs are reached by the same walk — a tripwire for a walk that stopped reading them. */
+  it("finds the springs' visual durations", () => {
+    expect(FOUND.filter(([p]) => p.endsWith(".visualDuration")).length).toBeGreaterThanOrEqual(3);
+  });
+
   it("keeps every preset inside the slow tier", () => {
     const offenders = FOUND.filter(([, duration]) => duration > SLOWEST);
     expect(offenders).toEqual([]);

@@ -61,10 +61,10 @@ export function AddCards({
       title="Add cards"
       subtitle={listWord === null ? `To ${name}` : `To ${name} · ${listWord}`}
       closeLabel="Close add cards"
-      // The filters sheet's own shape: the whole window below 640px, with the top inset taken
-      // because the shell's header is underneath; a tall centred panel above it. A height, not
+      // The filters sheet's own shape: the whole window below 640px, less the page sheet's sliver
+      // and the top inset the scrim keeps (`DialogHost.sheets`); a tall centred panel above it. A height, not
       // content, because the wall is a virtualised scroller and has none of its own.
-      size="h-full w-[40rem] pt-[env(safe-area-inset-top)] sm:pt-0"
+      size="h-full w-[40rem]"
       onDismiss={onClose}
       onClose={onClose}
     >

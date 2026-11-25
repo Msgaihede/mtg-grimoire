@@ -25,6 +25,7 @@
     "@tiptap/pm": "^3.31.3",
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
+    "@use-gesture/react": "catalog:",
     "clsx": "^2.1.1",
     "jsqr": "catalog:",
     "lucide-react": "catalog:",

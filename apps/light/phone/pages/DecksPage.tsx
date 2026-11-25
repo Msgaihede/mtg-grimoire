@@ -36,6 +36,7 @@ import type { PipCounts } from "@grimoire/ui/lib/mana";
 import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
 import { useImageRetry } from "@grimoire/ui/lib/useImageRetry";
 import { cn } from "@grimoire/ui/lib/utils";
+import { useSwipeBack } from "../PageStack";
 import { linkTo, navigate, upLinkTo } from "../router";
 import { phoneNewDeckDestination } from "../transfer/destinations";
 import { ImportSheet } from "../transfer/ImportSheet";
@@ -363,6 +364,8 @@ function FolderBar({
   // A parent the cabinet no longer holds is the top level — `buildFolderTree` drew this folder
   // at the root for exactly that reason, so the way up has to agree with where it was drawn.
   const up = parentId !== null && known.has(parentId) ? parentId : null;
+  // A swipe right goes where the `‹` below goes.
+  useSwipeBack(galleryAt(up));
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2 py-1">
       <a

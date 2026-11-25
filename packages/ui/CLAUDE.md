@@ -98,8 +98,9 @@ For global repo workflow, style, and testing conventions, refer to:
 ## 5. Motion & Accessibility
 
 - **Animation presets (`packages/ui/lib/motion.ts`)**:
-  - Standard timings and curves (`scrim`, `dialog`, `popup`, `press`).
+  - Standard timings and curves (`scrim`, `dialog`, `popup`, `press`), and springs for what a finger starts (`SPRING`, `sheet`, `PAGE`, `pressSpring`) — timed by `visualDuration` on the same tiers, `bounce: 0` for anything docked to an edge.
   - Forbidden APIs: `AnimatePresence mode="popLayout"` and `animateView()` (append runtime styles blocked by CSP `style-src 'self'`).
+  - `@use-gesture/react` draws nothing and injects no style; its `useDrag` runs on touch events, **never with `filterTaps`** (it swallows every mouse click it did not see begin — `Dialog.tsx` says why).
   - Same policy, any library: a Tiptap editor is built with `injectCSS: false` and imports `prosemirror-view/style/prosemirror.css` for the bundler (`tokens.test.ts` enforces both). Before a new dependency draws anything, grep its `dist/` for `createElement("style")`.
   - `<MotionConfig reducedMotion="user">` mounted once per face (in `App.tsx` and `PhoneApp.tsx`). Non-positional animations require explicit `useReducedMotion()`.
 - **Press feedback**: Use `PRESS` recipe from `packages/ui/lib/motion.ts`. Never apply press scaling to text input fields.
