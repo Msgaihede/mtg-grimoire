@@ -30,9 +30,11 @@ const PROMPTS: [Prompt; 4] = [
     Prompt {
         name: "search_cards",
         title: "Search cards",
-        description: "How to find cards in the whole card database, the user's collection and their \
-            wishlist — by name with the search tools, and by type, colour, mana value, tags, rarity \
-            or price through the read graph's structured filters.",
+        description:
+            "How to find cards in the whole card database, the user's collection and their \
+            wishlist — by name with the search tools, by type, colour, mana value, tags, rarity or \
+            price through find_cards' filters, and through the read graph's structured filters \
+            for the collection and wishlist, art tags and sorting.",
         argument: ("request", "What the user is looking for, in their words."),
         body: include_str!("prompts/search_cards.md"),
     },
@@ -47,7 +49,8 @@ const PROMPTS: [Prompt; 4] = [
     Prompt {
         name: "graphql_discovery",
         title: "Explore the data graph",
-        description: "A map of the read graph's root fields, how its schema reads (nullability, ids, \
+        description:
+            "A map of the read graph's root fields, how its schema reads (nullability, ids, \
             money, timestamps, filters, depth) and how to find, check and run a query.",
         argument: ("question", "What the user wants to know from their data."),
         body: include_str!("prompts/graphql_discovery.md"),

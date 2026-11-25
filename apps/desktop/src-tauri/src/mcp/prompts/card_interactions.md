@@ -22,6 +22,10 @@ app.
 
 A card is named by a printing's `cardId`: turn a name into one with `find_cards` first.
 
+`get_card`'s `related` holds at most 25 entries (`relatedTotal` is the full count when there are
+more). Its relation `comboPiece` is Scryfall's word for cards that refer to each other (a token's
+makers, for one), not a Spellbook combo; combos are `card_combos`.
+
 ## Where each answer comes from
 
 - **Combos are Commander Spellbook's**, and the list holds Commander-legal combos only: a combo

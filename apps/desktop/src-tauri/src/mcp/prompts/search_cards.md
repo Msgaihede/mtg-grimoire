@@ -13,7 +13,8 @@ tell them to make the change in the app.
 | "Tell me about this card", "how many do I own?" | `get_card` (with a `cardId` from `find_cards`) |
 | "Do I have…", "what's in my Trade binder?" — the collection by name | `search_collection` (and `list_folders` with `list: "collection"`) |
 | "What's on my wishlist?" — wishes by name | `search_wishlist` (and `list_folders` with `list: "wishlist"`) |
-| "Red creatures under 3 mana", "my rares worth over $10", anything beyond a name | `graph_query` with structured filters (below) |
+| "Red creatures under 3 mana", any search by type, colour, mana value, rarity, set, tags or price | `find_cards` with `filters` (`find_tags` for a tag's slug) |
+| "My rares worth over $10", the collection or wishlist by structured filters, art tags, sort | `graph_query` with structured filters (below) |
 
 - **A card's identity is a printing's Scryfall id (`cardId`).** `find_cards` answers one printing per
   card by default; pass `allPrintings: true` (and `set`, e.g. `"lea"`) when the user means a
@@ -21,10 +22,17 @@ tell them to make the change in the app.
 - **Folders are numeric ids**: `list_folders` first, then pass `folderId`.
 - **Lists are paged**: `limit` and `offset`. Say how many there are in all when you only show some.
 
-## Beyond names: structured filters through the read graph
+## Beyond names: `find_cards` filters, and the read graph for the rest
 
-`graph_query` runs a GraphQL query over the user's data. Three root fields search cards, and all
-three take the same `filters: CardFilterInput`:
+`find_cards` takes the Search page's `filters` over the whole card database: arrays and flags such as
+`colors: ["U","R"]` with `colorsExact: true`, `types`, `manaValues`, `rarities`, `sets`, `format`,
+`oracleTags: ["ramp"]` (slugs from `find_tags`) and the price filters. Reach for it first.
+
+`graph_query` does what only it does: the collection and wishlist filters, `artTags`, `predicates`
+and `sort`. It runs a GraphQL query over the user's data. Three root fields search cards, and all
+three take the same `filters: CardFilterInput`. Its spelling differs from `find_cards`': `colors` is
+a string such as `"UR"` with `colorsStrict: true` (not `colorsExact`), and tags are
+`{ include: ["ramp"] }` objects, not arrays:
 
 - `searchCards` — every card in the database, with how many copies the user owns (`ownedQuantity`)
   and whether it is wishlisted. Also takes `owned: true|false`, `minPrice`, `maxPrice`,
