@@ -620,6 +620,8 @@ exactly one term.
 | `packages/ui/features/search/useCardSearch.ts` | The wiring: parse, resolve, merge, gate, and the two chip rewrites |
 | `packages/ui/features/search/TagQueryRow.tsx` | The chip row, the unknown-tag note and the refused-lookup note |
 | `packages/ui/components/QuerySyntaxHelp.tsx` | The F1 panel's Search syntax tab, drawn from `QUERY_KEYWORDS` |
+| `crates/grimoire-core/src/query_language.rs` | The grammar's Rust port (project C, 2026-11-25): `parse_query`, its tables, and `read`, the MCP tools' stricter door — see [The Rust port](#the-rust-port-project-c) |
+| `packages/ui/features/search/__golden__/query-language.json` | The golden both suites read, written by `queryLanguage.golden.test.ts` |
 
 The tag merge is a union rather than one side winning: a Tags page reader who has chipped `dog`
 and then types `otag:ramp` is asking for a dog that ramps. Each list is deduplicated and sorted,
@@ -906,3 +908,80 @@ Most of the families above read columns `cards` already had — `released_at`, `
   `o:"~ deals 3"` matches "deals 3".
 - **`cube:`, `cheapest:`, `artists>`, `illustrations>`.** No data behind them in this corpus; each
   is free text.
+
+## The Rust port (project C)
+
+2026-11-25, [the design](../superpowers/specs/2026-11-25-mcp-scryfall-syntax-design.md). The
+MCP server's tools take Scryfall syntax (`find_cards`, `search_collection` and `search_wishlist`'s
+`syntax`), and the server has no window to parse it in, so the grammar was **ported** to
+`crates/grimoire-core/src/query_language.rs`: the owner's rule for every piece of TypeScript the
+MCP needs (2026-11-24), because the planned remote tier has no window either. **The TypeScript is
+unchanged and is still what every box in the app parses with.**
+
+### What is ported, and what is not
+
+- **Ported, function by function and under the same names**: `keywordKey`, the vocabulary tables,
+  `predicateValue`, `classify`, `excludedName`, `lex`, `parseSequence`, `simplify`, `termOf`,
+  `groupOf` and `parseQuery`. Each Rust function names the one it ports; the reasons stay in the
+  TypeScript's doc comments, the one home they have.
+- **Not ported**: the chip rewrites (`removeToken`, `setTokenNegated`, `setTokenValue`,
+  `predicateLabel`), which edit a text box and have no use without one, and the spans' readers.
+- `filters::QueryPredicate`, `PredicateField` and `PredicateOp` gained `Serialize`, in
+  `wirePredicate`'s shape (`terms` only on a group), so a Rust parse is handed to `search_cards` as
+  the page would send it.
+
+### One answer, held by a golden
+
+`packages/ui/features/search/__golden__/query-language.json` holds every vocabulary table, some
+three hundred chosen queries (every branch of the grammar, and the cases that exist only because
+there are two languages) and five hundred seeded random queries, each with the page's parse.
+`queryLanguage.golden.test.ts` writes it (`pnpm vitest run -u`; the diff is the review) and
+`query_language.rs`' tests read it. A grammar change fails the TypeScript suite until the golden
+is rewritten, and then the Rust one until the port follows. The random queries exist for the drift
+nobody would think to write a case for; the seed is stored so the set can be regrown on purpose.
+
+**Where JavaScript and Rust disagree, the port follows JavaScript**, and the golden has a case for
+each:
+
+| The page | Rust's nearest | The port |
+| --- | --- | --- |
+| `/\s/` and `.trim()`: U+FEFF is a space, U+0085 is not | `char::is_whitespace`: the opposite on both | `js_space`, `js_trim` |
+| `/[\p{L}\p{N}]/u`: a letter or a number | `char::is_alphanumeric`, which also takes every Other_Alphabetic mark (Ⓐ) | the general category, from `unicode-properties` |
+| `\d`, `[A-Za-z]`, `/i` without `u`: ASCII | Unicode-aware classes | ASCII tests |
+| spans in UTF-16 code units | byte offsets | byte offsets; the golden test converts |
+
+Every regular expression the grammar uses is deterministic (no backtracking changes the match),
+so each is a short scan in Rust rather than a regex dependency. **Letters follow each engine's
+Unicode version** (Node's ICU, WebView2's, the crate's tables), so a letter assigned in the newest
+Unicode could read differently across hosts; the golden uses only long-assigned characters, and a
+case added to it should too.
+
+### `read`: the tools refuse what the box forgives
+
+The page reads `cmc>=banana` as the words *cmc banana*, drops a bare `t:` and runs an unclosed `(`
+to the end, because the box is parsed on every keystroke. An agent that wrote those would read the
+empty answer as "no such cards". So the tools call `query_language::read`, which answers the same
+parse as `parse_query` or refuses, naming **every** term it would not apply as written, each in a
+sentence with what its keyword takes (the owner's decision, 2026-11-25):
+
+- a value or a sign the keyword does not take (`cmc>=banana`, `is:fetchlnad`, `t>goblin`);
+- a keyword this app does not read, when it has a value (`cube:vintage`; `Protection:` alone stays
+  a word, so `Circle of Protection: Red` is a name);
+- a regular expression; a display keyword (`unique:`, `order:`, `include:extras`); a keyword, `!`
+  or `-` with nothing after it;
+- a dangling `or` or `and`, a `(` never closed, a `)` that closes nothing, `()`, a quote never
+  closed;
+- a term with no word to search for (`+++`, `t:'--'`), which the page lets stand on its way to
+  one;
+- more than 2,000 characters, or groups nested more than 16 deep, checked by a scan that does
+  not recurse before anything that does.
+
+The reasons are the classifier's own (`classify_why`, which `parse_query` ignores), so the check
+cannot disagree with the parse. **Tags are stricter in the tools too**: every tag a search names,
+inside an `or` as well, is resolved before the search runs, and an unknown one is refused with its
+closest names, where the page lets an unknown tag inside an `or` match nothing in its branch.
+
+The MCP side is `apps/desktop/src-tauri/src/mcp/syntax.rs`; the `scryfall_syntax` prompt teaches
+the language and closes with a keyword reference generated from the port's table, and every
+example search in every prompt must pass `read` (`prompts::every_example_search_reads_as_written`).
+

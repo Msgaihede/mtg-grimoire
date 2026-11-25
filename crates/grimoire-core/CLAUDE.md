@@ -72,6 +72,10 @@ For hosts without Tauri macro dispatch (Android `core_call` and WASM `call`):
 - **A table call holds the scanner's lease as `scanner::PAGE`**: a host of the table has exactly one page, so `scanner_elsewhere` answers `false` there and `scanner_hold` always succeeds. An entry that admits is `blocking` or `bytes`, never `write`/`owned` — the lease is taken before the write connection is waited for. The desktop never dispatches scanner commands through the table (its wrappers admit the webview's own label).
 - Non-desktop command exception: `card_image_source` is registered exclusively in the table for web service worker image resolution (`TABLE_ONLY`).
 
+## 5a. The query grammar (`src/query_language.rs`)
+
+- **The page's Scryfall parser (`packages/ui/features/search/queryLanguage.ts`), ported function by function** for hosts with no window (the MCP tools). `parse_query` must answer what `parseQuery` answers for every input, spans included (bytes here, UTF-16 there): `packages/ui/features/search/__golden__/query-language.json` is written by the TypeScript and read by this module's tests. Change the grammar on both sides in one commit; follow JavaScript's semantics where the two standard libraries differ (`js_space`, `indexable`, ASCII classes). `read` is the tools' door: bounds first, then every term it would not apply as written refused as an `Unread`; never make `parse_query` itself stricter.
+
 ---
 
 ## 6. Image Cache Contract (`src/images.rs`)
