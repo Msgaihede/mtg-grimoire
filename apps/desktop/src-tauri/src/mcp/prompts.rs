@@ -1,6 +1,7 @@
 //! **The skills the server ships**, as MCP prompts (`prompts/list`, `prompts/get`): how to search
 //! cards, how to create a custom home widget, how to find one's way around the read graph, and how
-//! cards fit together (what a card does, its combos, tags and related cards, a format's rules).
+//! cards fit together (what a card does, its combos, tags and related cards, a format's rules), how
+//! to review a deck and how to build one from the collection.
 //!
 //! **Prompts rather than files a reader installs** (the owner's decision, 2026-10-31): every MCP
 //! client can ask for them, Claude Desktop's bundle included, and they update with the app. Each
@@ -26,7 +27,7 @@ struct Prompt {
     body: &'static str,
 }
 
-const PROMPTS: [Prompt; 4] = [
+const PROMPTS: [Prompt; 6] = [
     Prompt {
         name: "search_cards",
         title: "Search cards",
@@ -69,6 +70,31 @@ const PROMPTS: [Prompt; 4] = [
             "What the user wants to know about a card or a combo.",
         ),
         body: include_str!("prompts/card_interactions.md"),
+    },
+    Prompt {
+        name: "review_deck",
+        title: "Review a deck",
+        description: concat!(
+            "How to review one of the user's decks: what it is, what the app's validation finds ",
+            "wrong, its bracket floor, curve and mana, its combos, draw odds, what it is short of ",
+            "and which owned cards could improve it — suggesting changes the user makes in the app."
+        ),
+        argument: (
+            "request",
+            "Which deck, and what the user wants from the review.",
+        ),
+        body: include_str!("prompts/review_deck.md"),
+    },
+    Prompt {
+        name: "build_from_collection",
+        title: "Build a deck from the collection",
+        description: concat!(
+            "How to build a deck out of cards the user owns: the format's rules, a commander or a ",
+            "plan, cards by function and colour from the collection, combos the collection holds, ",
+            "and a decklist the user pastes into the app's import."
+        ),
+        argument: ("request", "The deck the user wants, in their words."),
+        body: include_str!("prompts/build_from_collection.md"),
     },
 ];
 
@@ -119,7 +145,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_four_skills_are_listed_each_with_one_optional_argument() {
+    fn the_six_skills_are_listed_each_with_one_optional_argument() {
         let listed: Vec<String> = list()
             .iter()
             .map(|p| p["name"].as_str().unwrap().to_owned())
@@ -130,7 +156,9 @@ mod tests {
                 "search_cards",
                 "create_widget",
                 "graphql_discovery",
-                "card_interactions"
+                "card_interactions",
+                "review_deck",
+                "build_from_collection"
             ]
         );
         assert_eq!(names(), listed);

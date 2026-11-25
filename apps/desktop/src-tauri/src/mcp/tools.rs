@@ -140,7 +140,7 @@ pub fn list() -> Vec<Value> {
         "type": "string",
         "description": "A GraphQL query document over the schema graph_schema answers.",
     });
-    vec![
+    let mut all = vec![
         tool(
             "graph_schema",
             "Read the data schema",
@@ -300,18 +300,7 @@ pub fn list() -> Vec<Value> {
             &[],
             &read,
         ),
-        tool(
-            "get_deck",
-            "Get deck",
-            "One deck's cards, pile by pile (main deck, sideboard, commander, maybeboard and \
-             the user's own piles).",
-            json!({
-                "deckId": { "type": "integer", "description": "From list_decks." },
-                "list": list_variant,
-            }),
-            &["deckId"],
-            &read,
-        ),
+        super::decks::get_deck_tool(&read),
         tool(
             "card_combos",
             "A card's combos",
@@ -441,7 +430,9 @@ pub fn list() -> Vec<Value> {
                 "create_widget: building a custom home-page widget; graphql_discovery: the read ",
                 "graph, for anything else in the user's data; card_interactions: what a card does, ",
                 "its combos, oracle tags, related and similar cards, its Scryfall record and format ",
-                "rules. Read the one that fits before a task of its kind."
+                "rules; review_deck: a deck's problems, bracket, stats, combos, odds, shortfall and ",
+                "upgrades from the collection; build_from_collection: a new deck from cards the ",
+                "user owns. Read the one that fits before a task of its kind."
             ),
             json!({
                 "topic": { "type": "string", "enum": super::prompts::names(), "description": "Which guide." },
@@ -577,7 +568,14 @@ pub fn list() -> Vec<Value> {
             &["widgetId"],
             &remove,
         ),
-    ]
+    ];
+    // The deck tools follow `get_deck` (MCP project E, `decks.rs`).
+    let at = all
+        .iter()
+        .position(|t| t["name"] == "get_deck")
+        .map_or(all.len(), |i| i + 1);
+    all.splice(at..at, super::decks::tools(&read));
+    all
 }
 
 /// `find_cards`' thirteen filter fields as JSON Schema properties — `show_search` adds three to them,
@@ -610,7 +608,7 @@ fn show_filter_properties() -> Value {
     properties
 }
 
-fn tool(
+pub(super) fn tool(
     name: &str,
     title: &str,
     description: &str,
@@ -651,7 +649,12 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "search_wishlist" => search_wishlist(state, &args).await,
         "list_folders" => list_folders(state, &args).await,
         "list_decks" => list_decks(state, &args).await,
-        "get_deck" => get_deck(state, &args).await,
+        "get_deck" => super::decks::get_deck(state, &args).await,
+        "deck_stats" => super::decks::stats(state, &args).await,
+        "check_deck" => super::decks::check_deck(state, &args).await,
+        "deck_shortfall" => super::decks::deck_shortfall(state, &args).await,
+        "owned_for_deck" => super::decks::owned_for_deck(state, &args).await,
+        "draw_odds" => super::decks::draw_odds(state, &args).await,
         "card_combos" => card_combos(state, &args).await,
         "get_combo" => get_combo(state, &args).await,
         "held_combos" => held_combos(state, &args).await,
@@ -719,12 +722,12 @@ impl Args {
         }
     }
 
-    fn required_text(&self, name: &str) -> Result<String, String> {
+    pub(super) fn required_text(&self, name: &str) -> Result<String, String> {
         self.text(name)?
             .ok_or_else(|| format!("{name} is required."))
     }
 
-    fn int(&self, name: &str) -> Result<Option<i64>, String> {
+    pub(super) fn int(&self, name: &str) -> Result<Option<i64>, String> {
         match self.0.get(name) {
             None | Some(Value::Null) => Ok(None),
             Some(v) => v
@@ -734,13 +737,19 @@ impl Args {
         }
     }
 
-    fn required_int(&self, name: &str) -> Result<i64, String> {
+    pub(super) fn required_int(&self, name: &str) -> Result<i64, String> {
         self.int(name)?
             .ok_or_else(|| format!("{name} is required."))
     }
 
     /// A whole number in `min..=max`, `default` when absent.
-    fn bounded(&self, name: &str, default: i64, min: i64, max: i64) -> Result<i64, String> {
+    pub(super) fn bounded(
+        &self,
+        name: &str,
+        default: i64,
+        min: i64,
+        max: i64,
+    ) -> Result<i64, String> {
         let n = self.int(name)?.unwrap_or(default);
         if (min..=max).contains(&n) {
             Ok(n)
@@ -800,7 +809,7 @@ impl Args {
     }
 
     /// One of `allowed`, or `default` when absent.
-    fn choice(
+    pub(super) fn choice(
         &self,
         name: &str,
         allowed: &[&str],
@@ -852,7 +861,7 @@ fn announce(state: &AppState, tables: &'static [&'static str]) {
 }
 
 /// The `keys` of an object, renamed `(out, in)`, leaving out the ones that are absent or null.
-fn pick(value: &Value, keys: &[(&str, &str)]) -> Value {
+pub(super) fn pick(value: &Value, keys: &[(&str, &str)]) -> Value {
     let mut out = Map::new();
     for (to, from) in keys {
         if let Some(v) = value.get(*from).filter(|v| !v.is_null()) {
@@ -862,7 +871,7 @@ fn pick(value: &Value, keys: &[(&str, &str)]) -> Value {
     Value::Object(out)
 }
 
-fn rows(value: &Value, field: &str) -> Vec<Value> {
+pub(super) fn rows(value: &Value, field: &str) -> Vec<Value> {
     value
         .get(field)
         .and_then(Value::as_array)
@@ -1512,66 +1521,6 @@ async fn list_decks(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
     Ok(json!({ "decks": decks }))
 }
 
-async fn get_deck(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
-    let deck_id = args.required_int("deckId")?;
-    let variant = args
-        .choice("list", &["live", "theory"], Some("live"))?
-        .unwrap_or_default();
-    let detail = run(
-        state,
-        "deck_get",
-        json!({ "id": deck_id, "variant": variant }),
-    )
-    .await?;
-    let cards = rows(&detail, "cards");
-    let piles: Vec<Value> = rows(&detail, "categories")
-        .iter()
-        .filter(|c| c.get("variant").and_then(Value::as_str) == Some(variant.as_str()))
-        .map(|pile| {
-            let id = pile.get("id");
-            let in_pile: Vec<Value> = cards
-                .iter()
-                .filter(|c| c.get("categoryId") == id)
-                .map(|c| {
-                    pick(
-                        c,
-                        &[
-                            ("cardId", "cardId"),
-                            ("name", "name"),
-                            ("quantity", "quantity"),
-                            ("set", "setCode"),
-                            ("collectorNumber", "collectorNumber"),
-                            ("finish", "finish"),
-                            ("manaCost", "manaCost"),
-                            ("typeLine", "typeLine"),
-                        ],
-                    )
-                })
-                .collect();
-            let mut pile = pick(
-                pile,
-                &[("pile", "name"), ("kind", "kind"), ("counts", "isActive")],
-            );
-            pile["cards"] = Value::Array(in_pile);
-            pile
-        })
-        .collect();
-    let mut deck = pick(
-        detail.get("deck").unwrap_or(&Value::Null),
-        &[
-            ("deckId", "id"),
-            ("name", "name"),
-            ("format", "formatName"),
-            ("formatKey", "formatKey"),
-            ("description", "description"),
-            ("cards", "cardCount"),
-        ],
-    );
-    deck["list"] = json!(variant);
-    deck["piles"] = Value::Array(piles);
-    Ok(deck)
-}
-
 /// The word for a Commander Spellbook bracket letter; an unknown letter is passed through.
 fn bracket_word(letter: &str) -> String {
     match letter {
@@ -1606,7 +1555,7 @@ fn combo_data(status: &Value) -> Value {
 }
 
 /// Put `comboData` on an answer, with the sentence that says so when nothing was downloaded.
-fn with_combo_data(answer: &mut Value, status: &Value, notes: Vec<String>) {
+pub(super) fn with_combo_data(answer: &mut Value, status: &Value, notes: Vec<String>) {
     with_feed_data(
         answer,
         "comboData",
@@ -1734,7 +1683,7 @@ fn full_combo(v: &Value) -> Value {
     out
 }
 
-fn short_list(list: &[Value]) -> Vec<Value> {
+pub(super) fn short_list(list: &[Value]) -> Vec<Value> {
     list.iter().map(short_combo).collect()
 }
 
@@ -2652,10 +2601,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 27);
+        assert_eq!(names.len(), 32);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 27, "names are unique");
+        assert_eq!(names.len(), 32, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);

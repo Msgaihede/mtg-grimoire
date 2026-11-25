@@ -304,6 +304,17 @@ const TABLE_ONLY: &[(&str, &str)] = &[
         ),
     ),
     (
+        "deck_draw_odds",
+        concat!(
+            "a deck's draw odds by turn over the page's hypergeometric arithmetic, for the MCP ",
+            "server's draw_odds tool"
+        ),
+    ),
+    (
+        "deck_owned_fits",
+        "owned cards a deck could play and does not, for the MCP server's owned_for_deck tool",
+    ),
+    (
         "deck_stats",
         concat!(
             "a deck's stats band, ported from the page's TypeScript (which computes its own), ",

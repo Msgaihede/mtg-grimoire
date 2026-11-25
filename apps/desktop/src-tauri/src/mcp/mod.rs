@@ -31,6 +31,7 @@
 //! no sync spec names, so it never leaves this installation — and compared in constant time.
 
 pub mod claude_desktop;
+mod decks;
 mod filters;
 pub mod http;
 pub mod prompts;

@@ -763,6 +763,11 @@ commands! {
         )
     };
 
+    // deck_fits — owned cards a deck could play (no page calls this).
+    read deck_owned_fits in deck_fits(deck_id: i64, variant: String, words: Vec<String>, oracle_tags: Vec<String>, types: Vec<String>, mana_values: Vec<u8>, limit: i64, offset: i64) = |conn| {
+        owned_fits(conn, deck_id, &variant, &words, &oracle_tags, &types, &mana_values, limit, offset)
+    };
+
     // deck_rules — the deck page's validation and bracket, ported (no page calls these).
     read deck_check in deck_rules(deck_id: i64, variant: String) = |conn| check_deck(conn, deck_id, &variant);
 
@@ -770,6 +775,10 @@ commands! {
     read deck_stats in deck_stats(deck_id: i64, variant: String, marketplace: Option<String>) = |conn| {
         let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
         read_stats(conn, deck_id, &variant, marketplace)
+    };
+    read deck_draw_odds in deck_stats(deck_id: i64, variant: String, cards: Vec<String>, pile: Option<String>, card_type: Option<String>, want: i64, mode: OddsMode, hand: i64, turns: i64, on_the_play: bool) = |conn| {
+        let what = DrawWhat { cards: &cards, pile: pile.as_deref(), card_type: card_type.as_deref() };
+        draw_odds(conn, deck_id, &variant, what, want, mode, hand, turns, on_the_play)
     };
 
     // deck_theory
