@@ -152,6 +152,139 @@ mod tests {
         assert_eq!(js_trim("\u{0085}a"), "\u{0085}a");
     }
 
+    /// The coverage fence, as `packages/ui/features/decks/golden/coverage.golden.test.ts` holds it
+    /// on the TypeScript side: a rule with no golden case is a rule this port is not held to.
+    #[test]
+    fn the_goldens_cover_every_rule() {
+        use crate::deck_golden::load;
+        use std::collections::BTreeSet;
+
+        let validation = load(include_str!(
+            "../../../../packages/ui/features/decks/__golden__/validation.json"
+        ));
+        let whole = load(include_str!(
+            "../../../../packages/ui/features/decks/__golden__/whole-deck.json"
+        ));
+        let companions = load(include_str!(
+            "../../../../packages/ui/features/decks/__golden__/companions.json"
+        ));
+        let bracket = load(include_str!(
+            "../../../../packages/ui/features/decks/__golden__/bracket.json"
+        ));
+        let words = |values: Vec<&Value>| -> BTreeSet<String> {
+            values
+                .into_iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        };
+        let issues = |cases: &[Value], fields: &[&str]| -> Vec<Value> {
+            cases
+                .iter()
+                .flat_map(|c| {
+                    fields
+                        .iter()
+                        .flat_map(move |f| c[*f].as_array().unwrap().clone())
+                })
+                .map(|issue| issue["code"].clone())
+                .collect()
+        };
+
+        // `types.ts`' vocabulary, both ways: every code answered somewhere, and no other.
+        const CODES: [&str; 23] = [
+            "deck-size",
+            "sideboard-size",
+            "copy-limit",
+            "singleton",
+            "restricted",
+            "banned",
+            "not-legal",
+            "unknown-legality",
+            "unknown-copy-limit",
+            "orphan",
+            "mana-value",
+            "commander-zone",
+            "commander-missing",
+            "commander-count",
+            "commander-eligibility",
+            "commander-partner",
+            "commander-banned",
+            "color-identity",
+            "companion-zone",
+            "companion-count",
+            "companion-eligibility",
+            "companion-unknown",
+            "companion-condition",
+        ];
+        let mut seen = issues(&validation.cases, &["deck", "marks"]);
+        seen.extend(issues(&whole.cases, &["deck", "marks"]));
+        seen.extend(issues(&companions.cases, &["issues"]));
+        let seen = words(seen.iter().collect());
+        let vocabulary: BTreeSet<String> = CODES.iter().map(|c| (*c).to_owned()).collect();
+        assert_eq!(seen, vocabulary, "the issue codes the goldens answer");
+
+        // Every commander rule a spec carries is judged by some case.
+        let rules = words(
+            validation
+                .specs
+                .values()
+                .map(|s| &s["commanderRule"])
+                .collect(),
+        );
+        let judged = words(
+            validation
+                .cases
+                .iter()
+                .map(|c| &validation.specs[c["spec"].as_str().unwrap()]["commanderRule"])
+                .collect(),
+        );
+        assert_eq!(judged, rules, "the commander rules the cases judge");
+
+        // Each of the ten companions sits in a companion zone somewhere.
+        let zoned = words(
+            companions
+                .cases
+                .iter()
+                .flat_map(|c| c["cards"].as_array().unwrap())
+                .filter(|row| row["categoryKind"] == "companion")
+                .map(|row| &row["name"])
+                .collect(),
+        );
+        for (name, _) in companions::COMPANIONS {
+            assert!(zoned.contains(name), "no golden case zones {name}");
+        }
+
+        // Every bracket reason fires, and every combo letter the ingest admits is read.
+        let reasons = words(
+            bracket
+                .cases
+                .iter()
+                .flat_map(|c| c["estimate"]["reasons"].as_array().unwrap())
+                .map(|r| &r["code"])
+                .collect(),
+        );
+        for code in bracket::ReasonCode::ALL {
+            let code = serde_json::to_value(code).unwrap();
+            assert!(
+                reasons.contains(code.as_str().unwrap()),
+                "no case fires {code}"
+            );
+        }
+        let letters = words(
+            bracket
+                .cases
+                .iter()
+                .flat_map(|c| c["combos"].as_array().unwrap())
+                .map(|combo| &combo["bracketTag"])
+                .collect(),
+        );
+        for letter in crate::combos::BRACKET_TAGS {
+            assert!(
+                letters.contains(letter),
+                "no case reads the letter {letter}"
+            );
+        }
+    }
+
     #[test]
     fn faces_of_is_an_array_or_nothing() {
         assert_eq!(faces_of(None).len(), 0);
