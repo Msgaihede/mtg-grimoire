@@ -1,12 +1,16 @@
 //! **The skills the server ships**, as MCP prompts (`prompts/list`, `prompts/get`): how to search
-//! cards, how to create a custom home widget, and how to find one's way around the read graph.
+//! cards, how to create a custom home widget, how to find one's way around the read graph, and how
+//! cards fit together (what a card does, its combos, tags and related cards, a format's rules).
 //!
 //! **Prompts rather than files a reader installs** (the owner's decision, 2026-10-31): every MCP
 //! client can ask for them, Claude Desktop's bundle included, and they update with the app. Each
 //! is a Markdown file beside this one (`prompts/*.md`), compiled in, so it reads as prose in review;
 //! `create_widget` closes with the widget catalogue's committed prompt (`tools::CATALOG_PROMPT`).
 //!
-//! **The examples are held to the graph**: every fenced `graphql` block in the three files must pass
+//! **Every prompt is also the agent's to read** (spec §2): most clients run a prompt only when the
+//! user picks it, so the tool `read_guide` answers the same text, its topics being [`names`].
+//!
+//! **The examples are held to the graph**: every fenced `graphql` block in the files must pass
 //! `Graph::validate` (`every_example_query_is_valid`), so a renamed field fails here rather than
 //! in an agent's hands.
 
@@ -22,7 +26,7 @@ struct Prompt {
     body: &'static str,
 }
 
-const PROMPTS: [Prompt; 3] = [
+const PROMPTS: [Prompt; 4] = [
     Prompt {
         name: "search_cards",
         title: "Search cards",
@@ -48,6 +52,20 @@ const PROMPTS: [Prompt; 3] = [
         argument: ("question", "What the user wants to know from their data."),
         body: include_str!("prompts/graphql_discovery.md"),
     },
+    Prompt {
+        name: "card_interactions",
+        title: "How cards fit together",
+        description: concat!(
+            "Which tool answers what a card does, its combos, what it brings with it, cards that ",
+            "do the same job, its raw Scryfall facts and a format's rules — and what each source ",
+            "can and cannot tell."
+        ),
+        argument: (
+            "question",
+            "What the user wants to know about a card or a combo.",
+        ),
+        body: include_str!("prompts/card_interactions.md"),
+    },
 ];
 
 /// `prompts/list`'s answer.
@@ -63,6 +81,11 @@ pub fn list() -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// Every prompt's name, in `prompts/list`'s order — the topics `read_guide` takes.
+pub fn names() -> Vec<&'static str> {
+    PROMPTS.iter().map(|p| p.name).collect()
 }
 
 /// `prompts/get`'s answer for `name` with `arguments`, or `None` for a name that is no prompt.
@@ -92,15 +115,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_three_skills_are_listed_each_with_one_optional_argument() {
-        let names: Vec<String> = list()
+    fn the_four_skills_are_listed_each_with_one_optional_argument() {
+        let listed: Vec<String> = list()
             .iter()
             .map(|p| p["name"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(
-            names,
-            ["search_cards", "create_widget", "graphql_discovery"]
+            listed,
+            [
+                "search_cards",
+                "create_widget",
+                "graphql_discovery",
+                "card_interactions"
+            ]
         );
+        assert_eq!(names(), listed);
         for prompt in list() {
             assert_eq!(prompt["arguments"].as_array().unwrap().len(), 1);
             assert_eq!(prompt["arguments"][0]["required"], false);
@@ -124,7 +153,45 @@ mod tests {
         );
         // The widget skill closes with the whole catalogue.
         assert!(text("create_widget", json!({})).ends_with(CATALOG_PROMPT.trim_end()));
+        assert!(text(
+            "card_interactions",
+            json!({ "question": "does Thoracle combo?" })
+        )
+        .ends_with("## The user's request\n\ndoes Thoracle combo?"));
         assert!(get("add_cards", None).is_none());
+    }
+
+    /// The card-knowledge skill routes each question to a tool, so every tool it teaches must be
+    /// named in it — and must be a tool the server lists.
+    #[test]
+    fn card_interactions_names_every_tool_it_teaches() {
+        let text = get("card_interactions", None).expect("card_interactions is a prompt")
+            ["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(text.starts_with("# How cards fit together in MTG Grimoire"));
+        let tools: Vec<String> = super::super::tools::list()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect();
+        for tool in [
+            "get_card",
+            "card_combos",
+            "get_combo",
+            "held_combos",
+            "find_tags",
+            "find_cards",
+            "similar_cards",
+            "card_scryfall",
+            "format_rules",
+        ] {
+            assert!(
+                text.contains(&format!("`{tool}`")),
+                "card_interactions does not name {tool}"
+            );
+            assert!(tools.contains(&tool.to_owned()), "{tool} is not a tool");
+        }
     }
 
     #[test]

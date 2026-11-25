@@ -13,7 +13,8 @@
 //! read graph's three, `graph_schema`, `graph_validate` and `graph_query`, which hand an agent the
 //! whole of the reader's data as one GraphQL schema (`crates/grimoire-graph`): the schema to write
 //! a home widget's query against, a check of a draft with each problem's line and column, and the
-//! answer, exactly as the page's `graphql_query` would get it.
+//! answer, exactly as the page's `graphql_query` would get it. `read_guide` answers any of the
+//! server's prompts (`prompts.rs`) as text, for a client that runs one only when the user picks it.
 //! **No tool writes the reader's collection, wishlist or decks** (the owner's decision, 2026-10-31,
 //! which retired issue #1396's three adds): an agent finds and explains, and the reader makes the
 //! change in the app, which is open.
@@ -399,6 +400,24 @@ pub fn list() -> Vec<Value> {
             &read,
         ),
         tool(
+            "read_guide",
+            "Read a guide",
+            concat!(
+                "How to do a kind of task with these tools: the text of this server's prompt of ",
+                "that name, for when the user has not picked it. search_cards: finding cards by ",
+                "name and by filters in the database, the collection and the wishlist; ",
+                "create_widget: building a custom home-page widget; graphql_discovery: the read ",
+                "graph, for anything else in the user's data; card_interactions: what a card does, ",
+                "its combos, oracle tags, related and similar cards, its Scryfall record and format ",
+                "rules. Read the one that fits before a task of its kind."
+            ),
+            json!({
+                "topic": { "type": "string", "enum": super::prompts::names(), "description": "Which guide." },
+            }),
+            &["topic"],
+            &read,
+        ),
+        tool(
             "widget_vocabulary",
             "Read the widget catalogue",
             "Everything a custom home widget may be built from, for writing one: the prompt — the \
@@ -577,6 +596,7 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "find_tags" => find_tags(state, &args).await,
         "similar_cards" => similar_cards(state, &args).await,
         "format_rules" => format_rules(state, &args).await,
+        "read_guide" => read_guide(&args),
         "widget_vocabulary" => widget_vocabulary(&args),
         "widget_check" => widget_check(&args),
         "widget_preview" => widget_preview(state, &args).await,
@@ -1311,6 +1331,18 @@ async fn format_rules(state: &Arc<AppState>, args: &Args) -> Result<Value, Strin
         })
         .collect();
     Ok(json!({ "formats": formats }))
+}
+
+/// `read_guide`: a prompt's text as `prompts/get` answers it with no argument, for a client that
+/// runs a prompt only when the user picks it (spec §2).
+fn read_guide(args: &Args) -> Result<Value, String> {
+    let topics = super::prompts::names();
+    let topic = args
+        .choice("topic", &topics, None)?
+        .ok_or_else(|| "topic is required.".to_owned())?;
+    let prompt = super::prompts::get(&topic, None)
+        .ok_or_else(|| format!("There is no guide named {topic}."))?;
+    Ok(json!({ "topic": topic, "guide": prompt["messages"][0]["content"]["text"] }))
 }
 
 async fn search_collection(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
@@ -2469,10 +2501,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 25);
+        assert_eq!(names.len(), 26);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 25, "names are unique");
+        assert_eq!(names.len(), 26, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -3054,6 +3086,64 @@ mod tests {
             call(&state, "drop_tables", json!({})).await,
             Called::NoSuchTool
         ));
+    }
+
+    // ---- the guide ----------------------------------------------------------------------
+
+    /// Every prompt is also a guide the agent can read by itself (spec §2): the text `prompts/get`
+    /// answers with no argument.
+    #[tokio::test]
+    async fn read_guide_answers_every_prompt() {
+        let state = state("read-guide");
+        for topic in super::super::prompts::names() {
+            let answer = done(&state, "read_guide", json!({ "topic": topic })).await;
+            let prompt = super::super::prompts::get(topic, None).unwrap();
+            assert_eq!(answer["topic"], topic);
+            assert_eq!(answer["guide"], prompt["messages"][0]["content"]["text"]);
+            assert!(answer["guide"]
+                .as_str()
+                .is_some_and(|guide| guide.starts_with("# ")));
+        }
+    }
+
+    /// The topic enum is the prompt list, so a prompt added later is a topic at once; the
+    /// description says what each topic is for, so it must name every one.
+    #[test]
+    fn read_guide_s_topics_are_the_prompt_names() {
+        let tools = list();
+        let guide = tools
+            .iter()
+            .find(|t| t["name"] == "read_guide")
+            .expect("read_guide is listed");
+        let listed: Vec<Value> = super::super::prompts::list()
+            .iter()
+            .map(|p| p["name"].clone())
+            .collect();
+        assert_eq!(
+            guide["inputSchema"]["properties"]["topic"]["enum"],
+            json!(listed)
+        );
+        assert_eq!(guide["inputSchema"]["required"], json!(["topic"]));
+        assert_eq!(guide["annotations"]["readOnlyHint"], true);
+        let description = guide["description"].as_str().unwrap();
+        for topic in super::super::prompts::names() {
+            assert!(
+                description.contains(topic),
+                "read_guide's description does not name {topic}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_guide_that_is_no_prompt_is_refused() {
+        let state = state("read-guide-unknown");
+        let why = refused(&state, "read_guide", json!({ "topic": "add_cards" })).await;
+        assert!(why.starts_with("topic cannot be \"add_cards\""), "{why}");
+        assert!(why.contains("card_interactions"), "{why}");
+        assert_eq!(
+            refused(&state, "read_guide", json!({})).await,
+            "topic is required."
+        );
     }
 
     // ---- the combo tools ----------------------------------------------------------------
