@@ -881,7 +881,9 @@ export function JoinedChoices<T extends string>({
                 aria-hidden
                 layoutId={marker}
                 transition={SPRING.marker}
-                className="absolute inset-0 rounded-[5px] bg-accent/10 shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                // The segment's own corners — square in the middle, rounded at the two ends — so a
+                // pressed segment looks exactly as the fill drew it; only the move between is new.
+                className="absolute inset-0 rounded-[inherit] bg-accent/10 shadow-[inset_0_0_0_1px_var(--color-accent)]"
               />
             )}
             {slide ? <span className="relative">{c.label}</span> : c.label}
