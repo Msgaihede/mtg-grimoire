@@ -2679,7 +2679,7 @@ describe("DeckEditor", () => {
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     const asked = searchCards.mock.calls.map((c) => (c[0] as { colors?: string }).colors);
-    expect(asked.at(-1)).toBe("WUG");
+    expect(asked[asked.length - 1]).toBe("WUG");
     // Never the whole corpus first: every request the panel made already carried the identity.
     expect(asked.every((colors) => colors === "WUG")).toBe(true);
   });
@@ -2689,7 +2689,8 @@ describe("DeckEditor", () => {
     await openSearchPanel();
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
-    const last = searchCards.mock.calls.at(-1)?.[0] as { colors?: string };
+    const calls = searchCards.mock.calls;
+    const last = calls[calls.length - 1][0] as { colors?: string };
     expect(last.colors).toBeUndefined();
   });
 
