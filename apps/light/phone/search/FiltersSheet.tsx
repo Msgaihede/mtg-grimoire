@@ -275,7 +275,7 @@ export function FiltersSheet<SortKey extends string>({
       open={open}
       title="Filters"
       closeLabel="Close filters"
-      size="h-full w-[38rem] pt-[env(safe-area-inset-top)] sm:h-auto sm:pt-0"
+      size="h-full w-[38rem] sm:h-auto"
       onDismiss={onDismiss}
       onClose={onClose}
     >

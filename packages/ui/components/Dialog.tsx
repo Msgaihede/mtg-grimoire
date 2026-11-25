@@ -7,6 +7,7 @@ import {
   type JSX,
   type ReactNode,
 } from "react";
+import { useDrag } from "@use-gesture/react";
 import { X } from "lucide-react";
 import {
   animate,
@@ -20,7 +21,7 @@ import {
 import { useBackClaim, useDialogHost } from "@/lib/dialogHost";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
-import { dialog as dialogMotion, DURATION, EASE, scrim, seconds } from "@/lib/motion";
+import { dialog as dialogMotion, scrim, sheet as sheetMotion, SPRING } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
@@ -459,7 +460,12 @@ function Panel({
   /** False from the render that starts the fade out — the panel goes inert on it, and a host's
    *  body sees the same answer, which is what `useDeckField` writes on. */
   const present = useIsPresent();
-  const swipe = useSwipeToClose(useDialogHost()?.swipeToClose === true, onClose, present);
+  const host = useDialogHost();
+  const swipe = useSwipeToClose(host?.swipeToClose === true, onClose, present, panelRef);
+  // A finger's face presents every dialog as a sheet rising from the foot of the glass — see
+  // `DialogHost.sheets` and `motion.ts`'s `sheet`. The desktop, which lends nothing, is unmoved.
+  const sheets = host?.sheets === true;
+  const presentation = sheets ? sheetMotion : dialogMotion;
 
   // The caret moves into the layer, as it does for every other one in the app: the dialog's own
   // controls are then the next thing Tab reaches, and Escape has something to hand back. **No
@@ -595,6 +601,11 @@ function Panel({
         "fixed inset-0 grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]",
         "place-items-center bg-bg/75",
         "p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]",
+        // **A sheet leaves a sliver of the page above it** (2026-11-25): below `sm` a full-height
+        // sheet stops 12px under the top inset, so the reader sees what it was pulled up over and
+        // that it is a layer — the page sheet a phone draws, rather than a second page that
+        // happens to have a ✕. A short action sheet stands on the foot and never reaches it.
+        sheets && "max-sm:pt-[calc(0.75rem+env(safe-area-inset-top))]",
         // **Only when a host asked for flanks**, and the `undefined` test is doing real work: with
         // no flanks this string has to be what it was before the prop existed, because every other
         // dialog in the builder is drawn by this line and a third column would narrow all of them
@@ -630,7 +641,7 @@ function Panel({
       }}
     >
       <motion.div
-        {...dialogMotion}
+        {...presentation}
         ref={panelRef}
         // The header's drag (`useSwipeToClose`). A motion value, so the scale tween and the drag
         // compose into one transform and the exit fades from wherever the finger let go.
@@ -720,6 +731,9 @@ function Panel({
           // floating over something, at the one width where it is not. The same 640px fold as
           // the scrim's `p-0 sm:px-6`, and for the same reason spelled at that site.
           "sm:rounded-xl sm:border sm:border-border",
+          // A sheet's top corners are rounded below `sm` too: it no longer touches the top edge
+          // (the scrim's sliver, above), so it has an edge for a corner to be rounded against.
+          sheets && "max-sm:rounded-t-2xl",
           // Opt-in, for {@link DialogProps.container}'s reason: this makes the panel the
           // containing block for every `fixed` descendant under it, so it is switched on by the
           // one host that folds on its own width and by nobody else. The `card` in the name is a
@@ -739,6 +753,8 @@ function Panel({
       >
         <header
           {...swipe.handlers}
+          // The handle the body's drag leaves to the header's own (`useSwipeToClose`).
+          data-dialog-handle=""
           className={cn(
             "flex items-center gap-3 border-b border-border px-5 py-4",
             // The header is the sheet's handle under a finger: no pan of its own to give up, so
@@ -837,11 +853,25 @@ const SWIPE_SLOP_PX = 8;
  * stay open. So the let-go past the line asks for a render of its own beside the close, and the
  * effect after that render settles the drag when the panel is still `present` — a close that went
  * through has lowered it in the same batch, and its exit fades from where the finger let go.
+ *
+ * **The body drags too, where it is scrolled to its top** (2026-11-25) — a phone's sheet is pulled
+ * down by whatever the thumb is on, not by a 56px strip. A finger that goes down on the body and
+ * moves *down* closes the sheet the way the header does, but only when every scroller between it
+ * and the panel is already at its top: anywhere else the same move is the list scrolling back up,
+ * and it stays that. **Touch events, through `@use-gesture/react`'s `useDrag`, never pointer
+ * events**, and that is the whole difference from the header's road: the body is a scroller, and a
+ * browser hands a pan it may scroll to the compositor and sends the page `pointercancel` — so a
+ * pointer drag on a list is cancelled before it starts. Touch events keep arriving. The header
+ * (`data-dialog-handle`) is left to its own handlers, so one finger is never two drags; a range
+ * input under the finger is its own gesture.
+ *
+ * **The spring back is {@link SPRING.surface}**, which starts from the speed the finger let go at.
  */
 function useSwipeToClose(
   enabled: boolean,
   onClose: () => void,
   present: boolean,
+  panelRef: React.RefObject<HTMLDivElement | null>,
 ): {
   enabled: boolean;
   y: MotionValue<number>;
@@ -865,7 +895,7 @@ function useSwipeToClose(
 
   const settle = () => {
     if (reduced) y.set(0);
-    else void animate(y, 0, { duration: seconds(DURATION.base), ease: EASE.standard });
+    else void animate(y, 0, SPRING.surface);
   };
 
   /** A let-go past the line asked to close, and the render after it has not been looked at yet. */
@@ -876,6 +906,61 @@ function useSwipeToClose(
     closeAsked.current = false;
     if (present) settle();
   });
+
+  /** A let-go: past the line or with a flick it asks to close, and anything short springs back. */
+  const letGo = (distance: number, speed: number) => {
+    if (distance >= SWIPE_CLOSE_PX || speed >= SWIPE_FLICK) {
+      closeAsked.current = true;
+      askedToClose();
+      onClose();
+    } else settle();
+  };
+
+  // The body's drag — see this hook's doc. `memo` is whether the drag is the sheet's: decided on
+  // the first sample past the slop, and the rest of the gesture keeps the answer.
+  useDrag(
+    ({
+      first,
+      last,
+      movement: [, my],
+      velocity: [, vy],
+      direction: [, dy],
+      event,
+      cancel,
+      memo,
+      touches,
+    }) => {
+      let mine = memo === true;
+      if (first) {
+        // One finger, on a move nothing under it has claimed: a pinch, and a zoomed card picture
+        // panning under the finger (`PinchZoom`, which cancels its own moves), are not the sheet's.
+        mine =
+          my > 0 &&
+          touches === 1 &&
+          !event.defaultPrevented &&
+          mayPullDown(event.target, panelRef.current);
+        if (!mine) {
+          cancel();
+          return false;
+        }
+      }
+      if (!mine) return false;
+      y.set(Math.max(0, my));
+      if (last) letGo(Math.max(0, my), dy > 0 ? vy : 0);
+      return true;
+    },
+    {
+      target: panelRef,
+      enabled,
+      axis: "y",
+      threshold: SWIPE_SLOP_PX,
+      pointer: { touch: true },
+      // **No `filterTaps`.** It swallows, in the capture phase, every click whose gesture it did
+      // not see begin as a tap — and with `touch` it sees no mouse at all, so every mouse click
+      // inside (the web app below 1024px) was dropped. A browser already sends no click after a
+      // touch that moved, and `threshold` keeps a tap out of the handler.
+    },
+  );
 
   if (!enabled) return { enabled, y, handlers: {} };
   return {
@@ -923,11 +1008,7 @@ function useSwipeToClose(
         const d = drag.current;
         drag.current = null;
         if (d === null || d.id !== e.pointerId || !d.live) return;
-        if (y.get() >= SWIPE_CLOSE_PX || d.v >= SWIPE_FLICK) {
-          closeAsked.current = true;
-          askedToClose();
-          onClose();
-        } else settle();
+        letGo(y.get(), d.v);
       },
       onPointerCancel: () => {
         if (drag.current?.live === true) settle();
@@ -935,4 +1016,18 @@ function useSwipeToClose(
       },
     },
   };
+}
+
+/**
+ * Whether a finger that went down on `target` may pull the panel down: it is not on the header
+ * (whose own drag answers it) or a range input, and nothing between it and the panel is scrolled
+ * away from its top — there the move is the list scrolling up, not the sheet going.
+ */
+function mayPullDown(target: EventTarget | null, panel: HTMLElement | null): boolean {
+  if (!(target instanceof Element) || panel === null) return false;
+  if (target.closest("[data-dialog-handle], input[type='range']") !== null) return false;
+  for (let el: Element | null = target; el !== null && el !== panel; el = el.parentElement) {
+    if (el.scrollTop > 0) return false;
+  }
+  return true;
 }

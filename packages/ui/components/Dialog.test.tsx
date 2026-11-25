@@ -774,7 +774,7 @@ describe("a dialog under a host that lends a finger's gestures", () => {
           onClose={onClose}
           {...props}
         >
-          <p>Body</p>
+          {props.children ?? <p>Body</p>}
         </Dialog>
       </DialogHostContext.Provider>,
     );
@@ -983,6 +983,78 @@ describe("a dialog under a host that lends a finger's gestures", () => {
     fireEvent.pointerUp(header(), { ...mouse, clientY: 300 });
     expect(onClose).not.toHaveBeenCalled();
     expect(container.querySelector("header")).toHaveClass("touch-none");
+  });
+
+  /** A finger on the body, as `@use-gesture/react` reads one — touch events, with their own clock. */
+  const bodyTouch = (
+    el: Element,
+    kind: "touchStart" | "touchMove" | "touchEnd",
+    y: number,
+    timeStamp: number,
+  ) => {
+    const point = { identifier: 1, target: el, clientX: 100, clientY: y, pageX: 100, pageY: y };
+    const touches = kind === "touchEnd" ? [] : [point];
+    const event = createEvent[kind](el, {
+      touches,
+      targetTouches: touches,
+      changedTouches: [point],
+    });
+    Object.defineProperty(event, "timeStamp", { value: timeStamp });
+    fireEvent(el, event);
+  };
+  /** A drag down the body, held still before the let-go so the distance alone decides. */
+  const dragBody = (el: Element, to: number) => {
+    bodyTouch(el, "touchStart", 0, 1000);
+    bodyTouch(el, "touchMove", 20, 1010);
+    bodyTouch(el, "touchMove", to, 1020);
+    bodyTouch(el, "touchMove", to, 1200);
+    bodyTouch(el, "touchEnd", to, 1200);
+  };
+
+  it("presents a sheet — the sliver above it and its top corners — only where the host asks", () => {
+    const { unmount } = hosted({ claimBack: () => () => {}, swipeToClose: true, sheets: true });
+    const panel = screen.getByRole("dialog");
+    expect(panel).toHaveClass("max-sm:rounded-t-2xl");
+    expect(panel.parentElement).toHaveClass("max-sm:pt-[calc(0.75rem+env(safe-area-inset-top))]");
+    unmount();
+
+    hosted({ claimBack: () => () => {}, swipeToClose: true });
+    expect(screen.getByRole("dialog")).not.toHaveClass("max-sm:rounded-t-2xl");
+  });
+
+  it("closes when the body is dragged down past the line while it is at its top", () => {
+    const { onClose } = hosted({ claimBack: () => () => {}, swipeToClose: true, sheets: true });
+    dragBody(screen.getByText("Body"), SWIPE_CLOSE_PX - 30);
+    expect(onClose).not.toHaveBeenCalled();
+    dragBody(screen.getByText("Body"), SWIPE_CLOSE_PX + 30);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a drag on a body scrolled away from its top to the scroll", () => {
+    const { onClose } = hosted(
+      { claimBack: () => () => {}, swipeToClose: true, sheets: true },
+      {
+        children: (
+          <div data-testid="scroller" className="overflow-y-auto">
+            <p>Long list</p>
+          </div>
+        ),
+      },
+    );
+    const scroller = screen.getByTestId("scroller");
+    scroller.scrollTop = 200;
+    dragBody(screen.getByText("Long list"), SWIPE_CLOSE_PX + 60);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("still takes a mouse's click inside a sheet whose body can be dragged", async () => {
+    const onPress = vi.fn();
+    hosted(
+      { claimBack: () => () => {}, swipeToClose: true, sheets: true },
+      { children: <button onClick={onPress}>Apply</button> },
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(onPress).toHaveBeenCalledOnce();
   });
 
   it("is a desktop dialog with no host: no grabber, no drag", () => {

@@ -54,6 +54,8 @@ export function WallTile({
       money={item.money}
       pressLabel={copies === null ? item.pressLabel : `${item.pressLabel}, ${copies}`}
       onPress={item.cardId === null ? undefined : () => onOpen(item)}
+      // The art dips under the finger, so a tap is felt to land before the sheet rises.
+      pressClassName={PRESS}
       overlay={
         copies === null ? undefined : (
           // The tag as it is, placed by its own `className`: it is a filled, slanted banner already,

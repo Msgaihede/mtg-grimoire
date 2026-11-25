@@ -80,7 +80,7 @@ export function ImportSheet({
       title="Import cards"
       subtitle={destination.Subtitle === undefined ? subtitle : <destination.Subtitle />}
       closeLabel="Close import"
-      size="h-full w-[42rem] pt-[env(safe-area-inset-top)] sm:pt-0"
+      size="h-full w-[42rem]"
       onDismiss={onClose}
       onClose={onClose}
     >
