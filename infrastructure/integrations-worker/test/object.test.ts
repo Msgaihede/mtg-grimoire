@@ -310,6 +310,11 @@ describe("two requests in one object", () => {
     },
   );
 
+  /**
+   * Which of the two commits first is the runtime's: each awaits its own inflate, MACs and seals,
+   * and those settle in no fixed order. Either is right, so long as the newer is the one kept —
+   * the older answers 409 when it lands second, and 200 when it lands first and is overwritten.
+   */
   it("keeps the newer of two replacements, whichever finishes last", async () => {
     const { storage, store } = await made();
     const newer = store.replace(
@@ -328,8 +333,27 @@ describe("two requests in one object", () => {
       digestOf(5),
       3,
     );
-    const answers = await Promise.all([newer, older]);
-    expect(answers.map((a) => a.status).sort()).toEqual([200, 409]);
+    const [kept, refusedOrOverwritten] = await Promise.all([newer, older]);
+    expect(kept.status).toBe(200);
+    expect([200, 409]).toContain(refusedOrOverwritten.status);
+    expect(storage.db.prepare("SELECT uid FROM rows").all()).toEqual([{ uid: "new" }]);
+    expect((await store.digests("g1"))?.tables.decks?.digest).toBe(digestOf(9));
+  });
+
+  it.each([
+    ["the older lands second", ["new", "old"], [200, 409]],
+    ["the older lands first", ["old", "new"], [200, 200]],
+  ] as const)("keeps the newer of two replacements when %s", async (_when, order, statuses) => {
+    const { storage, store } = await made();
+    const of = { new: 9, old: 5 } as const;
+    const answers = [];
+    for (const uid of order) {
+      const ms = of[uid];
+      answers.push(
+        await store.replace("g1", "decks", await gz([DECK(uid)]), { ms, ctr: 0 }, digestOf(ms), 2),
+      );
+    }
+    expect(answers.map((a) => a.status)).toEqual(statuses);
     expect(storage.db.prepare("SELECT uid FROM rows").all()).toEqual([{ uid: "new" }]);
     expect((await store.digests("g1"))?.tables.decks?.digest).toBe(digestOf(9));
   });
