@@ -8,6 +8,7 @@ import {
   termsFor,
   toggleChip,
   toggleChipMode,
+  type TagChip,
   type TagSelection,
 } from "./tagFilters";
 
@@ -52,6 +53,7 @@ const TAG_MEMORY = viewMemory<{ selection: TagSelection; text: string }>("search
  */
 export function useTagSelection({
   withoutChips = false,
+  initialChips = null,
 }: {
   /**
    * Open with no chips picked, the remembered floor, taxonomy and box kept — read on the mount
@@ -61,10 +63,18 @@ export function useTagSelection({
    * the cleared chips leave with nothing to narrow.
    */
   withoutChips?: boolean;
+  /**
+   * Open with exactly these chips picked in place of the remembered ones, the floor, taxonomy
+   * and box kept — `withoutChips`' seed for a hand-off that names its own tags (an agent's
+   * search, `show_search`), read on the mount only and for the same reason. Wins over
+   * `withoutChips`; {@link TagFilter.replaceChips} is the same answer for a page already mounted.
+   */
+  initialChips?: readonly TagChip[] | null;
 } = {}) {
   const [remembered] = useState(() => TAG_MEMORY.recall());
   const [selection, setSelection] = useState<TagSelection>(() => {
     const kept = remembered?.selection ?? EMPTY_SELECTION;
+    if (initialChips) return settleFloor({ ...kept, chips: initialChips });
     return withoutChips && kept.chips.length > 0 ? settleFloor({ ...kept, chips: [] }) : kept;
   });
   const [text, setText] = useState(remembered?.text ?? "");
@@ -105,6 +115,12 @@ export function useTagSelection({
   );
   /** Every chip off, the floor and the taxonomy chooser kept — the chips row's own reset. */
   const clearTags = useCallback(() => update((s) => ({ ...s, chips: [] })), [update]);
+  /** Exactly these chips and no others, the floor and the taxonomy chooser kept — an agent's
+   *  search arriving on a page already mounted, whose tags are the whole of its tag question. */
+  const replaceChips = useCallback(
+    (chips: readonly TagChip[]) => update((s) => ({ ...s, chips })),
+    [update],
+  );
 
   return {
     selection,
@@ -118,6 +134,7 @@ export function useTagSelection({
     setFloor,
     setNamespace,
     clearTags,
+    replaceChips,
   };
 }
 

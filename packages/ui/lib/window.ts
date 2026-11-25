@@ -20,6 +20,7 @@
  * `onFocusChanged` listeners are all in `core:default`, which the capability already grants.
  */
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { SearchHandoff } from "./ipc";
 
 /** Send the window to the taskbar. */
 export async function minimizeWindow(): Promise<void> {
@@ -131,6 +132,19 @@ export async function onSnapHover(cb: (hovering: boolean) => void): Promise<() =
   return () => {
     for (const off of offs) off();
   };
+}
+
+/** The event the desktop emits to one window when an agent's `show_search` is shown there. */
+export const SEARCH_SHOW_EVENT = "search:show";
+
+/**
+ * Subscribe to the search an agent asked this window to show, and hand back the unsubscribe.
+ *
+ * **On its own window, never app-wide**, `onSnapHover`'s reason: Rust's `emit_to(label)` reaches
+ * every global listener, so an app-wide `listen` would run the search in every open window.
+ */
+export async function onSearchShow(cb: (handoff: SearchHandoff) => void): Promise<() => void> {
+  return getCurrentWindow().listen<SearchHandoff>(SEARCH_SHOW_EVENT, (e) => cb(e.payload));
 }
 
 /**
