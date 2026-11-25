@@ -22,6 +22,7 @@ import type {
   DeckVariant,
   PriceMoverWindow,
   ScannerTrayChoice,
+  SearchHandoff,
   SearchSortKey,
 } from "./ipc";
 import type { MarketplaceId } from "./marketplace";
@@ -902,6 +903,17 @@ interface AppState {
   /** Spend it — `SearchPage`, on the commit it applied it. */
   clearPendingSearchText: () => void;
   /**
+   * **A search an agent asked the window to show** (the MCP tool `show_search`, after the reader
+   * said yes) — {@link pendingSearchText}'s one-shot shape carrying the whole {@link SearchHandoff}
+   * (its id, text and filters) instead of a box's text. Cleared by {@link setActiveView}; written
+   * after it by {@link showSearchHandoff}.
+   */
+  pendingSearchHandoff: SearchHandoff | null;
+  /** Go to the Search view with an agent's search — {@link showTextInSearch}'s shape. */
+  showSearchHandoff: (handoff: SearchHandoff) => void;
+  /** Spend it — `SearchPage`, on the commit it applied it. */
+  clearPendingSearchHandoff: () => void;
+  /**
    * **A card the header's quick search asked a list to reveal** (issue #1098): the folder it is
    * filed in and a query naming its printing, which the page answers by standing in that folder
    * with every other filter cleared and the box holding the query. {@link pendingFolder} and
@@ -1548,6 +1560,9 @@ export const useAppStore = create<AppState>((set) => ({
         // action writes its field after calling this.
         pendingDeckFolder: null,
         pendingSearchText: null,
+        // An agent's search (`show_search`), for the same reason: `showSearchHandoff` writes it
+        // after calling this.
+        pendingSearchHandoff: null,
         pendingReveal: null,
         // The re-press's hand-off (issue #1507), for the same reason: `selectView` writes it after
         // calling this.
@@ -1883,6 +1898,12 @@ export const useAppStore = create<AppState>((set) => ({
     set({ pendingSearchText: text });
   },
   clearPendingSearchText: () => set({ pendingSearchText: null }),
+  pendingSearchHandoff: null,
+  showSearchHandoff: (handoff) => {
+    useAppStore.getState().setActiveView("search");
+    set({ pendingSearchHandoff: handoff });
+  },
+  clearPendingSearchHandoff: () => set({ pendingSearchHandoff: null }),
   pendingReveal: null,
   revealCard: (reveal) => {
     useAppStore.getState().setActiveView(reveal.scope);

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CardWalkStop } from "@/features/decks/deckWalk";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
+import type { SearchHandoff } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext, type ViewId } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
@@ -381,6 +382,24 @@ describe("the quick search's hand-offs", () => {
     expect(s.pendingReveal).toEqual(reveal);
     // The view change carrying the reveal spent the search hand-off nobody read.
     expect(s.pendingSearchText).toBeNull();
+  });
+
+  it("goes to Search with an agent's search, and a later view change spends it", () => {
+    const handoff = { id: 7, text: "t:creature" } as SearchHandoff;
+    useAppStore.getState().showSearchHandoff(handoff);
+    expect(useAppStore.getState().activeView).toBe("search");
+    expect(useAppStore.getState().pendingSearchHandoff).toBe(handoff);
+    useAppStore.getState().setActiveView("home");
+    expect(useAppStore.getState().pendingSearchHandoff).toBeNull();
+  });
+
+  it("parks a deck open in the editor when an agent's search arrives", () => {
+    useAppStore.getState().setActiveView("decks");
+    useAppStore.setState({ openDeckId: 12 });
+    useAppStore.getState().showSearchHandoff({ id: 1, text: "" } as SearchHandoff);
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("search");
+    expect(s.parkedDeckId).toBe(12);
   });
 
   it("is spent by a later view change, read or not", () => {
