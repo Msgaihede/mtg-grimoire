@@ -62,7 +62,7 @@
 //! # What survives the reduction
 //!
 //! Per variant: its id, its `bracketTag`, its colour identity, its popularity, how many
-//! `requires[]` templates it also needs, its `produces[]` feature names joined with `\n`, and
+//! `requires[]` templates it also needs (the count, and since corpus schema 9 their names joined with `\n`), its `produces[]` feature names joined with `\n`, and
 //! **four prose fields** — `description`, `easyPrerequisites`, `notablePrerequisites` and
 //! `manaNeeded`. Per `uses[]` entry: an oracle id, a name, a quantity and whether the card must
 //! be the commander. Everything else is read and dropped.
@@ -252,11 +252,10 @@ struct RawVariant {
     mana_needed: Option<String>,
     #[serde(default)]
     uses: Vec<RawUse>,
-    /// **Read for its length and nothing else.** `IgnoredAny` parses each template and builds
-    /// nothing from it, and a `Vec` of a zero-sized type allocates nothing — so this counts the
-    /// entries without ever holding one.
+    /// The templates ("a creature with flying"). Counted for [`Combo::template_count`] and,
+    /// since corpus schema 9, read for their names, which [`Combo::requires`] keeps.
     #[serde(default)]
-    requires: Vec<IgnoredAny>,
+    requires: Vec<RawRequire>,
     #[serde(default)]
     produces: Vec<RawProduces>,
 }
@@ -296,6 +295,19 @@ struct RawCard {
 struct RawProduces {
     #[serde(default)]
     feature: Option<RawFeature>,
+}
+
+/// One `requires[]` entry: `{ template: { name, … } }`.
+#[derive(Debug, Deserialize)]
+struct RawRequire {
+    #[serde(default)]
+    template: Option<RawTemplate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTemplate {
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,6 +359,8 @@ pub struct Combo {
     pub identity: String,
     /// Feature names, `\n`-joined.
     pub produces: String,
+    /// The templates' names ("a creature with flying"), `\n`-joined; `""` when there are none.
+    pub requires: String,
     /// How the combo is actually played: the numbered steps, `\n`-separated.
     ///
     /// **`""` is a value and not a skip reason**, for all four of these. The file writes an
@@ -452,13 +466,24 @@ fn reduce(raw: RawVariant) -> Option<Combo> {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let template_count = (raw.requires.len() + unidentified) as i64;
+    let requires = raw
+        .requires
+        .into_iter()
+        .filter_map(|r| r.template.and_then(|t| t.name))
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
     Some(Combo {
         id,
         bracket_tag,
         card_count,
-        template_count: (raw.requires.len() + unidentified) as i64,
+        template_count,
         identity: raw.identity.unwrap_or_default(),
         produces,
+        requires,
         // **Verbatim, and untrimmed.** These are the only fields here whose *formatting* is
         // part of the value: `description`'s newlines are the numbered steps, and a trim would
         // be this crate concluding something about prose it is only carrying. `unwrap_or_default`
@@ -956,8 +981,8 @@ fn store_batch(db: &Mutex<Connection>, chunk: &[Combo]) -> Result<usize, ComboEr
             "INSERT INTO combos_staging
                 (id, bracket_tag, card_count, template_count, identity, produces,
                  popularity, description, easy_prerequisites, notable_prerequisites,
-                 mana_needed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 mana_needed, requires)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )?;
         let mut card = tx.prepare_cached(
             "INSERT INTO combo_cards_staging
@@ -976,7 +1001,8 @@ fn store_batch(db: &Mutex<Connection>, chunk: &[Combo]) -> Result<usize, ComboEr
                 c.description,
                 c.easy_prerequisites,
                 c.notable_prerequisites,
-                c.mana_needed
+                c.mana_needed,
+                c.requires
             ])?;
             // **In the file's order, and that is load-bearing**: `combo_cards` has no
             // ordinal column, so insert order is rowid order and rowid order is what
@@ -1548,6 +1574,8 @@ pub struct CardCombo {
     pub identity: String,
     /// What it does — feature names, one per line.
     pub produces: String,
+    /// The templates' names ("a creature with flying"), one per line. `""` where there are none.
+    pub requires: String,
     /// How it is played — the numbered steps, `\n`-separated. `""` where the feed carries none.
     pub description: String,
     /// `""` where the feed carries none, which is the common case for all three of these.
@@ -1835,7 +1863,8 @@ fn page_sql(owned_only: bool) -> String {
     // The columns, in the order `card_combos` reads them back by index.
     const COLUMNS: &str = "SELECT c.id, c.bracket_tag, c.card_count, c.template_count,
                                   c.identity, c.produces, c.description, c.easy_prerequisites,
-                                  c.notable_prerequisites, c.mana_needed, c.popularity";
+                                  c.notable_prerequisites, c.mana_needed, c.popularity,
+                                  c.requires";
     const TAIL: &str = "ORDER BY c.card_count, c.popularity DESC, c.id LIMIT ?4 OFFSET ?5";
     if owned_only {
         // `grp` is already one row per searched combo, so it stands in for `sel` here rather
@@ -2053,6 +2082,7 @@ pub fn card_combos(
                 notable_prerequisites: r.get(8)?,
                 mana_needed: r.get(9)?,
                 popularity: r.get(10)?,
+                requires: r.get(11)?,
                 pieces: Vec::new(),
             })
         })
@@ -2758,6 +2788,7 @@ mod tests {
                 template_count: 0,
                 identity: "UB".into(),
                 produces: "Infinite mana".into(),
+                requires: String::new(),
                 // The fixture carries a `description` and no other prose, so this is also the
                 // assertion that an **absent** key lands as `""` rather than as anything else.
                 description: "Long prose.".into(),
@@ -3048,6 +3079,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(blanks, 2, "`empty` and `absent`, stored the same way");
+    }
+
+    /// **The template text is kept, not just counted.** `requires[]` was read for its length
+    /// alone; the names ("a creature with flying") are what an agent reading a combo needs, and
+    /// they come back through [`card_combos`] `\n`-joined, the way `produces` does.
+    #[test]
+    fn a_combo_keeps_its_template_text() {
+        let with = r#"{"id":"with","status":"OK","bracketTag":"C","identity":"U",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],
+            "requires":[{"template":{"name":"a creature with flying"}},
+                        {"template":{"name":"an artifact"}}],
+            "produces":[]}"#;
+        let without = r#"{"id":"without","status":"OK","bracketTag":"C","identity":"U",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],
+            "requires":[],"produces":[]}"#;
+        let file = parse(&document(&[with.to_owned(), without.to_owned()]));
+        let db = mem_db();
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
+
+        let by_id = |id: &str| page.combos.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(
+            by_id("with").requires,
+            "a creature with flying\nan artifact"
+        );
+        assert_eq!(by_id("with").template_count, 2);
+        assert_eq!(by_id("without").requires, "");
+        assert_eq!(by_id("without").template_count, 0);
     }
 
     // ---- the write --------------------------------------------------------------------
@@ -4553,6 +4616,7 @@ mod tests {
                 template_count: 1,
                 identity: "B".into(),
                 produces: "Infinite colorless mana".into(),
+                requires: "a creature with flying".into(),
                 description: "Sacrifice a token.\nRepeat.".into(),
                 easy_prerequisites: "All permanents are untapped.".into(),
                 notable_prerequisites: String::new(),
@@ -4583,6 +4647,7 @@ mod tests {
                     "templateCount": 1,
                     "identity": "B",
                     "produces": "Infinite colorless mana",
+                    "requires": "a creature with flying",
                     "description": "Sacrifice a token.\nRepeat.",
                     "easyPrerequisites": "All permanents are untapped.",
                     "notablePrerequisites": "",

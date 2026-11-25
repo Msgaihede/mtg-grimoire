@@ -133,6 +133,7 @@ function combo(over: Partial<CardCombo> = {}): CardCombo {
     templateCount: 0,
     identity: "RW",
     produces: "Infinite lifegain\nInfinite lifegain triggers",
+    requires: "",
     description: "",
     easyPrerequisites: "",
     notablePrerequisites: "",

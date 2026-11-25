@@ -57,6 +57,7 @@ const LIFEGAIN: CardCombo = {
   templateCount: 0,
   identity: "RW",
   produces: "Infinite lifegain\nInfinite lifegain triggers",
+  requires: "",
   description: "",
   easyPrerequisites: "",
   notablePrerequisites: "",
@@ -73,6 +74,7 @@ const AVACYN_COMBO: CardCombo = {
   templateCount: 0,
   identity: "RW",
   produces: "Infinite lifegain\nInfinite damage",
+  requires: "",
   description: "",
   easyPrerequisites: "",
   notablePrerequisites: "",
@@ -96,6 +98,7 @@ const TEMPLATED: CardCombo = {
   templateCount: 1,
   identity: "RW",
   produces: "Infinite damage",
+  requires: "A creature that can deal damage",
   description:
     "Target Boros Reckoner with Boros Charm.\n" +
     "Deal damage to Boros Reckoner with the creature you control.\n" +

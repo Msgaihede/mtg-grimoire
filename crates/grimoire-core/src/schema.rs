@@ -759,6 +759,15 @@ pub const USER_SCHEMA_VERSION: i64 = 69;
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
 ///
+/// **9 (2026-11-24) is `combos.requires`** — the names of the feed's `requires[]` templates
+/// ("a creature with flying"), which were read for their count and thrown away, and which the
+/// local MCP server's card-knowledge tools hand to an agent. **It has no rung function of its
+/// own**: `"requires"` joins [`COMBO_V2_COLUMNS`], so [`combos_are_at_head`] fails on a corpus
+/// without it and corpus schema 2's [`rebuild_combo_tables`] drops and rebuilds the three combo
+/// tables and deletes `combo_meta`, which makes [`crate::combos::due_at_launch`] true. Nothing
+/// is backfilled — only the feed has the text — and the next launch fetches it again, the cost
+/// schema 2 already named. Gated on the shape, never on this number.
+///
 /// **8 (2026-10-11, [#909](https://github.com/Msgaihede/mtg-grimoire/issues/909), the full
 /// Scryfall query language) is `cards.print_facts`, `sets.block_code` and `sets.block`** — the
 /// facts about a printing and a set that the search box's newer terms ask and no column held.
@@ -914,7 +923,7 @@ pub const USER_SCHEMA_VERSION: i64 = 69;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 8;
+pub const CORPUS_SCHEMA_VERSION: i64 = 9;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5514,7 +5523,11 @@ CREATE TABLE {schema}.combos (
                  description    TEXT NOT NULL DEFAULT '',
                  -- How many decks Spellbook has seen it in. NULL where the feed carries none,
                  -- which is not the same as zero and must not be faked into it.
-                 popularity     INTEGER
+                 popularity     INTEGER,
+                 -- The names of the feed's `requires[]` templates ("a creature with flying"),
+                 -- `\n`-joined and empty where there are none. Corpus schema 9; `template_count`
+                 -- is still the count, and this is the text an agent reads beside it.
+                 requires       TEXT NOT NULL DEFAULT ''
              );
 
 CREATE TABLE {schema}.combo_cards (
@@ -8906,11 +8919,12 @@ pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
 /// probe only has to be able to tell the two shapes apart, and any one of these four does that;
 /// a future rung that adds a fifth column owes the same thing every rung owes — a fixture at the
 /// shape below it — and that fixture is what goes red if this list is not widened with it.
-const COMBO_V2_COLUMNS: [&str; 4] = [
+const COMBO_V2_COLUMNS: [&str; 5] = [
     "mana_needed",
     "easy_prerequisites",
     "notable_prerequisites",
     "description",
+    "requires",
 ];
 
 /// Whether `combos` in `schema` carries [`COMBO_V2_COLUMNS`].
@@ -9976,7 +9990,9 @@ const COMBO_STAGING_SQL: &str = "
         easy_prerequisites TEXT NOT NULL DEFAULT '',
         notable_prerequisites TEXT NOT NULL DEFAULT '',
         description    TEXT NOT NULL DEFAULT '',
-        popularity     INTEGER
+        popularity     INTEGER,
+        -- Corpus schema 9, in COMBO_TABLES_SQL's position and with its default.
+        requires       TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE {schema}.combo_cards_staging (
         combo_id          TEXT NOT NULL REFERENCES combos_staging(id) ON DELETE CASCADE,
@@ -22263,11 +22279,12 @@ pub(crate) mod tests {
     /// [`COMBO_V2_COLUMNS`]**. An assertion that asked [`combos_are_at_head`], or looped over
     /// the implementation's own list, would agree with whatever that constant currently says —
     /// including a list with a typo in it, or an empty one.
-    const NEW_COMBO_COLUMNS: [&str; 4] = [
+    const NEW_COMBO_COLUMNS: [&str; 5] = [
         "mana_needed",
         "easy_prerequisites",
         "notable_prerequisites",
         "description",
+        "requires",
     ];
 
     /// The rung, over the version below it: the three tables come back at head and empty, and
@@ -23693,6 +23710,132 @@ pub(crate) mod tests {
             "the four are `DEFAULT ''` because the feed writes an empty string: {live:?}"
         );
         assert_eq!(defaults("combos_staging"), live);
+    }
+
+    // ---- corpus schema 9: combo template text ----------------------------------------
+
+    /// A pair whose corpus wears **head's version stamp over a `combos` with no `requires`**,
+    /// holding one combo and the `combo_meta` row that says it was fetched — the state every
+    /// converted database and every fresh install is in on the day corpus schema 9 ships.
+    ///
+    /// The table is rebuilt rather than `DROP COLUMN`ed, the construction [`corpus_at_schema_1`]
+    /// already uses for `combos`.
+    fn corpus_missing_requires() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.combo_cards;
+             DROP TABLE {CORPUS}.combos;
+             CREATE TABLE {CORPUS}.combos (
+                 id             TEXT PRIMARY KEY,
+                 bracket_tag    TEXT NOT NULL,
+                 card_count     INTEGER NOT NULL,
+                 template_count INTEGER NOT NULL,
+                 identity       TEXT NOT NULL,
+                 produces       TEXT NOT NULL,
+                 mana_needed    TEXT NOT NULL DEFAULT '',
+                 easy_prerequisites TEXT NOT NULL DEFAULT '',
+                 notable_prerequisites TEXT NOT NULL DEFAULT '',
+                 description    TEXT NOT NULL DEFAULT '',
+                 popularity     INTEGER
+             );
+             CREATE TABLE {CORPUS}.combo_cards (
+                 combo_id          TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 oracle_id         TEXT NOT NULL,
+                 name              TEXT NOT NULL,
+                 quantity          INTEGER NOT NULL,
+                 must_be_commander INTEGER NOT NULL
+             );"
+        ))
+        .unwrap();
+        conn.execute_batch(&on_schema(CORPUS, COMBO_INDEXES_SQL))
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO combos
+                 (id,bracket_tag,card_count,template_count,identity,produces,popularity)
+                 VALUES ('1957-4050','R',2,1,'ub','Infinite mill',9001);
+             INSERT INTO combo_cards (combo_id,oracle_id,name,quantity,must_be_commander)
+                 VALUES ('1957-4050','oid-thoracle','Thassa''s Oracle',1,0);
+             INSERT OR REPLACE INTO combo_meta (id,etag,stamp,fetched_at,checked_at,combo_count)
+                 VALUES (1,'\"an-etag\"','2026-09-01T00:00:00Z',1800000000,1800000000,1);",
+        )
+        .unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    fn combos_has_requires(conn: &Connection) -> bool {
+        combo_column_names(conn, CORPUS)
+            .unwrap()
+            .iter()
+            .any(|n| n == "requires")
+    }
+
+    /// The rung is corpus schema 2's own: widening [`COMBO_V2_COLUMNS`] sends a corpus without
+    /// the column through [`rebuild_combo_tables`], which takes the rows and the `combo_meta`
+    /// row with the old shape, so the next launch fetches the feed again.
+    #[test]
+    fn the_requires_rung_rebuilds_the_combo_tables_and_drops_their_meta() {
+        let conn = corpus_missing_requires();
+        assert!(
+            !combos_has_requires(&conn),
+            "the fixture must start without the column or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(combos_has_requires(&conn));
+        let rows: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {CORPUS}.combos"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "no backfill: only the feed has the text");
+        let meta: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM {CORPUS}.combo_meta"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta, 0, "the meta row goes, so the feed is due");
+        assert!(crate::combos::due_at_launch(&conn, 1_800_000_100));
+    }
+
+    /// The counterweight: a fresh corpus is built with the column and owes nothing.
+    #[test]
+    fn a_fresh_corpus_has_requires_and_owes_nothing() {
+        let conn = memory_pair();
+        assert!(combos_has_requires(&conn));
+        assert!(combos_are_at_head(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(combos_has_requires(&conn));
+        assert!(combos_are_at_head(&conn, CORPUS).unwrap());
+    }
+
+    /// **The population a version gate would miss**: head's number over the old shape. The gate
+    /// is the shape, so the column arrives anyway.
+    #[test]
+    fn a_corpus_stamped_at_head_without_requires_still_gets_it() {
+        let conn = corpus_missing_requires();
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert_eq!(version, 9, "head is corpus schema 9");
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            combos_has_requires(&conn),
+            "the number said head and the shape did not"
+        );
+        // Twice is once.
+        migrate_corpus(&conn).unwrap();
     }
 
     // ---- v19: a deck card names a finish ---------------------------------------------
