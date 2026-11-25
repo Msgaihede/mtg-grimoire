@@ -251,12 +251,19 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
 /// reason — [`DESKTOP_ONLY`], read from the other side. A host of the table needs them and
 /// this one does not, so there is no wrapper, and a page here that invoked one would be told
 /// the command does not exist.
-const TABLE_ONLY: &[(&str, &str)] = &[(
-    "card_image_source",
-    "where a card's picture is, for a host whose page fetches pictures itself — a web \
+const TABLE_ONLY: &[(&str, &str)] = &[
+    (
+        "card_image_source",
+        "where a card's picture is, for a host whose page fetches pictures itself — a web \
      host's service worker. This app's `mtgimg://` handler asks the image cache, which \
      resolves, fetches and stores in one call (`images::answer`)",
-)];
+    ),
+    (
+        "combo_get",
+        "one combo whole, for the MCP server's get_combo tool; the page reads combos a page at a \
+     time through combos_for_card",
+    ),
+];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
 /// table came to cover the light app (phase 4, step 4.2, 2026-10-03), each group here says what

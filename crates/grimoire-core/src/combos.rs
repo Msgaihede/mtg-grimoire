@@ -1697,6 +1697,12 @@ const HIT_CTE: &str =
 /// that holds neither folded. Measured at no cost — 58.3 ms against 59.2 ms for a needle
 /// pre-lowered in Rust, median of 15 over the real corpus.
 ///
+/// # `?6` is what the combo must produce
+///
+/// A JSON array of lower-cased words, `[]` for no filter: the combo stays only if **no** word is
+/// missing from its `produces` text, so the words match in any order and across lines.
+/// [`card_combos`] builds it; every statement that composes `sel` binds it.
+///
 /// # `?2 = ''` is *no search*
 ///
 /// [`card_combos`] trims the needle and binds `''` for `None`, for a blank and for a string
@@ -1708,10 +1714,13 @@ const HIT_CTE: &str =
 const SEL_CTE: &str = "sel(combo_id) AS (
         SELECT h.combo_id
           FROM hit h
-         WHERE ?2 = ''
-            OR EXISTS (SELECT 1 FROM combo_cards s
-                        WHERE s.combo_id = h.combo_id
-                          AND instr(lower(s.name), lower(?2)) > 0))";
+         WHERE (?2 = ''
+                OR EXISTS (SELECT 1 FROM combo_cards s
+                            WHERE s.combo_id = h.combo_id
+                              AND instr(lower(s.name), lower(?2)) > 0))
+           AND NOT EXISTS (SELECT 1 FROM json_each(?6) w
+                             JOIN combos pc ON pc.id = h.combo_id
+                            WHERE instr(lower(pc.produces), lower(w.value)) = 0))";
 
 /// Which oracle cards the reader owns at least one copy of.
 ///
@@ -1998,6 +2007,7 @@ pub fn card_combos(
     conn: &Connection,
     oracle_id: &str,
     search: Option<&str>,
+    produces: Option<&str>,
     card_count: Option<i64>,
     owned_only: bool,
     limit: i64,
@@ -2013,6 +2023,16 @@ pub fn card_combos(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
+    // **What the combo produces, as a JSON array of lower-cased words** for `?6`: every word
+    // must be found in the combo's `produces` text, in any order and across its lines, so
+    // `"infinite mana"` finds a combo producing "Infinite mana" and one producing "Infinite
+    // colorless mana". `[]` is no filter, and so are `None` and a blank string.
+    let words: Vec<String> = produces
+        .unwrap_or("")
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect();
+    let words = serde_json::to_string(&words).map_err(|e| e.to_string())?;
     // Clamped rather than refused: every one of these is a number a page composed and none is
     // a reader's answer to anything, so a bound this app can meet quietly is worth more than a
     // sentence nobody will read. `limit` is clamped *up* as well — a `0` asked for by a page
@@ -2032,16 +2052,19 @@ pub fn card_combos(
         .prepare_cached(&counts_sql())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
     let buckets: Vec<(i64, i64, i64)> = counts
-        .query_map(params![oracle_id, needle], |r| {
-            // `sum()` over a group is never NULL here — every group has a row and `all_owned`
-            // is a 0 or a 1 — but a count read as an `Option` costs nothing and cannot panic a
-            // reader's window over an arithmetic surprise.
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-            ))
-        })
+        .query_map(
+            params![oracle_id, needle, Option::<i64>::None, 0, 0, words],
+            |r| {
+                // `sum()` over a group is never NULL here — every group has a row and `all_owned`
+                // is a 0 or a 1 — but a count read as an `Option` costs nothing and cannot panic a
+                // reader's window over an arithmetic surprise.
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                ))
+            },
+        )
         .and_then(|rows| rows.collect())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
 
@@ -2069,23 +2092,26 @@ pub fn card_combos(
         .prepare_cached(&page_sql(owned_only))
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
     let mut combos: Vec<CardCombo> = page
-        .query_map(params![oracle_id, needle, card_count, limit, offset], |r| {
-            Ok(CardCombo {
-                id: r.get(0)?,
-                bracket_tag: r.get(1)?,
-                card_count: r.get(2)?,
-                template_count: r.get(3)?,
-                identity: r.get(4)?,
-                produces: r.get(5)?,
-                description: r.get(6)?,
-                easy_prerequisites: r.get(7)?,
-                notable_prerequisites: r.get(8)?,
-                mana_needed: r.get(9)?,
-                popularity: r.get(10)?,
-                requires: r.get(11)?,
-                pieces: Vec::new(),
-            })
-        })
+        .query_map(
+            params![oracle_id, needle, card_count, limit, offset, words],
+            |r| {
+                Ok(CardCombo {
+                    id: r.get(0)?,
+                    bracket_tag: r.get(1)?,
+                    card_count: r.get(2)?,
+                    template_count: r.get(3)?,
+                    identity: r.get(4)?,
+                    produces: r.get(5)?,
+                    description: r.get(6)?,
+                    easy_prerequisites: r.get(7)?,
+                    notable_prerequisites: r.get(8)?,
+                    mana_needed: r.get(9)?,
+                    popularity: r.get(10)?,
+                    requires: r.get(11)?,
+                    pieces: Vec::new(),
+                })
+            },
+        )
         .and_then(|rows| rows.collect())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
 
@@ -2138,6 +2164,62 @@ pub fn card_combos(
         by_card_count,
         combos,
     })
+}
+
+/// One combo whole, by its id: the page's own columns and [`pieces_sql`] for that one id, so it
+/// answers exactly the [`CardCombo`] [`card_combos`] lists for it. `Ok(None)` for an id this
+/// database does not hold.
+pub fn combo_by_id(conn: &Connection, id: &str) -> Result<Option<CardCombo>, String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT c.id, c.bracket_tag, c.card_count, c.template_count,
+                    c.identity, c.produces, c.description, c.easy_prerequisites,
+                    c.notable_prerequisites, c.mana_needed, c.popularity,
+                    c.requires
+               FROM combos c WHERE c.id = ?1",
+        )
+        .map_err(|e| format!("could not read a combo: {e}"))?;
+    let mut combo = match stmt
+        .query_row(params![id], |r| {
+            Ok(CardCombo {
+                id: r.get(0)?,
+                bracket_tag: r.get(1)?,
+                card_count: r.get(2)?,
+                template_count: r.get(3)?,
+                identity: r.get(4)?,
+                produces: r.get(5)?,
+                description: r.get(6)?,
+                easy_prerequisites: r.get(7)?,
+                notable_prerequisites: r.get(8)?,
+                mana_needed: r.get(9)?,
+                popularity: r.get(10)?,
+                requires: r.get(11)?,
+                pieces: Vec::new(),
+            })
+        })
+        .optional()
+        .map_err(|e| format!("could not read a combo: {e}"))?
+    {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let mut stmt = conn
+        .prepare_cached(&pieces_sql(conn, "?"))
+        .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+    combo.pieces = stmt
+        .query_map(params![id], |r| {
+            Ok(ComboPiece {
+                oracle_id: r.get(1)?,
+                name: r.get(2)?,
+                quantity: r.get(3)?,
+                must_be_commander: r.get(4)?,
+                owned: r.get(5)?,
+                card_id: r.get(6)?,
+            })
+        })
+        .and_then(|rows| rows.collect())
+        .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+    Ok(Some(combo))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -3101,7 +3183,7 @@ mod tests {
         store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
 
         let by_id = |id: &str| page.combos.iter().find(|c| c.id == id).unwrap();
         assert_eq!(
@@ -3828,6 +3910,79 @@ mod tests {
         db
     }
 
+    /// A card's combos produce different things, so the filter has something to separate.
+    fn produces_db() -> Mutex<Connection> {
+        let db = mem_db();
+        let combo = |id: &str, produces: &str| {
+            format!(
+                r#"{{"id":"{id}","status":"OK","bracketTag":"P","identity":"C",
+                     "legalities":{{"commander":true}},
+                     "uses":[{{"card":{{"name":"Ashnod's Altar","oracleId":"o-altar"}}}}],
+                     "requires":[],"produces":[{produces}]}}"#
+            )
+        };
+        let feature = |n: &str| format!(r#"{{"feature":{{"name":"{n}"}},"quantity":1}}"#);
+        let file = parse(&document(&[
+            combo("mana", &feature("Infinite mana")),
+            combo(
+                "colorless",
+                &format!(
+                    "{},{}",
+                    feature("Infinite colorless mana"),
+                    feature("Win the game")
+                ),
+            ),
+            combo("etb", &feature("Infinite ETB")),
+            combo(
+                "storm",
+                &format!("{},{}", feature("Mana"), feature("Infinite storm")),
+            ),
+        ]));
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        db
+    }
+
+    #[test]
+    fn one_combo_reads_whole_with_its_pieces_and_owned_counts() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        let listed = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
+        for want in &listed.combos {
+            assert_eq!(combo_by_id(&conn, &want.id).unwrap().as_ref(), Some(want));
+        }
+        let c4 = combo_by_id(&conn, "c4").unwrap().unwrap();
+        assert_eq!(c4.pieces.len(), 4);
+        assert_eq!(c4.pieces[0].name, "Ashnod's Altar");
+        assert_eq!(c4.pieces[1].owned, 4, "Basalt: 3 + 1 across printings");
+        assert_eq!(combo_by_id(&conn, "nope").unwrap(), None);
+    }
+
+    #[test]
+    fn a_card_s_combos_narrow_to_what_they_produce() {
+        let db = produces_db();
+        let conn = crate::db::lock_blocking(&db);
+        let ask =
+            |p: Option<&str>| card_combos(&conn, "o-altar", None, p, None, false, 25, 0).unwrap();
+        let mut got: Vec<String> = ask(Some("infinite mana"))
+            .combos
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            ["colorless", "mana", "storm"],
+            "any order, across lines, case-folded"
+        );
+        let page = ask(Some("INFINITE   Mana"));
+        assert_eq!(page.matching, 3);
+        assert_eq!(page.total, 4, "total is the card's own census");
+        assert_eq!(page.by_card_count.iter().map(|b| b.combos).sum::<i64>(), 3);
+        assert_eq!(ask(None).combos.len(), 4);
+        assert_eq!(ask(Some("  ")).combos.len(), 4);
+        assert_eq!(ask(Some("zzz")).combos.len(), 0);
+    }
+
     fn ids(page: &CardCombosPage) -> Vec<&str> {
         page.combos.iter().map(|c| c.id.as_str()).collect()
     }
@@ -3844,7 +3999,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
 
         assert_eq!(
             ids(&page),
@@ -3873,7 +4028,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(2), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(2), false, 25, 0).unwrap();
 
         assert_eq!(page.total, 6, "every combo naming the Altar, unfiltered");
         assert_eq!(page.matching, 3, "the three two-card ones");
@@ -3898,7 +4053,7 @@ mod tests {
 
         // Asked with a filter on, deliberately: the histogram describes the whole set whatever
         // the page is showing, or the chips would empty themselves as soon as one was pressed.
-        let page = card_combos(&conn, "o-altar", None, Some(4), true, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(4), true, 25, 0).unwrap();
 
         assert_eq!(
             page.by_card_count,
@@ -3931,7 +4086,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         let ask = |cards: Option<i64>, owned: bool| {
-            let page = card_combos(&conn, "o-altar", None, cards, owned, 25, 0).unwrap();
+            let page = card_combos(&conn, "o-altar", None, None, cards, owned, 25, 0).unwrap();
             assert_eq!(
                 page.matching as usize,
                 page.combos.len(),
@@ -3966,12 +4121,12 @@ mod tests {
     fn paging_walks_the_order_with_no_gap_and_no_repeat_and_clamps_the_limit() {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
-        let all = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
+        let all = card_combos(&conn, "o-altar", None, None, None, false, 25, 0).unwrap();
         let whole: Vec<String> = ids(&all).iter().map(|s| s.to_string()).collect();
 
         let mut walked: Vec<String> = Vec::new();
         for offset in [0, 2, 4, 6] {
-            let page = card_combos(&conn, "o-altar", None, None, false, 2, offset).unwrap();
+            let page = card_combos(&conn, "o-altar", None, None, None, false, 2, offset).unwrap();
             assert_eq!(page.total, 6, "the counts do not move as the page does");
             assert!(page.combos.len() <= 2, "the limit is a limit");
             walked.extend(ids(&page).iter().map(|s| s.to_string()));
@@ -3982,7 +4137,7 @@ mod tests {
         // as *nothing*, so an unclamped `limit` fails loudly in one direction and silently in
         // the other; `MAX_PAGE + 50` is the ceiling the caller does not get to raise.
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, 0, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, 0, 0)
                 .unwrap()
                 .combos
                 .len(),
@@ -3990,14 +4145,14 @@ mod tests {
             "a zero is clamped up to one row, not down to none"
         );
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, -1, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, -1, 0)
                 .unwrap()
                 .combos
                 .len(),
             1
         );
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, MAX_PAGE + 50, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, MAX_PAGE + 50, 0)
                 .unwrap()
                 .combos
                 .len(),
@@ -4017,7 +4172,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(3), false, 25, 0).unwrap();
         let c3b = page.combos.iter().find(|c| c.id == "c3b").unwrap();
 
         assert_eq!(
@@ -4043,7 +4198,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(4), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(4), false, 25, 0).unwrap();
         let pieces = &page.combos[0].pieces;
         let by_oracle = |o: &str| pieces.iter().find(|p| p.oracle_id == o).unwrap();
 
@@ -4069,7 +4224,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(3), false, 25, 0).unwrap();
 
         assert_eq!(ids(&page), vec!["c3a", "c3b"]);
         assert_eq!(
@@ -4108,7 +4263,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, Some(2), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, Some(2), false, 25, 0).unwrap();
         let c3 = page.combos.iter().find(|c| c.id == "c3a");
         assert!(c3.is_none(), "the size filter is on");
         let pieces = &page.combos.iter().find(|c| c.id == "c2a").unwrap().pieces;
@@ -4121,7 +4276,7 @@ mod tests {
             vec![("o-altar", 2), ("o-basalt", 4)],
             "two in a locked case, and four across two printings and two finishes"
         );
-        let curio = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0)
+        let curio = card_combos(&conn, "o-altar", None, None, Some(3), false, 25, 0)
             .unwrap()
             .combos[0]
             .pieces
@@ -4144,7 +4299,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, 25, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, 25, 0)
                 .unwrap()
                 .owned_total,
             2,
@@ -4160,14 +4315,14 @@ mod tests {
         own(&conn, "p-nameless", "nonfoil", 1, None);
 
         assert_eq!(
-            card_combos(&conn, "o-altar", None, None, false, 25, 0)
+            card_combos(&conn, "o-altar", None, None, None, false, 25, 0)
                 .unwrap()
                 .owned_total,
             2,
             "a NULL oracle id in the collection owns nothing and hides nothing"
         );
         assert_eq!(
-            ids(&card_combos(&conn, "o-altar", None, None, true, 25, 0).unwrap()),
+            ids(&card_combos(&conn, "o-altar", None, None, None, true, 25, 0).unwrap()),
             vec!["c2a", "c2z"],
             "and the owned page is the same two it was"
         );
@@ -4190,7 +4345,7 @@ mod tests {
         store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
 
         let conn = crate::db::lock_blocking(&db);
-        let page = card_combos(&conn, "o-kiki", None, None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-kiki", None, None, None, false, 25, 0).unwrap();
 
         assert_eq!(page.total, 1);
         assert_eq!(ids(&page), vec!["twice"]);
@@ -4225,7 +4380,7 @@ mod tests {
 
         let never = crate::schema::memory_pair();
         assert_eq!(
-            card_combos(&never, "o-altar", None, None, false, 25, 0).unwrap(),
+            card_combos(&never, "o-altar", None, None, None, false, 25, 0).unwrap(),
             empty,
             "never ingested"
         );
@@ -4233,12 +4388,12 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         assert_eq!(
-            card_combos(&conn, "o-who", None, None, false, 25, 0).unwrap(),
+            card_combos(&conn, "o-who", None, None, None, false, 25, 0).unwrap(),
             empty,
             "a card no combo names"
         );
         assert_eq!(
-            card_combos(&conn, "  ", None, None, false, 25, 0).unwrap(),
+            card_combos(&conn, "  ", None, None, None, false, 25, 0).unwrap(),
             empty,
             "and a blank is a card nothing names, rather than a match on everything"
         );
@@ -4333,7 +4488,7 @@ mod tests {
         cards: Option<i64>,
         owned_only: bool,
     ) -> CardCombosPage {
-        card_combos(conn, "o-altar", search, cards, owned_only, 25, 0).unwrap()
+        card_combos(conn, "o-altar", search, None, cards, owned_only, 25, 0).unwrap()
     }
 
     fn bucket_sum(page: &CardCombosPage) -> i64 {
@@ -4581,8 +4736,17 @@ mod tests {
 
         let mut walked: Vec<String> = Vec::new();
         for offset in [0, 2, 4] {
-            let page =
-                card_combos(&conn, "o-altar", Some("basalt"), None, false, 2, offset).unwrap();
+            let page = card_combos(
+                &conn,
+                "o-altar",
+                Some("basalt"),
+                None,
+                None,
+                false,
+                2,
+                offset,
+            )
+            .unwrap();
             assert_eq!(page.total, 7, "the counts do not move as the page does");
             assert_eq!(page.matching, 4);
             assert!(page.combos.len() <= 2, "the limit is a limit");

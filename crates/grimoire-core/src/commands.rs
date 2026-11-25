@@ -464,9 +464,10 @@ commands! {
     };
 
     // combos
-    read combos_for_card in combos(oracle_id: String, search: Option<String>, card_count: Option<i64>, owned_only: bool, limit: i64, offset: i64) = |conn| {
-        card_combos(conn, &oracle_id, search.as_deref(), card_count, owned_only, limit, offset)
+    read combos_for_card in combos(oracle_id: String, search: Option<String>, produces: Option<String>, card_count: Option<i64>, owned_only: bool, limit: i64, offset: i64) = |conn| {
+        card_combos(conn, &oracle_id, search.as_deref(), produces.as_deref(), card_count, owned_only, limit, offset)
     };
+    read combo_get in combos(id: String) = |conn| combo_by_id(conn, &id);
     read combos_for_cards in combos(card_ids: Vec<String>) = |conn| match_combos(conn, &card_ids);
     blocking combos_status in combos() = |state| Ok(status_of(&state));
     task combos_refresh in combos(force: bool) = |state| async move {
@@ -1679,6 +1680,7 @@ mod tests {
         let expected = json!(crate::combos::card_combos(
             &state.lock_db_read(),
             "none",
+            None,
             None,
             None,
             false,
