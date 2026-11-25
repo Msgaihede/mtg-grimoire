@@ -93,7 +93,8 @@ a refused call changes no window. The window is the one the reader last focused
 first label in sorted order; the tool reaches it only through the `SearchWindows` seam
 (`window::DesktopWindows`; a fake in tests), never an `AppHandle`. The search goes as a
 `SearchHandoff` in the filter bar's own shape — a value the bar has no control for (`gameChanger`, a format the picker lacks, the `special`
-and `bonus` rarities) goes into the text as a keyword — emitted as `search:show` to that window
+and `bonus` rarities) goes into the text as a keyword, after the agent's text, which is put in
+parentheses first when it holds an `or` — emitted as `search:show` to that window
 alone. The page listens on its own window (`onSearchShow`), hands it to the store as the one-shot
 `showSearchHandoff`, and the Search page applies it over a clean slate. Then the window is
 unminimized, shown and focused, and Windows is asked whether it came forward (`GetForegroundWindow`,

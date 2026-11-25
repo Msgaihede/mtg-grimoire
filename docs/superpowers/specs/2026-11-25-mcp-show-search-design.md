@@ -220,8 +220,10 @@ filters previews the count.
 - `id`: a number unique to this call, which the page sends back with its report.
 - `text`: the agent's text, with the keywords for values that have no control appended, each
   separated by a space: ` is:gamechanger` when `filters.gameChanger` is true, ` f:<key>` for a
-  format the picker lacks, and the rarity group (§6.1). The translations into the box are written
-  in Rust, so the page receives ready values.
+  format the picker lacks, and the rarity group (§6.1); when a keyword is appended and the agent's
+  text holds an `or` (a whitespace-separated word, any case), that text is written in parentheses
+  first, because the page binds terms side by side tighter than `or`. The translations into the
+  box are written in Rust, so the page receives ready values.
 - the filters in the page's own shape: `format` (a key the picker offers, or absent for _Tokens &
   extras_), `colors` (letters) and `colorsStrict`, `types`, `rarities` (chip rarities only, empty
   when they went into the text), `sets`, `manaValues`, `manaX`, `owned`, `priceMin`, `priceMax`,

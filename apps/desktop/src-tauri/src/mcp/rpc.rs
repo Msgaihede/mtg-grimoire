@@ -2,8 +2,10 @@
 //!
 //! `initialize` (the version handshake and what this server offers), `ping`, `tools/list` and
 //! `tools/call`. Every notification is accepted and none needs an answer — `initialized` changes
-//! nothing for a server that keeps no session, and a `cancelled` arrives after a tool call that
-//! answers in milliseconds has already answered. A batch (an array, which the 2025-03-26 revision
+//! nothing for a server that keeps no session, and a `cancelled` is not acted on: nearly every tool
+//! answers in milliseconds, so it arrives after the answer, and `show_search`, which can wait up to
+//! five seconds for the page, has already sent the window its search by then and cannot take it
+//! back. A batch (an array, which the 2025-03-26 revision
 //! allows and later ones dropped) is answered message by message, so a client of any revision is
 //! served.
 //!

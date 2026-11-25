@@ -34,7 +34,8 @@ const PROMPTS: [Prompt; 4] = [
             "How to find cards in the whole card database, the user's collection and their \
             wishlist — by name with the search tools, by type, colour, mana value, tags, rarity or \
             price through find_cards' filters, and through the read graph's structured filters \
-            for the collection and wishlist, art tags and sorting.",
+            for the collection and wishlist, art tags and sorting — and how to show a search on \
+            the app's Search page with show_search.",
         argument: ("request", "What the user is looking for, in their words."),
         body: include_str!("prompts/search_cards.md"),
     },
