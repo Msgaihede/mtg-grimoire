@@ -92,12 +92,16 @@ pub mod deck;
 pub mod deck_apply;
 pub mod deck_audit;
 pub mod deck_completion;
+#[cfg(test)]
+mod deck_golden;
 pub mod deck_meta;
 pub mod deck_missing;
 pub mod deck_notes;
 pub mod deck_pull;
 pub mod deck_query;
 pub mod deck_quick_add;
+pub mod deck_rules;
+pub mod deck_stats;
 pub mod deck_theory;
 pub mod deck_todos;
 pub mod deck_tokens;

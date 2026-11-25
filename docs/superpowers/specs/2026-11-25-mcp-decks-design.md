@@ -1,7 +1,8 @@
 # MCP server: decks (project E of the MCP improvements)
 
-Date: 2026-11-25. Status: **draft, awaiting the owner's approval** — no code is written until it
-is approved.
+Date: 2026-11-25. Status: approved by the owner, 2026-11-25 — two pull requests, E2 stacked on E1
+(§5); `get_deck` widened and five tools added (§6.3); an explicit golden corpus with a coverage fence
+(§4, §6.2); every call in §8 as written.
 
 Project E of the programme recorded in
 [2026-11-24-mcp-card-knowledge-design.md](2026-11-24-mcp-card-knowledge-design.md) §2. It starts
