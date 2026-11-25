@@ -212,8 +212,11 @@ pub fn list() -> Vec<Value> {
             "One printing's details: oracle text, type, mana cost, the finishes it was made in, \
              its legalities and market prices, how many the user owns, its faces, its oracle \
              tags (direct ones, with tagData saying when the tag list was downloaded), the cards \
-             it brings with it (tokens, emblems, meld parts, combo pieces) and how many \
-             Commander Spellbook combos name it.",
+             it brings with it (related: tokens, emblems, meld parts, combo pieces; at most 25, \
+             with relatedTotal giving the full count when there are more; comboPiece is \
+             Scryfall's word for cards that refer to each other, not a Spellbook combo, which \
+             card_combos answers) and how many Commander Spellbook combos name it. Prices are \
+             in the reader's marketplace.",
             json!({ "cardId": card_id }),
             &["cardId"],
             &read,
@@ -1046,9 +1049,23 @@ async fn find_cards(state: &Arc<AppState>, args: &Args) -> Result<Value, String>
     }))
 }
 
+/// The most `related` entries `get_card` answers; `relatedTotal` names the full count past it.
+const RELATED_CAP: usize = 25;
+
 async fn get_card(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
     let card_id = args.required_text("cardId")?;
-    let detail = run(state, "card_detail", json!({ "id": card_id })).await?;
+    // Prices are the reader's marketplace's, as `find_cards`' are; a read that fails leaves the
+    // card on the default.
+    let marketplace = run(state, "get_marketplace", json!({}))
+        .await
+        .ok()
+        .filter(Value::is_string);
+    let detail = run(
+        state,
+        "card_detail",
+        json!({ "id": card_id, "marketplace": marketplace }),
+    )
+    .await?;
     if detail.is_null() {
         return Err(format!(
             "No card has the id {card_id}. Use find_cards to look one up."
@@ -1115,8 +1132,16 @@ async fn get_card(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
             with_tag_data(&mut card, &status);
         }
     }
-    if let Ok(related) = run(state, "card_related", json!({ "id": card_id })).await {
-        card["related"] = related;
+    if let Ok(Value::Array(mut related)) =
+        run(state, "card_related", json!({ "id": card_id })).await
+    {
+        // A token printing can name hundreds of cards; an answer stays short and says how many.
+        let total = related.len();
+        if total > RELATED_CAP {
+            related.truncate(RELATED_CAP);
+            card["relatedTotal"] = json!(total);
+        }
+        card["related"] = json!(related);
     }
     if let Some(oracle) = detail.get("oracleId").and_then(Value::as_str) {
         let page = run(
@@ -1778,12 +1803,19 @@ async fn card_combos(state: &Arc<AppState>, args: &Args) -> Result<Value, String
 async fn get_combo(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
     let id = args.required_text("comboId")?;
     let combo = run(state, "combo_get", json!({ "id": id })).await?;
-    if combo.is_null() {
-        return Err(format!(
-            "No combo has the id {id}. Use card_combos or held_combos to find one."
-        ));
-    }
     let status = run(state, "combos_status", json!({})).await?;
+    if combo.is_null() {
+        let mut why =
+            format!("No combo has the id {id}. Use card_combos or held_combos to find one.");
+        // Read through the feed helper, so the missing-list sentence is the one every answer uses.
+        let mut missing = json!({});
+        with_combo_data(&mut missing, &status, Vec::new());
+        if let Some(note) = missing.get("note").and_then(Value::as_str) {
+            why.push(' ');
+            why.push_str(note);
+        }
+        return Err(why);
+    }
     let mut answer = full_combo(&combo);
     with_combo_data(&mut answer, &status, Vec::new());
     Ok(answer)
@@ -1891,8 +1923,16 @@ async fn held_combos(state: &Arc<AppState>, args: &Args) -> Result<Value, String
     let variant = args
         .choice("list", &["live", "theory"], Some("live"))?
         .unwrap_or_default();
-    let format = args.text("format")?;
-    let identity = args.text("identity")?;
+    let mut format = args.text("format")?;
+    let mut identity = args.text("identity")?;
+    // A deck brings its own format and commanders; only the collection's are checked here.
+    if args.int("deckId")?.is_none() {
+        if let Some(typed) = format.take() {
+            let specs = run(state, "format_specs_list", json!({})).await?;
+            format = format_key(Some(typed), "format", &specs)?;
+        }
+        identity = identity.map(|i| i.to_uppercase());
+    }
     let mut notes = Vec::new();
     let (complete, complete_total, away) = match args.int("deckId")? {
         None => {
@@ -4028,5 +4068,81 @@ mod tests {
         assert_eq!(got["cards"][0]["price"], 10.0, "{got}");
         let cheap = json!({ "filters": { "priceMax": 5 } });
         assert!(names(&done(&state, "find_cards", cheap).await).is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_card_prices_in_the_readers_marketplace() {
+        let state = state("get-card-marketplace");
+        seed(&state, |c| {
+            raw_card(c, "p-a", "Card A", &json!({}));
+            c.execute(
+                "UPDATE cards SET prices = ?1 WHERE id = 'p-a'",
+                [json!({ "usd": "1.00", "eur": "10.00" }).to_string()],
+            )
+            .unwrap();
+        });
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["prices"]["nonfoil"], 1.0, "{got}");
+        seed(&state, |c| {
+            grimoire_core::marketplace::store(c, "cardmarket").unwrap();
+        });
+        let got = done(&state, "get_card", json!({ "cardId": "p-a" })).await;
+        assert_eq!(got["prices"]["nonfoil"], 10.0, "{got}");
+    }
+
+    #[tokio::test]
+    async fn get_card_caps_related_and_counts_the_rest() {
+        let state = state("get-card-related-cap");
+        let parts = |n: usize| {
+            let all: Vec<Value> = (0..n)
+                .map(|i| {
+                    json!({ "id": format!("tok-{i}"), "object": "related_card",
+                            "component": "token", "name": format!("Token {i}"),
+                            "type_line": "Token Creature" })
+                })
+                .collect();
+            json!({ "all_parts": all })
+        };
+        seed(&state, |c| {
+            raw_card(c, "p-many", "Many", &parts(30));
+            raw_card(c, "p-few", "Few", &parts(3));
+        });
+        let got = done(&state, "get_card", json!({ "cardId": "p-many" })).await;
+        assert_eq!(got["related"].as_array().unwrap().len(), 25, "{got}");
+        assert_eq!(got["relatedTotal"], 30, "{got}");
+        let got = done(&state, "get_card", json!({ "cardId": "p-few" })).await;
+        assert_eq!(got["related"].as_array().unwrap().len(), 3, "{got}");
+        assert!(got.get("relatedTotal").is_none(), "{got}");
+    }
+
+    #[tokio::test]
+    async fn held_combos_checks_the_collection_format_and_upper_cases_identity() {
+        let state = state("held-collection-format");
+        seed(&state, |c| {
+            for (card, name) in [("p-a", "Card A"), ("p-b", "Card B"), ("p-c", "Card C")] {
+                combo_card(c, card, name, "U", true);
+            }
+            combo(c, "ac", "P", &[CA, CC]);
+            downloaded(c);
+            grimoire_core::schema::fixtures::entry(c, "p-a", 1);
+        });
+        let got = done(&state, "held_combos", json!({ "format": "Commander" })).await;
+        assert_eq!(ids(&got, "oneCardAway"), ["ac"], "{got}");
+        let got = done(&state, "held_combos", json!({ "identity": "u" })).await;
+        assert_eq!(ids(&got, "oneCardAway"), ["ac"], "{got}");
+        let why = refused(&state, "held_combos", json!({ "format": "casual" })).await;
+        assert!(why.contains("format") && why.contains("commander"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_combo_with_no_list_says_the_list_is_missing() {
+        let state = state("get-combo-missing-no-list");
+        let why = refused(&state, "get_combo", json!({ "comboId": "nope" })).await;
+        assert!(why.contains("No combo has the id nope"), "{why}");
+        assert!(why.contains("Settings"), "{why}");
+        assert!(!why.contains("  "), "{why}");
+        seed(&state, downloaded);
+        let why = refused(&state, "get_combo", json!({ "comboId": "nope" })).await;
+        assert!(!why.contains("Settings"), "{why}");
     }
 }
