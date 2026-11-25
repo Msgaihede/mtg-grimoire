@@ -38,6 +38,8 @@ const INSTRUCTIONS: &str = concat!(
     "user uses the app. ",
     "Card identities are Scryfall printing ids (cardId): use find_cards to turn a card name into ",
     "one; its filters also search by format, colour, type, mana value, price and oracle tag. ",
+    "find_cards, search_collection and search_wishlist also take a Scryfall search in syntax ",
+    "(t:goblin cmc<=2, or, parentheses, is:, otag:); read the scryfall_syntax guide first. ",
     "Folders and decks are named by numeric ids from list_folders and list_decks. ",
     "For searches those filters cannot express, and for anything else in the user's data, the ",
     "read graph answers (graph_schema, graph_query). ",
@@ -49,9 +51,9 @@ const INSTRUCTIONS: &str = concat!(
     "concluding there is nothing. ",
     "The one thing these tools write is the user's custom home-page widgets (widget_create, ",
     "widget_update, widget_delete). ",
-    "Four prompts explain the work: search_cards, graphql_discovery, create_widget and ",
-    "card_interactions; read_guide answers any of them by name, so read the one that fits before ",
-    "a task of its kind."
+    "Five prompts explain the work: search_cards, scryfall_syntax, graphql_discovery, ",
+    "create_widget and card_interactions; read_guide answers any of them by name, so read the one ",
+    "that fits before a task of its kind."
 );
 
 /// What [`handle`] made of a request body.

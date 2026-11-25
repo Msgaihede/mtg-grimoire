@@ -14,6 +14,7 @@ tell them to make the change in the app.
 | "Do I have…", "what's in my Trade binder?" — the collection by name | `search_collection` (and `list_folders` with `list: "collection"`) |
 | "What's on my wishlist?" — wishes by name | `search_wishlist` (and `list_folders` with `list: "wishlist"`) |
 | "Red creatures under 3 mana", any search by type, colour, mana value, rarity, set, tags or price | `find_cards` with `filters` (`find_tags` for a tag's slug) |
+| A Scryfall search (`t:goblin cmc<=2`, `is:fetchland`), or what the filters cannot say: keywords, rules text, power, `or` | `find_cards`, `search_collection` or `search_wishlist` with `syntax` (the `scryfall_syntax` prompt) |
 | "My rares worth over $10", the collection or wishlist by structured filters, art tags, sort | `graph_query` with structured filters (below) |
 
 - **A card's identity is a printing's Scryfall id (`cardId`).** `find_cards` answers one printing per
@@ -26,7 +27,9 @@ tell them to make the change in the app.
 
 `find_cards` takes the Search page's `filters` over the whole card database: arrays and flags such as
 `colors: ["U","R"]` with `colorsExact: true`, `types`, `manaValues`, `rarities`, `sets`, `format`,
-`oracleTags: ["ramp"]` (slugs from `find_tags`) and the price filters. Reach for it first.
+`oracleTags: ["ramp"]` (slugs from `find_tags`) and the price filters. Reach for it first. For
+anything else a card search can say, all three search tools take Scryfall's syntax in `syntax`;
+read the `scryfall_syntax` prompt before writing one.
 
 `graph_query` does what only it does: the collection and wishlist filters, `artTags`, `predicates`
 and `sort`. It runs a GraphQL query over the user's data. Three root fields search cards, and all
