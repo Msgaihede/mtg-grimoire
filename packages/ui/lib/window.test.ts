@@ -7,11 +7,25 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: globalListen }));
 
-import { SNAP_HOVER_EVENTS, onSnapHover } from "./window";
+import { SEARCH_SHOW_EVENT, SNAP_HOVER_EVENTS, onSearchShow, onSnapHover } from "./window";
 
 beforeEach(() => {
   windowListen.mockClear();
   globalListen.mockClear();
+});
+
+describe("onSearchShow", () => {
+  it("listens on its own window, never app-wide, and hands over the payload", async () => {
+    const cb = vi.fn();
+    await onSearchShow(cb);
+    expect(windowListen).toHaveBeenCalledWith(SEARCH_SHOW_EVENT, expect.any(Function));
+    expect(globalListen).not.toHaveBeenCalled();
+    const handler = (
+      windowListen.mock.calls[0] as unknown as [string, (e: { payload: unknown }) => void]
+    )[1];
+    handler({ payload: { id: 7 } });
+    expect(cb).toHaveBeenCalledWith({ id: 7 });
+  });
 });
 
 describe("onSnapHover", () => {

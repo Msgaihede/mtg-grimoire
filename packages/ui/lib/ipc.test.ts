@@ -86,6 +86,7 @@ import integrationSettingsRs from "../../../crates/grimoire-core/src/integration
 // The local MCP server (issues #1395 and #1396, PR 1): the desktop's own module — a socket on the
 // reader's computer, not the engine's, so it is in `src-tauri` alone.
 import mcpRs from "../../../apps/desktop/src-tauri/src/mcp/mod.rs?raw";
+import mcpShowRs from "../../../apps/desktop/src-tauri/src/mcp/show.rs?raw";
 // PR 3's review list (plan `2026-10-29-integrations-intents.md` §3.5): the parked intents and the
 // device's policy, beside the four commands that answer them.
 import integrationReviewRs from "../../../crates/grimoire-core/src/integration/review.rs?raw";
@@ -175,6 +176,7 @@ import {
   type FeedProgressEvent,
   type FolderRule,
   type McpStatus,
+  type SearchShownReport,
   type OracleTagProgressEvent,
   type RelayOutcome,
   type ScannerSubmission,
@@ -5951,6 +5953,22 @@ describe("the local MCP server's wrappers name the commands mcp/mod.rs declares"
     expect(invoke).toHaveBeenCalledWith("mcp_set_port", { port: 40000 });
   });
 
+  it("mcpSearchShown sends the id and the report under their own names", async () => {
+    invoke.mockResolvedValue(null);
+    const report: SearchShownReport = {
+      total: 3,
+      totalIsCapped: false,
+      keywords: ["t:creature"],
+      words: "",
+      unknownTags: [],
+      failure: null,
+    };
+
+    await ipc.mcpSearchShown(7, report);
+
+    expect(invoke).toHaveBeenCalledWith("mcp_search_shown", { id: 7, report });
+  });
+
   const MCP_SOURCES = import.meta.glob<string>(
     ["/apps/desktop/src-tauri/src/mcp/**/*.rs", "!/apps/desktop/src-tauri/src/mcp/**/*tests.rs"],
     { query: "?raw", import: "default", eager: true },
@@ -6889,6 +6907,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // `undefined` into every client snippet the panel offers — copied, pasted into an agent's
     // config, and refused there with nothing in this app to say why.
     ["McpStatus", mcpRs, "McpStatus"],
+    // **`show_search`'s wire** (project B), pinned to `mcp/show.rs`: the hand-off the desktop emits
+    // as `search:show` and the report the page answers with. A renamed field on either side is a
+    // silently empty filter or a report the waiting tool reads as a default.
+    ["SearchHandoff", mcpShowRs, "SearchHandoff"],
+    ["HandoffSort", mcpShowRs, "HandoffSort"],
+    ["SearchShownReport", mcpShowRs, "SearchShownReport"],
     // **The review list's three** (plan `2026-10-29-integrations-intents.md` §3.5). A renamed
     // `intents` reads `undefined` and the list draws *nothing waiting* over intents the store
     // holds; a renamed `fixed` is falsy, and Discord's rows draw as switches the reader can turn
