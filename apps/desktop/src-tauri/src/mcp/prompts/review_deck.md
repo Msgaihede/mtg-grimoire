@@ -27,7 +27,7 @@ user makes every change in the app's deck editor.
    - **`deck_shortfall`** — what the deck is short of, what it costs, and where the user already
      owns copies (a binder, another deck): fetch those rather than buy them.
    - **`owned_for_deck`** — cards the user owns that the deck could play and does not, narrowed by
-     `oracleTags` (from `find_tags`: "ramp", "removal"), `types` or `manaValues`.
+     its `filters`: `oracleTags` (from `find_tags`: "ramp", "removal"), `types` or `manaValues`.
    - **`similar_cards`** with the deck's `format` and `identity` — alternatives to a card.
    - **`get_card`** for any card whose text or rulings matter to a suggestion.
 
@@ -59,8 +59,9 @@ user makes every change in the app's deck editor.
   `missing.owned`), and say which suggestions they would have to buy.
 - Keep a suggestion legal: in the deck's format, inside its identity, within the copy limits.
 - Give each change as the user would make it: which card to cut, which to add, and in which pile.
-  When there are several, end with them as a short list; for a new list, write it as plain
-  decklist text (`1 Sol Ring`, one card a line) the user can paste into the app's import.
+  When there are several, end with them as a short list; for a whole new list, write it as plain
+  decklist text (`1 Sol Ring`, one card a line) the user can paste into the deck editor's
+  **Import cards**.
 
 ## Keep answers small
 

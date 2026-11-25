@@ -25,11 +25,12 @@ passed as `format` to the search tools.
 ## 3. Fill it from what the user owns
 
 - **By function**: `find_tags` turns "ramp", "card draw", "board wipe", "removal" into oracle tag
-  slugs; then `find_cards` with `filters: { owned: true, oracleTags: [...], colors: "<identity>",
-  format: "<format>" }`. `colors` is a colour identity there, read as "fits inside".
+  slugs; then `find_cards` with `filters: { owned: true, oracleTags: [...], colors: ["G", "W"],
+  format: "commander" }`. `colors` is a colour identity there, read as "fits inside" (`["C"]` for
+  colourless).
 - **Cards like one the user likes**: `similar_cards` with `format` and `identity`.
 - **For a deck that already exists**: `owned_for_deck` answers the owned cards that deck could play
-  and does not, narrowed by `oracleTags`, `types` or `manaValues`.
+  and does not, narrowed by its `filters` (`oracleTags`, `types`, `manaValues`).
 - Check a card with `get_card` before you rely on what its tags suggest it does.
 
 ## 4. Shape it
@@ -45,9 +46,9 @@ passed as `format` to the search tools.
 
 Write the deck as plain decklist text, one line a card — `1 Sol Ring` — with the commander first
 under a `Commander` heading and the rest under `Deck` (and `Sideboard` where the format has one).
-Tell the user to create the deck in the app and paste the list into its import (the deck editor's
-Import). Once it is in, `check_deck` and `deck_stats` can review it: the `review_deck` guide says
-how.
+Tell the user to make the deck in the app with **Import deck** on the Decks page, pasting the
+list; it creates the deck with those cards. Once it is in, `check_deck` and `deck_stats` can review
+it: the `review_deck` guide says how.
 
 ## Keep answers small
 

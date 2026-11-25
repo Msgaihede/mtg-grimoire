@@ -604,7 +604,9 @@ mod identity_tests {
             })
         );
         assert_eq!(
-            deck_identity(&[red.clone()], Some(&edh)).unwrap().from,
+            deck_identity(std::slice::from_ref(&red), Some(&edh))
+                .unwrap()
+                .from,
             "cards"
         );
         assert_eq!(deck_identity(&[blue_parked], Some(&modern)), None);
