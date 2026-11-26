@@ -19,7 +19,8 @@ pub use draft::{
     DraftSetup, DraftStatus, DraftView, PodFormat, WinstonPile, WinstonView,
 };
 pub use playtest::{
-    Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView,
+    Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestFirst, PlaytestPlayer,
+    PlaytestStep, PlaytestView,
 };
 pub use support::{deck_support, DeckSupport, SupportCache, UnsupportedCard};
 pub use tokens::TokenFacts;

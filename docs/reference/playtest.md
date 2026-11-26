@@ -60,6 +60,15 @@ constant so that it is not the shuffle's own stream. The same seed and decks pla
 and the session's tests rely on that. The seed modulo the player count is the coin flip: 0, the
 reader plays first (in a duel, an even seed).
 
+**Who plays first is the reader's to pick** (issue #1751, phase's own client's
+`ChooseStartingPlayer` / `ChoosePlayDraw`): `playtest_start`'s `first`, a `PlaytestFirst` —
+`random` (the coin flip above, and the default when it is left out), `play` (the reader) or `draw`
+(an opponent: in a duel the one, at a table of four the seed modulo three after the reader). The
+session hands it to phase's `start_game_with_starting_player` (`Playtest::new_first`; `new` is the
+coin flip). Against the goldfish the coin flip is the reader, as it always was, and `draw` lets the
+goldfish take the first turn; its `deadOn` still counts the reader's own turns. A lobby's game is
+always the coin flip.
+
 **Measured** (debug build, this container, 2026-10-13): a Medium AI's keep and first turn took
 1.8 s. The crate's fourteen playtest tests, six AI turns among them at VeryEasy, ran in about 4 s
 together. Medium and above search with phase's 1.5 s budget a decision, so a long AI turn takes
@@ -98,10 +107,18 @@ The owner's choice of 2026-10-13, Arena's arrangement. With priority, the reader
 | A step they asked to stop at (`setStops`), the stack empty | `respond` | Once per step                        |
 | The opponent's spell or ability on top of the stack        | `respond` | If they have something they could do |
 | Combat, once blockers are declared, the stack empty        | `respond` | If they have something they could do |
+| Their own spell or ability on top, holding priority        | `respond` | If they have something they could do |
 
 "Something they could do" is phase's `has_meaningful_priority_action`: a spell or ability other
 than a mana ability. Without one there is nothing to decide, and the stop would only cost a click.
-**The reader's own spell on top never stops them**: it resolves, as on Arena.
+**The reader's own spell on top does not stop them unless they hold priority**: it resolves, as on
+Arena. **Holding priority** (issue #1751, phase's client's full-control toggle,
+`SetPriorityPassingMode`) is a setting, `setHold { on }`, read back as `view.hold`: on, their own
+spell or ability on top stops them as an opponent's does, so they can answer it themselves (a
+second spell on top of the first); `pass` then lets the top resolve. Like `setStops` it is taken at
+any stage, plays nothing on, is not remembered by undo, and is each person's own in a lobby's game
+(kept in their `Chair`). The game menu's "Hold priority on your spells" row sets it; it is off at
+the start of every game.
 
 **The stops** are `PlaytestStop { seat, step }`, a step of either seat's turn: upkeep, draw, first
 main, beginning of combat, after attackers, after blockers, damage, second main or end. They are
@@ -255,6 +272,24 @@ generically, never matched variant by variant.
     `distribute` and never a `sole_answer` while two targets share it;
   - **a name** (`nameEntry`): a `NamedChoice` that takes a free word is answered with any name
     (`name`), checked by phase's `accepts_free_entry_answer`, beside its listed sample.
+  - **a crew or a saddle** (`crew`, `saddle`; `CrewVehicle`, `SaddleMount`, issue #1745): any
+    of the untapped creatures, so long as their power reaches `powerMin` — each counted by the
+    engine's own `contributions` ("as though its power were 2 greater"), never `GameCard.power`;
+    one creature that may is tapped unasked;
+  - **a banded blocker's damage** (`AssignBlockerDamage`, CR 510.1d, 702.22k): a `distribute`
+    of all of it among the attackers it blocks, none the least, answered `AssignBlockerDamage` —
+    the engine lists only all of it to the first, which `sole_answer` used to take silently;
+  - **counters taken off a card** (`counters`, `RemoveCountersChoice` and
+    `MoveCountersDistribution` — Rhys the Evermore, Tetravus; CR 107.1c, 122.5): a stepper per
+    kind (and per destination, for a move) within what the card has and `maxTotal`, answered by
+    `moveCounters`; none at all is an answer, so it is never a `sole_answer` while there are any;
+  - **five triggers or more in order** (`triggers`, `OrderTriggers`): phase lists every order up
+    to four, and only as they are and reversed past that, so the board lists the abilities in
+    the order they resolve, with up and down, and `orderTriggers` sends the permutation (the
+    first index put on the stack first);
+  - **coin flips kept and die rolls ignored** (`results`, `CoinFlipKeepChoice` — Krark's Thumb —
+    and `DieKeepChoice`, CR 705.1, 706.6): the results drawn, exactly `count` of the `eligible`
+    picked, answered by `keepResults`; phase lists nothing when more than one coin is kept.
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
@@ -281,23 +316,24 @@ The answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or th
 (`ChooseKeptCreatures`, `ChooseKeptPermanents`) for a keep. The meaning of the picked cards is
 phase's:
 
-| Question                                         | `purpose`   | The picked cards                                                 | Count                                               |
-| ------------------------------------------------ | ----------- | ---------------------------------------------------------------- | --------------------------------------------------- |
-| `ScryChoice`                                     | `scry`      | Stay on top, first picked on top; the rest go to the bottom      | 0 to all, ordered                                   |
-| `SurveilChoice`                                  | `surveil`   | Stay on top, in order; the rest go to the graveyard              | 0 to all, ordered                                   |
-| `DiscardChoice`, `DiscardToHandSize`             | `discard`   | Are discarded                                                    | `count`, or up to it                                |
-| `SearchChoice`                                   | `search`    | Are found                                                        | `count`, or up to it when a partial find is allowed |
-| `DigChoice`                                      | `dig`       | Are kept, from `selectable_cards`                                | `keep_count`, or up to it                           |
-| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`    | Are chosen                                                       | as the question says                                |
-| `RevealChoice`                                   | `reveal`    | Is revealed                                                      | one, or none when optional                          |
-| `MultiTargetSelection`                           | `targets`   | Are the targets                                                  | `min_targets` to `max_targets`                      |
-| `KeepWithinTotalPowerChoice`                     | `keep`      | Are kept; the rest are sacrificed                                | any, their total power at most `powerCap`           |
-| `KeepExactPermanentsChoice`                      | `keep`      | Are kept; the rest are sacrificed                                | `required_count`                                    |
-| `EffectZoneChoice` of `Sacrifice`                | `sacrifice` | Are sacrificed                                                   | `min_count` to `count`, or `count`                  |
-| `EffectZoneChoice` of `CastFromZone`             | `cast`      | Is cast                                                          | `min_count` to `count`, or `count`                  |
-| `EffectZoneChoice` of `Discard`                  | `discard`   | Are discarded                                                    | `min_count` to `count`, or `count`                  |
-| `EffectZoneChoice` of any other kind             | `choose`    | Are what the effect acts on; into a library, in the order picked | `min_count` to `count`, or `count`                  |
-| `CastOffer`'s `FreeCastWindow`                   | `cast`      | Is cast; none closes the window                                  | one, or none                                        |
+| Question                                         | `purpose`   | The picked cards                                                           | Count                                               |
+| ------------------------------------------------ | ----------- | -------------------------------------------------------------------------- | --------------------------------------------------- |
+| `ScryChoice`                                     | `scry`      | Stay on top, first picked on top; the rest go to the bottom                | 0 to all, ordered                                   |
+| `SurveilChoice`                                  | `surveil`   | Stay on top, in order; the rest go to the graveyard                        | 0 to all, ordered                                   |
+| `DiscardChoice`, `DiscardToHandSize`             | `discard`   | Are discarded                                                              | `count`, or up to it                                |
+| `SearchChoice`                                   | `search`    | Are found                                                                  | `count`, or up to it when a partial find is allowed |
+| `SearchPartitionChoice`, battlefield and hand    | `split`     | Go onto the battlefield (tapped, as the card says); the rest into the hand | exactly `primary_count`                             |
+| `DigChoice`                                      | `dig`       | Are kept, from `selectable_cards`                                          | `keep_count`, or up to it                           |
+| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`    | Are chosen                                                                 | as the question says                                |
+| `RevealChoice`                                   | `reveal`    | Is revealed                                                                | one, or none when optional                          |
+| `MultiTargetSelection`                           | `targets`   | Are the targets                                                            | `min_targets` to `max_targets`                      |
+| `KeepWithinTotalPowerChoice`                     | `keep`      | Are kept; the rest are sacrificed                                          | any, their total power at most `powerCap`           |
+| `KeepExactPermanentsChoice`                      | `keep`      | Are kept; the rest are sacrificed                                          | `required_count`                                    |
+| `EffectZoneChoice` of `Sacrifice`                | `sacrifice` | Are sacrificed                                                             | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of `CastFromZone`             | `cast`      | Is cast                                                                    | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of `Discard`                  | `discard`   | Are discarded                                                              | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of any other kind             | `choose`    | Are what the effect acts on; into a library, in the order picked           | `min_count` to `count`, or `count`                  |
+| `CastOffer`'s `FreeCastWindow`                   | `cast`      | Is cast; none closes the window                                            | one, or none                                        |
 
 Every `EffectZoneChoice` asked of the reader is a pick, whatever its effect (issue #1416): its
 fields give the count, and its kind only what the picked cards are for. Before, only a cast was;
@@ -550,14 +586,19 @@ motion is reduced, and a count would have to agree with every way of logging the
 **One action is one step back, and an action is the reader's.** The AI's turn is never a moment of
 its own: it happened inside the reader's action that passed to it, so undo lands where the reader
 last decided, never in the middle of the opponent's turn. Undo and redo answer with no facts and no
-frames, so nothing plays back. **The stops and the sandbox are settings** (`setStops`,
-`setSandbox`): not remembered, and left as they are by undo. A finished game can be undone too, which is how a reader takes back the play
+frames, so nothing plays back. **The stops, the sandbox and holding priority are settings**
+(`setStops`, `setSandbox`, `setHold`): not remembered, and left as they are by undo. A finished game can be undone too, which is how a reader takes back the play
 that lost it.
 
 ## What the reader may see
 
 Each opponent's hand and library are **counts** (`handCount`, `library`), the goldfish's too.
-Their `libraryCards` are always empty on the wire, and the sandbox never reaches them.
+Their `libraryCards` are always empty on the wire, and the sandbox never reaches them. **The
+reader's own `libraryCards` (top first) are sent only while the sandbox is on**, for its library
+dialog's look and search (issue #1749): CR 401.2 hides a library's order from its owner too, and
+phase's projection hides every library card but a top the player may look at or that is revealed
+(`libraryTop`). The opening hand's _In the library_ figure is a count of its own,
+`MulliganView.libraryLands`.
 
 **What phase's own projection shows the reader, the board shows** (phase 0.132.0 parity,
 2026-11-25; `Playtest::sight`). Every view asks phase's `filter_state_for_viewer` for the reader's
@@ -716,7 +757,8 @@ wall's own heading row, drawn as the bar rather than as a row of its own under i
 - **The table, on the right** — **Gamemode** (three tiles: "Goldfish", "Duel", the default, and
   "Four-player", each drawn as its table), **Seats** (one row per player: "You", then "Opponent"
   or "Opponent 1" to "Opponent 3"), **AI skill** (five segments, "Very easy" to "Very hard",
-  starting on Medium) and **Start game**.
+  starting on Medium), **Plays first** ("Coin flip", the default, "You" or "Opponent" — issue
+  #1751, `PlaytestPicks.first`, sent only when it is not the coin flip) and **Start game**.
 
 **One seat is always the one being picked for** — `aria-pressed`, ringed in accent, and named over
 the wall ("Picking for Opponent 2"). A deck pressed on the wall sits there, and the next empty seat
@@ -1132,9 +1174,9 @@ ever, and every guest is sent its step after each change. A guest's action is `l
 goes to the host's board as `playtest:step` (`HostStep`) and to each guest as `lobby:game`
 (`GuestGame`: the step, the others' names from its seat, its deck's name, `dealt` for a deal's first
 step). A refusal goes back to that guest alone, as `lobby:refused`. A guest's step crosses packed
-(body `game`, gzip in base64): a Commander board with the guest's own library is well past the
-relay's 64 KiB frame as JSON and a tenth of that packed; one that still would not fit is sent
-without the library, which only the sandbox draws.
+(body `game`, gzip in base64), under the relay's 64 KiB frame. It never carries the guest's
+library's cards: those are sent only while the sandbox is on, and the sandbox stays off in a
+lobby's game.
 
 **The page.** The setup's aside has a _Play with friends_ block (`features/playtesting/lobby/`):
 **Create lobby** for a supporter (`useMayHostPod`, the draft's own reading of the membership) and
@@ -1158,14 +1200,13 @@ putting a host's game away closes its lobby: dealt or being dealt, never refused
 
 ## What is not there yet
 
-- **Holding priority over your own spell.** The reader's own spell on top never stops them, so
-  they cannot respond to it themselves (a second spell on top of their first).
-- **Choosing who plays first.** It is the seed's coin flip against the AI, and the reader against
-  the goldfish.
+- **Choosing who plays first in a lobby's game.** It is the seed's coin flip; the setup page's
+  pick is a solo game's.
 - **Choosing the payment inside a cast.** The reader taps sources for mana first (`tapForMana`),
   and whatever the pool does not cover is paid by phase's `Auto`; the cast itself never stops for
   a payment (`CastPaymentMode::Manual`).
-- **A search that splits its finds between zones** is still its generic options or `auto`.
+- **A search that splits its finds between other zones than the battlefield and the hand** is
+  still its generic options or `auto`; Cultivate's split is the `split` pick.
 - **Mana payment inside a payment window.** phase's client taps sources during `ManaPayment`,
   `UnlessPayment` and the like; here those are paid by phase's `Auto`, and a cast never stamps
   `AutoExceptSacrificialMana`, so a Treasure may be spent without asking.

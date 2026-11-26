@@ -114,8 +114,9 @@ const WAIT_STEP: Duration = Duration::from_millis(50);
 const MAX_ROWS: usize = 400;
 const MAX_TOKENS: usize = 200;
 const MAX_COPIES: u32 = 250;
-/// What a packed step may come to before the guest's library is left out of it: under the
-/// relay's 64 KiB frame, with room for the frame around it.
+/// What a packed step comes to at the most: under the relay's 64 KiB frame, with room for the
+/// frame around it.
+#[cfg(test)]
 const PACKED_LIMIT: usize = 60 * 1024;
 
 /// The host's game in a lobby: whose seat is whose, and what each is called.
@@ -277,18 +278,11 @@ fn gzip_base64(text: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// A guest's step as it crosses the relay: its JSON, gzipped, in base64. A step that would still
-/// not fit the relay's frame is sent without the guest's own library, which the board draws only
-/// for the sandbox — off in a lobby's game.
+/// A guest's step as it crosses the relay: its JSON, gzipped, in base64. It never carries the
+/// guest's library: the session sends a library's cards only while the sandbox is on, and the
+/// sandbox stays off in a lobby's game (issue #1749).
 pub fn pack(game: &GuestGame) -> String {
-    let text = serde_json::to_string(game).unwrap_or_default();
-    let packed = gzip_base64(&text);
-    if packed.len() <= PACKED_LIMIT {
-        return packed;
-    }
-    let mut lighter = game.clone();
-    lighter.step.view.you.library_cards.clear();
-    gzip_base64(&serde_json::to_string(&lighter).unwrap_or_default())
+    gzip_base64(&serde_json::to_string(game).unwrap_or_default())
 }
 
 /// A packed step read back, or `None` for one that is not.
