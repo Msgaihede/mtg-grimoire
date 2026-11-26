@@ -433,6 +433,26 @@ the reader's `tapped`, and undone like any action. `canTapForMana` is on each of
 battlefield cards the rules would tap now, read once per view like `castable`. It is not a sandbox
 action: it is a rules action, so the sandbox's gate does not touch it.
 
+**Inside a payment window too** (issue #1743, from the phase.rs parity audit). phase's own board
+lights the sources up and lets the player tap them while a cost is paid (`ManaPaymentUI.tsx`), and
+so does this one: `mana_ways` answers in `ManaPayment`, `ManaAbilityManaPayment` and
+`UnlessPayment` (`paying`) as well as at priority, `run` takes `tapForMana` there before the
+prompt's refusal, and `canTapForMana` is drawn through the prompt (not while the board asks its own
+`ManaChoice`). The cast being paid keeps its `Pending`, so `cancel` takes the whole cast back, the
+taps with it; the window stays open after a tap, and the reader taps on, pays (the window's
+`PassPriority`, said "Pay") or cancels. A window the reader could tap a source in is never a
+`sole_answer`. `UnlessPaymentChooseCost` is left out: phase's reducer has no tap arm there, and
+phase's board leaves it out too.
+
+**A source that sacrifices itself is asked about.** The reader's casts and activations are stamped
+`AutoExceptSacrificialMana` (`ask_before_sacrificing`, in `apply`), as phase's client stamps them
+(`castPaymentMode.ts`): paid automatically, except that a Treasure or a Lotus Petal is the engine's
+question, `ManaSourceSelection`, never spent without asking. phase's flat `legal_actions` leaves
+every mana ability out, so its sources are read off the question's own `options` (`answers`), one
+`ActivateManaSource` each — named by its source card, so a click on it on the table picks it — beside
+`BackToManaPayment` ("Pay another way"), which opens the payment window and is an answer, never a
+take-back. An activation phase offers only as `Manual` keeps its mode.
+
 **`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
 from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
 reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a

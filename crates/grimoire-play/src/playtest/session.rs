@@ -74,8 +74,9 @@ use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, Mulliga
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
-    CastOfferKind, CombatDamageAssignmentMode, CounterMoveChoice, CounterRemoveChoice, DayNight,
-    ManaChoice, MulliganDecisionPhase, PayCostKind, StackEntry, StackEntryKind, WaitingFor,
+    CastOfferKind, CastPaymentMode, CombatDamageAssignmentMode, CounterMoveChoice,
+    CounterRemoveChoice, DayNight, ManaChoice, MulliganDecisionPhase, PayCostKind, StackEntry,
+    StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
@@ -1231,10 +1232,16 @@ impl Playtest {
     /// What the rules offer the reader beyond a hand card's play: foretelling a hand card,
     /// activating one of a hand card's abilities (cycling, issue #1431) or a graveyard card's
     /// (unearth, issue #1714), casting a card from the graveyard or exile, and tapping a
-    /// permanent for mana. Nothing in a replay frame, or while the reader does not have priority.
+    /// permanent for mana. Nothing in a replay frame, or while the reader does not have priority
+    /// — but for tapping for mana, which is offered in a payment window too (`mana_ways`, issue
+    /// #1743), unless the board is asking a question of its own.
     fn offers(&self, watching: bool) -> Offers {
         let mut offers = Offers::default();
-        if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
+        if watching || self.choice.is_some() {
+            return offers;
+        }
+        offers.mana = self.mana_ways().iter().filter_map(mana_source).collect();
+        if !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
             return offers;
         }
         for action in self.answers() {
@@ -1249,7 +1256,6 @@ impl Playtest {
                 _ => {}
             }
         }
-        offers.mana = self.mana_ways().iter().filter_map(mana_source).collect();
         offers
     }
 
@@ -2829,18 +2835,41 @@ impl Playtest {
             .sum()
     }
 
-    /// The answers the engine accepts to the question it is asking the reader.
+    /// The answers the engine accepts to the question it is asking the reader. phase's flat list
+    /// leaves every mana ability out, its `ActivateManaSource` too, so the engine's own "spend
+    /// this sacrificial source?" (`ManaSourceSelection`, issue #1743) would list only declining
+    /// it: its sources are its `options`, each one answer, as phase's own candidates read them.
     fn answers(&self) -> Vec<GameAction> {
-        legal_actions(&self.state)
+        let mut answers = Vec::new();
+        if let WaitingFor::ManaSourceSelection {
+            player, options, ..
+        } = &self.state.waiting_for
+        {
+            if *player == self.you {
+                answers.extend(
+                    options
+                        .iter()
+                        .cloned()
+                        .map(|selection| GameAction::ActivateManaSource { selection }),
+                );
+            }
+        }
+        answers.extend(legal_actions(&self.state));
+        answers
     }
 
     /// The question's answer when it has only one, which `advance` takes without asking (issue
     /// #999): a target slot with one card left, a payment with nothing to choose, a sole mana
     /// source. phase itself fills in a cast whose targets have one combination. Taking a cast back
-    /// (`CancelCast`, `BackToManaPayment`) is not an answer to it — the board's `cancel` is there
-    /// for that. A pick has one answer when every eligible card must be picked, in no order that
-    /// matters.
+    /// (`CancelCast`) is not an answer to it — the board's `cancel` is there for that — but
+    /// declining a sacrificial source (`BackToManaPayment`, back to the payment window) is: a
+    /// Treasure is never spent without asking (issue #1743). A payment window the reader could tap
+    /// a source in has more than one answer, whatever the engine lists. A pick has one answer when
+    /// every eligible card must be picked, in no order that matters.
     fn sole_answer(&self) -> Option<GameAction> {
+        if self.paying() && !self.mana_ways().is_empty() {
+            return None;
+        }
         // The engine lists one division of combat damage, its own; the reader has more whenever
         // two creatures block, or trample could carry damage past one (issue #1448).
         if let Some(damage) = self.damage() {
@@ -2879,7 +2908,7 @@ impl Playtest {
         let mut answers = self
             .answers()
             .into_iter()
-            .filter(|a| !matches!(a, GameAction::CancelCast | GameAction::BackToManaPayment));
+            .filter(|a| !matches!(a, GameAction::CancelCast));
         let only = answers.next()?;
         answers.next().is_none().then_some(only)
     }
@@ -2929,6 +2958,12 @@ impl Playtest {
                     // A mana ability's row: the type of mana it makes (`Green`, `Colorless`).
                     "selection" if value.get("mana_type").is_some() => {
                         label = value.get("mana_type").and_then(tag_of);
+                        // The engine's own "spend this sacrificial source?" (issue #1743) names
+                        // the source, so it reads, and is picked on the table, by its card.
+                        if kind == "ActivateManaSource" {
+                            let source = value.pointer("/source/object_id");
+                            ids.extend(source.and_then(Value::as_u64).map(ObjectId));
+                        }
                     }
                     // Cards, by id or list of ids. A retarget's `new_targets` is one entry per
                     // target of the spell, `null` for each left as it is (issue #1520).
@@ -3477,6 +3512,13 @@ impl Playtest {
                 self.restore(pending.checkpoint);
                 Ok(())
             }
+            // A source tapped by hand inside a payment window (issue #1743): the window stays
+            // open. `mana_ways` is empty in any other question, so the tap is refused there.
+            PlaytestAction::TapForMana { id }
+                if stage == PlaytestStage::Prompt && choice.is_none() =>
+            {
+                self.tap_for_mana(ObjectId(id), out)
+            }
             // The board's own question stays open, as it was: `act` puts it back on a refusal.
             _ if stage == PlaytestStage::Prompt => {
                 Err("Answer the question first, or cancel it.".into())
@@ -3763,6 +3805,8 @@ impl Playtest {
     /// phase's `Auto`. The mana floats in their pool, which a cast spends first, until the step or
     /// phase ends and the rules empty it (CR 500.4). One way is taken; several (a dual land's two
     /// colors, a creature's two mana abilities) are the board's `ManaChoice`; none is a refusal.
+    /// Inside a payment window (`paying`) the tap pays toward the cost being paid, as phase's own
+    /// board lets a player tap there (issue #1743).
     fn tap_for_mana(&mut self, id: ObjectId, out: &mut Log) -> Result<(), String> {
         let name = self.own(id)?.name.clone();
         let mut ways: Vec<GameAction> = self
@@ -3788,21 +3832,45 @@ impl Playtest {
     /// (`activatable_mana_actions_for_player`, which its land-tap reducer checks against) — a
     /// land's `TapLandForMana` for each kind of mana it makes, any other permanent's mana
     /// `ActivateAbility`. Mana abilities are not in `legal_actions` (they are no decision to
-    /// auto-pass over), so `answers` never lists them.
+    /// auto-pass over), so `answers` never lists them. Offered wherever phase's reducer takes a
+    /// mana tap from the reader: their priority and the payment windows (`paying`).
     fn mana_ways(&self) -> Vec<GameAction> {
-        if !matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you)
-        {
+        let priority =
+            matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you);
+        if !priority && !self.paying() {
             return Vec::new();
         }
         activatable_mana_actions_for_player(&self.state, self.you)
+    }
+
+    /// The reader is paying a cost, in a window phase's reducer takes mana abilities in (CR
+    /// 605.3a, CR 118.12): a spell's or an ability's mana payment, a mana ability's own, a "pay
+    /// unless". phase's board taps sources in these (`ManaPaymentUI`, issue #1743). Not in
+    /// `UnlessPaymentChooseCost`: its reducer has no arm for a tap, so a tap there is refused, as
+    /// phase's own board leaves it out.
+    fn paying(&self) -> bool {
+        let wf = &self.state.waiting_for;
+        matches!(
+            wf,
+            WaitingFor::ManaPayment { .. }
+                | WaitingFor::ManaAbilityManaPayment { .. }
+                | WaitingFor::UnlessPayment { .. }
+        ) && wf.acting_player() == Some(self.you)
     }
 
     /// A mana ability activated: told as the reader's tap, its mana in their pool. Nothing plays
     /// on and the reader keeps priority where they were, since `advance` would pass a stop they
     /// were already stopped at. Only a question the ability itself asks (a cost to choose) is
     /// played on to, and can be cancelled back to before the tap, as a cast can.
+    ///
+    /// Inside a payment window (issue #1743) the cast being paid keeps its own `Pending`, so
+    /// `cancel` still takes the whole cast back, the taps with it; and the window stays open after
+    /// the tap — the reader taps on, pays, or cancels.
     fn make_mana(&mut self, name: String, action: GameAction, out: &mut Log) -> Result<(), String> {
-        self.begin(name.clone());
+        let paying = self.paying();
+        if !paying {
+            self.begin(name.clone());
+        }
         out.own(
             self.you,
             PlaytestHappened::Tapped {
@@ -3813,7 +3881,12 @@ impl Playtest {
             },
         );
         self.apply(self.you, action, out)?;
-        if matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you) {
+        if paying && self.paying() {
+            return Ok(());
+        }
+        if !paying
+            && matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you)
+        {
             self.pending = None;
             return Ok(());
         }
@@ -4625,8 +4698,17 @@ impl Playtest {
         }
     }
 
-    /// One action by `actor`, its events told as what happened.
-    fn apply(&mut self, actor: PlayerId, action: GameAction, out: &mut Log) -> Result<(), String> {
+    /// One action by `actor`, its events told as what happened. The reader's casts and
+    /// activations are paid `AutoExceptSacrificialMana` (`ask_before_sacrificing`).
+    fn apply(
+        &mut self,
+        actor: PlayerId,
+        mut action: GameAction,
+        out: &mut Log,
+    ) -> Result<(), String> {
+        if actor == self.you {
+            ask_before_sacrificing(&mut action);
+        }
         let result = apply(&mut self.state, actor, action).map_err(|e| e.to_string())?;
         out.tell(&self.state, &result.events);
         Ok(())
@@ -5002,6 +5084,28 @@ fn collect_refs(
             }
         }
         _ => {}
+    }
+}
+
+/// CR 601.2g-h + CR 605.3b: the reader's casts and activations are paid as phase's own board pays
+/// them (`castPaymentMode.ts`, issue #1743) — automatically, except that a source which sacrifices
+/// itself (a Treasure, Lotus Petal) is the engine's question (`ManaSourceSelection`), never spent
+/// without asking. phase's cast-family actions and activations carry the mode; any other action
+/// is left as it is, and so is an activation the engine offers only as `Manual` (it can be paid no
+/// other way) or a mode already chosen.
+fn ask_before_sacrificing(action: &mut GameAction) {
+    let mode = match action {
+        GameAction::CastSpell { payment_mode, .. }
+        | GameAction::CastSpellForFree { payment_mode, .. }
+        | GameAction::CastSpellAsMiracle { payment_mode, .. }
+        | GameAction::CastSpellAsMadness { payment_mode, .. }
+        | GameAction::CastSpellAsSneak { payment_mode, .. }
+        | GameAction::CastSpellAsWebSlinging { payment_mode, .. }
+        | GameAction::ActivateAbility { payment_mode, .. } => payment_mode,
+        _ => return,
+    };
+    if *mode == CastPaymentMode::Auto {
+        *mode = CastPaymentMode::AutoExceptSacrificialMana;
     }
 }
 
