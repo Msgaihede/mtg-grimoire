@@ -3178,6 +3178,76 @@ fn the_top_of_the_library_is_shown_while_a_static_lets_the_reader_look_at_it_or_
     );
 }
 
+/// Issue #1747: the engine's presentation facts reach the view — the cards exiled with a
+/// permanent (an Oblivion Ring's, in Banishing Light's words), the storm count (one spell cast this turn), and a player's
+/// conditions ("Players can't gain life." on both seats).
+#[test]
+fn an_exiled_card_is_linked_to_its_ring_and_storm_and_conditions_are_shown() {
+    let (ring, locked) = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Oblivion Ring",
+            Some("{2}{W}"),
+            "Enchantment",
+            "When Oblivion Ring enters, exile another target nonland permanent until Oblivion Ring leaves the battlefield.",
+            None,
+            10,
+        ));
+        cards.push(card(
+            "Lifeless Lock",
+            Some("{2}{B}"),
+            "Enchantment",
+            "Players can't gain life.",
+            None,
+            10,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Grizzly Bears");
+        let ring = in_hand(&mut game, "Oblivion Ring");
+        let mut step = game.act(A::Play { id: ring }).expect("cast unpaid");
+        for _ in 0..10 {
+            if step.view.stack.is_empty() && step.view.stage == Stage::Main {
+                break;
+            }
+            step = game
+                .act(match step.view.stage {
+                    Stage::Prompt => A::Auto,
+                    _ => A::Pass,
+                })
+                .expect("resolve");
+        }
+        put_down(&mut game, "Lifeless Lock");
+        (step.view, game.view())
+    });
+    let oring = find(&ring.you.battlefield, "Oblivion Ring").expect("the ring is down");
+    let bear = find(&ring.you.exile, "Grizzly Bears").expect("the bear is exiled");
+    assert!(find(&ring.you.battlefield, "Grizzly Bears").is_none());
+    assert_eq!(
+        ring.exiled_with,
+        vec![super::view::PlaytestExiledWith {
+            source: oring.id,
+            cards: vec![bear.id],
+        }]
+    );
+    assert_eq!(ring.storm, 1, "one spell cast this turn");
+    assert!(ring.you.conditions.is_empty());
+    assert!(
+        ring.turn_order.is_empty(),
+        "a game of two has no turn order"
+    );
+    for seat in [&locked.you, &locked.opponents[0]] {
+        assert!(
+            seat.conditions
+                .iter()
+                .any(|c| c.kind == super::view::PlaytestConditionKind::CantGainLife),
+            "{:?}: {:?}",
+            seat.player,
+            seat.conditions
+        );
+    }
+}
+
 /// A deck with a source that sacrifices itself for mana (a fixed-color Lotus Petal) beside a
 /// Forest, and a {2} creature the two pay for together.
 fn petal_deck() -> Vec<CardFacts> {

@@ -95,6 +95,7 @@ import {
 } from "./players";
 import { pickableCards } from "./prompt";
 import { DamagePanel } from "./DamagePanel";
+import { exiledWithLines, stackFacts } from "./details";
 import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
 import { RespondPrompt, respondingTo } from "./RespondPrompt";
@@ -453,6 +454,14 @@ export function PlaytestBoard({
   useLandingOf(root, ids);
 
   const current = useMemo(() => fresh(pointed, view), [pointed, view]);
+  /** What the engine's presentation facts add under the pointed card's preview (issue #1747): a
+   *  stack item's modes, payments and reveals, and the cards exiled with a permanent. */
+  const notes = useMemo(() => {
+    const id = current?.pointed.card.id;
+    if (view === null || id === undefined) return undefined;
+    const item = view.stack.find((s) => s.id === id);
+    return [...(item === undefined ? [] : stackFacts(item)), ...exiledWithLines(view, id)];
+  }, [current, view]);
 
   const drop = useCallback(
     (drag: TableDrag, to: GamePlace) => {
@@ -1417,6 +1426,7 @@ export function PlaytestBoard({
           width={previewWidth}
           onResize={setPreviewWidth}
           overDialog={looking}
+          notes={notes}
         />
 
         {panel === "help" && (

@@ -1,5 +1,6 @@
 import { useRef, type JSX, type MouseEvent, type ReactNode } from "react";
 import {
+  Ban,
   Castle,
   CircleDot,
   Crown,
@@ -26,6 +27,7 @@ import { cardImageUrl } from "@/lib/images";
 import { cn } from "@/lib/utils";
 import { shownName } from "../table/Inspect";
 import { useAimTarget, type DropAim } from "../table/tableDrag";
+import { conditionWords } from "./details";
 import { tableCards } from "./players";
 
 /** What of a seat's standing its plate draws beside poison: the wire's own fields. */
@@ -41,6 +43,7 @@ export type Standing = Pick<
   | "cityBlessing"
   | "ring"
   | "dungeon"
+  | "conditions"
 >;
 
 /** One mark of a player's standing on their plate: a glyph, its short text, and its words. */
@@ -53,14 +56,16 @@ export interface StandingMark {
   label: string;
   /** Its words on hover, where they say more than `label` (a dungeon room's text). */
   title?: string;
-  /** Gold for a designation a player holds (the monarch, the initiative); plain otherwise. */
-  tone: "plain" | "accent";
+  /** Gold for a designation a player holds (the monarch, the initiative); red for a condition
+   *  that keeps them from something (can't gain life); plain otherwise. */
+  tone: "plain" | "accent" | "danger";
 }
 
 /**
  * The marks a player's standing puts on their plate, in the order they are drawn: their counters
  * (energy, experience, rad, tickets, CR 122.1), speed, the Ring's temptations, the monarch, the
- * initiative, the city's blessing and the dungeon room they are in. **Only what a player has**:
+ * initiative, the city's blessing, the dungeon room they are in, and the conditions on them —
+ * can't gain life, can't cast spells (phase's `player_status`). **Only what a player has**:
  * a count of 0, a speed of `null`, a designation not held draws nothing, so a game without any of
  * it shows the plate as it always was.
  */
@@ -130,6 +135,10 @@ export function standingMarks(seat: Standing): StandingMark[] {
       tone: "plain",
     });
   }
+  seat.conditions.forEach((condition, i) => {
+    const { text, label } = conditionWords(condition);
+    marks.push({ key: `condition-${i}`, icon: Ban, text, label, tone: "danger" });
+  });
   return marks;
 }
 
@@ -264,7 +273,11 @@ export function PlateFrame({
               title={m.title ?? m.label}
               className={cn(
                 "inline-flex max-w-[160px] flex-none items-center gap-1 rounded-full border bg-surface px-2 text-xs/6 font-semibold whitespace-nowrap tabular-nums",
-                m.tone === "accent" ? "border-accent text-accent" : "border-border text-text",
+                m.tone === "accent"
+                  ? "border-accent text-accent"
+                  : m.tone === "danger"
+                    ? "border-destructive text-destructive"
+                    : "border-border text-text",
               )}
             >
               <m.icon className="size-3.5 flex-none" aria-hidden="true" />

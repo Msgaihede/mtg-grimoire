@@ -71,11 +71,15 @@ export function Inspect({
   width,
   onResize,
   overDialog = false,
+  notes = NO_NOTES,
 }: {
   pointed: Pointed | null;
   width: number;
   onResize: (next: (width: number) => number) => void;
   overDialog?: boolean;
+  /** What the table says of the card beyond its own state, one fact a line: a stack item's
+   *  modes and what was paid for it, the cards exiled with it (issue #1747). */
+  notes?: readonly string[];
 }): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);
   const pointer = useRef({ x: 0, y: 0 });
@@ -170,6 +174,13 @@ export function Inspect({
           ))}
         </ul>
       )}
+      {notes.length > 0 && (
+        <ul className="flex flex-col gap-0.5 text-xs text-text" data-testid="card-notes">
+          {notes.map((note, i) => (
+            <li key={i}>{note}</li>
+          ))}
+        </ul>
+      )}
       {card.effects.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-xs text-text" data-testid="card-effects">
           {card.effects.map((effect, i) => (
@@ -185,6 +196,8 @@ export function Inspect({
     </div>
   );
 }
+
+const NO_NOTES: readonly string[] = [];
 
 /** What a card the engine plays only in part is called under its preview. */
 const PARTLY = "Played only in part by the rules engine";

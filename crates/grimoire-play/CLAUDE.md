@@ -52,13 +52,13 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   holds each struct field for field, and every `PlaytestAction` / `PlaytestHappened` variant and
   field. A change to either side is one commit with the other.
 - **A game never sends what the reader may not see.** Each opponent's hand and library are counts
-  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). In a
-  lobby's game that holds for every person: each guest is sent the view from its own seat
-  (`guest_steps`, `view_of`), never the host's. **A hidden card is sent only when phase's own
-  projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
-  the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
-  face-down exile card they may look at. Never decide that in this crate, and never read a
-  position off the projection (it reorders a library's hidden cards), nor send `library_cards` with the sandbox off (#1749). The log's events pass phase's `filter_events_for_viewer` per seat first (`shown_to`, #1748).
+  in `PlaytestSeat`, their draws `Drew` with no name (`playtest/session.rs`' `tell`). In a lobby's
+  game each guest is sent the view from its own seat (`guest_steps`, `view_of`). **A hidden card is
+  sent only when phase's own projection for that seat shows it** (`Sight::of`, over
+  `filter_state_for_viewer`): a library's top (#1722), an opponent's revealed or known hand card, a
+  face-down exile card they may look at. Never decide that here, never read a position off the
+  projection, nor send `library_cards` with the sandbox off (#1749). Log events pass phase's
+  `filter_events_for_viewer` (`shown_to`, #1748); derived facts are `derive_filtered_views` (#1747).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and

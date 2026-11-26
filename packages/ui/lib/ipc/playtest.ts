@@ -183,6 +183,22 @@ export interface PlaytestView {
    *  another player's turn. */
   landsLeft: number | null;
   /**
+   * The storm count (CR 702.40a): the copies the Storm trigger on the stack will make, or else the
+   * spells cast this turn. Table-wide and public.
+   */
+  storm: number;
+  /**
+   * The turns to come, the current one first: a player twice in a row is an extra turn (CR 500.7).
+   * Empty in a game of two seats left in it.
+   */
+  turnOrder: PlaytestPlayer[];
+  /**
+   * The cards exiled with a battlefield permanent (CR 607.2a) — an Oblivion Ring's, a Banisher
+   * Priest's, an imprint or Hideaway card's — by their ids in the exile piles. A face-down card is
+   * one the pile draws as its back.
+   */
+  exiledWith: PlaytestExiledWith[];
+  /**
    * The rules' answers at the reader's priority (`main`, `respond`) that belong to no card, other
    * than passing: a special action such as paying to end a Licid's effect (CR 116.2c), offered
    * as a button beside Pass and taken with `special`. Empty at every other stage and in a replay
@@ -190,6 +206,42 @@ export interface PlaytestView {
    */
   specials: PlaytestOption[];
 }
+
+/** A permanent and the cards exiled with it, in the order they were exiled. */
+export interface PlaytestExiledWith {
+  source: number;
+  cards: number[];
+}
+
+/** A condition on a player: something that stops them doing what the rules otherwise let them. */
+export interface PlaytestCondition {
+  kind: PlaytestConditionKind;
+  /** The permanent imposing it, when the engine names one the table shows. */
+  source: number | null;
+  /** For `castOnlyFrom`, the zones the player may still cast from; empty otherwise. */
+  zones: GamePlace[];
+}
+
+/** What a player is kept from (phase's `PlayerConditionKind`). */
+export type PlaytestConditionKind =
+  | "cantWin"
+  | "cantGainLife"
+  | "cantLoseLife"
+  | "cantPayLife"
+  | "cantCast"
+  | "cantActivate"
+  | "castOnlyFrom";
+
+/** A fact of how a spell or ability on the stack was cast. */
+export type PlaytestPaid =
+  | { type: "x"; value: number }
+  | { type: "manaSpent"; amount: number }
+  | { type: "colorsSpent"; distinct: number }
+  | { type: "kicked"; count: number }
+  | { type: "additionalCost" }
+  /** Cast another way — phase's name for it (`Flashback`, `Evoke`, `Overload`…). */
+  | { type: "variant"; variant: string }
+  | { type: "convoked"; count: number };
 
 /** It is day or night (CR 731). */
 export type PlaytestDayNight = "day" | "night";
@@ -272,6 +324,8 @@ export interface PlaytestSeat {
   dungeon: PlaytestDungeon | null;
   /** The ids of the battlefield permanents attached to this player — a Curse (CR 303.4). */
   enchantedBy: number[];
+  /** What this player is kept from: can't gain life, can't cast spells and the like. */
+  conditions: PlaytestCondition[];
   /**
    * This player's companion while it is still outside the game (CR 702.139a): revealed, so
    * public to every seat. `null` for a player who revealed none, and once it is in the game.
@@ -615,6 +669,19 @@ export interface PlaytestStackItem {
   targets: number[];
   /** The players it targets. */
   targetPlayers: PlaytestPlayer[];
+  /** The modes chosen for it (CR 700.2), in the engine's words. */
+  modes: string[];
+  /** How it was cast: X, kicker, an additional cost, the mana spent. */
+  paid: PlaytestPaid[];
+  /**
+   * Every event that set a trigger off, when one trigger stands for several at once ("one or more
+   * creatures die") — `cause` is the first. Empty otherwise.
+   */
+  causes: PlaytestCause[];
+  /** A copy of a spell (CR 707.10) rather than a card being cast. */
+  copy: boolean;
+  /** The names of the cards revealed for it while it waits (CR 701.20a). */
+  revealed: string[];
 }
 
 /** Everything the board can ask of a game. `id` is a {@link GameCard.id} from the current view. */

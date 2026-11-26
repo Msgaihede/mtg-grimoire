@@ -75,6 +75,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     ring: 0,
     dungeon: null,
     enchantedBy: [],
+    conditions: [],
     companion: null,
     ...over,
   };
@@ -190,6 +191,9 @@ export function turnFive(): TurnFive {
     deciding: null,
     dayNight: null,
     landsLeft: 1,
+    storm: 0,
+    turnOrder: [],
+    exiledWith: [],
     specials: [],
   };
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
@@ -539,6 +543,11 @@ export function withStack(): TurnFive {
           cause: null,
           targets: [bolt.id],
           targetPlayers: [],
+          modes: [],
+          paid: [],
+          causes: [],
+          copy: false,
+          revealed: [],
         },
         {
           id: bolt.id,
@@ -550,6 +559,11 @@ export function withStack(): TurnFive {
           cause: null,
           targets: [],
           targetPlayers: ["you"],
+          modes: [],
+          paid: [],
+          causes: [],
+          copy: false,
+          revealed: [],
         },
       ],
     },
@@ -957,6 +971,11 @@ export function replayStep(): { step: PlaytestStep; start: PlaytestView } {
         cause: null,
         targets: [],
         targetPlayers: ["you" as const],
+        modes: [],
+        paid: [],
+        causes: [],
+        copy: false,
+        revealed: [],
       },
     ],
   };
@@ -1333,6 +1352,9 @@ export function parityMarks(): ParityMarks {
     ...t.view,
     dayNight: "night",
     landsLeft: 1,
+    storm: 0,
+    turnOrder: [],
+    exiledWith: [],
     specials: [],
     you: { ...t.view.you, ring: 1, enchantedBy: [curse.id] },
     opponents: [

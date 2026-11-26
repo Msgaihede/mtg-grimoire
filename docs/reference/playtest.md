@@ -639,7 +639,7 @@ phase's projection hides every library card but a top the player may look at or 
 `MulliganView.libraryLands`.
 
 **What phase's own projection shows the reader, the board shows** (phase 0.132.0 parity,
-2026-11-25; `Playtest::sight`). Every view asks phase's `filter_state_for_viewer` for the reader's
+2026-11-25; `Sight::of`). Every view asks phase's `filter_state_for_viewer` for the reader's
 seat — the projection phase's own client draws from — and sends a hidden card only when it says
 the reader may see it (`display_visible_to_viewer`). Positions are read off the game, never off
 the projection, which reorders a library's hidden cards. From it:
@@ -660,6 +660,44 @@ the projection, which reorders a library's hidden cards. From it:
   the controller).
 - **A question's `shown`**: the cards the reader is privately looking at as it is asked (phase's
   `private_look_ids`) and a cast offer's `hit_card` (a cascade's or a discover's).
+
+### The engine's presentation facts (issue #1747)
+
+The same projection feeds phase's `derive_filtered_views(state, projected, Some(reader))` — the
+derived views phase's own client draws its HUD from — **once a view** (`view_as`), replay frames
+included. The board words them (`packages/ui/features/playtesting/play/details.ts`); it decides
+none of them:
+
+- **A stack item's details** (`stack_entry_details`, `stack_revealed_cards`): `modes` (the modes
+  chosen, the engine's words), `paid` (X, kicker, an additional cost, a way to cast, convoke, the
+  mana spent), `causes` (every event of a batched trigger, when it stands for more than one —
+  `cause` stays the first), `copy` (a copy of a spell, CR 707.10, the object's own `is_copy`) and
+  `revealed` (the names revealed for it). The stack card carries a "Copy" or "X=3" chip; the rest
+  is under the pointed card's preview and in its spoken label. phase's trigger-context labels are
+  English sentences, so `causes` is read with the session's own `cause` instead, by the reader's
+  `Eyes`.
+- **Exiled with** (`linked_exile_ids`): `exiledWith`, each battlefield permanent and the cards in
+  the exile piles linked to it (CR 607.2a) — Banishing Light, Banisher Priest, an imprint or
+  Hideaway card. Read off the projection, so a face-down card stays one the pile draws as its back
+  ("a face-down card" under the preview). The preview says "Exiled with it: …" on the source and
+  "Exiled with …" on the exiled card. phase links a card exiled "until … leaves the battlefield"
+  and an imprint; the old Oblivion Ring wording (two triggers) carries no link at this rev.
+- **The storm count** (`storm_count`): `storm`, after the turn's facts on the middle line once it is
+  more than 0.
+- **The turn order** (`turn_order`): `turnOrder`, the current turn first, a player twice in a row an
+  extra turn. phase leaves it empty with two seats or fewer in the game, so the middle line's
+  "Next" chips are a table of three or four's.
+- **Player conditions** (`player_status`): each seat's `conditions` — can't win, can't gain or lose
+  life, can't pay life, can't cast, can't activate, may cast only from some zones — red marks on
+  the plate, beside its standing. A `source` is sent only when the table shows that card.
+
+**What it costs** (measured 2026-11-26 on a four-player game's turns, release build,
+`derived_views_cost_beside_the_projection`, an ignored test in `playtest/tests.rs`, 250 views
+over six rounds' states): the projection `filter_state_for_viewer` costs **0.86 ms** a view, and
+`derive_filtered_views` over it **0.16 ms** more — about a fifth on top of what every view already
+paid. One call answers all five facts from the projection already made; deriving each by hand
+would walk the same state five times, and phase's own pieces (`storm_count`,
+`turn_order_views`, `player_status_views`) are private to it in any case.
 
 An opponent's draw is `drew` with no name, and a card going back from their hand to their library
 is not told at all. The AI itself reads the whole `GameState`. Whether it plays as if it knows the
