@@ -255,6 +255,24 @@ generically, never matched variant by variant.
     `distribute` and never a `sole_answer` while two targets share it;
   - **a name** (`nameEntry`): a `NamedChoice` that takes a free word is answered with any name
     (`name`), checked by phase's `accepts_free_entry_answer`, beside its listed sample.
+  - **a crew or a saddle** (`crew`, `saddle`; `CrewVehicle`, `SaddleMount`, issue #1745): any
+    of the untapped creatures, so long as their power reaches `powerMin` — each counted by the
+    engine's own `contributions` ("as though its power were 2 greater"), never `GameCard.power`;
+    one creature that may is tapped unasked;
+  - **a banded blocker's damage** (`AssignBlockerDamage`, CR 510.1d, 702.22k): a `distribute`
+    of all of it among the attackers it blocks, none the least, answered `AssignBlockerDamage` —
+    the engine lists only all of it to the first, which `sole_answer` used to take silently;
+  - **counters taken off a card** (`counters`, `RemoveCountersChoice` and
+    `MoveCountersDistribution` — Rhys the Evermore, Tetravus; CR 107.1c, 122.5): a stepper per
+    kind (and per destination, for a move) within what the card has and `maxTotal`, answered by
+    `moveCounters`; none at all is an answer, so it is never a `sole_answer` while there are any;
+  - **five triggers or more in order** (`triggers`, `OrderTriggers`): phase lists every order up
+    to four, and only as they are and reversed past that, so the board lists the abilities in
+    the order they resolve, with up and down, and `orderTriggers` sends the permutation (the
+    first index put on the stack first);
+  - **coin flips kept and die rolls ignored** (`results`, `CoinFlipKeepChoice` — Krark's Thumb —
+    and `DieKeepChoice`, CR 705.1, 706.6): the results drawn, exactly `count` of the `eligible`
+    picked, answered by `keepResults`; phase lists nothing when more than one coin is kept.
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
@@ -575,7 +593,12 @@ that lost it.
 ## What the reader may see
 
 Each opponent's hand and library are **counts** (`handCount`, `library`), the goldfish's too.
-Their `libraryCards` are always empty on the wire, and the sandbox never reaches them.
+Their `libraryCards` are always empty on the wire, and the sandbox never reaches them. **The
+reader's own `libraryCards` (top first) are sent only while the sandbox is on**, for its library
+dialog's look and search (issue #1749): CR 401.2 hides a library's order from its owner too, and
+phase's projection hides every library card but a top the player may look at or that is revealed
+(`libraryTop`). The opening hand's _In the library_ figure is a count of its own,
+`MulliganView.libraryLands`.
 
 **What phase's own projection shows the reader, the board shows** (phase 0.132.0 parity,
 2026-11-25; `Playtest::sight`). Every view asks phase's `filter_state_for_viewer` for the reader's
@@ -1150,9 +1173,9 @@ ever, and every guest is sent its step after each change. A guest's action is `l
 goes to the host's board as `playtest:step` (`HostStep`) and to each guest as `lobby:game`
 (`GuestGame`: the step, the others' names from its seat, its deck's name, `dealt` for a deal's first
 step). A refusal goes back to that guest alone, as `lobby:refused`. A guest's step crosses packed
-(body `game`, gzip in base64): a Commander board with the guest's own library is well past the
-relay's 64 KiB frame as JSON and a tenth of that packed; one that still would not fit is sent
-without the library, which only the sandbox draws.
+(body `game`, gzip in base64), under the relay's 64 KiB frame. It never carries the guest's
+library's cards: those are sent only while the sandbox is on, and the sandbox stays off in a
+lobby's game.
 
 **The page.** The setup's aside has a _Play with friends_ block (`features/playtesting/lobby/`):
 **Create lobby** for a supporter (`useMayHostPod`, the draft's own reading of the membership) and

@@ -6,7 +6,10 @@ import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CardFace } from "../table/Inspect";
+import { CountersPanel } from "./CountersPanel";
 import { DistributePanel } from "./DistributePanel";
+import { ResultsPanel } from "./ResultsPanel";
+import { TriggersPanel } from "./TriggersPanel";
 import {
   cardOfRef,
   distinctOptions,
@@ -86,9 +89,16 @@ export function PromptPanel({
   const line = help ?? source?.text ?? null;
   const [named, setNamed] = useState("");
   const [others, setOthers] = useState(false);
-  // A question with more to it than its listed answers: cards shown, a name to type, an amount
-  // to divide. Its body scrolls as one.
-  const extra = prompt.shown.length > 0 || prompt.nameEntry || prompt.distribute !== null;
+  // An answer the listed options cannot hold — an amount to divide, counters to take, an order
+  // of triggers, flips to keep — drawn in their place, the engine's own behind "Other answers".
+  const own =
+    prompt.distribute !== null ||
+    prompt.counters !== null ||
+    prompt.triggers !== null ||
+    prompt.results !== null;
+  // A question with more to it than its listed answers: cards shown, a name to type, an answer
+  // of its own. Its body scrolls as one.
+  const extra = prompt.shown.length > 0 || prompt.nameEntry || own;
   return (
     <section
       aria-label={title}
@@ -182,7 +192,37 @@ export function PromptPanel({
               opponents={opponents}
             />
           )}
-          {prompt.distribute !== null && prompt.options.length > 0 && (
+          {prompt.counters !== null && (
+            <CountersPanel
+              key={`${prompt.counters.source?.id}:${prompt.counters.kinds.map((k) => `${k.kind}${k.count}`).join(",")}`}
+              counters={prompt.counters}
+              table={table}
+              disabled={disabled}
+              onAct={onAct}
+              onPoint={onPoint}
+              onUnpoint={onUnpoint}
+            />
+          )}
+          {prompt.triggers !== null && (
+            <TriggersPanel
+              key={prompt.triggers.map((t) => `${t.id}:${t.text}`).join(",")}
+              triggers={prompt.triggers}
+              table={table}
+              disabled={disabled}
+              onAct={onAct}
+              onPoint={onPoint}
+              onUnpoint={onUnpoint}
+            />
+          )}
+          {prompt.results !== null && (
+            <ResultsPanel
+              key={prompt.results.results.join(",")}
+              results={prompt.results}
+              disabled={disabled}
+              onAct={onAct}
+            />
+          )}
+          {own && prompt.options.length > 0 && (
             <button
               type="button"
               aria-expanded={others}
@@ -195,7 +235,7 @@ export function PromptPanel({
               Other answers
             </button>
           )}
-          {(prompt.distribute === null || others) && answers(named)}
+          {(!own || others) && answers(named)}
         </div>
       ) : (
         answers("")

@@ -98,6 +98,9 @@ describe("optionLabel", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
     };
     expect(pickableCards(prompt)).toEqual(new Map([[7, 1]]));
   });
@@ -404,6 +407,9 @@ describe("pickableCards", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
       options: [
         option({ index: 0, cards: [a] }),
         option({ index: 1, cards: [a, b] }),
@@ -431,6 +437,9 @@ describe("pickableCards", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
       options: [option({ index: 0, kind: "ChooseReplacement", cards: [effect] })],
     });
     expect(picks.size).toBe(0);

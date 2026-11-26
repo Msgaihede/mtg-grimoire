@@ -13,7 +13,13 @@ import {
 } from "./damage";
 
 function damage(over: Partial<PlaytestDamage> = {}): PlaytestDamage {
-  const ref = (id: number) => ({ id, name: `Blocker ${id}`, cardId: null, text: null, cause: null });
+  const ref = (id: number) => ({
+    id,
+    name: `Blocker ${id}`,
+    cardId: null,
+    text: null,
+    cause: null,
+  });
   return {
     attacker: ref(9),
     total: 3,

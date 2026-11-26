@@ -74,8 +74,8 @@ use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, Mulliga
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
-    CastOfferKind, CombatDamageAssignmentMode, DayNight, ManaChoice, MulliganDecisionPhase,
-    PayCostKind, StackEntry, StackEntryKind, WaitingFor,
+    CastOfferKind, CombatDamageAssignmentMode, CounterMoveChoice, CounterRemoveChoice, DayNight,
+    ManaChoice, MulliganDecisionPhase, PayCostKind, StackEntry, StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::mana::ManaCost;
@@ -97,17 +97,18 @@ use crate::cards::{self, CardFacts};
 use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
 use crate::table::{game_card, is_permanent, mana_table, mana_type, place_of};
 use crate::tokens::{DeckTokens, TokenFacts};
-use crate::view::{GameCard, ManaKind, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{CardCounter, GameCard, ManaKind, MulliganView, Place, Seat, TokenOffer};
 
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestCombat, PlaytestCommanderDamage, PlaytestDamage, PlaytestDamageBlocker,
-    PlaytestDamageShare, PlaytestDayNight, PlaytestDesignation, PlaytestDistribute,
-    PlaytestDistributeTarget, PlaytestDungeon, PlaytestEmblem, PlaytestFrame, PlaytestHappened,
-    PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer,
-    PlaytestPrompt, PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep,
-    PlaytestStop, PlaytestStopStep, PlaytestView,
+    PlaytestCombat, PlaytestCommanderDamage, PlaytestCounterShare, PlaytestCounters,
+    PlaytestDamage, PlaytestDamageBlocker, PlaytestDamageShare, PlaytestDayNight,
+    PlaytestDesignation, PlaytestDistribute, PlaytestDistributeTarget, PlaytestDungeon,
+    PlaytestEmblem, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
+    PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestResults, PlaytestSeat,
+    PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep,
+    PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -1309,7 +1310,9 @@ impl Playtest {
             emblems: self.emblems(seat),
             library: player.library.len() as u32,
             // phase's library is a vector whose **front is the top** (`DrawCards` takes from it).
-            library_cards: if reader {
+            // Sent only while the sandbox is on, for its look and search: a library's order is
+            // hidden from its owner too (CR 401.2, issue #1749).
+            library_cards: if reader && self.sandbox {
                 cards(&mut player.library.iter())
             } else {
                 Vec::new()
@@ -1724,10 +1727,24 @@ impl Playtest {
                 }
             }
         };
+        // A count, never the cards: the reader may not know their library's order (CR 401.2).
+        let library_lands = self
+            .player(self.you)
+            .library
+            .iter()
+            .filter(|id| {
+                self.state.objects.get(id).is_some_and(|o| {
+                    o.card_types
+                        .core_types
+                        .contains(&engine::types::card_type::CoreType::Land)
+                })
+            })
+            .count() as u32;
         Some(MulliganView {
             mulligans: entry.mulligan_count,
             bottom,
             free_first: *free_first_mulligan,
+            library_lands,
         })
     }
 
@@ -1751,6 +1768,9 @@ impl Playtest {
                 shown: Vec::new(),
                 distribute: None,
                 name_entry: false,
+                counters: None,
+                triggers: None,
+                results: None,
             };
         }
         // The question's own data names its ability when it is about one — a trigger's targets —
@@ -1806,7 +1826,198 @@ impl Playtest {
             shown: self.shown(&question),
             distribute: self.distribute(),
             name_entry: self.name_entry(),
+            counters: self.counters(),
+            triggers: self.triggers(),
+            results: self.results(),
         }
+    }
+
+    /// Counters to remove from a card, or to move from it onto other permanents, as the reader
+    /// chooses (`RemoveCountersChoice`, `MoveCountersDistribution`; CR 107.1c, 122.5). The
+    /// engine lists only none and all, so without this the reader could not take some.
+    fn counters(&self) -> Option<PlaytestCounters> {
+        let (source_id, available, destinations, max_total) = match &self.state.waiting_for {
+            WaitingFor::MoveCountersDistribution {
+                player,
+                source_id,
+                available,
+                destinations,
+                ..
+            } if *player == self.you => (source_id, available, destinations.as_slice(), None),
+            WaitingFor::RemoveCountersChoice {
+                player,
+                source_id,
+                available,
+                max_total,
+                ..
+            } if *player == self.you => (source_id, available, &[][..], *max_total),
+            _ => return None,
+        };
+        Some(PlaytestCounters {
+            source: self.card_ref(*source_id),
+            kinds: available
+                .iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(kind, n)| CardCounter {
+                    kind: kind.display_phrase().into_owned(),
+                    count: *n,
+                })
+                .collect(),
+            destinations: destinations
+                .iter()
+                .filter_map(|id| self.card_ref(*id))
+                .collect(),
+            max_total,
+        })
+    }
+
+    /// The reader's counters taken (`MoveCounters`) as the engine takes them, or the sentence that
+    /// says why not: each share of a kind the card has, onto a listed destination for a move, no
+    /// kind past what there is and no more in all than the most.
+    fn counters_answer(&self, shares: &[PlaytestCounterShare]) -> Result<GameAction, String> {
+        let counters = self
+            .counters()
+            .ok_or("This question is not which counters to take.")?;
+        let (available, moving) = match &self.state.waiting_for {
+            WaitingFor::MoveCountersDistribution { available, .. } => (available, true),
+            WaitingFor::RemoveCountersChoice { available, .. } => (available, false),
+            _ => return Err(NO_PROMPT.into()),
+        };
+        let mut taken: Vec<(usize, Option<u64>, u32)> = Vec::new();
+        for share in shares.iter().filter(|s| s.count > 0) {
+            let kind = available
+                .iter()
+                .position(|(k, n)| *n > 0 && k.display_phrase() == share.kind)
+                .ok_or_else(|| format!("The card has no {} counters.", share.kind))?;
+            let listed = match share.to {
+                Some(id) => moving && counters.destinations.iter().any(|d| d.id == id),
+                None => !moving,
+            };
+            if !listed || taken.iter().any(|(k, to, _)| *k == kind && *to == share.to) {
+                return Err(NOT_IN_GAME.into());
+            }
+            taken.push((kind, share.to, share.count));
+        }
+        for (i, (_, n)) in available.iter().enumerate() {
+            let asked: u32 = taken.iter().filter(|t| t.0 == i).map(|t| t.2).sum();
+            if asked > *n {
+                return Err(format!(
+                    "The card has {n} {} counter{}.",
+                    available[i].0.display_phrase(),
+                    if *n == 1 { "" } else { "s" }
+                ));
+            }
+        }
+        let total: u32 = taken.iter().map(|t| t.2).sum();
+        if let Some(most) = counters.max_total.filter(|m| total > *m) {
+            return Err(format!("Take at most {most} counters in all."));
+        }
+        Ok(if moving {
+            GameAction::ChooseCounterMoveDistribution {
+                selections: taken
+                    .into_iter()
+                    .map(|(kind, to, count)| CounterMoveChoice {
+                        destination_id: ObjectId(to.unwrap_or_default()),
+                        counter_type: available[kind].0.clone(),
+                        count,
+                    })
+                    .collect(),
+            }
+        } else {
+            GameAction::ChooseCountersToRemove {
+                selections: taken
+                    .into_iter()
+                    .map(|(kind, _, count)| CounterRemoveChoice {
+                        counter_type: available[kind].0.clone(),
+                        count,
+                    })
+                    .collect(),
+            }
+        })
+    }
+
+    /// The reader's triggers to put in order, when the engine lists only some orders of them:
+    /// every order of up to four (24 answers), only as they are and reversed past that
+    /// (`OrderTriggers`, CR 603.3b). The abilities as `abilities` names them.
+    fn triggers(&self) -> Option<Vec<PlaytestCardRef>> {
+        match &self.state.waiting_for {
+            WaitingFor::OrderTriggers { player, triggers }
+                if *player == self.you && triggers.len() > ORDERS_LISTED =>
+            {
+                let abilities = self.abilities();
+                (abilities.len() == triggers.len()).then_some(abilities)
+            }
+            _ => None,
+        }
+    }
+
+    /// Coin flips to keep or die rolls to ignore (`CoinFlipKeepChoice`, CR 705.1 — Krark's
+    /// Thumb; `DieKeepChoice`, CR 706.6), with the results shown. The engine lists one answer a
+    /// coin kept, and none when more than one is.
+    fn results(&self) -> Option<PlaytestResults> {
+        let index = |i: usize| i as u32;
+        match &self.state.waiting_for {
+            WaitingFor::CoinFlipKeepChoice {
+                player,
+                results,
+                keep_count,
+            } if *player == self.you => Some(PlaytestResults {
+                dice: false,
+                results: results.iter().map(|r| u32::from(*r)).collect(),
+                eligible: (0..results.len()).map(index).collect(),
+                count: (*keep_count).min(results.len()) as u32,
+            }),
+            WaitingFor::DieKeepChoice {
+                player,
+                results,
+                ignorable_indices,
+                ignore_count,
+            } if *player == self.you => Some(PlaytestResults {
+                dice: true,
+                results: results.iter().map(|r| u32::from(*r)).collect(),
+                eligible: ignorable_indices.iter().copied().map(index).collect(),
+                count: (*ignore_count).min(ignorable_indices.len()) as u32,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The reader's kept results (`KeepResults`) as the engine takes them: exactly `count`
+    /// distinct indices, each one it may name.
+    fn results_answer(&self, indices: &[u32]) -> Result<GameAction, String> {
+        let results = self
+            .results()
+            .ok_or("This question is not which flips or rolls to keep.")?;
+        if indices.len() != results.count as usize {
+            return Err(format!(
+                "{} {} {}.",
+                if results.dice { "Ignore" } else { "Keep" },
+                results.count,
+                match (results.dice, results.count == 1) {
+                    (true, true) => "roll",
+                    (true, false) => "rolls",
+                    (false, true) => "flip",
+                    (false, false) => "flips",
+                }
+            ));
+        }
+        let mut seen = HashSet::new();
+        if indices
+            .iter()
+            .any(|i| !results.eligible.contains(i) || !seen.insert(*i))
+        {
+            return Err(NOT_IN_GAME.into());
+        }
+        let picked: Vec<usize> = indices.iter().map(|i| *i as usize).collect();
+        Ok(if results.dice {
+            GameAction::SelectDieRolls {
+                ignore_indices: picked,
+            }
+        } else {
+            GameAction::SelectCoinFlips {
+                keep_indices: picked,
+            }
+        })
     }
 
     /// The cards the question shows the reader without asking them to pick: the cards they are
@@ -1844,6 +2055,29 @@ impl Playtest {
     /// resolves. The engine lists only an even split and a lethal-first one, so without this
     /// the reader could not choose the division (issue #1448's reason, outside combat).
     fn distribute(&self) -> Option<PlaytestDistribute> {
+        // A blocker's combat damage among the attackers it blocks, divided by the active player
+        // against banding (CR 510.1d, 702.22k): any division of all of it, none at the least.
+        // The engine lists one, all of it to the first attacker.
+        if let WaitingFor::AssignBlockerDamage {
+            player,
+            total_damage,
+            attackers,
+            ..
+        } = &self.state.waiting_for
+        {
+            return (*player == self.you).then(|| PlaytestDistribute {
+                total: *total_damage,
+                unit: "Damage".into(),
+                targets: attackers
+                    .iter()
+                    .map(|id| PlaytestDistributeTarget {
+                        card: self.card_ref(*id),
+                        player: None,
+                        min: 0,
+                    })
+                    .collect(),
+            });
+        }
         let WaitingFor::DistributeAmong {
             player,
             total,
@@ -2392,11 +2626,76 @@ impl Playtest {
                 false,
                 PickAnswer::FreeCast,
             ),
+            // Tap creatures with total power N or more to crew a Vehicle or saddle a Mount
+            // (CR 702.122a, 702.171a): any of them, so long as their power reaches `power_min`,
+            // each counted as the engine counts it (`contributions`). The engine lists only some
+            // of the sets.
+            WaitingFor::CrewVehicle {
+                player,
+                vehicle_id,
+                eligible_creatures,
+                ..
+            } if *player == self.you => (
+                PlaytestPickPurpose::Crew,
+                all(eligible_creatures),
+                all(eligible_creatures),
+                0,
+                eligible_creatures.len(),
+                false,
+                PickAnswer::Crew(*vehicle_id),
+            ),
+            WaitingFor::SaddleMount {
+                player,
+                mount_id,
+                eligible_creatures,
+                ..
+            } if *player == self.you => (
+                PlaytestPickPurpose::Saddle,
+                all(eligible_creatures),
+                all(eligible_creatures),
+                0,
+                eligible_creatures.len(),
+                false,
+                PickAnswer::Saddle(*mount_id),
+            ),
             _ => return None,
         };
         let power_cap = match &self.state.waiting_for {
             WaitingFor::KeepWithinTotalPowerChoice { cap, .. } => Some(*cap),
             _ => None,
+        };
+        let (power_min, contributions) = match &self.state.waiting_for {
+            WaitingFor::CrewVehicle {
+                crew_power: least,
+                eligible_creatures,
+                contributions,
+                ..
+            }
+            | WaitingFor::SaddleMount {
+                saddle_power: least,
+                eligible_creatures,
+                contributions,
+                ..
+            } => (
+                Some(i32::try_from(*least).unwrap_or(i32::MAX)),
+                // The engine's own reckoning when it gives one for every creature; each one's
+                // power when not (an older wire without the field).
+                if contributions.len() == eligible_creatures.len() {
+                    contributions.clone()
+                } else {
+                    eligible_creatures
+                        .iter()
+                        .map(|id| {
+                            self.state
+                                .objects
+                                .get(id)
+                                .and_then(|o| o.power)
+                                .unwrap_or(0)
+                        })
+                        .collect()
+                },
+            ),
+            _ => (None, Vec::new()),
         };
         let split = match &self.state.waiting_for {
             WaitingFor::DigRestSplitChoice { top_count, .. }
@@ -2428,6 +2727,8 @@ impl Playtest {
                 max: max as u32,
                 ordered,
                 power_cap,
+                power_min,
+                contributions,
                 zone,
                 split,
             },
@@ -2474,6 +2775,19 @@ impl Playtest {
             return Err(format!("Each target is given at least {least}."));
         }
         given.retain(|(_, n)| *n > 0);
+        if matches!(
+            self.state.waiting_for,
+            WaitingFor::AssignBlockerDamage { .. }
+        ) {
+            return given
+                .into_iter()
+                .map(|(t, n)| match t {
+                    TargetRef::Object(id) => Ok((id, n)),
+                    TargetRef::Player(_) => Err(NOT_IN_GAME.to_string()),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|assignments| GameAction::AssignBlockerDamage { assignments });
+        }
         Ok(GameAction::DistributeAmong {
             distribution: given,
         })
@@ -2511,7 +2825,26 @@ impl Playtest {
         if self.distribute().is_some_and(|d| d.targets.len() > 1) {
             return None;
         }
+        // Counters to take: none is always an answer, and so is any other while there are any.
+        if self.counters().is_some_and(|c| !c.kinds.is_empty()) {
+            return None;
+        }
+        if self.triggers().is_some() {
+            return None;
+        }
+        // Flips or rolls: one answer only when every index that may be named must be.
+        if let Some(results) = self.results() {
+            if results.eligible.len() == results.count as usize {
+                return self.results_answer(&results.eligible).ok();
+            }
+            return None;
+        }
         if let Some((pick, answer)) = self.pick() {
+            // Crew or saddle with one creature that may: tapping it is the one answer.
+            if let Some(least) = pick.power_min {
+                let one = pick.eligible.len() == 1 && pick.contributions.first() >= Some(&least);
+                return one.then(|| pick_answer(pick.eligible, answer));
+            }
             let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
             return (all && (!pick.ordered || pick.min <= 1))
                 .then(|| pick_answer(pick.eligible, answer));
@@ -3036,6 +3369,18 @@ impl Playtest {
                         ));
                     }
                 }
+                if let Some(least) = pick.power_min {
+                    let total: i32 = ids
+                        .iter()
+                        .filter_map(|id| pick.eligible.iter().position(|e| e == id))
+                        .filter_map(|i| pick.contributions.get(i))
+                        .sum();
+                    if total < least {
+                        return Err(format!(
+                            "The tapped creatures' total power is {total}; it must be at least {least}."
+                        ));
+                    }
+                }
                 self.apply(self.you, pick_answer(ids, answer), out)?;
                 self.advance(out)
             }
@@ -3052,6 +3397,41 @@ impl Playtest {
                     return Err(NO_PROMPT.into());
                 }
                 let answer = self.distribute_answer(&shares)?;
+                self.apply(self.you, answer, out)?;
+                self.advance(out)
+            }
+            PlaytestAction::MoveCounters { shares } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() {
+                    return Err(NO_PROMPT.into());
+                }
+                let answer = self.counters_answer(&shares)?;
+                self.apply(self.you, answer, out)?;
+                self.advance(out)
+            }
+            PlaytestAction::OrderTriggers { order } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() {
+                    return Err(NO_PROMPT.into());
+                }
+                let triggers = self
+                    .triggers()
+                    .ok_or("This question is not the order of triggers.")?;
+                let mut seen = HashSet::new();
+                if order.len() != triggers.len()
+                    || order
+                        .iter()
+                        .any(|i| *i as usize >= triggers.len() || !seen.insert(*i))
+                {
+                    return Err("Put every trigger in the order once.".into());
+                }
+                let order = order.into_iter().map(|i| i as usize).collect();
+                self.apply(self.you, GameAction::OrderTriggers { order }, out)?;
+                self.advance(out)
+            }
+            PlaytestAction::KeepResults { indices } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() {
+                    return Err(NO_PROMPT.into());
+                }
+                let answer = self.results_answer(&indices)?;
                 self.apply(self.you, answer, out)?;
                 self.advance(out)
             }
@@ -4484,6 +4864,10 @@ pub(super) fn stack_targets(
     (cards, players)
 }
 
+/// The most triggers whose every order phase's `legal_actions` lists (its
+/// `order_triggers_candidates`); past it, it lists only two orders, and `triggers` asks.
+const ORDERS_LISTED: usize = 4;
+
 /// Which of the engine's answers a pick's cards are sent as (`pick`'s second value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickAnswer {
@@ -4499,6 +4883,10 @@ enum PickAnswer {
     FreeCast,
     /// `SubmitPilePartition`: the cards of the first pile.
     PileA,
+    /// `CrewVehicle`: the creatures tapped to crew this Vehicle.
+    Crew(ObjectId),
+    /// `SaddleMount`: the creatures tapped to saddle this Mount.
+    Saddle(ObjectId),
 }
 
 /// A pick's answer: the cards, as the question takes them.
@@ -4518,6 +4906,14 @@ fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
             selection: ids.first().copied().map(ObjectId),
         },
         PickAnswer::PileA => GameAction::SubmitPilePartition { pile_a: objects() },
+        PickAnswer::Crew(vehicle_id) => GameAction::CrewVehicle {
+            vehicle_id,
+            creature_ids: objects(),
+        },
+        PickAnswer::Saddle(mount_id) => GameAction::SaddleMount {
+            mount_id,
+            creature_ids: objects(),
+        },
     }
 }
 

@@ -10,8 +10,8 @@ use crate::view::{GameCard, Place};
 
 use super::session::Playtest;
 use super::view::{
-    Difficulty, PlaytestAction as A, PlaytestHappened as H, PlaytestPickPurpose,
-    PlaytestStage as Stage, PlaytestStep,
+    Difficulty, PlaytestAction as A, PlaytestCounterShare, PlaytestHappened as H,
+    PlaytestPickPurpose, PlaytestStage as Stage, PlaytestStep,
 };
 
 fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
@@ -480,6 +480,329 @@ fn damage_divided_among_targets_is_asked_as_a_division() {
         .map(|c| c.damage)
         .collect();
     assert_eq!(damaged, vec![1, 1], "{:?}", divided.happened);
+}
+
+/// Answer each question the way `answer` says until `done` holds, at most `n` times.
+fn answer_until(
+    game: &mut Playtest,
+    mut step: PlaytestStep,
+    n: usize,
+    done: impl Fn(&PlaytestStep) -> bool,
+    want: &[u64],
+) -> PlaytestStep {
+    for _ in 0..n {
+        if done(&step) {
+            break;
+        }
+        let Some(prompt) = step.view.prompt.clone() else {
+            break;
+        };
+        step = if let Some(pick) = &prompt.pick {
+            let ids: Vec<u64> = want
+                .iter()
+                .copied()
+                .filter(|id| pick.eligible.contains(id))
+                .take(pick.max.max(1) as usize)
+                .collect();
+            game.act(A::PickCards { ids }).expect("picked")
+        } else {
+            let at = prompt
+                .options
+                .iter()
+                .find(|o| o.cards.iter().any(|c| want.contains(&c.id)))
+                .or(prompt.options.first())
+                .unwrap_or_else(|| panic!("{} {:?}", prompt.kind, prompt.options));
+            game.act(A::Choose { index: at.index }).expect("answered")
+        };
+    }
+    step
+}
+
+fn ids_of(step: &PlaytestStep, name: &str) -> Vec<u64> {
+    step.view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.name == name)
+        .map(|c| c.id)
+        .collect()
+}
+
+/// Issue #1745: crewing a Vehicle is a pick of creatures whose power reaches its crew number
+/// (CR 702.122a), never the engine's few listed sets; too little power is refused.
+#[test]
+fn crewing_is_a_pick_of_creatures_with_power_enough() {
+    let (asked, refused, crewed) = engine(|| {
+        let wagon = card("Test Wagon", Some("{3}"), "Artifact — Vehicle", "Crew 3", 1);
+        let mut game = kept(&deck(vec![wagon]));
+        put(&mut game, "Grizzly Bears", Place::Battlefield);
+        put(&mut game, "Grizzly Bears", Place::Battlefield);
+        let step = put(&mut game, "Test Wagon", Place::Battlefield);
+        let wagon = ids_of(&step, "Test Wagon")[0];
+        let bears = ids_of(&step, "Grizzly Bears");
+        let step = game.act(A::Activate { id: wagon }).expect("crew it");
+        let asked = answer_until(
+            &mut game,
+            step,
+            4,
+            |s| {
+                s.view
+                    .prompt
+                    .as_ref()
+                    .and_then(|p| p.pick.as_ref())
+                    .is_some_and(|p| p.purpose == PlaytestPickPurpose::Crew)
+            },
+            &[wagon],
+        );
+        let refused = game
+            .act(A::PickCards {
+                ids: vec![bears[0]],
+            })
+            .unwrap_err();
+        let crewed = game.act(A::PickCards { ids: bears }).expect("crewed");
+        (asked, refused, crewed)
+    });
+    let pick = asked.view.prompt.unwrap().pick.unwrap();
+    assert_eq!(pick.power_min, Some(3));
+    assert_eq!(pick.eligible.len(), 2);
+    assert_eq!(pick.contributions, vec![2, 2]);
+    assert!(refused.contains("at least 3"), "{refused}");
+    let wagon = find(&crewed.view.you.battlefield, "Test Wagon").unwrap();
+    assert!(
+        wagon.type_line.contains("Creature"),
+        "crewed, it is a creature: {wagon:?}"
+    );
+    assert!(
+        crewed
+            .view
+            .you
+            .battlefield
+            .iter()
+            .filter(|c| c.name == "Grizzly Bears")
+            .all(|c| c.tapped),
+        "both Bears tapped to crew it"
+    );
+}
+
+/// Issue #1745: "remove any number of counters" (Rhys the Evermore, Tetravus; CR 107.1c) asks
+/// how many of each kind, never only none or all.
+#[test]
+fn removing_any_number_of_counters_asks_how_many() {
+    let (asked, removed) = engine(|| {
+        let rod = card(
+            "Test Rod",
+            Some("{1}"),
+            "Artifact",
+            "{T}: Remove any number of counters from target creature you control.",
+            1,
+        );
+        let mut game = kept(&deck(vec![rod]));
+        let step = put(&mut game, "Grizzly Bears", Place::Battlefield);
+        let bear = ids_of(&step, "Grizzly Bears")[0];
+        game.act(A::Counters {
+            id: bear,
+            kind: "+1/+1".into(),
+            delta: 3,
+        })
+        .expect("counters by hand");
+        let step = put(&mut game, "Test Rod", Place::Battlefield);
+        let rod = ids_of(&step, "Test Rod")[0];
+        let step = game.act(A::Activate { id: rod }).expect("activated");
+        let mut asked = answer_until(
+            &mut game,
+            step,
+            6,
+            |s| s.view.prompt.as_ref().is_some_and(|p| p.counters.is_some()),
+            &[bear],
+        );
+        // The ability resolves once the reader passes.
+        for _ in 0..3 {
+            if asked
+                .view
+                .prompt
+                .as_ref()
+                .is_some_and(|p| p.counters.is_some())
+            {
+                break;
+            }
+            asked = game.act(A::Pass).expect("resolve it");
+            asked = answer_until(
+                &mut game,
+                asked,
+                4,
+                |s| s.view.prompt.as_ref().is_some_and(|p| p.counters.is_some()),
+                &[bear],
+            );
+        }
+        let counters = asked
+            .view
+            .prompt
+            .as_ref()
+            .and_then(|p| p.counters.clone())
+            .unwrap_or_else(|| panic!("{:?}", asked.view.prompt));
+        let kind = counters.kinds[0].kind.clone();
+        let refused = game
+            .act(A::MoveCounters {
+                shares: vec![PlaytestCounterShare {
+                    kind: kind.clone(),
+                    to: None,
+                    count: 4,
+                }],
+            })
+            .unwrap_err();
+        assert!(refused.contains("has 3"), "{refused}");
+        let removed = game
+            .act(A::MoveCounters {
+                shares: vec![PlaytestCounterShare {
+                    kind,
+                    to: None,
+                    count: 2,
+                }],
+            })
+            .expect("two removed");
+        (counters, removed)
+    });
+    assert_eq!(asked.kinds.len(), 1);
+    assert_eq!(asked.kinds[0].count, 3);
+    assert!(asked.destinations.is_empty(), "a removal, not a move");
+    let bear = find(&removed.view.you.battlefield, "Grizzly Bears").unwrap();
+    assert_eq!(bear.power, Some(3), "one +1/+1 counter left: {bear:?}");
+}
+
+/// Issue #1745: five triggers at once are put in order as the reader chooses — phase lists only
+/// two of their 120 orders past four.
+#[test]
+fn five_triggers_are_put_in_any_order() {
+    let (asked, ordered) = engine(|| {
+        let wardens: Vec<CardFacts> = (1..=5)
+            .map(|n| {
+                card(
+                    &format!("Test Shrine {n}"),
+                    Some("{1}"),
+                    "Enchantment",
+                    &format!("Whenever a creature you control enters, you gain {n} life."),
+                    1,
+                )
+            })
+            .collect();
+        let mut game = kept(&deck(wardens));
+        for n in 1..=5 {
+            put(&mut game, &format!("Test Shrine {n}"), Place::Battlefield);
+        }
+        put(&mut game, "Forest", Place::Battlefield);
+        put(&mut game, "Forest", Place::Battlefield);
+        let mut step = cast(&mut game, "Grizzly Bears");
+        for _ in 0..6 {
+            if step
+                .view
+                .prompt
+                .as_ref()
+                .is_some_and(|p| p.triggers.is_some())
+            {
+                break;
+            }
+            step = if step.view.prompt.is_some() {
+                answer_until(&mut game, step, 1, |_| false, &[])
+            } else {
+                game.act(A::Pass).expect("resolve the Bears")
+            };
+        }
+        let asked = step.clone();
+        let triggers = asked
+            .view
+            .prompt
+            .as_ref()
+            .and_then(|p| p.triggers.clone())
+            .unwrap_or_else(|| panic!("{:?}", asked.view.prompt));
+        let refused = game
+            .act(A::OrderTriggers {
+                order: vec![0, 0, 1, 2, 3],
+            })
+            .unwrap_err();
+        assert!(refused.contains("once"), "{refused}");
+        let order: Vec<u32> = vec![2, 0, 4, 1, 3];
+        let ordered = game.act(A::OrderTriggers { order }).expect("ordered");
+        (triggers, ordered)
+    });
+    assert_eq!(asked.len(), 5);
+    assert!(asked.iter().all(|t| t.text.is_some()), "{asked:?}");
+    // Each resolves, the last placed first (CR 405.3): Test Shrine n gains n life.
+    let gains: Vec<i32> = ordered
+        .happened
+        .iter()
+        .filter_map(|h| match h {
+            H::Life { amount, .. } if *amount > 0 => Some(*amount),
+            _ => None,
+        })
+        .collect();
+    let shrine = |i: usize| -> i32 {
+        asked[i]
+            .name
+            .trim_start_matches("Test Shrine ")
+            .parse()
+            .unwrap()
+    };
+    let want: Vec<i32> = [3, 1, 4, 0, 2].iter().map(|i| shrine(*i)).collect();
+    assert_eq!(gains, want, "{:?}", ordered.happened);
+}
+
+/// Issue #1745: Krark's Thumb's two flips are shown, and the one kept is the reader's pick.
+#[test]
+fn a_coin_flip_kept_shows_the_flips() {
+    let (asked, refused) = engine(|| {
+        let thumb = card(
+            "Krark's Thumb",
+            Some("{2}"),
+            "Legendary Artifact",
+            "If you would flip a coin, instead flip two coins and ignore one.",
+            1,
+        );
+        let flip = card(
+            "Test Toss",
+            Some("{G}"),
+            "Sorcery",
+            "Flip a coin. If you win the flip, draw a card.",
+            1,
+        );
+        let mut game = kept(&deck(vec![thumb, flip]));
+        put(&mut game, "Krark's Thumb", Place::Battlefield);
+        put(&mut game, "Forest", Place::Battlefield);
+        let mut step = cast(&mut game, "Test Toss");
+        for _ in 0..4 {
+            if step
+                .view
+                .prompt
+                .as_ref()
+                .is_some_and(|p| p.results.is_some())
+            {
+                break;
+            }
+            step = if step.view.prompt.is_some() {
+                answer_until(&mut game, step, 1, |_| false, &[])
+            } else {
+                game.act(A::Pass).expect("resolve it")
+            };
+        }
+        let asked = step
+            .view
+            .prompt
+            .as_ref()
+            .and_then(|p| p.results.clone())
+            .unwrap_or_else(|| panic!("{:?}", step.view.prompt));
+        let refused = game
+            .act(A::KeepResults {
+                indices: vec![0, 1],
+            })
+            .unwrap_err();
+        game.act(A::KeepResults { indices: vec![1] })
+            .expect("kept the second");
+        (asked, refused)
+    });
+    assert!(!asked.dice);
+    assert_eq!(asked.results.len(), 2);
+    assert!(asked.results.iter().all(|r| *r <= 1));
+    assert_eq!(asked.count, 1);
+    assert!(refused.contains("Keep 1 flip"), "{refused}");
 }
 
 /// Issue #1746: phase's game menu offers Concede (CR 104.3a), always legal though never among

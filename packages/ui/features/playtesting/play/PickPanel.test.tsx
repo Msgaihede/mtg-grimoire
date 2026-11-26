@@ -41,6 +41,9 @@ function libraryPick(over: Partial<PlaytestPick>): PlaytestPrompt {
     shown: [],
     distribute: null,
     nameEntry: false,
+    counters: null,
+    triggers: null,
+    results: null,
     pick: {
       purpose: "order",
       cards,
@@ -49,6 +52,8 @@ function libraryPick(over: Partial<PlaytestPick>): PlaytestPrompt {
       max: cards.length,
       ordered: true,
       powerCap: null,
+      powerMin: null,
+      contributions: [],
       zone: "libraryTop",
       split: null,
       ...over,

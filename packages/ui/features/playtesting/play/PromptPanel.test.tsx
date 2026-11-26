@@ -40,6 +40,9 @@ function question(kind: string, over: Partial<PlaytestPrompt>): PlaytestPrompt {
     shown: [],
     distribute: null,
     nameEntry: false,
+    counters: null,
+    triggers: null,
+    results: null,
     ...over,
   };
 }
@@ -148,6 +151,9 @@ describe("PromptPanel", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
     });
     expect(screen.getByRole("heading", { name: "Choose ring bearer" })).toBeInTheDocument();
     expect(screen.getByText(/can’t show this choice/)).toBeInTheDocument();
@@ -242,5 +248,55 @@ describe("PromptPanel", () => {
         { id: null, player: "opponent", amount: 1 },
       ],
     });
+  });
+
+  it("takes so many counters of each kind off a card, none at all an answer (issue #1745)", () => {
+    const { onAct } = setup(
+      question("RemoveCountersChoice", {
+        options: [named(0, "none"), named(1, "all")],
+        counters: {
+          source: ref(1, "Tetravus"),
+          kinds: [{ kind: "+1/+1", count: 3 }],
+          destinations: [],
+          maxTotal: null,
+        },
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "all" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More counters to +1/+1 counters" }));
+    fireEvent.click(screen.getByRole("button", { name: "More counters to +1/+1 counters" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove 2" }));
+    expect(onAct).toHaveBeenCalledWith({
+      type: "moveCounters",
+      shares: [{ kind: "+1/+1", to: null, count: 2 }],
+    });
+  });
+
+  it("puts five triggers in the order picked, the first listed resolving first", () => {
+    const triggers = [0, 1, 2, 3, 4].map((i) => ({
+      ...ref(10 + i, `Shrine ${i}`),
+      text: `gain ${i}`,
+    }));
+    const { onAct } = setup(question("OrderTriggers", { triggers }));
+    // The engine's own order resolves the last put on first.
+    const rows = within(screen.getByRole("list", { name: /Triggers/ })).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Shrine 4");
+    fireEvent.click(screen.getByRole("button", { name: "Resolve Shrine 0 earlier" }));
+    fireEvent.click(screen.getByRole("button", { name: "Put on the stack" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "orderTriggers", order: [1, 0, 2, 3, 4] });
+  });
+
+  it("shows the flips, and keeps the one picked", () => {
+    const { onAct } = setup(
+      question("CoinFlipKeepChoice", {
+        results: { dice: false, results: [1, 0], eligible: [0, 1], count: 1 },
+      }),
+    );
+    const keep = screen.getByRole("button", { name: "Keep it" });
+    fireEvent.click(keep);
+    expect(onAct).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Flip 2: Tails" }));
+    fireEvent.click(keep);
+    expect(onAct).toHaveBeenCalledWith({ type: "keepResults", indices: [1] });
   });
 });

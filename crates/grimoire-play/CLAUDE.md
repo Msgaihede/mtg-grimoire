@@ -58,7 +58,7 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
   the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
   face-down exile card they may look at. Never decide that in this crate, and never read a
-  position off the projection (it reorders a library's hidden cards).
+  position off the projection (it reorders a library's hidden cards), nor send `library_cards` with the sandbox off (#1749).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
@@ -117,9 +117,15 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   a set of cards (or an order of them), whose fields give the count — `damage`, the attacker's
   division of combat damage among its blockers (issue #1448), whose one listed answer is the
   engine's own split and so never a `sole_answer`, `distribute`, any other division of an amount
-  among targets (`DistributeAmong`), for the same reason, and `name_entry`, a name the reader
-  types. An index an answer carries is put in words from the question's own data, by phase's
-  field names (`options`, `*_descriptions`), never by the kind of question. `auto` must answer
+  among targets (`DistributeAmong`) or a banded blocker's damage among the attackers it blocks
+  (`AssignBlockerDamage`), for the same reason, `counters`, counters of each kind removed or
+  moved (`RemoveCountersChoice`, `MoveCountersDistribution`), `triggers`, five triggers or more
+  to order (`OrderTriggers` past phase's four), `results`, coin flips kept or die rolls ignored
+  (`CoinFlipKeepChoice`, `DieKeepChoice`), and `name_entry`, a name the reader types (issue
+  #1745 added the crew and saddle picks, bounded below by `power_min` over the engine's own
+  `contributions`, and every one after `distribute`'s banding). An index an answer carries is
+  put in words from the question's own data, by phase's field names (`options`,
+  `*_descriptions`), never by the kind of question. `auto` must answer
   any prompt (phase-ai for the reader). A question with one answer (`sole_answer`) is taken by
   `advance`, never asked.
 - **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no

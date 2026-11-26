@@ -805,7 +805,6 @@ export function PlaytestBoard({
                 hand: view.you.hand,
                 mulligan: view.mulligan,
                 library: view.you.library,
-                libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
               }}
               onAct={offer}
               busy={busy}
