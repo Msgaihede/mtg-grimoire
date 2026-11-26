@@ -6,6 +6,8 @@ import {
   phaseLine,
   pickAttacker,
   pickBlocker,
+  specialButtons,
+  specialLabel,
   stageButtons,
   tableMarks,
   tablePicks,
@@ -271,5 +273,36 @@ describe("a four-player table", () => {
     const picks = toggleAttacker(NO_PICKS, attack.view, attack.goyf.id);
     expect(tablePicks(attack.view, picks).opponent).toEqual(new Set([attack.jace.id]));
     expect(tablePicks(attack.view, picks).opponent2.size).toBe(0);
+  });
+});
+
+// Issue #1746: the rules' actions that belong to no card, beside Pass.
+describe("specialButtons", () => {
+  const option = {
+    index: 0,
+    kind: "EndContinuousEffect",
+    cards: [],
+    players: [],
+    number: null,
+    yes: null,
+    label: "Calming Licid",
+    cost: "{W}",
+  };
+
+  it("names the Licid whose effect it ends, and what it costs", () => {
+    expect(specialLabel(option)).toBe("End Calming Licid's effect {W}");
+    expect(specialLabel({ ...option, label: null, cost: null })).toBe("End the effect");
+    expect(specialLabel({ ...option, kind: "BeginResolveAll", label: null, cost: null })).toBe(
+      "Begin resolve all",
+    );
+  });
+
+  it("is a button for each special the view offers, taken by its index", () => {
+    const { view } = turnFive();
+    expect(specialButtons(view)).toEqual([]);
+    expect(specialButtons({ ...view, specials: [option, { ...option, index: 1 }] })).toEqual([
+      { label: "End Calming Licid's effect {W}", action: { type: "special", index: 0 } },
+      { label: "End Calming Licid's effect {W}", action: { type: "special", index: 1 } },
+    ]);
   });
 });

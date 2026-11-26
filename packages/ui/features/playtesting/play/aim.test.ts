@@ -204,6 +204,7 @@ describe("aimAnswer", () => {
           number: null,
           yes: null,
           label: null,
+          cost: null,
         },
       ],
     };

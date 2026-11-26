@@ -182,6 +182,13 @@ export interface PlaytestView {
   /** On the reader's own turn, the lands they may still play this turn (CR 305.2); `null` on
    *  another player's turn. */
   landsLeft: number | null;
+  /**
+   * The rules' answers at the reader's priority (`main`, `respond`) that belong to no card, other
+   * than passing: a special action such as paying to end a Licid's effect (CR 116.2c), offered
+   * as a button beside Pass and taken with `special`. Empty at every other stage and in a replay
+   * frame.
+   */
+  specials: PlaytestOption[];
 }
 
 /** It is day or night (CR 731). */
@@ -561,8 +568,12 @@ export interface PlaytestOption {
   players: PlaytestPlayer[];
   number: number | null;
   yes: boolean | null;
-  /** A named choice's own word, as the card prints it. */
+  /** A named choice's own word, as the card prints it — or the card a special action is about,
+   *  as the engine names it. */
   label: string | null;
+  /** What the answer costs, in mana symbols (`{1}{W}`), when it names a cost of its own — a
+   *  special action's. */
+  cost: string | null;
 }
 
 export interface PlaytestCardRef {
@@ -653,6 +664,11 @@ export type PlaytestAction =
   | { type: "name"; text: string }
   | { type: "auto" }
   | { type: "cancel" }
+  /** Take the view's `specials[index]`: an action of the rules' that belongs to no card. */
+  | { type: "special"; index: number }
+  /** Concede (CR 104.3a): the reader leaves the game and loses — at any stage of an unfinished
+   *  game, a guest's too. Against the goldfish it ends the game as a loss. */
+  | { type: "concede" }
   /*
    * The sandbox, refused while it is off, taken wherever the reader plays or declares (`main`,
    * `respond`, `attack`, `block`; issue #1522), never in a question: any card the reader

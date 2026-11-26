@@ -190,6 +190,7 @@ export function turnFive(): TurnFive {
     deciding: null,
     dayNight: null,
     landsLeft: 1,
+    specials: [],
   };
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
@@ -343,6 +344,7 @@ export function targetPrompt(): TurnFive {
     number: null,
     yes: null,
     label: null,
+    cost: null,
   });
   return {
     ...t,
@@ -389,6 +391,7 @@ export function orderTriggersPrompt(): TurnFive {
     number: null,
     yes: null,
     label: null,
+    cost: null,
   });
   return {
     ...t,
@@ -445,6 +448,7 @@ export function castChoicePrompt(): TurnFive {
             number: null,
             yes: null,
             label: "Bonecrusher Giant",
+            cost: null,
           },
           {
             index: 1,
@@ -454,6 +458,7 @@ export function castChoicePrompt(): TurnFive {
             number: null,
             yes: null,
             label: "Stomp",
+            cost: null,
           },
         ],
         cancellable: true,
@@ -483,6 +488,7 @@ export function optionalEffectPrompt(): TurnFive {
     number: null,
     yes,
     label: null,
+    cost: null,
   });
   return {
     ...t,
@@ -759,6 +765,7 @@ export function damagePrompt(trample = false): TurnFive {
             number: null,
             yes: null,
             label: null,
+            cost: null,
           },
         ],
         cancellable: false,
@@ -1326,6 +1333,7 @@ export function parityMarks(): ParityMarks {
     ...t.view,
     dayNight: "night",
     landsLeft: 1,
+    specials: [],
     you: { ...t.view.you, ring: 1, enchantedBy: [curse.id] },
     opponents: [
       {

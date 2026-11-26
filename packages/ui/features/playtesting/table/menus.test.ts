@@ -609,6 +609,20 @@ describe("gameMenu", () => {
     }
   });
 
+  // Issue #1746: Concede, as phase's own game menu offers it — greyed while there is nothing to
+  // concede, and the board's own question before it is sent.
+  it("offers Concede while a game is unfinished", () => {
+    const onConcede = vi.fn();
+    const items = gameMenu({ ...base, view: menuView(), onConcede });
+    expect(act(items, "Concede").disabled).toBeUndefined();
+    act(items, "Concede").onSelect();
+    expect(onConcede).toHaveBeenCalledOnce();
+    expect(act(gameMenu({ ...base, view: menuView() }), "Concede").disabled).toBe(true);
+    expect(act(gameMenu({ ...base, view: menuView(), onConcede: null }), "Concede").disabled).toBe(
+      true,
+    );
+  });
+
   it("toggles the sandbox from its own row, checked while it is on", () => {
     const onAct = vi.fn();
     const on = row(gameMenu({ ...base, view: menuView({ sandbox: true }), onAct }), "Sandbox");

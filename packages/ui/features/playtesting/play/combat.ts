@@ -12,6 +12,7 @@ import type {
   PlaytestAction,
   PlaytestAttackPair,
   PlaytestBlockPair,
+  PlaytestOption,
   PlaytestPlayer,
   PlaytestStage,
   PlaytestStopStep,
@@ -19,7 +20,7 @@ import type {
 } from "@/lib/ipc";
 import type { CardMark } from "../table/Battlefield";
 import { playerName, playerPossessive } from "./players";
-import { pickableCards } from "./prompt";
+import { pickableCards, words } from "./prompt";
 
 /** The reader's combat picks, until they are declared. */
 export interface Picks {
@@ -322,6 +323,31 @@ export function stageButtons(
     case "over":
       return { primary: null, secondary: null };
   }
+}
+
+/**
+ * What a special action's button says (issue #1746): an action of the rules' that belongs to no
+ * card, offered beside Pass as phase's own board offers it. Paying to end a Licid's effect
+ * (CR 116.2c) names the card and the cost, as the engine gives them; any other is phase's name
+ * for it, in words.
+ */
+export function specialLabel(option: PlaytestOption): string {
+  const cost = option.cost === null ? "" : ` ${option.cost}`;
+  if (option.kind === "EndContinuousEffect") {
+    return option.label === null ? `End the effect${cost}` : `End ${option.label}'s effect${cost}`;
+  }
+  return `${words(option.kind)}${option.label === null ? "" : ` · ${option.label}`}${cost}`;
+}
+
+/**
+ * The foot's special actions, beside Pass: the view's `specials`, each a button that takes it.
+ * The engine lists them only at the reader's priority, so none shows anywhere else.
+ */
+export function specialButtons(view: PlaytestView): StageButton[] {
+  return view.specials.map((option) => ({
+    label: specialLabel(option),
+    action: { type: "special", index: option.index },
+  }));
 }
 
 /** Every table's marks, by player — empty for a player the game does not seat. */
