@@ -134,6 +134,11 @@ describe("targetArrows", () => {
           cause: null,
           targets: [goyf.id],
           targetPlayers: [],
+          modes: [],
+          paid: [],
+          causes: [],
+          copy: false,
+          revealed: [],
         },
         {
           id: 7002,
@@ -145,6 +150,11 @@ describe("targetArrows", () => {
           cause: null,
           targets: [],
           targetPlayers: [],
+          modes: [],
+          paid: [],
+          causes: [],
+          copy: false,
+          revealed: [],
         },
       ],
     };

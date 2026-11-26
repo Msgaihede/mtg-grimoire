@@ -56,6 +56,9 @@ use engine::database::combo_table::ComboTable;
 use engine::game::casting::activated_ability_definitions;
 use engine::game::combat::AttackTarget;
 use engine::game::coverage::card_face_gaps;
+use engine::game::derived_views::{
+    derive_filtered_views, DerivedViews, PlayerConditionKind, StackPaidFactView,
+};
 use engine::game::dungeon;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
@@ -101,12 +104,13 @@ use crate::view::{GameCard, ManaKind, MulliganView, Place, Seat, TokenOffer};
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestCombat, PlaytestCommanderDamage, PlaytestDamage, PlaytestDamageBlocker,
-    PlaytestDamageShare, PlaytestDayNight, PlaytestDesignation, PlaytestDistribute,
-    PlaytestDistributeTarget, PlaytestDungeon, PlaytestEmblem, PlaytestFrame, PlaytestHappened,
-    PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer,
-    PlaytestPrompt, PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep,
-    PlaytestStop, PlaytestStopStep, PlaytestView,
+    PlaytestCombat, PlaytestCommanderDamage, PlaytestCondition, PlaytestConditionKind,
+    PlaytestDamage, PlaytestDamageBlocker, PlaytestDamageShare, PlaytestDayNight,
+    PlaytestDesignation, PlaytestDistribute, PlaytestDistributeTarget, PlaytestDungeon,
+    PlaytestEmblem, PlaytestExiledWith, PlaytestFrame, PlaytestHappened, PlaytestOption,
+    PlaytestPaid, PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt,
+    PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop,
+    PlaytestStopStep, PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -962,7 +966,11 @@ impl Playtest {
             self.stage()
         };
         let offers = self.offers(watching);
-        let sight = self.sight();
+        // phase's projection for the reader's seat, made once a view: what they may see, and
+        // the engine's presentation facts (`derive_filtered_views`) read off it.
+        let projected = filter_state_for_viewer(s, self.you);
+        let derived = derive_filtered_views(s, &projected, Some(self.you));
+        let sight = Sight::of(&projected);
         let combat = s.combat.as_ref().map(|c| {
             let mut blocks: Vec<PlaytestBlockPair> = c
                 .blocker_to_attacker
@@ -1079,14 +1087,14 @@ impl Playtest {
             phase: phase_of(s.phase),
             step: stop_step(s.phase),
             mulligan: self.mulligan(),
-            you: self.seat(self.you, &offers, &sight),
+            you: self.seat(self.you, &offers, &sight, &derived),
             // The reader's offers on every seat: an opponent's card in a graveyard or exile is
             // castable when the rules let the reader cast it (issue #1713) — Hostage Taker's
             // hostage, Dire Fleet Daredevil's instant, a spell "from any graveyard".
             opponents: self
                 .others()
                 .into_iter()
-                .map(|p| self.seat(p, &offers, &sight))
+                .map(|p| self.seat(p, &offers, &sight, &derived))
                 .collect(),
             combat,
             attack,
@@ -1122,13 +1130,21 @@ impl Playtest {
                         ),
                         _ => (None, None),
                     };
-                    // A batch's first event is its cause, as phase's own stack tooltip reads it.
-                    let event = s
+                    // A batch's first event is its cause, as phase's own stack tooltip reads it;
+                    // every event of it is `causes`.
+                    let batch: Vec<&GameEvent> = s
                         .stack_trigger_event_batches
                         .get(&entry.id)
-                        .and_then(|batch| batch.first())
-                        .or(event);
+                        .map(|batch| batch.iter().collect())
+                        .filter(|batch: &Vec<&GameEvent>| !batch.is_empty())
+                        .or_else(|| event.map(|e| vec![e]))
+                        .unwrap_or_default();
+                    let causes: Vec<PlaytestCause> = batch
+                        .iter()
+                        .filter_map(|e| self.cause(&serde_json::to_value(e).ok()?))
+                        .collect();
                     let (targets, target_players) = stack_targets(s, entry, self.eyes());
+                    let detail = derived.stack_entry_details.get(&entry.id);
                     Some(PlaytestStackItem {
                         id: entry.id.0,
                         // A face-down spell of an opponent's has no name to them (CR 708.4).
@@ -1141,9 +1157,18 @@ impl Playtest {
                         seat: self.seat_of(entry.controller),
                         ability: !matches!(entry.kind, StackEntryKind::Spell { .. }),
                         text: text.filter(|t| !t.is_empty()),
-                        cause: event.and_then(|e| self.cause(&serde_json::to_value(e).ok()?)),
+                        cause: causes.first().cloned(),
                         targets,
                         target_players,
+                        modes: detail.map_or_else(Vec::new, |d| d.selected_mode_labels.clone()),
+                        paid: detail.map_or_else(Vec::new, |d| d.paid.iter().map(paid).collect()),
+                        causes: if batch.len() > 1 { causes } else { Vec::new() },
+                        copy: s.objects.get(&entry.id).is_some_and(|o| o.is_copy),
+                        revealed: derived
+                            .stack_revealed_cards
+                            .get(&entry.id)
+                            .cloned()
+                            .unwrap_or_default(),
                     })
                 })
                 .collect(),
@@ -1168,23 +1193,27 @@ impl Playtest {
             lands_left: (s.active_player == self.you).then(|| {
                 u32::from(s.max_lands_per_turn).saturating_sub(u32::from(s.lands_played_this_turn))
             }),
-        }
-    }
-
-    /// What phase's own projection for the reader's seat lets them see (`filter_state_for_viewer`,
-    /// the one its own board draws from): every hidden card the rules show them — a library's top
-    /// they may look at or that is revealed (CR 401.5), an opponent's hand card revealed or known
-    /// to them, a face-down card in exile they may look at or play. The board never decides that
-    /// for itself. Positions are read off the game, never off the projection, which reorders a
-    /// library's hidden cards.
-    fn sight(&self) -> Sight {
-        let projected = filter_state_for_viewer(&self.state, self.you);
-        Sight {
-            seen: projected
-                .objects
+            storm: derived.storm_count,
+            turn_order: derived
+                .turn_order
                 .iter()
-                .filter(|(_, o)| o.display_visible_to_viewer)
-                .map(|(id, _)| *id)
+                .map(|slot| self.seat_of(slot.player))
+                .collect(),
+            // Only what the exile piles show: a card that has left exile is no longer with it.
+            exiled_with: derived
+                .linked_exile_ids
+                .iter()
+                .filter_map(|(source, cards)| {
+                    let cards: Vec<u64> = cards
+                        .iter()
+                        .filter(|id| s.exile.contains(id))
+                        .map(|id| id.0)
+                        .collect();
+                    (!cards.is_empty()).then_some(PlaytestExiledWith {
+                        source: source.0,
+                        cards,
+                    })
+                })
                 .collect(),
         }
     }
@@ -1222,7 +1251,13 @@ impl Playtest {
         offers
     }
 
-    fn seat(&self, seat: PlayerId, offers: &Offers, sight: &Sight) -> PlaytestSeat {
+    fn seat(
+        &self,
+        seat: PlayerId,
+        offers: &Offers,
+        sight: &Sight,
+        derived: &DerivedViews,
+    ) -> PlaytestSeat {
         let s = &self.state;
         let player = &s.players[seat.0 as usize];
         let reader = seat == self.you;
@@ -1347,6 +1382,44 @@ impl Playtest {
                         .is_some_and(|o| o.attached_to.and_then(|t| t.as_player()) == Some(seat))
                 })
                 .map(|id| id.0)
+                .collect(),
+            conditions: derived
+                .player_status
+                .iter()
+                .filter(|c| c.player == seat)
+                .map(|c| {
+                    let (kind, zones) = match &c.kind {
+                        PlayerConditionKind::CantWin => (PlaytestConditionKind::CantWin, vec![]),
+                        PlayerConditionKind::CantGainLife => {
+                            (PlaytestConditionKind::CantGainLife, vec![])
+                        }
+                        PlayerConditionKind::CantLoseLife => {
+                            (PlaytestConditionKind::CantLoseLife, vec![])
+                        }
+                        PlayerConditionKind::CantPayLifeAsCost => {
+                            (PlaytestConditionKind::CantPayLife, vec![])
+                        }
+                        PlayerConditionKind::CantCastSpells => {
+                            (PlaytestConditionKind::CantCast, vec![])
+                        }
+                        PlayerConditionKind::CantActivateAbilities => {
+                            (PlaytestConditionKind::CantActivate, vec![])
+                        }
+                        PlayerConditionKind::CastOnlyFromZones { allowed_zones } => (
+                            PlaytestConditionKind::CastOnlyFrom,
+                            allowed_zones.iter().filter_map(|z| place_of(*z)).collect(),
+                        ),
+                    };
+                    PlaytestCondition {
+                        kind,
+                        // Only a source the table shows is named.
+                        source: c
+                            .source
+                            .filter(|id| self.card_ref(*id).is_some())
+                            .map(|id| id.0),
+                        zones,
+                    }
+                })
                 .collect(),
         }
     }
@@ -4368,6 +4441,46 @@ fn hidden(c: GameCard) -> GameCard {
 /// What the reader's seat may see of the hidden cards (`Playtest::sight`).
 struct Sight {
     seen: HashSet<ObjectId>,
+}
+
+impl Sight {
+    /// What phase's own projection for the reader's seat (`filter_state_for_viewer`, the one its
+    /// own board draws from) lets them see: every hidden card the rules show them — a library's
+    /// top they may look at or that is revealed (CR 401.5), an opponent's hand card revealed or
+    /// known to them, a face-down card in exile they may look at or play. The board never decides
+    /// that for itself. Positions are read off the game, never off the projection, which
+    /// reorders a library's hidden cards.
+    fn of(projected: &GameState) -> Sight {
+        Sight {
+            seen: projected
+                .objects
+                .iter()
+                .filter(|(_, o)| o.display_visible_to_viewer)
+                .map(|(id, _)| *id)
+                .collect(),
+        }
+    }
+}
+
+/// A paid fact of phase's, on the wire.
+fn paid(fact: &StackPaidFactView) -> PlaytestPaid {
+    match fact {
+        StackPaidFactView::XValue { value } => PlaytestPaid::X { value: *value },
+        StackPaidFactView::ManaSpent { amount } => PlaytestPaid::ManaSpent { amount: *amount },
+        StackPaidFactView::ColorsSpent { distinct } => PlaytestPaid::ColorsSpent {
+            distinct: *distinct,
+        },
+        StackPaidFactView::Kicked { count } => PlaytestPaid::Kicked {
+            count: *count as u32,
+        },
+        StackPaidFactView::AdditionalCostPaid => PlaytestPaid::AdditionalCost,
+        StackPaidFactView::CastVariant { variant } => PlaytestPaid::Variant {
+            variant: variant.clone(),
+        },
+        StackPaidFactView::Convoked { count } => PlaytestPaid::Convoked {
+            count: *count as u32,
+        },
+    }
 }
 
 /// The card an object of this name is a face of (`Playtest::card_names`): the card's own name

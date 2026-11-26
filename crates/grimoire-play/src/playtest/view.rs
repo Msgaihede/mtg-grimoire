@@ -127,6 +127,84 @@ pub struct PlaytestView {
     /// On the reader's own turn, the lands they may still play this turn (CR 305.2) — 1 for
     /// the turn's land drop not yet made, more with an Azusa. `None` on another player's turn.
     pub lands_left: Option<u32>,
+    /// The storm count (CR 702.40a), phase's `storm_count`: the copies the Storm trigger on the
+    /// stack will make, or else the spells cast this turn — what a Storm spell cast now would
+    /// copy. Table-wide and public.
+    pub storm: u32,
+    /// The turns to come, the current one first (phase's `turn_order`): a player twice in a row
+    /// is an extra turn (CR 500.7), one missing a skipped turn. Empty in a game of two seats
+    /// left in it, where whose turn is next is plain.
+    pub turn_order: Vec<PlaytestPlayer>,
+    /// The cards exiled with a permanent on the battlefield (CR 607.2a, phase's
+    /// `linked_exile_ids`) — an Oblivion Ring's, a Banisher Priest's, an imprint or Hideaway
+    /// card's — read off phase's projection for the reader's seat, so a face-down card is one
+    /// the exile pile draws as its back.
+    pub exiled_with: Vec<PlaytestExiledWith>,
+}
+
+/// A permanent and the cards exiled with it (CR 607.2a): its ids in the exile piles, in the
+/// order they were exiled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestExiledWith {
+    pub source: u64,
+    pub cards: Vec<u64>,
+}
+
+/// A condition on a player (phase's `player_status`): something that stops them doing what the
+/// rules otherwise let them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCondition {
+    pub kind: PlaytestConditionKind,
+    /// The permanent imposing it, when the engine names one.
+    pub source: Option<u64>,
+    /// For `castOnlyFrom`, the zones the player may still cast from; empty otherwise.
+    pub zones: Vec<Place>,
+}
+
+/// What a player is kept from (phase's `PlayerConditionKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestConditionKind {
+    /// Can't win the game (CR 104.2b).
+    CantWin,
+    /// Can't gain life (CR 119.7).
+    CantGainLife,
+    /// Can't lose life (CR 119.8).
+    CantLoseLife,
+    /// Can't pay life (CR 118.3).
+    CantPayLife,
+    /// Can't cast spells (CR 101.2, Epic's CR 702.50b) — perhaps only some, as `source` says.
+    CantCast,
+    /// Can't activate abilities (CR 602.5) — perhaps mana abilities aside.
+    CantActivate,
+    /// May cast spells only from `zones` (CR 601.2a).
+    CastOnlyFrom,
+}
+
+/// A fact of how a spell or ability on the stack was cast (phase's `StackPaidFactView`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PlaytestPaid {
+    /// X was chosen as `value` (CR 107.3).
+    X { value: u32 },
+    /// The amount of mana spent to cast it.
+    ManaSpent { amount: u32 },
+    /// The colours of mana spent to cast it (Converge, Sunburst).
+    ColorsSpent { distinct: u32 },
+    /// Kicked, `count` times (CR 702.33).
+    Kicked { count: u32 },
+    /// An additional cost was paid (CR 601.2b).
+    AdditionalCost,
+    /// Cast another way — `variant` is phase's name for it (`Flashback`, `Evoke`, `Overload`…).
+    Variant { variant: String },
+    /// Convoked with `count` creatures (CR 702.51).
+    Convoked { count: u32 },
 }
 
 /// It is day or night (CR 731).
@@ -252,6 +330,9 @@ pub struct PlaytestSeat {
     /// The ids of the permanents on the battlefield attached to this player — a Curse, an Aura
     /// that enchants a player (CR 303.4).
     pub enchanted_by: Vec<u64>,
+    /// What this player is kept from (phase's `player_status`): can't gain life, can't cast
+    /// spells and the like.
+    pub conditions: Vec<PlaytestCondition>,
 }
 
 /// A player's place in a dungeon (CR 309): its name and the room the venture marker is on.
@@ -633,6 +714,18 @@ pub struct PlaytestStackItem {
     pub targets: Vec<u64>,
     /// The players it targets.
     pub target_players: Vec<PlaytestPlayer>,
+    /// The modes chosen for it (CR 700.2), in the engine's words, in the order they resolve.
+    pub modes: Vec<String>,
+    /// How it was cast: X, kicker, an additional cost, the mana spent (phase's paid facts).
+    pub paid: Vec<PlaytestPaid>,
+    /// Every event that set a trigger off, when one trigger stands for several at once ("one or
+    /// more creatures die") — `cause` is the first. Empty for a spell.
+    pub causes: Vec<PlaytestCause>,
+    /// A copy of a spell (CR 707.10) — Storm's, a Twincast's — rather than a card being cast.
+    pub copy: bool,
+    /// The names of the cards revealed for it while it waits (phase's `stack_revealed_cards`,
+    /// CR 701.20a) — a card revealed from a hand to pay for it, a card it revealed.
+    pub revealed: Vec<String>,
 }
 
 /// What the AI opponent plays like: phase's difficulty presets, from random to competitive.

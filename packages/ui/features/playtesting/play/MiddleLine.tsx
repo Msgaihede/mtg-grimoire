@@ -1,5 +1,5 @@
 import { useState, type JSX, type MouseEvent } from "react";
-import { Moon, OctagonPause, Sun } from "lucide-react";
+import { CloudLightning, Moon, OctagonPause, Sun } from "lucide-react";
 import type { GameCard, GameSeat, PlaytestStackItem, PlaytestStop, PlaytestView } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -7,6 +7,7 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CardFace } from "../table/Inspect";
 import { combatLine, type Picks } from "./combat";
+import { stackChip, stackFacts, turnsToCome } from "./details";
 import { opponentNumber, playerPossessive, tableCards } from "./players";
 import { abilityLine, cardOfRef } from "./prompt";
 import { STOP_STEPS, fixedStop, hasStop, toggleStop } from "./stops";
@@ -29,9 +30,10 @@ import { trackerOf } from "./tracker";
  * where the eye already is between the two tables. A refusal is said in full text colour and
  * stays until the next action.
  *
- * **Two of the game's facts sit quietly after the switches** (`TurnFacts`): day or night, once a
- * daybound or nightbound card has made it one (CR 731), and on the reader's own turn the lands
- * they may still play (CR 305.2).
+ * **The game's facts sit quietly after the switches** (`TurnFacts`): day or night, once a
+ * daybound or nightbound card has made it one (CR 731), on the reader's own turn the lands they
+ * may still play (CR 305.2), and the storm count once a spell has been cast this turn
+ * (CR 702.40a). At a table of three or more the turns to come follow the tracker (`TurnOrder`).
  */
 export function MiddleLine({
   view,
@@ -58,6 +60,7 @@ export function MiddleLine({
   return (
     <div className={cn("flex items-center gap-3 px-1", className)}>
       <TurnTracker view={view} />
+      <TurnOrder view={view} />
       <StopsButton stops={view.stops} many={view.opponents.length > 1} onStops={onStops} />
       {/* A lobby game has no sandbox (issue #1419): the host refuses it, so no switch. */}
       {!view.lobby && <SandboxButton on={view.sandbox} onSandbox={onSandbox} />}
@@ -122,18 +125,69 @@ export function TurnTracker({ view }: { view: PlaytestView }): JSX.Element {
 }
 
 /**
+ * The turns to come after this one, at a table of three or more (phase's turn order): each
+ * player's short name in the order their turns begin, gold for the reader's, an extra turn
+ * (CR 500.7) marked where a player comes twice in a row. Nothing in a game of two, where the next
+ * turn is plain.
+ */
+export function TurnOrder({
+  view,
+}: {
+  view: Pick<PlaytestView, "turnOrder" | "opponents">;
+}): JSX.Element | null {
+  const turns = turnsToCome(view);
+  if (turns.length === 0) return null;
+  const words = turns.map((t) => `${t.text}${t.extra ? " (extra turn)" : ""}`).join(", ");
+  return (
+    <span
+      role="group"
+      aria-label={`Next turns: ${words}`}
+      className="flex flex-none items-center gap-1 text-[11px]/5 whitespace-nowrap text-dim"
+    >
+      <span aria-hidden="true">Next</span>
+      {turns.map((t) => (
+        <span
+          key={t.key}
+          aria-hidden="true"
+          data-extra={t.extra || undefined}
+          className={cn(
+            "rounded-full border px-1.5",
+            t.you ? "border-accent text-accent" : "border-border",
+            t.extra && "border-dashed font-semibold",
+          )}
+        >
+          {t.text}
+          {t.extra ? " +" : ""}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
  * Day or night and the lands left to play, dim text after the switches — see {@link MiddleLine}.
  * Nothing at all while it is neither day nor night and the turn is not the reader's.
  */
 export function TurnFacts({
   view,
 }: {
-  view: Pick<PlaytestView, "dayNight" | "landsLeft">;
+  view: Pick<PlaytestView, "dayNight" | "landsLeft"> & Partial<Pick<PlaytestView, "storm">>;
 }): JSX.Element | null {
   const { dayNight, landsLeft } = view;
-  if (dayNight === null && landsLeft === null) return null;
+  const storm = view.storm ?? 0;
+  if (dayNight === null && landsLeft === null && storm === 0) return null;
   return (
     <span className="flex flex-none items-center gap-2 text-[11px]/5 whitespace-nowrap text-dim">
+      {storm > 0 && (
+        <span
+          data-storm={storm}
+          title="The storm count: the copies a Storm spell cast now would make (CR 702.40a)"
+          className="inline-flex items-center gap-1"
+        >
+          <CloudLightning className="size-3" aria-hidden="true" />
+          Storm {storm}
+        </span>
+      )}
       {dayNight !== null && (
         <span data-day-night={dayNight} className="inline-flex items-center gap-1">
           {dayNight === "day" ? (
@@ -209,10 +263,13 @@ export function StackColumn({
           const detail = item.ability
             ? abilityLine(item.name, item.text, item.cause, view.opponents.length)
             : item.name;
+          // Its modes, what was paid, a copy, what was revealed (issue #1747).
+          const facts = stackFacts(item);
+          const chip = stackChip(item);
           return (
             <li
               key={item.id}
-              aria-label={`${i === 0 ? "Top" : `${i + 1} from the top`}: ${whose} ${detail}${item.ability ? ", ability" : ""}`}
+              aria-label={`${i === 0 ? "Top" : `${i + 1} from the top`}: ${whose} ${detail}${item.ability ? ", ability" : ""}${facts.length > 0 ? `. ${facts.join(". ")}` : ""}`}
               title={item.ability && detail !== item.name ? detail : undefined}
               onMouseEnter={(e) => onPoint(card, item, e)}
               onMouseLeave={onUnpoint}
@@ -225,6 +282,15 @@ export function StackColumn({
               style={{ top: i * STACK_STEP, width: STACK_W, height: STACK_H }}
             >
               <CardFace card={card} />
+              {chip !== null && (
+                <span
+                  aria-hidden="true"
+                  data-stack-chip={chip}
+                  className="absolute top-0.5 right-0.5 rounded-full bg-surface/90 px-1 text-[9px]/[13px] font-semibold text-text shadow-sm"
+                >
+                  {chip}
+                </span>
+              )}
               <span
                 aria-hidden="true"
                 className={cn(

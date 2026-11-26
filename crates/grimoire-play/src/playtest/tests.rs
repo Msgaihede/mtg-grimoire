@@ -2462,3 +2462,60 @@ fn control_of_a_permanent_in_combat_is_refused() {
     );
     assert!(refused.unwrap_err().contains("is in combat"));
 }
+
+/// Issue #1747: a table of four has a turn order, the current turn first, from the reader's seat.
+#[test]
+fn a_four_player_game_has_its_turn_order_from_the_readers_seat() {
+    let (kept, round) = engine(|| {
+        let (mut game, step) = four(4);
+        let round = to_main(&mut game);
+        (step.view, round.view)
+    });
+    let order = vec![
+        PlaytestPlayer::You,
+        PlaytestPlayer::Opponent,
+        PlaytestPlayer::Opponent2,
+        PlaytestPlayer::Opponent3,
+    ];
+    assert_eq!(kept.turn_order, order);
+    assert_eq!(
+        round.turn_order, order,
+        "the round comes back to the reader"
+    );
+}
+
+/// Issue #1747: what phase's `derive_filtered_views` costs a view, beside the projection the view
+/// already made (`filter_state_for_viewer`), over a four-player game's turns. Run by hand:
+/// `cargo test -p grimoire-play --release -- --ignored derived_views_cost --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn derived_views_cost_beside_the_projection() {
+    use engine::game::derived_views::derive_filtered_views;
+    use engine::game::visibility::filter_state_for_viewer;
+    use std::time::{Duration, Instant};
+    engine(|| {
+        let (mut game, _) = four(4);
+        let (mut projection, mut derived, mut samples) = (Duration::ZERO, Duration::ZERO, 0u32);
+        for _ in 0..6 {
+            let state = game.state_for_test().clone();
+            for _ in 0..50 {
+                let at = Instant::now();
+                let projected = filter_state_for_viewer(&state, PlayerId(0));
+                let mid = Instant::now();
+                std::hint::black_box(derive_filtered_views(&state, &projected, Some(PlayerId(0))));
+                derived += mid.elapsed();
+                projection += at.elapsed() - mid.elapsed();
+                samples += 1;
+            }
+            let round = to_main(&mut game);
+            if round.view.stage == Stage::Over {
+                break;
+            }
+        }
+        println!(
+            "{samples} views: projection {:?} a view, derived views {:?} a view",
+            projection / samples,
+            derived / samples
+        );
+    });
+}
