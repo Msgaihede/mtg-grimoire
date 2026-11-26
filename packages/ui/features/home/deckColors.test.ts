@@ -179,8 +179,15 @@ describe("deckCombo", () => {
     deck({ id: 3, name: "Eldrazi" }),
     deck({ id: 4, name: "Empty" }),
     deck({ id: 5, name: "Karn" }),
-    // A plan with nothing in its Actual list: the tile reads the plan, and so does the sheet.
-    deck({ id: 6, name: "Plan", theoryEnabled: true, cardCount: 0, theoryCardCount: 99 }),
+    // A theory deck whose tile is turned to its plan: the tile reads the plan, and so does the sheet.
+    deck({
+      id: 6,
+      name: "Plan",
+      theoryEnabled: true,
+      cardCount: 0,
+      theoryCardCount: 99,
+      lastVariant: "theory",
+    }),
   ];
   const sources = colorSources(
     decks,
@@ -209,7 +216,7 @@ describe("deckCombo", () => {
     expect(deckCombo(byId(3), sources)).toBe("W");
   });
 
-  it("reads a theory-only deck's plan", () => {
+  it("reads the plan of a deck whose tile is turned to it", () => {
     expect(deckCombo(byId(6), sources)).toBe("UG");
   });
 

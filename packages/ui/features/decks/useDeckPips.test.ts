@@ -22,7 +22,7 @@ const ROWS: DeckPipCosts[] = [
     theoryCosts: [],
   },
   { deckId: 7, costs: [{ cost: "{G}{G}", copies: 2 }], theoryCosts: [] },
-  // A `THEORY ONLY` deck (issue #1673): nothing in its Actual list, a plan in blue.
+  // A theory deck turned to its plan: nothing in its Actual list, a plan in blue.
   { deckId: 9, costs: [], theoryCosts: [{ cost: "{U}{U}", copies: 3 }] },
 ];
 
@@ -31,7 +31,7 @@ const ROWS: DeckPipCosts[] = [
 const DECKS = [
   { id: 4, theoryEnabled: false, virtualOnly: false, cardCount: 5 },
   { id: 7, theoryEnabled: true, virtualOnly: false, cardCount: 2 },
-  { id: 9, theoryEnabled: true, virtualOnly: false, cardCount: 0 },
+  { id: 9, theoryEnabled: true, virtualOnly: false, cardCount: 0, lastVariant: "theory" },
 ] as DeckRow[];
 
 let client: QueryClient;
@@ -55,8 +55,8 @@ describe("useDeckPips", () => {
     expect(result.current.byDeck.get(7)).toEqual({ W: 0, U: 0, B: 0, R: 0, G: 4, C: 0 });
   });
 
-  /** Issue #1673: the bar under a `THEORY ONLY` tile is its plan's, as its card count is. */
-  it("hands a THEORY ONLY deck its plan's pips", async () => {
+  /** The bar under a tile turned to its plan is the plan's, as its card count is. */
+  it("hands a deck turned to its theory list its plan's pips", async () => {
     const { result } = renderHook(() => useDeckPips(DECKS), { wrapper });
 
     await waitFor(() => expect(result.current.query.isSuccess).toBe(true));

@@ -267,7 +267,7 @@ function comparatorFor(sort: DeckSortKey, ctx: DeckSortContext) {
     // The biggest pile first, which is what a reader picking a card count is looking for — and
     // the names still read forwards inside a size, because a name has no natural relationship to
     // a number of cards for a direction to be inherited from. The pile is the one each tile
-    // prints (`tileCardCount`, the plan's on a `THEORY ONLY` deck — issue #1673), so the wall
+    // prints (`tileCardCount`, the plan's on a deck turned to its theory list — issue #1673), so the wall
     // reads in the order of the numbers on it.
     case "cards":
       return (a: DeckRow, b: DeckRow) => tileCardCount(b) - tileCardCount(a) || byName(a, b);

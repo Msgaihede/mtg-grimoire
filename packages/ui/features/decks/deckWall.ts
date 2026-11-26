@@ -50,8 +50,8 @@ export function wallStyle(zoom: number): CSSProperties {
 
 /** What {@link useDeckWallMarks} answers, and what a wall hands each tile it draws. */
 export interface DeckWallMarks {
-  /** Every deck's printed pips, from the list its tile is about (the plan on a `THEORY ONLY`
-   *  deck, issue #1673); a deck the read has not reached is missing, and draws no band. */
+  /** Every deck's printed pips, from the list its tile is about (the plan on a deck turned
+   *  to its theory list); a deck the read has not reached is missing, and draws no band. */
   pipsByDeck: Map<number, PipCounts>;
   /** Each Commander deck's estimated bracket floor — the sort's `bracket` key reads it too. */
   floorByDeck: Map<number, number>;

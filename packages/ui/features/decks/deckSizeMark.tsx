@@ -14,7 +14,7 @@
  * judges nothing (`unspecified`) and a format the seed no longer carries both draw a plain
  * count: no verdict about rules the reader never picked.
  *
- * **The count is the tile's, which is the plan's on a `THEORY ONLY` deck** (issue #1673,
+ * **The count is the tile's, which is the plan's on a deck turned to its theory list** (issue #1673,
  * `deckCover.ts`' `tileList`): the verdict judges the number the caption prints, so a plan that
  * has reached 100 stops being a red `0` and one at 73 says how far it has to go — the sentence
  * the editor's panel says on the Theory tab, where it validates the same list.
@@ -42,7 +42,7 @@ export function deckSizeProblem(deck: DeckRow, spec: FormatSpec | null): string 
  * the colour, so the caption's other terms keep the dim they share with every tile.
  *
  * `list` is which list the count is of (`tileList`). A plan's count says so to a screen reader —
- * `98 cards in the theory list` — where a sighted reader has the `THEORY ONLY` badge on the art
+ * `98 cards in the theory list` — where a sighted reader has the bold word of the `THEORY | ACTUAL` chip on the art
  * above it; the visible caption stays the three terms every tile has.
  */
 export function DeckCardCount({

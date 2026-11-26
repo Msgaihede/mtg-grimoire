@@ -8593,7 +8593,7 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // an active one gets *in*. Its `JOIN deck_categories` is an *inner* join — `category_id`
     // is NOT NULL with an enforced foreign key — which is what the `undefined` check is.
     cardCount: sizedCopies(db, d.id, LIVE),
-    // The same subquery over the plan (issue #1673) — the count a `THEORY ONLY` tile prints.
+    // The same subquery over the plan (issue #1673) — the count a tile turned to its theory list prints.
     theoryCardCount: sizedCopies(db, d.id, THEORY),
     updatedAt: d.updatedAt,
     // The v8 deck columns still on the row, read off it now that a deck stores them. There
@@ -11835,7 +11835,7 @@ export function readHandlers(db: FakeDb) {
      * {@link SIZE_KINDS}' three kinds — the sideboard and the companion are beside the deck
      * rather than in it, and a switched-off pile counts toward nothing — folded per list:
      * `costs` is the `live` list's (`cardCount`'s pile) and `theoryCosts` the plan's
-     * (`theoryCardCount`'s), so a `THEORY ONLY` tile's bar and count agree too (issue #1673).
+     * (`theoryCardCount`'s), so a tile turned to its theory list's bar and count agree too (issue #1673).
      *
      * **A cost string, never a counted pip.** Which of a cost's symbols is a pip, and what a
      * `{W/U}` half is worth, is `packages/ui/lib/mana.ts`'s `countPips` — the facts/conclusions boundary

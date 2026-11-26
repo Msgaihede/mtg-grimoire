@@ -23,7 +23,7 @@ import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import { ART_ASPECT } from "@/lib/images";
-import type { DeckRow } from "@/lib/ipc";
+import type { DeckRow, DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import type { PipCounts } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
@@ -40,6 +40,7 @@ import {
   type DeckBadge,
 } from "./deckCover";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
+import { listChipLabel, ListWords, otherList } from "./listChip";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import type { Panel } from "./panels";
@@ -368,7 +369,7 @@ export function DeckTile({
 
   /** The plural for the delete question. **The Actual list's count, never the tile's**: the
    *  question is about the copies the reader owns going back to Recently removed, and a plan's
-   *  rows are not cardboard — so a `THEORY ONLY` deck's caption may read its plan (issue #1673)
+   *  rows are not cardboard — so a tile turned to its theory list may print its plan's count
    *  while this still says what deleting it returns. */
   const unit = deck.cardCount === 1 ? "card" : "cards";
   const colorsLabel = deckColorsLabel(pips);
@@ -750,6 +751,7 @@ export function DeckTile({
         bracketLabel={bracketLabel}
         edgeTaken={edgeTaken}
         overflow={overflow}
+        onToggleList={() => decks.setVariant.mutate({ id, variant: otherList(tileList(deck)) })}
       />
 
       {/* Invisible until the tile is hovered or holds the caret — a wall of art is not a wall
@@ -1196,12 +1198,15 @@ function ArtMarks({
   bracketLabel,
   edgeTaken,
   overflow: { rowRef, moreRef, reserve },
+  onToggleList,
 }: {
   deck: DeckRow;
   badge: DeckBadge | null;
   bracketLabel: string | null;
   edgeTaken: boolean;
   overflow: TagOverflow;
+  /** Turn a theory deck's tile to its other list; absent where the chip is only a reading. */
+  onToggleList?: () => void;
 }) {
   const hasMarks = badge !== null || bracketLabel !== null;
   const tagsHidden = reserve !== null && deck.tags.length > 0;
@@ -1266,26 +1271,15 @@ function ArtMarks({
       {/* What kind of deck this is — that it keeps a plan, or that it keeps no cardboard.
           Absent on the ordinary one-list deck, which is the majority of the wall;
           {@link deckBadge} argues why that absence is the rule rather than an omission. */}
-      {badge !== null && (
-        <span
-          className={cn(
-            TILE_MARK,
-            "left-[calc(0.375rem*var(--mark-scale,1))]",
-            // Dashed means provisional, here as on a folder card: a theory list is a plan.
-            //
-            // **`VIRTUAL` is therefore solid, and that is a ruling rather than an omission**
-            // (issue #401). A virtual deck's list is not a sketch of a deck the reader
-            // intends to sleeve up — it *is* the deck, and the cards in it are as real as
-            // any other deck's; what they are not is cardboard the reader owns. Dashing it
-            // would spend the vocabulary this file already gave `THEORY ONLY` on a
-            // completely different fact and tell a reader who has learned the dash that a
-            // finished MTGO list is a plan. The mark for "you own none of this" is the word
-            // itself.
-            badge === "THEORY ONLY" && "border-dashed",
-          )}
-        >
-          {badge}
-        </span>
+      {badge === "VIRTUAL" && (
+        <span className={cn(TILE_MARK, BADGE_PLACE)}>{badge}</span>
+      )}
+      {/* A theory deck's chip is the tile's switch between its two lists (`tileList`): the
+          bold word is the list the count, the verdict and the colour bar are read from. A
+          button only where a host hands it `onToggleList` — the Playtesting lobby's wall only
+          picks decks, so there it says which list is showing and nothing more. */}
+      {badge === "THEORY | ACTUAL" && (
+        <ListChip showing={tileList(deck)} onToggle={onToggleList} />
       )}
       {/* What the deck reads as, in the opposite corner of the same edge — one mark for what
           the deck *is* and one for how strong it is, which is the pair a reader browses a
@@ -1310,6 +1304,43 @@ function ArtMarks({
         </span>
       )}
     </div>
+  );
+}
+
+/** Where the kind mark sits on the art's bottom edge — the left corner, the bracket's opposite. */
+const BADGE_PLACE = "left-[calc(0.375rem*var(--mark-scale,1))]";
+
+/**
+ * `THEORY | ACTUAL`, the word for the list the tile shows in bold ({@link ListWords}) — a switch
+ * between a theory deck's two lists, whatever either holds, so an empty or oversized list is
+ * never hidden.
+ *
+ * As a button it sits outside the tile's own `<button>` (the marks' overlay) and takes back the
+ * `pointer-events` the overlay sets to none, and `data-no-drag` keeps a press on it from being the
+ * start of a drag of the deck.
+ */
+function ListChip({ showing, onToggle }: { showing: DeckVariant; onToggle?: () => void }) {
+  if (onToggle === undefined) {
+    return (
+      <span
+        className={cn(TILE_MARK, BADGE_PLACE)}
+        role="img"
+        aria-label={listChipLabel(showing, false)}
+      >
+        <ListWords showing={showing} />
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      data-no-drag=""
+      onClick={onToggle}
+      aria-label={listChipLabel(showing, true)}
+      className={cn(TILE_MARK, BADGE_PLACE, "pointer-events-auto hover:bg-bg/90", FOCUS)}
+    >
+      <ListWords showing={showing} />
+    </button>
   );
 }
 
@@ -1349,8 +1380,8 @@ function TagHover({ tags, edgeTaken }: { tags: readonly string[]; edgeTaken: boo
  * `Modern · Arena · 60 cards` — what rules the list is built to, where it is played and how big
  * it is. One definition for every tile that captions a deck; {@link DeckTile}'s note on the line
  * says why `Any` is never printed and why the bracket is not a fourth segment. The count goes red
- * when it does not fit the format ({@link DeckCardCount}, issue #1524), and on a `THEORY ONLY`
- * deck it is the plan's ({@link tileList}, issue #1673).
+ * when it does not fit the format ({@link DeckCardCount}, issue #1524), and it is the count of
+ * the list the tile's `THEORY | ACTUAL` chip shows ({@link tileList}).
  */
 function DeckCaption({ deck, sizeProblem }: { deck: DeckRow; sizeProblem: string | null }) {
   return (

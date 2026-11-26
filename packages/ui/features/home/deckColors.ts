@@ -22,7 +22,7 @@
  * `deckPips.ts`), with `{C}` left out: a colourless pip is a demand for a kind of mana, not a
  * colour, so a mono-white deck with one Eldrazi in it is still Mono White.
  *
- * **Both read the list the gallery's tile reads** (`tileList`): a `THEORY ONLY` deck — a plan
+ * **Both read the list the gallery's tile reads** (`tileList`): a deck turned to its theory list — a plan
  * with nothing in its Actual list yet — is filed by its plan, exactly as its tile is coloured by it.
  *
  * **A deck with neither is not colourless.** An empty deck, or one of nothing but lands, has said
