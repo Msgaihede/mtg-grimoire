@@ -615,11 +615,14 @@ export type PlaytestAction =
   /** Foretell a hand card (CR 702.143a): pay {2}, exile it face down, cast it on a later turn
    *  (a `play` of it in exile). Offered when its {@link GameCard.canForetell} says so. */
   | { type: "foretell"; id: number }
+  /** Put the reader's revealed companion into their hand (CR 702.139c): {3}, in their main phase
+   *  with the stack empty, once a game. Offered when their seat's `companion.toHand` says so. */
+  | { type: "companionToHand" }
   /** Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: its
    *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
-   *  Several kinds of mana are a `ManaChoice` prompt. Offered when its
-   *  {@link GameCard.canTapForMana} says so. */
-  | { type: "companionToHand" }
+   *  Taken at priority and inside a payment window (`ManaPayment`, `ManaAbilityManaPayment`,
+   *  `UnlessPayment`, issue #1743), which stays open after the tap. Several kinds of mana are a
+   *  `ManaChoice` prompt. Offered when its {@link GameCard.canTapForMana} says so. */
   | { type: "tapForMana"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
@@ -731,8 +734,9 @@ export type PlaytestHappened =
   /** The reader put a card somewhere by hand; `seat` is whose card it is. */
   | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   /**
-   * The reader put a card under a player's control by hand; `seat` is whose card it is, `from`
-   * where it was (the battlefield for a change of control alone), `controller` who has it now.
+   * A card put under a player's control; `seat` is whose card it is, `from` where it was (the
+   * battlefield for a change of control alone), `controller` who has it now. `byHand` is the
+   * reader's sandbox edit; otherwise the rules changed it.
    */
   | {
       type: "controlled";
@@ -740,6 +744,7 @@ export type PlaytestHappened =
       name: string;
       from: GamePlace;
       controller: PlaytestPlayer;
+      byHand: boolean;
     }
   | { type: "tapped"; seat: PlaytestPlayer; name: string; count: number; tapped: boolean }
   | { type: "untappedAll" }
@@ -765,9 +770,88 @@ export type PlaytestHappened =
   | { type: "became"; seat: PlaytestPlayer; what: PlaytestDesignation }
   /** It became day or night (CR 731). */
   | { type: "dayNight"; now: PlaytestDayNight }
+  /** Counters the rules put on a permanent (`delta` above zero) or took off it; `name` is `null`
+   *  for an opponent's face-down permanent. */
+  | {
+      type: "countersChanged";
+      seat: PlaytestPlayer;
+      name: string | null;
+      kind: string;
+      delta: number;
+    }
+  /** Permanents an effect tapped or untapped (never for mana, an attack or a cost); a name is
+   *  `null` for an opponent's face-down permanent. */
+  | { type: "becameTapped"; seat: PlaytestPlayer; names: (string | null)[]; tapped: boolean }
+  /** A triggered ability triggered; `name` is its source's, `null` for an opponent's face-down one. */
+  | { type: "triggered"; seat: PlaytestPlayer; name: string | null }
+  /** A double-faced card transformed; `name` is the face it shows now. */
+  | { type: "transformed"; seat: PlaytestPlayer; name: string }
+  /** A face-down permanent turned face up, and so named. */
+  | { type: "turnedFaceUp"; seat: PlaytestPlayer; name: string }
+  /** A permanent turned face down; `name` is `null` for an opponent's. */
+  | { type: "turnedFaceDown"; seat: PlaytestPlayer; name: string | null }
+  /** An Aura or an Equipment attached (`attached`) or unattached; `to` is `null` for a player,
+   *  `toSeat` the permanent's controller or that player. */
+  | {
+      type: "attached";
+      seat: PlaytestPlayer;
+      name: string;
+      to: string | null;
+      toSeat: PlaytestPlayer;
+      attached: boolean;
+    }
+  /** A card destroyed, sacrificed, cycled or discarded, told in place of its `moved`. */
+  | {
+      type: "removed";
+      seat: PlaytestPlayer;
+      name: string | null;
+      how: PlaytestRemoval;
+      to: GamePlace;
+    }
+  /** A player's counters or speed changed: `delta` the change, `total` what they have now. */
+  | {
+      type: "playerCounters";
+      seat: PlaytestPlayer;
+      kind: PlaytestPlayerCounter;
+      delta: number;
+      total: number;
+    }
+  /** A player ventured into a dungeon's room. */
+  | { type: "roomEntered"; seat: PlaytestPlayer; dungeon: string; room: string }
+  | { type: "dungeonCompleted"; seat: PlaytestPlayer; dungeon: string }
+  | { type: "voted"; seat: PlaytestPlayer; choice: string }
+  /** A vote's count, each choice with its votes. */
+  | { type: "voteResolved"; tallies: PlaytestTally[] }
+  /** A clash: `seat` clashed with `with`; the mana values are `null` for an empty library, and
+   *  `result` is `seat`'s. */
+  | {
+      type: "clashed";
+      seat: PlaytestPlayer;
+      with: PlaytestPlayer;
+      manaValue: number | null;
+      theirManaValue: number | null;
+      result: PlaytestClash;
+    }
+  /** A player will take an extra turn. */
+  | { type: "extraTurn"; seat: PlaytestPlayer }
   | { type: "chose"; what: string }
   | { type: "eliminated"; seat: PlaytestPlayer }
   | { type: "gameOver"; winner: PlaytestPlayer | null };
+
+/** Why the rules moved a card (`removed`). */
+export type PlaytestRemoval = "destroyed" | "sacrificed" | "cycled" | "discarded";
+
+/** A count a player has (`playerCounters`). */
+export type PlaytestPlayerCounter = "poison" | "energy" | "experience" | "rad" | "ticket" | "speed";
+
+/** How a clash came out for the player who clashed (`clashed`). */
+export type PlaytestClash = "won" | "lost" | "tied";
+
+/** One choice of a vote and how many voted for it (`voteResolved`). */
+export interface PlaytestTally {
+  choice: string;
+  votes: number;
+}
 
 /** A designation a player takes (`became`). */
 export type PlaytestDesignation = "monarch" | "initiative" | "cityBlessing" | "ringTempted";

@@ -433,6 +433,26 @@ the reader's `tapped`, and undone like any action. `canTapForMana` is on each of
 battlefield cards the rules would tap now, read once per view like `castable`. It is not a sandbox
 action: it is a rules action, so the sandbox's gate does not touch it.
 
+**Inside a payment window too** (issue #1743, from the phase.rs parity audit). phase's own board
+lights the sources up and lets the player tap them while a cost is paid (`ManaPaymentUI.tsx`), and
+so does this one: `mana_ways` answers in `ManaPayment`, `ManaAbilityManaPayment` and
+`UnlessPayment` (`paying`) as well as at priority, `run` takes `tapForMana` there before the
+prompt's refusal, and `canTapForMana` is drawn through the prompt (not while the board asks its own
+`ManaChoice`). The cast being paid keeps its `Pending`, so `cancel` takes the whole cast back, the
+taps with it; the window stays open after a tap, and the reader taps on, pays (the window's
+`PassPriority`, said "Pay") or cancels. A window the reader could tap a source in is never a
+`sole_answer`. `UnlessPaymentChooseCost` is left out: phase's reducer has no tap arm there, and
+phase's board leaves it out too.
+
+**A source that sacrifices itself is asked about.** The reader's casts and activations are stamped
+`AutoExceptSacrificialMana` (`ask_before_sacrificing`, in `apply`), as phase's client stamps them
+(`castPaymentMode.ts`): paid automatically, except that a Treasure or a Lotus Petal is the engine's
+question, `ManaSourceSelection`, never spent without asking. phase's flat `legal_actions` leaves
+every mana ability out, so its sources are read off the question's own `options` (`answers`), one
+`ActivateManaSource` each — named by its source card, so a click on it on the table picks it — beside
+`BackToManaPayment` ("Pay another way"), which opens the payment window and is an answer, never a
+take-back. An activation phase offers only as `Manual` keeps its mode.
+
 **`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
 from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
 reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a
@@ -674,19 +694,37 @@ and the action `tapForMana { id }`, and reuses the fact `tapped`. `ipc.test.ts` 
 **Facts come from phase's events** (`tell`). Each applied action returns `GameEvent`s, and so does
 each of the AI's actions. They become the log's facts:
 
-| Event                                    | Fact                                                                                                 |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `TurnStarted`                            | `turnBegan`                                                                                          |
-| `LandPlayed`                             | `played`                                                                                             |
-| `SpellCast`                              | `cast`                                                                                               |
-| `AbilityActivated` (not mana)            | `activated`                                                                                          |
-| `Foretold`                               | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again     |
-| `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
-| `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
-| `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
-| `LifeChanged`                            | `life`: the change and the total after it                                                            |
-| `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
-| `EffectResolved` of a `CreateEmblem`     | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)        |
+| Event                                                             | Fact                                                                                                                                          |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TurnStarted`                                                     | `turnBegan`                                                                                                                                   |
+| `LandPlayed`                                                      | `played`                                                                                                                                      |
+| `SpellCast`                                                       | `cast`                                                                                                                                        |
+| `AbilityActivated` (not mana)                                     | `activated`                                                                                                                                   |
+| `Foretold`                                                        | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again                                              |
+| `ZoneChanged`                                                     | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again                                          |
+| `AttackersDeclared` / `BlockersDeclared`                          | `attacked` / `blocked`                                                                                                                        |
+| `DamageDealt` to a permanent                                      | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)                                                        |
+| `LifeChanged`                                                     | `life`: the change and the total after it                                                                                                     |
+| `TokenCreated`                                                    | `tokensCreated`, with consecutive tokens of one name counted together                                                                         |
+| `EffectResolved` of a `CreateEmblem`                              | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)                                                 |
+| `CounterAdded` / `CounterRemoved`                                 | `countersChanged`: the permanent, the counter's kind and the change (issue #1748)                                                             |
+| `PermanentTapped` / `PermanentUntapped`                           | `becameTapped`: only a tap an effect made (phase's `caused_by`), never for mana, an attack or a cost; consecutive ones of one player's merged |
+| `AbilityTriggered`                                                | `triggered`, naming the source                                                                                                                |
+| `ControllerChanged`                                               | `controlled` with `byHand: false` (the sandbox's own is `byHand: true`)                                                                       |
+| `Transformed` / `TurnedFaceUp` / `TurnedFaceDown`                 | `transformed` / `turnedFaceUp` (always named: face up is public) / `turnedFaceDown`                                                           |
+| `Attached` / `Unattached`                                         | `attached`, with `attached` false for an unattach; `to` is `null` for a player                                                                |
+| `CreatureDestroyed`, `PermanentSacrificed`, `Cycled`, `Discarded` | `removed` with its `how`, told in place of the card's `moved`                                                                                 |
+| `EnergyChanged`, `PlayerCounterChanged`, `SpeedChanged`           | `playerCounters`: the kind, the change and the total after it                                                                                 |
+| `RoomEntered` / `DungeonCompleted`                                | `roomEntered` / `dungeonCompleted`                                                                                                            |
+| `VoteCast` / `VoteResolved` / `Clash`                             | `voted` / `voteResolved` (each choice's votes) / `clashed`                                                                                    |
+| `ExtraTurnCreated`                                                | `extraTurn`                                                                                                                                   |
+
+**Every seat's events go through phase's own filter first** (`shown_to`, over
+`filter_events_for_viewer`, issue #1748), the event stream's counterpart of the state's
+`filter_state_for_viewer`. An event phase would not send a seat is told to it only as a card that
+moved, never named (a hidden draw, a hidden find, a manifest), and any other kind not at all, so an
+event `tell` learns later can never say what that seat may not see. The filter drops events and
+rewrites only kinds it never drops, so `shown_to` finds each kept event again in order.
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
 

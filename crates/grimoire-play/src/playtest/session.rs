@@ -62,7 +62,7 @@ use engine::game::engine::apply;
 use engine::game::mana_sources::{activatable_mana_actions_for_player, max_mana_yield};
 use engine::game::printed_cards::intrinsic_etb_counters;
 use engine::game::turn_control::authorized_submitters;
-use engine::game::visibility::filter_state_for_viewer;
+use engine::game::visibility::{filter_events_for_viewer, filter_state_for_viewer};
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
     DeckList, PlayerDeckList,
@@ -73,12 +73,12 @@ use engine::types::ability::{
 use engine::types::actions::{
     DebugAction, DebugTokenRequest, GameAction, MulliganChoice, OutsideGameSelection,
 };
-use engine::types::events::{ActivatedAbilityKind, GameEvent};
+use engine::types::events::{ActivatedAbilityKind, ClashResult, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
-    CastOfferKind, CombatDamageAssignmentMode, CounterMoveChoice, CounterRemoveChoice, DayNight,
-    ManaChoice, MulliganDecisionPhase, OutsideGameChoiceSource, PayCostKind, StackEntry,
-    StackEntryKind, WaitingFor,
+    CastOfferKind, CastPaymentMode, CombatDamageAssignmentMode, CounterMoveChoice,
+    CounterRemoveChoice, DayNight, ManaChoice, MulliganDecisionPhase, OutsideGameChoiceSource,
+    PayCostKind, StackEntry, StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
@@ -104,13 +104,14 @@ use crate::view::{CardCounter, GameCard, ManaKind, MulliganView, Place, Seat, To
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestCombat, PlaytestCommanderDamage, PlaytestCompanion, PlaytestCounterShare,
-    PlaytestCounters, PlaytestDamage, PlaytestDamageBlocker, PlaytestDamageShare, PlaytestDayNight,
-    PlaytestDesignation, PlaytestDistribute, PlaytestDistributeTarget, PlaytestDungeon,
-    PlaytestEmblem, PlaytestFirst, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase,
-    PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestResults,
+    PlaytestClash, PlaytestCombat, PlaytestCommanderDamage, PlaytestCompanion,
+    PlaytestCounterShare, PlaytestCounters, PlaytestDamage, PlaytestDamageBlocker,
+    PlaytestDamageShare, PlaytestDayNight, PlaytestDesignation, PlaytestDistribute,
+    PlaytestDistributeTarget, PlaytestDungeon, PlaytestEmblem, PlaytestFirst, PlaytestFrame,
+    PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose,
+    PlaytestPlayer, PlaytestPlayerCounter, PlaytestPrompt, PlaytestRemoval, PlaytestResults,
     PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop,
-    PlaytestStopStep, PlaytestView,
+    PlaytestStopStep, PlaytestTally, PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -1267,10 +1268,16 @@ impl Playtest {
     /// What the rules offer the reader beyond a hand card's play: foretelling a hand card,
     /// activating one of a hand card's abilities (cycling, issue #1431) or a graveyard card's
     /// (unearth, issue #1714), casting a card from the graveyard or exile, and tapping a
-    /// permanent for mana. Nothing in a replay frame, or while the reader does not have priority.
+    /// permanent for mana. Nothing in a replay frame, or while the reader does not have priority
+    /// — but for tapping for mana, which is offered in a payment window too (`mana_ways`, issue
+    /// #1743), unless the board is asking a question of its own.
     fn offers(&self, watching: bool) -> Offers {
         let mut offers = Offers::default();
-        if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
+        if watching || self.choice.is_some() {
+            return offers;
+        }
+        offers.mana = self.mana_ways().iter().filter_map(mana_source).collect();
+        if !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
             return offers;
         }
         for action in self.answers() {
@@ -1286,7 +1293,6 @@ impl Playtest {
                 _ => {}
             }
         }
-        offers.mana = self.mana_ways().iter().filter_map(mana_source).collect();
         offers
     }
 
@@ -3003,18 +3009,41 @@ impl Playtest {
             .sum()
     }
 
-    /// The answers the engine accepts to the question it is asking the reader.
+    /// The answers the engine accepts to the question it is asking the reader. phase's flat list
+    /// leaves every mana ability out, its `ActivateManaSource` too, so the engine's own "spend
+    /// this sacrificial source?" (`ManaSourceSelection`, issue #1743) would list only declining
+    /// it: its sources are its `options`, each one answer, as phase's own candidates read them.
     fn answers(&self) -> Vec<GameAction> {
-        legal_actions(&self.state)
+        let mut answers = Vec::new();
+        if let WaitingFor::ManaSourceSelection {
+            player, options, ..
+        } = &self.state.waiting_for
+        {
+            if *player == self.you {
+                answers.extend(
+                    options
+                        .iter()
+                        .cloned()
+                        .map(|selection| GameAction::ActivateManaSource { selection }),
+                );
+            }
+        }
+        answers.extend(legal_actions(&self.state));
+        answers
     }
 
     /// The question's answer when it has only one, which `advance` takes without asking (issue
     /// #999): a target slot with one card left, a payment with nothing to choose, a sole mana
     /// source. phase itself fills in a cast whose targets have one combination. Taking a cast back
-    /// (`CancelCast`, `BackToManaPayment`) is not an answer to it — the board's `cancel` is there
-    /// for that. A pick has one answer when every eligible card must be picked, in no order that
-    /// matters.
+    /// (`CancelCast`) is not an answer to it — the board's `cancel` is there for that — but
+    /// declining a sacrificial source (`BackToManaPayment`, back to the payment window) is: a
+    /// Treasure is never spent without asking (issue #1743). A payment window the reader could tap
+    /// a source in has more than one answer, whatever the engine lists. A pick has one answer when
+    /// every eligible card must be picked, in no order that matters.
     fn sole_answer(&self) -> Option<GameAction> {
+        if self.paying() && !self.mana_ways().is_empty() {
+            return None;
+        }
         // The engine lists one division of combat damage, its own; the reader has more whenever
         // two creatures block, or trample could carry damage past one (issue #1448).
         if let Some(damage) = self.damage() {
@@ -3053,7 +3082,7 @@ impl Playtest {
         let mut answers = self
             .answers()
             .into_iter()
-            .filter(|a| !matches!(a, GameAction::CancelCast | GameAction::BackToManaPayment));
+            .filter(|a| !matches!(a, GameAction::CancelCast));
         let only = answers.next()?;
         answers.next().is_none().then_some(only)
     }
@@ -3103,6 +3132,12 @@ impl Playtest {
                     // A mana ability's row: the type of mana it makes (`Green`, `Colorless`).
                     "selection" if value.get("mana_type").is_some() => {
                         label = value.get("mana_type").and_then(tag_of);
+                        // The engine's own "spend this sacrificial source?" (issue #1743) names
+                        // the source, so it reads, and is picked on the table, by its card.
+                        if kind == "ActivateManaSource" {
+                            let source = value.pointer("/source/object_id");
+                            ids.extend(source.and_then(Value::as_u64).map(ObjectId));
+                        }
                     }
                     // Cards, by id or list of ids. A retarget's `new_targets` is one entry per
                     // target of the spell, `null` for each left as it is (issue #1520).
@@ -3660,6 +3695,13 @@ impl Playtest {
                 self.restore(pending.checkpoint);
                 Ok(())
             }
+            // A source tapped by hand inside a payment window (issue #1743): the window stays
+            // open. `mana_ways` is empty in any other question, so the tap is refused there.
+            PlaytestAction::TapForMana { id }
+                if stage == PlaytestStage::Prompt && choice.is_none() =>
+            {
+                self.tap_for_mana(ObjectId(id), out)
+            }
             // The board's own question stays open, as it was: `act` puts it back on a refusal.
             _ if stage == PlaytestStage::Prompt => {
                 Err("Answer the question first, or cancel it.".into())
@@ -3981,6 +4023,8 @@ impl Playtest {
     /// phase's `Auto`. The mana floats in their pool, which a cast spends first, until the step or
     /// phase ends and the rules empty it (CR 500.4). One way is taken; several (a dual land's two
     /// colors, a creature's two mana abilities) are the board's `ManaChoice`; none is a refusal.
+    /// Inside a payment window (`paying`) the tap pays toward the cost being paid, as phase's own
+    /// board lets a player tap there (issue #1743).
     fn tap_for_mana(&mut self, id: ObjectId, out: &mut Log) -> Result<(), String> {
         let name = self.own(id)?.name.clone();
         let mut ways: Vec<GameAction> = self
@@ -4006,21 +4050,45 @@ impl Playtest {
     /// (`activatable_mana_actions_for_player`, which its land-tap reducer checks against) — a
     /// land's `TapLandForMana` for each kind of mana it makes, any other permanent's mana
     /// `ActivateAbility`. Mana abilities are not in `legal_actions` (they are no decision to
-    /// auto-pass over), so `answers` never lists them.
+    /// auto-pass over), so `answers` never lists them. Offered wherever phase's reducer takes a
+    /// mana tap from the reader: their priority and the payment windows (`paying`).
     fn mana_ways(&self) -> Vec<GameAction> {
-        if !matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you)
-        {
+        let priority =
+            matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you);
+        if !priority && !self.paying() {
             return Vec::new();
         }
         activatable_mana_actions_for_player(&self.state, self.you)
+    }
+
+    /// The reader is paying a cost, in a window phase's reducer takes mana abilities in (CR
+    /// 605.3a, CR 118.12): a spell's or an ability's mana payment, a mana ability's own, a "pay
+    /// unless". phase's board taps sources in these (`ManaPaymentUI`, issue #1743). Not in
+    /// `UnlessPaymentChooseCost`: its reducer has no arm for a tap, so a tap there is refused, as
+    /// phase's own board leaves it out.
+    fn paying(&self) -> bool {
+        let wf = &self.state.waiting_for;
+        matches!(
+            wf,
+            WaitingFor::ManaPayment { .. }
+                | WaitingFor::ManaAbilityManaPayment { .. }
+                | WaitingFor::UnlessPayment { .. }
+        ) && wf.acting_player() == Some(self.you)
     }
 
     /// A mana ability activated: told as the reader's tap, its mana in their pool. Nothing plays
     /// on and the reader keeps priority where they were, since `advance` would pass a stop they
     /// were already stopped at. Only a question the ability itself asks (a cost to choose) is
     /// played on to, and can be cancelled back to before the tap, as a cast can.
+    ///
+    /// Inside a payment window (issue #1743) the cast being paid keeps its own `Pending`, so
+    /// `cancel` still takes the whole cast back, the taps with it; and the window stays open after
+    /// the tap — the reader taps on, pays, or cancels.
     fn make_mana(&mut self, name: String, action: GameAction, out: &mut Log) -> Result<(), String> {
-        self.begin(name.clone());
+        let paying = self.paying();
+        if !paying {
+            self.begin(name.clone());
+        }
         out.own(
             self.you,
             PlaytestHappened::Tapped {
@@ -4031,7 +4099,12 @@ impl Playtest {
             },
         );
         self.apply(self.you, action, out)?;
-        if matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you) {
+        if paying && self.paying() {
+            return Ok(());
+        }
+        if !paying
+            && matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == self.you)
+        {
             self.pending = None;
             return Ok(());
         }
@@ -4473,6 +4546,7 @@ impl Playtest {
                 name,
                 from,
                 controller: seat,
+                by_hand: true,
             },
         );
         Ok(())
@@ -4843,8 +4917,17 @@ impl Playtest {
         }
     }
 
-    /// One action by `actor`, its events told as what happened.
-    fn apply(&mut self, actor: PlayerId, action: GameAction, out: &mut Log) -> Result<(), String> {
+    /// One action by `actor`, its events told as what happened. The reader's casts and
+    /// activations are paid `AutoExceptSacrificialMana` (`ask_before_sacrificing`).
+    fn apply(
+        &mut self,
+        actor: PlayerId,
+        mut action: GameAction,
+        out: &mut Log,
+    ) -> Result<(), String> {
+        if actor == self.you {
+            ask_before_sacrificing(&mut action);
+        }
         let result = apply(&mut self.state, actor, action).map_err(|e| e.to_string())?;
         out.tell(&self.state, &result.events);
         Ok(())
@@ -5234,6 +5317,28 @@ fn collect_refs(
     }
 }
 
+/// CR 601.2g-h + CR 605.3b: the reader's casts and activations are paid as phase's own board pays
+/// them (`castPaymentMode.ts`, issue #1743) — automatically, except that a source which sacrifices
+/// itself (a Treasure, Lotus Petal) is the engine's question (`ManaSourceSelection`), never spent
+/// without asking. phase's cast-family actions and activations carry the mode; any other action
+/// is left as it is, and so is an activation the engine offers only as `Manual` (it can be paid no
+/// other way) or a mode already chosen.
+fn ask_before_sacrificing(action: &mut GameAction) {
+    let mode = match action {
+        GameAction::CastSpell { payment_mode, .. }
+        | GameAction::CastSpellForFree { payment_mode, .. }
+        | GameAction::CastSpellAsMiracle { payment_mode, .. }
+        | GameAction::CastSpellAsMadness { payment_mode, .. }
+        | GameAction::CastSpellAsSneak { payment_mode, .. }
+        | GameAction::CastSpellAsWebSlinging { payment_mode, .. }
+        | GameAction::ActivateAbility { payment_mode, .. } => payment_mode,
+        _ => return,
+    };
+    if *mode == CastPaymentMode::Auto {
+        *mode = CastPaymentMode::AutoExceptSacrificialMana;
+    }
+}
+
 /// The permanent a mana action of `mana_ways` taps or activates.
 fn mana_source(action: &GameAction) -> Option<ObjectId> {
     match action {
@@ -5344,15 +5449,67 @@ fn names_source(action: &GameAction, id: ObjectId) -> bool {
     action.source_object() == Some(id)
 }
 
+/// Which of a run of events phase's own projection sends to `viewer`
+/// (`filter_events_for_viewer`, the event stream's counterpart of `filter_state_for_viewer`),
+/// one flag an event. The filter only drops events, in order, and changes only events it never
+/// drops (a cast's card id, a reveal's hidden ids, a trigger's causes), so each kept event is
+/// found again by equality, or for those by its kind alone.
+fn shown_to(state: &GameState, events: &[GameEvent], viewer: PlayerId) -> Vec<bool> {
+    let kept = filter_events_for_viewer(events, state, viewer);
+    let reshaped = |e: &GameEvent| {
+        matches!(
+            e,
+            GameEvent::SpellCast { .. }
+                | GameEvent::CardsRevealed { .. }
+                | GameEvent::EffectResolved { .. }
+                | GameEvent::AbilityTriggered { .. }
+        )
+    };
+    let mut next = kept.iter().peekable();
+    let shown: Vec<bool> = events
+        .iter()
+        .map(|e| {
+            let found = next.peek().is_some_and(|k| {
+                if reshaped(e) {
+                    std::mem::discriminant(*k) == std::mem::discriminant(e)
+                } else {
+                    *k == e
+                }
+            });
+            if found {
+                next.next();
+            }
+            found
+        })
+        .collect();
+    // A rev that changes what the filter rewrites shows here, in tests; in a game, every event is
+    // told as this crate's own rules tell it rather than none at all.
+    debug_assert!(
+        next.next().is_none(),
+        "phase's event filter rewrote an event it also drops"
+    );
+    if kept.len() == shown.iter().filter(|s| **s).count() {
+        shown
+    } else {
+        vec![true; events.len()]
+    }
+}
+
 /// What a run of the engine's events comes to, as the log's facts. `state` is the game after
 /// them, which names the objects they point at. An opponent's draws are told without the card,
 /// and so is anything of theirs face down.
+///
+/// Every event goes through phase's own filter for this seat first (`shown_to`): an event it
+/// would not send them is told only as a card that moved, with no name — a hidden draw, a
+/// hidden find — and any other kind not at all, so an event this crate learns to tell later can
+/// never say what the seat may not see.
 pub(super) fn tell(
     state: &GameState,
     events: &[GameEvent],
     eyes: Eyes,
     out: &mut Vec<PlaytestHappened>,
 ) {
+    let shown = shown_to(state, events, eyes.you);
     let secret = |id: &ObjectId| state.objects.get(id).is_some_and(|o| eyes.concealed(o));
     let name = |id: &ObjectId| {
         state
@@ -5419,7 +5576,96 @@ pub(super) fn tell(
             _ => None,
         })
         .collect();
+    // Why a card left where it was, for its move: a sacrifice or a destruction (CR 701.17,
+    // CR 701.8), a cycling or a discard (CR 702.29, CR 701.9). Cycling discards, and is told as
+    // the cycling.
+    let removed: HashMap<ObjectId, PlaytestRemoval> = events
+        .iter()
+        .filter_map(|e| match e {
+            GameEvent::CreatureDestroyed { object_id, .. } => {
+                Some((*object_id, PlaytestRemoval::Destroyed, 0))
+            }
+            GameEvent::PermanentSacrificed { object_id, .. } => {
+                Some((*object_id, PlaytestRemoval::Sacrificed, 1))
+            }
+            GameEvent::Discarded { object_id, .. } => {
+                Some((*object_id, PlaytestRemoval::Discarded, 0))
+            }
+            GameEvent::Cycled { object_id, .. } => Some((*object_id, PlaytestRemoval::Cycled, 1)),
+            _ => None,
+        })
+        .fold(HashMap::new(), |mut all, (id, how, rank)| {
+            let at = all.entry(id).or_insert((how, rank));
+            if rank > at.1 {
+                *at = (how, rank);
+            }
+            all
+        })
+        .into_iter()
+        .map(|(id, (how, _))| (id, how))
+        .collect();
+    let player_seat = |p: &PlayerId| eyes.seat(*p);
     for (at, event) in events.iter().enumerate() {
+        if !shown[at] {
+            // Only a card's move is told of an event phase keeps from this seat, and never by
+            // name: a draw or a find it may not see.
+            if let GameEvent::ZoneChanged {
+                object_id,
+                from: Some(from @ Zone::Library),
+                to: to @ Zone::Hand,
+                record,
+            } = event
+            {
+                let (Some(from_place), Some(to_place)) = (place_of(*from), place_of(*to)) else {
+                    continue;
+                };
+                let owner = state
+                    .objects
+                    .get(object_id)
+                    .map_or(record.controller, |o| o.owner);
+                let seat = eyes.seat(owner);
+                out.push(if drawn.contains(object_id) {
+                    PlaytestHappened::Drew { seat, name: None }
+                } else {
+                    PlaytestHappened::Moved {
+                        seat,
+                        name: None,
+                        from: from_place,
+                        to: to_place,
+                    }
+                });
+            } else if let GameEvent::ZoneChanged {
+                object_id,
+                from: Some(from),
+                to,
+                record,
+            } = event
+            {
+                // A face-down card leaving a library or a hand where it stays hidden (a
+                // manifest, a hideaway): that it went, not what it is.
+                let (Some(from_place), Some(to_place)) = (place_of(*from), place_of(*to)) else {
+                    continue;
+                };
+                if matches!(to, Zone::Hand | Zone::Library)
+                    || from_place == to_place
+                    || foretold.contains(object_id)
+                    || (*from == Zone::Hand && lands.contains(object_id))
+                {
+                    continue;
+                }
+                let owner = state
+                    .objects
+                    .get(object_id)
+                    .map_or(record.controller, |o| o.owner);
+                out.push(PlaytestHappened::Moved {
+                    seat: eyes.seat(owner),
+                    name: None,
+                    from: from_place,
+                    to: to_place,
+                });
+            }
+            continue;
+        }
         match event {
             // A companion is public from its reveal (CR 702.139a), and so is its move to a hand.
             GameEvent::CompanionRevealed { player, card_name } => {
@@ -5531,12 +5777,23 @@ pub(super) fn tell(
                     (Zone::Library, Zone::Library) => {}
                     // An opponent's card that is face down where it went (a hideaway card, a
                     // manifest) is theirs to know.
-                    _ => out.push(PlaytestHappened::Moved {
-                        seat: whose,
-                        name: (!secret(object_id)).then(|| record.name.clone()),
-                        from: from_place,
-                        to: to_place,
-                    }),
+                    _ => {
+                        let name = (!secret(object_id)).then(|| record.name.clone());
+                        out.push(match removed.get(object_id) {
+                            Some(&how) => PlaytestHappened::Removed {
+                                seat: whose,
+                                name,
+                                how,
+                                to: to_place,
+                            },
+                            None => PlaytestHappened::Moved {
+                                seat: whose,
+                                name,
+                                from: from_place,
+                                to: to_place,
+                            },
+                        })
+                    }
                 }
             }
             GameEvent::Foretold {
@@ -5725,6 +5982,223 @@ pub(super) fn tell(
                     });
                 }
             }
+            GameEvent::CounterAdded {
+                object_id,
+                counter_type,
+                count,
+                ..
+            }
+            | GameEvent::CounterRemoved {
+                object_id,
+                counter_type,
+                count,
+                ..
+            } => {
+                let Some(whose) = seat(object_id) else {
+                    continue;
+                };
+                let n = i32::try_from(*count).unwrap_or(i32::MAX);
+                out.push(PlaytestHappened::CountersChanged {
+                    seat: whose,
+                    name: name(object_id),
+                    kind: counter_type.display_phrase().into_owned(),
+                    delta: if matches!(event, GameEvent::CounterAdded { .. }) {
+                        n
+                    } else {
+                        -n
+                    },
+                });
+            }
+            GameEvent::PermanentTapped {
+                object_id,
+                caused_by,
+                ..
+            } => {
+                // `caused_by` is phase's mark of a tap an effect made; a tap for mana, an attack
+                // or a cost has none, and is told by its own fact.
+                if caused_by.is_some() {
+                    tapped_by_rules(out, seat(object_id), name(object_id), true);
+                }
+            }
+            GameEvent::PermanentUntapped { object_id } => {
+                tapped_by_rules(out, seat(object_id), name(object_id), false);
+            }
+            GameEvent::AbilityTriggered {
+                source_id,
+                controller,
+                ..
+            } => out.push(PlaytestHappened::Triggered {
+                seat: eyes.seat(*controller),
+                name: name(source_id),
+            }),
+            GameEvent::ControllerChanged {
+                object_id,
+                old_controller,
+                new_controller,
+                ..
+            } => {
+                let o = state.objects.get(object_id);
+                if let (Some(o), Some(name), false) =
+                    (o, name(object_id), old_controller == new_controller)
+                {
+                    out.push(PlaytestHappened::Controlled {
+                        seat: eyes.seat(o.owner),
+                        name,
+                        from: Place::Battlefield,
+                        controller: eyes.seat(*new_controller),
+                        by_hand: false,
+                    });
+                }
+            }
+            GameEvent::Transformed { object_id } => {
+                if let (Some(whose), Some(name)) = (seat(object_id), name(object_id)) {
+                    out.push(PlaytestHappened::Transformed { seat: whose, name });
+                }
+            }
+            GameEvent::TurnedFaceUp { object_id } => {
+                // Face up is public (CR 708.8): the card is named to everyone.
+                if let Some(o) = state.objects.get(object_id) {
+                    out.push(PlaytestHappened::TurnedFaceUp {
+                        seat: eyes.seat(o.controller),
+                        name: o.name.clone(),
+                    });
+                }
+            }
+            GameEvent::TurnedFaceDown { object_id } => {
+                if let Some(whose) = seat(object_id) {
+                    out.push(PlaytestHappened::TurnedFaceDown {
+                        seat: whose,
+                        name: name(object_id),
+                    });
+                }
+            }
+            GameEvent::Attached {
+                attachment_id,
+                target,
+            }
+            | GameEvent::Unattached {
+                attachment_id,
+                old_target: target,
+            } => {
+                let (Some(whose), Some(what)) = (seat(attachment_id), name(attachment_id)) else {
+                    continue;
+                };
+                let (to, to_seat) = match target {
+                    TargetRef::Object(id) => match (name(id), seat(id)) {
+                        (Some(n), Some(s)) => (Some(n), s),
+                        _ => continue,
+                    },
+                    TargetRef::Player(p) => (None, eyes.seat(*p)),
+                };
+                out.push(PlaytestHappened::Attached {
+                    seat: whose,
+                    name: what,
+                    to,
+                    to_seat,
+                    attached: matches!(event, GameEvent::Attached { .. }),
+                });
+            }
+            GameEvent::EnergyChanged { player, delta } => {
+                out.push(PlaytestHappened::PlayerCounters {
+                    seat: player_seat(player),
+                    kind: PlaytestPlayerCounter::Energy,
+                    delta: *delta,
+                    total: state.players[player.0 as usize].energy,
+                })
+            }
+            GameEvent::PlayerCounterChanged {
+                player,
+                counter_kind,
+                delta,
+            } => {
+                let p = &state.players[player.0 as usize];
+                let (kind, total) = match counter_kind {
+                    PlayerCounterKind::Poison => (PlaytestPlayerCounter::Poison, p.poison_counters),
+                    PlayerCounterKind::Experience => (
+                        PlaytestPlayerCounter::Experience,
+                        p.player_counter(counter_kind),
+                    ),
+                    PlayerCounterKind::Rad => {
+                        (PlaytestPlayerCounter::Rad, p.player_counter(counter_kind))
+                    }
+                    PlayerCounterKind::Ticket => (
+                        PlaytestPlayerCounter::Ticket,
+                        p.player_counter(counter_kind),
+                    ),
+                };
+                out.push(PlaytestHappened::PlayerCounters {
+                    seat: player_seat(player),
+                    kind,
+                    delta: *delta,
+                    total,
+                });
+            }
+            GameEvent::SpeedChanged {
+                player,
+                old_speed,
+                new_speed,
+            } => {
+                let (was, now) = (old_speed.unwrap_or(0), new_speed.unwrap_or(0));
+                if was != now {
+                    out.push(PlaytestHappened::PlayerCounters {
+                        seat: player_seat(player),
+                        kind: PlaytestPlayerCounter::Speed,
+                        delta: i32::from(now) - i32::from(was),
+                        total: u32::from(now),
+                    });
+                }
+            }
+            GameEvent::RoomEntered {
+                player_id,
+                dungeon,
+                room_name,
+                ..
+            } => out.push(PlaytestHappened::RoomEntered {
+                seat: player_seat(player_id),
+                dungeon: dungeon.to_string(),
+                room: room_name.clone(),
+            }),
+            GameEvent::DungeonCompleted { player_id, dungeon } => {
+                out.push(PlaytestHappened::DungeonCompleted {
+                    seat: player_seat(player_id),
+                    dungeon: dungeon.to_string(),
+                })
+            }
+            GameEvent::VoteCast { voter, choice, .. } => out.push(PlaytestHappened::Voted {
+                seat: player_seat(voter),
+                choice: choice.clone(),
+            }),
+            GameEvent::VoteResolved { tallies, .. } => out.push(PlaytestHappened::VoteResolved {
+                tallies: tallies
+                    .iter()
+                    .map(|(choice, votes)| PlaytestTally {
+                        choice: choice.clone(),
+                        votes: *votes,
+                    })
+                    .collect(),
+            }),
+            GameEvent::Clash {
+                controller,
+                opponent,
+                controller_mana_value,
+                opponent_mana_value,
+                result,
+            } => out.push(PlaytestHappened::Clashed {
+                seat: player_seat(controller),
+                with: player_seat(opponent),
+                mana_value: *controller_mana_value,
+                their_mana_value: *opponent_mana_value,
+                result: match result {
+                    ClashResult::Won => PlaytestClash::Won,
+                    ClashResult::Lost => PlaytestClash::Lost,
+                    ClashResult::Tied => PlaytestClash::Tied,
+                },
+            }),
+            GameEvent::ExtraTurnCreated { player_id, .. } => {
+                out.push(PlaytestHappened::ExtraTurn {
+                    seat: player_seat(player_id),
+                })
+            }
             GameEvent::TokenCreated {
                 object_id, name, ..
             } => {
@@ -5744,5 +6218,28 @@ pub(super) fn tell(
             }
             _ => {}
         }
+    }
+}
+
+/// A permanent an effect tapped or untapped, told with the ones before it in the same line when
+/// they are the same player's and went the same way (Sleep's every creature, one line).
+fn tapped_by_rules(
+    out: &mut Vec<PlaytestHappened>,
+    seat: Option<PlaytestPlayer>,
+    name: Option<String>,
+    tapped: bool,
+) {
+    let Some(whose) = seat else { return };
+    match out.last_mut() {
+        Some(PlaytestHappened::BecameTapped {
+            seat,
+            names,
+            tapped: was,
+        }) if *seat == whose && *was == tapped => names.push(name),
+        _ => out.push(PlaytestHappened::BecameTapped {
+            seat: whose,
+            names: vec![name],
+            tapped,
+        }),
     }
 }

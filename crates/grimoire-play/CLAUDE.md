@@ -58,7 +58,7 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
   the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
   face-down exile card they may look at. Never decide that in this crate, and never read a
-  position off the projection (it reorders a library's hidden cards), nor send `library_cards` with the sandbox off (#1749).
+  position off the projection (it reorders a library's hidden cards), nor send `library_cards` with the sandbox off (#1749). The log's events pass phase's `filter_events_for_viewer` per seat first (`shown_to`, #1748).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
@@ -106,12 +106,12 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   `play` takes it by the rules alone — the sandbox's ways (unpaid, put, activate) are for the
   reader's own cards (`own`).
 - **Tapping for mana is the rules', never the sandbox's** (`tap_for_mana`, issue #1326). It is
-  taken sandbox or not, wherever the reader has priority, from phase's own board list
-  (`activatable_mana_actions_for_player`) — never a list of this crate's, and never the
-  manual-selection list, which the land-tap reducer does not accept. The mana floats until a cast
-  spends it or the rules empty the pool (CR 500.4); nothing plays on after it (`make_mana`), so a
-  stop is not passed over. Never put it in `is_sandbox`, and never let the sandbox's `Tap` make
-  mana.
+  taken sandbox or not, at the reader's priority or in a payment window (`paying`, issue #1743),
+  from phase's own board list (`activatable_mana_actions_for_player`) — never a list of this
+  crate's, nor the manual-selection list the land-tap reducer refuses. The mana floats until spent
+  or the pool empties (CR 500.4); nothing plays on after it (`make_mana`), and a window stays open.
+  The reader's casts are stamped `AutoExceptSacrificialMana` (`ask_before_sacrificing`): a Treasure
+  is asked about, never spent unasked. Never put it in `is_sandbox`, nor let the sandbox's `Tap` make mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The exceptions are `pick` — the few questions answered by
   a set of cards (or an order of them), whose fields give the count — `damage`, the attacker's
@@ -192,8 +192,8 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 
 ## Commands
 
-| Command                                                      | Action                                                                                                      |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Command                                                      | Action                                                                                                                           |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish, a `VeryEasy` AI and a person (`lobby_tests.rs`); the drafts too |
-| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                       |
-| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                      |
+| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                                            |
+| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                                           |
