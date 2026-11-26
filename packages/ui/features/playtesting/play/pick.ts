@@ -66,6 +66,8 @@ export function pickTitle(pick: PlaytestPick): string {
       return `Choose ${bound(pick)} to pay the cost`;
     case "pile":
       return "Separate into two piles: picked cards are pile A";
+    case "outside":
+      return `Choose ${bound(pick)} from outside the game`;
     case "crew":
       return `Crew ${pick.powerMin ?? 0}: tap creatures with total power ${pick.powerMin ?? 0} or more`;
     case "saddle":
@@ -275,6 +277,8 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return "Pay";
     case "pile":
       return "Make piles";
+    case "outside":
+      return n === 0 ? "Take nothing" : `Take ${n}`;
     case "crew":
       return "Crew";
     case "saddle":

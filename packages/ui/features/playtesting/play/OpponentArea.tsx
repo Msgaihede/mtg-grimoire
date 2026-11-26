@@ -131,6 +131,7 @@ export function OpponentArea({
           commanderDamage={seat.commanderDamage}
           lethal={lethal}
           standing={seat}
+          companion={seat.companion}
           curses={curses}
           onPointCard={onPointCard}
           onUnpoint={onUnpoint}

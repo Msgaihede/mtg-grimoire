@@ -188,6 +188,16 @@ describe("answers told apart by their kind", () => {
     expect(text({ kind: "DecideOptionalEffect", yes: true })).toBe("Yes");
   });
 
+  it("reveals a companion by its name, or none", () => {
+    const reveal = { kind: "DeclareCompanion" };
+    expect(text({ ...reveal, label: "Lurrus of the Dream-Den" }, "CompanionReveal")).toBe(
+      "Reveal Lurrus of the Dream-Den",
+    );
+    expect(text({ ...reveal, label: "Decline" }, "CompanionReveal")).toBe(
+      "Don’t reveal a companion",
+    );
+  });
+
   it("pays an optional cost by its keyword, or declines it", () => {
     const cost = { kind: "DecideOptionalCost" };
     expect(text({ ...cost, yes: true }, "OptionalCostChoice", "Kicker")).toBe("Pay kicker");

@@ -259,6 +259,23 @@ pub struct PlaytestSeat {
     /// The ids of the permanents on the battlefield attached to this player — a Curse, an Aura
     /// that enchants a player (CR 303.4).
     pub enchanted_by: Vec<u64>,
+    /// This player's companion while it is still outside the game (CR 702.139a): revealed, so
+    /// public to every seat, from the reveal until it is put into a hand or an effect brings it
+    /// in. `None` for a player who revealed none, and once it is in the game.
+    pub companion: Option<PlaytestCompanion>,
+}
+
+/// A revealed companion outside the game (CR 702.139a).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCompanion {
+    pub name: String,
+    /// The deck's printing of it, for its picture.
+    pub card_id: Option<String>,
+    /// The rules offer the reader its special action now — {3} to put it into their hand, in
+    /// their main phase with the stack empty (CR 702.139c): a `CompanionToHand`. Only ever on the
+    /// reader's own seat.
+    pub to_hand: bool,
 }
 
 /// A player's place in a dungeon (CR 309): its name and the room the venture marker is on.
@@ -609,6 +626,10 @@ pub enum PlaytestPickPurpose {
     Pay,
     /// The picked cards are one pile, the rest the other (CR 700.3 — Fact or Fiction).
     Pile,
+    /// The picked cards are brought in from outside the game (CR 400.11): a wish's sideboard
+    /// card, the revealed companion, or Karn's face-up exiled card (issue #1744). A card that is
+    /// not in the game has no object: its id is one the pick alone gives it (`OUTSIDE_IDS`).
+    Outside,
     /// The picked creatures are tapped to crew the Vehicle (CR 702.122a).
     Crew,
     /// The picked creatures are tapped to saddle the Mount (CR 702.171a).
@@ -773,6 +794,10 @@ pub enum PlaytestAction {
     Foretell {
         id: u64,
     },
+    /// Put the reader's revealed companion into their hand by the rules (CR 702.139c): the
+    /// special action, {3}, in their main phase with the stack empty, once a game. Refused,
+    /// saying why, when the rules do not offer it (`PlaytestCompanion::to_hand`).
+    CompanionToHand,
     /// Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: the
     /// reader picks which sources pay rather than the engine. The mana floats in their pool, and
     /// the next cast spends it first, until the step or phase ends (CR 500.4). One way is taken;
@@ -964,6 +989,16 @@ pub enum PlaytestHappened {
         name: Option<String>,
         from: Place,
         to: Place,
+    },
+    /// A companion revealed from outside the game at the start (CR 702.139a). Public.
+    CompanionRevealed {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A companion put into its owner's hand by the special action (CR 702.139c). Public.
+    CompanionToHand {
+        seat: PlaytestPlayer,
+        name: String,
     },
     /// Cards drawn. `name` is the card for the reader's draw, `None` for an opponent's.
     Drew {

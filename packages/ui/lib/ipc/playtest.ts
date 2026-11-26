@@ -66,6 +66,7 @@ export type PlaytestPickPurpose =
   | "order"
   | "pay"
   | "pile"
+  | "outside"
   | "crew"
   | "saddle"
   | "split";
@@ -264,6 +265,23 @@ export interface PlaytestSeat {
   dungeon: PlaytestDungeon | null;
   /** The ids of the battlefield permanents attached to this player — a Curse (CR 303.4). */
   enchantedBy: number[];
+  /**
+   * This player's companion while it is still outside the game (CR 702.139a): revealed, so
+   * public to every seat. `null` for a player who revealed none, and once it is in the game.
+   */
+  companion: PlaytestCompanion | null;
+}
+
+/** A revealed companion outside the game (CR 702.139a). */
+export interface PlaytestCompanion {
+  name: string;
+  /** The deck's printing of it, for its picture. */
+  cardId: string | null;
+  /**
+   * The rules offer the reader its special action now — {3} to put it into their hand, in their
+   * main phase with the stack empty (CR 702.139c): a `companionToHand`. Only on the reader's seat.
+   */
+  toHand: boolean;
 }
 
 /** A player's place in a dungeon: its name, the room the marker is on and that room's words. */
@@ -597,6 +615,9 @@ export type PlaytestAction =
   /** Foretell a hand card (CR 702.143a): pay {2}, exile it face down, cast it on a later turn
    *  (a `play` of it in exile). Offered when its {@link GameCard.canForetell} says so. */
   | { type: "foretell"; id: number }
+  /** Put the reader's revealed companion into their hand (CR 702.139c): {3}, in their main phase
+   *  with the stack empty, once a game. Offered when their seat's `companion.toHand` says so. */
+  | { type: "companionToHand" }
   /** Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: its
    *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
    *  Taken at priority and inside a payment window (`ManaPayment`, `ManaAbilityManaPayment`,
@@ -680,6 +701,8 @@ export type PlaytestHappened =
   | { type: "foretold"; seat: PlaytestPlayer; name: string | null }
   /** `name` is `null` for an opponent's card face down where it went (a hideaway card, a manifest). */
   | { type: "moved"; seat: PlaytestPlayer; name: string | null; from: GamePlace; to: GamePlace }
+  | { type: "companionRevealed"; seat: PlaytestPlayer; name: string }
+  | { type: "companionToHand"; seat: PlaytestPlayer; name: string }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }
   | { type: "blocked"; seat: PlaytestPlayer; blocker: string; attacker: string }

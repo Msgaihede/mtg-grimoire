@@ -75,6 +75,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     ring: 0,
     dungeon: null,
     enchantedBy: [],
+    companion: null,
     ...over,
   };
 }

@@ -108,6 +108,12 @@ describe("an order, a cost and piles", () => {
     expect(pickPosition(pile, 0)).toBeNull();
   });
 
+  it("brings cards in from outside the game: a wish's sideboard card or the companion", () => {
+    expect(pickTitle(pick({ purpose: "outside", min: 0, max: 1 }))).toBe(
+      "Choose up to 1 from outside the game",
+    );
+  });
+
   it("splits a search's finds: the picked onto the battlefield, the rest into the hand", () => {
     const split = pick({ purpose: "split", min: 1, max: 1 });
     expect(pickTitle(split)).toBe("Put 1 onto the battlefield and the rest into your hand");

@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use grimoire_play::playtest::session::MAX_OPPONENTS;
 use grimoire_play::{
     deck_support, on_engine_stack, CardFacts, DeckSupport, Difficulty, FaceFacts, OpponentDeck,
-    Playtest, PlaytestAction, PlaytestFirst, PlaytestStep, SupportCache, TokenFacts,
+    OutsidePile, Playtest, PlaytestAction, PlaytestFirst, PlaytestStep, SupportCache, TokenFacts,
 };
 
 use crate::sync::AppState;
@@ -218,7 +218,7 @@ async fn deal(
             person: false,
         })
         .collect();
-    if yours.iter().all(|c| c.commander) {
+    if !yours.iter().any(CardFacts::in_library) {
         return Err(if theirs.is_empty() {
             "This deck has no cards to play with yet.".into()
         } else {
@@ -227,7 +227,7 @@ async fn deal(
     }
     if let Some(n) = theirs
         .iter()
-        .position(|o| o.cards.iter().all(|c| c.commander))
+        .position(|o| !o.cards.iter().any(CardFacts::in_library))
     {
         return Err(if duel {
             "The opponent's deck has no cards to play with yet.".into()
@@ -335,6 +335,10 @@ pub(crate) fn facts(card: grimoire_core::play::PlayCard) -> CardFacts {
         name: card.name,
         quantity: card.quantity,
         commander: card.commander,
+        outside: card.outside.map(|o| match o {
+            grimoire_core::play::OutsidePile::Sideboard => OutsidePile::Sideboard,
+            grimoire_core::play::OutsidePile::Companion => OutsidePile::Companion,
+        }),
         oracle_id: card.oracle_id,
         mana_cost: card.mana_cost,
         type_line: card.type_line,

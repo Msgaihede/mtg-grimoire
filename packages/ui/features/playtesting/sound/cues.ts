@@ -106,6 +106,8 @@ export function soundOf(h: PlaytestHappened): SoundId | null {
     case "controlled":
       // A card landing on a battlefield, a new side of the table's or its own.
       return "play";
+    case "companionToHand":
+      return "toHand";
     case "drew":
       return "draw";
     case "attacked":
@@ -162,6 +164,7 @@ export function soundOf(h: PlaytestHappened): SoundId | null {
       return null;
     // A reveal, a coin, a die, a name, a designation and the day are read, not heard.
     case "revealed":
+    case "companionRevealed":
     case "flipped":
     case "rolled":
     case "named":

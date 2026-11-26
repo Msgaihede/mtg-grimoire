@@ -129,6 +129,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     ring: 0,
     dungeon: null,
     enchantedBy: [],
+    companion: null,
     ...over,
   };
 }

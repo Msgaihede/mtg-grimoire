@@ -441,9 +441,7 @@ export function PlaytestSetup({
         <PageBar title="Playtesting" />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6">
           <p className="m-0 text-sm text-dim">
-            {loading
-              ? "Loading your decks…"
-              : "No decks yet. Make one in Decks to playtest."}
+            {loading ? "Loading your decks…" : "No decks yet. Make one in Decks to playtest."}
           </p>
         </div>
       </section>

@@ -31,6 +31,16 @@ const CASES: [PlaytestHappened, string | null, string][] = [
   ],
   [{ type: "foretold", seat: "opponent", name: null }, "The opponent foretold a card", "cast"],
   [
+    { type: "companionRevealed", seat: "you", name: "Lurrus of the Dream-Den" },
+    "Revealed Lurrus of the Dream-Den as your companion",
+    "reveal",
+  ],
+  [
+    { type: "companionToHand", seat: "opponent", name: "Jegantha, the Wellspring" },
+    "The opponent put Jegantha, the Wellspring, their companion, into their hand",
+    "move",
+  ],
+  [
     { type: "moved", seat: "you", name: "Tarmogoyf", from: "battlefield", to: "graveyard" },
     "Tarmogoyf went to your graveyard",
     "move",

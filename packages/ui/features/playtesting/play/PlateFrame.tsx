@@ -17,6 +17,7 @@ import { CardImage } from "@/components/CardImage";
 import type {
   GameCard,
   PlaytestCommanderDamage,
+  PlaytestCompanion,
   PlaytestPlayer,
   PlaytestSeat,
   PlaytestView,
@@ -165,6 +166,11 @@ export function cursesOn(
  * energy, experience, rad and tickets, speed, the Ring, the monarch, the initiative, the city's
  * blessing, the dungeon room — each only once the player has it — and the Curses attached to them
  * (`curses`), each a chip with its name that points at the card for the preview.
+ *
+ * **A revealed companion is on its owner's plate** (`companion`, CR 702.139a, issue #1744) while
+ * it is outside the game: its art and name, public to every seat. On the reader's own plate, while
+ * the rules offer its special action (`toHand`), the chip is a button that puts it into the hand
+ * for {3} (`onCompanion`, a `companionToHand`).
  */
 export function PlateFrame({
   seat,
@@ -179,6 +185,8 @@ export function PlateFrame({
   curses = NO_CURSES,
   onPointCard,
   onUnpoint,
+  companion = null,
+  onCompanion,
   children,
 }: {
   seat: PlaytestPlayer;
@@ -191,6 +199,10 @@ export function PlateFrame({
   /** Point at a Curse's chip: its card in the preview. Without it the chip names it only. */
   onPointCard?: (card: GameCard, e: MouseEvent) => void;
   onUnpoint?: () => void;
+  /** The player's revealed companion while it is outside the game; `null` for none. */
+  companion?: PlaytestCompanion | null;
+  /** Put the reader's companion into their hand: offered only while its `toHand` holds. */
+  onCompanion?: () => void;
   /** The commander damage this player has been dealt, one entry a commander. */
   commanderDamage?: readonly PlaytestCommanderDamage[];
   /** The commander damage that loses the game; `null` outside a Commander game. */
@@ -205,7 +217,11 @@ export function PlateFrame({
   const aimed = useAimTarget({ ref, aim });
   const standingShown = standing == null ? NO_MARKS : standingMarks(standing);
   const marked =
-    poison > 0 || commanderDamage.length > 0 || standingShown.length > 0 || curses.length > 0;
+    poison > 0 ||
+    commanderDamage.length > 0 ||
+    standingShown.length > 0 ||
+    curses.length > 0 ||
+    companion !== null;
   return (
     <div
       ref={ref}
@@ -273,6 +289,7 @@ export function PlateFrame({
               </span>
             </span>
           ))}
+          {companion !== null && <CompanionMark companion={companion} onToHand={onCompanion} />}
         </span>
       )}
     </div>
@@ -317,6 +334,60 @@ function CommanderDamageMark({
         <Crown className="ml-1 size-3.5" aria-hidden="true" />
       )}
       {damage.damage}
+    </span>
+  );
+}
+
+/** A revealed companion outside the game: its art and name, and — while the rules offer it and
+ *  the board can act — a press that puts it into the hand for {3}. */
+function CompanionMark({
+  companion,
+  onToHand,
+}: {
+  companion: PlaytestCompanion;
+  onToHand?: () => void;
+}): JSX.Element {
+  const art =
+    companion.cardId !== null ? (
+      <span
+        aria-hidden="true"
+        className="size-5 flex-none overflow-hidden rounded-full border border-border"
+      >
+        <CardImage
+          src={cardImageUrl(companion.cardId, 0, "art")}
+          alt=""
+          className="block h-full w-full object-cover"
+        />
+      </span>
+    ) : null;
+  const chip =
+    "inline-flex max-w-[200px] flex-none items-center gap-1 rounded-full border bg-surface py-px pr-2 pl-px text-xs/5 whitespace-nowrap";
+  if (companion.toHand && onToHand !== undefined) {
+    return (
+      <button
+        type="button"
+        data-companion="to-hand"
+        aria-label={`Put ${companion.name}, your companion, into your hand for {3}`}
+        title={`${companion.name} — put into your hand for {3}`}
+        onClick={onToHand}
+        className={cn(chip, "cursor-pointer border-accent font-semibold text-accent")}
+      >
+        {art}
+        <span className="min-w-0 truncate">To hand · {companion.name}</span>
+      </button>
+    );
+  }
+  return (
+    <span
+      data-companion="revealed"
+      aria-label={`Companion: ${companion.name}`}
+      title={`Companion: ${companion.name}`}
+      className={cn(chip, "border-border text-text", companion.cardId === null && "pl-2")}
+    >
+      {art}
+      <span aria-hidden="true" className="min-w-0 truncate">
+        {companion.name}
+      </span>
     </span>
   );
 }

@@ -70,13 +70,15 @@ use engine::game::{
 use engine::types::ability::{
     EffectKind, KeywordAction, LibraryPosition, ObjectSelectionCardinality, TargetRef,
 };
-use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
+use engine::types::actions::{
+    DebugAction, DebugTokenRequest, GameAction, MulliganChoice, OutsideGameSelection,
+};
 use engine::types::events::{ActivatedAbilityKind, ClashResult, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
     CastOfferKind, CastPaymentMode, CombatDamageAssignmentMode, CounterMoveChoice,
-    CounterRemoveChoice, DayNight, ManaChoice, MulliganDecisionPhase, PayCostKind, StackEntry,
-    StackEntryKind, WaitingFor,
+    CounterRemoveChoice, DayNight, ManaChoice, MulliganDecisionPhase, OutsideGameChoiceSource,
+    PayCostKind, StackEntry, StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
@@ -93,7 +95,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use serde_json::Value;
 
-use crate::cards::{self, CardFacts};
+use crate::cards::{self, CardFacts, OutsidePile};
 use crate::history::{History, NOTHING_TO_REDO, NOTHING_TO_UNDO};
 use crate::table::{game_card, is_permanent, mana_table, mana_type, place_of};
 use crate::tokens::{DeckTokens, TokenFacts};
@@ -102,13 +104,14 @@ use crate::view::{CardCounter, GameCard, ManaKind, MulliganView, Place, Seat, To
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestClash, PlaytestCombat, PlaytestCommanderDamage, PlaytestCounterShare, PlaytestCounters,
-    PlaytestDamage, PlaytestDamageBlocker, PlaytestDamageShare, PlaytestDayNight,
-    PlaytestDesignation, PlaytestDistribute, PlaytestDistributeTarget, PlaytestDungeon,
-    PlaytestEmblem, PlaytestFirst, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase,
-    PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPlayerCounter, PlaytestPrompt,
-    PlaytestRemoval, PlaytestResults, PlaytestSeat, PlaytestShare, PlaytestStackItem,
-    PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestTally, PlaytestView,
+    PlaytestClash, PlaytestCombat, PlaytestCommanderDamage, PlaytestCompanion,
+    PlaytestCounterShare, PlaytestCounters, PlaytestDamage, PlaytestDamageBlocker,
+    PlaytestDamageShare, PlaytestDayNight, PlaytestDesignation, PlaytestDistribute,
+    PlaytestDistributeTarget, PlaytestDungeon, PlaytestEmblem, PlaytestFirst, PlaytestFrame,
+    PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose,
+    PlaytestPlayer, PlaytestPlayerCounter, PlaytestPrompt, PlaytestRemoval, PlaytestResults,
+    PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop,
+    PlaytestStopStep, PlaytestTally, PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -200,6 +203,39 @@ struct Offers {
     activate: HashSet<ObjectId>,
     cast: HashSet<ObjectId>,
     mana: HashSet<ObjectId>,
+    /// The companion's special action (`CompanionToHand`), which names no object.
+    companion: bool,
+}
+
+/// One seat's deck as `new` deals it, by the engine's card names: the library, the command zone,
+/// and the two piles outside the game (issue #1744).
+#[derive(Default)]
+struct Piles {
+    main: Vec<String>,
+    commander: Vec<String>,
+    sideboard: Vec<String>,
+    companion: Vec<String>,
+}
+
+impl Piles {
+    /// The seat's list as phase loads it. phase takes a companion where its format has a slot
+    /// for one (`FormatConfig::companion_slot`): a Commander game's own slot, and otherwise the
+    /// sideboard (CR 702.139a: "from outside the game", which is the sideboard in constructed
+    /// play), so outside a Commander game the companion pile is sideboard cards too. A Commander
+    /// game has no sideboard (CR 903.5e) and phase drops it.
+    fn list(self, commander_game: bool) -> PlayerDeckList {
+        let mut sideboard = self.sideboard;
+        if !commander_game {
+            sideboard.extend(self.companion.iter().cloned());
+        }
+        PlayerDeckList {
+            main_deck: self.main,
+            commander: self.commander,
+            sideboard,
+            companion: self.companion,
+            ..PlayerDeckList::default()
+        }
+    }
 }
 
 /// A cast or an activation the engine is still asking the reader about, which `cancel` takes
@@ -531,8 +567,7 @@ impl Playtest {
         let mut commanders = HashSet::new();
         let mut card_names = HashMap::new();
         let mut piles = |deck: &[CardFacts], seat: PlayerId| {
-            let mut main = Vec::new();
-            let mut commander = Vec::new();
+            let mut piles = Piles::default();
             for card in deck {
                 let name = cards::engine_name(card);
                 if db.get_face_by_name(&name).is_none() {
@@ -546,30 +581,34 @@ impl Playtest {
                 by_name
                     .entry((seat, name.clone()))
                     .or_insert_with(|| card.card_id.clone());
-                if card.commander {
-                    commanders.insert((seat, name.clone()));
-                    commander.extend(std::iter::repeat_n(name, card.quantity as usize));
-                } else {
-                    main.extend(std::iter::repeat_n(name, card.quantity as usize));
+                let copies = std::iter::repeat_n(name.clone(), card.quantity as usize);
+                match card.outside {
+                    Some(OutsidePile::Sideboard) => piles.sideboard.extend(copies),
+                    Some(OutsidePile::Companion) => piles.companion.extend(copies),
+                    None if card.commander => {
+                        commanders.insert((seat, name.clone()));
+                        piles.commander.extend(copies);
+                    }
+                    None => piles.main.extend(copies),
                 }
             }
-            (main, commander)
+            piles
         };
-        let (your_main, your_commander) = piles(you, HOST);
-        if your_main.is_empty() {
+        let yours = piles(you, HOST);
+        if yours.main.is_empty() {
             return Err("Your deck has no cards to shuffle into a library.".into());
         }
         let seats: Vec<PlayerId> = (1..players).map(|n| PlayerId(n as u8)).collect();
         let mut theirs = Vec::with_capacity(seats.len());
         if goldfish {
-            theirs.push(PlayerDeckList {
-                main_deck: vec![FISH_CARD.to_string(); FISH_LIBRARY],
-                ..PlayerDeckList::default()
+            theirs.push(Piles {
+                main: vec![FISH_CARD.to_string(); FISH_LIBRARY],
+                ..Piles::default()
             });
         }
         for (deck, &seat) in opponents.iter().zip(&seats) {
-            let (main, commander) = piles(&deck.cards, seat);
-            if main.is_empty() {
+            let piles = piles(&deck.cards, seat);
+            if piles.main.is_empty() {
                 return Err(if opponents.len() == 1 {
                     "The opponent's deck has no cards to shuffle into a library.".into()
                 } else {
@@ -579,18 +618,16 @@ impl Playtest {
                     )
                 });
             }
-            theirs.push(PlayerDeckList {
-                main_deck: main,
-                commander,
-                ..PlayerDeckList::default()
-            });
+            theirs.push(piles);
         }
 
         // A commander on any side makes it a Commander game: 40 life, the command zone, tax.
-        let format = if your_commander.is_empty() && theirs.iter().all(|d| d.commander.is_empty()) {
-            FormatConfig::freeform()
-        } else {
+        let commander_game =
+            !yours.commander.is_empty() || theirs.iter().any(|d| !d.commander.is_empty());
+        let format = if commander_game {
             FormatConfig::commander()
+        } else {
+            FormatConfig::freeform()
         };
         let mut state = GameState::new(format, players as u8, seed);
         // The sandbox is phase's debug actions, which the engine refuses unless the game allows
@@ -603,13 +640,12 @@ impl Playtest {
         // `PlayerId(2)` on.
         let mut theirs = theirs.into_iter();
         let list = DeckList {
-            player: PlayerDeckList {
-                main_deck: your_main,
-                commander: your_commander,
-                ..PlayerDeckList::default()
-            },
-            opponent: theirs.next().unwrap_or_default(),
-            ai_decks: theirs.collect(),
+            player: yours.list(commander_game),
+            opponent: theirs
+                .next()
+                .map(|p| p.list(commander_game))
+                .unwrap_or_default(),
+            ai_decks: theirs.map(|p| p.list(commander_game)).collect(),
             ..DeckList::default()
         };
         // The combo table only feeds phase's bracket estimate, which a game never reads: an
@@ -1249,6 +1285,7 @@ impl Playtest {
                 GameAction::Foretell { object_id, .. } => {
                     offers.foretell.insert(object_id);
                 }
+                GameAction::CompanionToHand => offers.companion = true,
                 ref play if is_play(play) => offers.cast.extend(play.source_object()),
                 ref ability if is_ability(ability) => {
                     offers.activate.extend(ability.source_object())
@@ -1387,7 +1424,24 @@ impl Playtest {
                 })
                 .map(|id| id.0)
                 .collect(),
+            // Revealed, so public (CR 702.139a), until it is in the game.
+            companion: player
+                .companion
+                .as_ref()
+                .filter(|c| !c.used)
+                .map(|c| PlaytestCompanion {
+                    name: c.card.card.name.clone(),
+                    card_id: self.printing_by_name(seat, &c.card.card.name),
+                    to_hand: reader && offers.companion,
+                }),
         }
+    }
+
+    /// The deck's printing of a card of `owner`'s by its name: a card outside the game, which
+    /// has no object to read one off.
+    fn printing_by_name(&self, owner: PlayerId, name: &str) -> Option<String> {
+        let name = card_name(&self.card_names, name);
+        self.by_name.get(&(owner, name.to_string())).cloned()
     }
 
     /// `seat`'s emblems, oldest first: every one in the command zone it controls (CR 114.2),
@@ -2270,6 +2324,8 @@ impl Playtest {
     /// set for a keep-and-sacrifice-the-rest (issue #1079). The second value says which.
     fn pick(&self) -> Option<(PlaytestPick, PickAnswer)> {
         let all = |ids: &[ObjectId]| ids.iter().map(|id| id.0).collect::<Vec<u64>>();
+        // The cards outside the game a pick names, which have no object to read a ref off.
+        let mut outside: HashMap<u64, PlaytestCardRef> = HashMap::new();
         let (purpose, shown, eligible, min, max, ordered, answer) = match &self.state.waiting_for {
             WaitingFor::ScryChoice { player, cards } if *player == self.you => (
                 PlaytestPickPurpose::Scry,
@@ -2659,6 +2715,36 @@ impl Playtest {
                 false,
                 PickAnswer::FreeCast,
             ),
+            // A card from outside the game (CR 400.11): a wish's sideboard card, the revealed
+            // companion, a face-up exiled card for Karn (issue #1744). Every copy is a card of
+            // its own to pick; one in no zone is named by the pick alone (`outside_choices`).
+            WaitingFor::OutsideGameChoice {
+                player,
+                count,
+                up_to,
+                ..
+            } if *player == self.you => {
+                let ids: Vec<u64> = self
+                    .outside_choices()
+                    .into_iter()
+                    .map(|(id, _, card)| {
+                        if let Some(card) = card {
+                            outside.insert(id, card);
+                        }
+                        id
+                    })
+                    .collect();
+                let most = (*count).min(ids.len());
+                (
+                    PlaytestPickPurpose::Outside,
+                    ids.clone(),
+                    ids,
+                    if *up_to { 0 } else { most },
+                    most,
+                    false,
+                    PickAnswer::Outside,
+                )
+            }
             // Tap creatures with total power N or more to crew a Vehicle or saddle a Mount
             // (CR 702.122a, 702.171a): any of them, so long as their power reaches `power_min`,
             // each counted as the engine counts it (`contributions`). The engine lists only some
@@ -2742,18 +2828,22 @@ impl Playtest {
         // offered as one.
         let mut zones = shown
             .iter()
-            .filter_map(|id| self.state.objects.get(&ObjectId(*id)))
-            .map(|o| o.zone);
-        let first = zones.next();
+            .map(|id| self.state.objects.get(&ObjectId(*id)).map(|o| o.zone));
+        let first = zones.next().flatten();
         let zone = first
-            .filter(|z| zones.all(|other| other == *z))
+            .filter(|z| zones.all(|other| other == Some(*z)))
             .and_then(place_of);
         Some((
             PlaytestPick {
                 purpose,
                 cards: shown
                     .iter()
-                    .filter_map(|id| self.card_ref(ObjectId(*id)))
+                    .filter_map(|id| {
+                        outside
+                            .get(id)
+                            .cloned()
+                            .or_else(|| self.card_ref(ObjectId(*id)))
+                    })
                     .collect(),
                 eligible,
                 min: min as u32,
@@ -2767,6 +2857,90 @@ impl Playtest {
             },
             answer,
         ))
+    }
+
+    /// The reader's `OutsideGameChoice`, a card a copy: each one's id in the pick, the selection
+    /// phase takes it by, and its ref when it has no object. A face-up exiled card is its object
+    /// (Karn's); a sideboard copy, the companion or an opened pack's card is in no zone, and is
+    /// given an id from `OUTSIDE_IDS` on, in the question's order, which no object reaches.
+    fn outside_choices(&self) -> Vec<(u64, OutsideGameSelection, Option<PlaytestCardRef>)> {
+        let WaitingFor::OutsideGameChoice { choices, .. } = &self.state.waiting_for else {
+            return Vec::new();
+        };
+        let mut next = OUTSIDE_IDS;
+        let mut named = |name: &str, card_id: Option<String>| {
+            let id = next;
+            next += 1;
+            (
+                id,
+                PlaytestCardRef {
+                    id,
+                    name: name.to_string(),
+                    card_id,
+                    text: None,
+                    cause: None,
+                },
+            )
+        };
+        let mut out = Vec::new();
+        for choice in choices {
+            match &choice.source {
+                OutsideGameChoiceSource::Sideboard {
+                    sideboard_index,
+                    card,
+                } => {
+                    for _ in 0..choice.count {
+                        let (id, r) =
+                            named(&card.name, self.printing_by_name(self.you, &card.name));
+                        let selection = OutsideGameSelection::Sideboard {
+                            sideboard_index: *sideboard_index,
+                        };
+                        out.push((id, selection, Some(r)));
+                    }
+                }
+                OutsideGameChoiceSource::Companion { card } => {
+                    let (id, r) = named(&card.name, self.printing_by_name(self.you, &card.name));
+                    out.push((id, OutsideGameSelection::Companion, Some(r)));
+                }
+                OutsideGameChoiceSource::BoosterPack {
+                    pack_slot, card, ..
+                } => {
+                    let (id, r) = named(&card.name, None);
+                    let selection = OutsideGameSelection::BoosterPack {
+                        pack_slot: *pack_slot,
+                    };
+                    out.push((id, selection, Some(r)));
+                }
+                OutsideGameChoiceSource::FaceUpExile { object_id } => out.push((
+                    object_id.0,
+                    OutsideGameSelection::FaceUpExile {
+                        object_id: *object_id,
+                    },
+                    None,
+                )),
+            }
+        }
+        out
+    }
+
+    /// A pick's answer as the engine takes it: the picked cards, or for a card from outside the
+    /// game the selections they stand for.
+    fn answer_of(&self, ids: Vec<u64>, answer: PickAnswer) -> GameAction {
+        if answer != PickAnswer::Outside {
+            return pick_answer(ids, answer);
+        }
+        let choices = self.outside_choices();
+        GameAction::ChooseOutsideGameCards {
+            selections: ids
+                .iter()
+                .filter_map(|id| {
+                    choices
+                        .iter()
+                        .find(|(at, _, _)| at == id)
+                        .map(|(_, selection, _)| selection.clone())
+                })
+                .collect(),
+        }
     }
 
     /// A division the reader made (`Distribute`), checked against the question: every share to
@@ -2903,7 +3077,7 @@ impl Playtest {
             }
             let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
             return (all && (!pick.ordered || pick.min <= 1))
-                .then(|| pick_answer(pick.eligible, answer));
+                .then(|| self.answer_of(pick.eligible, answer));
         }
         let mut answers = self
             .answers()
@@ -3050,8 +3224,17 @@ impl Playtest {
                     }
                     // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`. A
                     // mana color's answer is told by its mana (issue #1363): `SingleColor`'s
-                    // `Black`, or `Combination`'s types in order, a space between.
-                    "choice" => label = mana_of(value).or_else(|| tag_of(value)),
+                    // `Black`, or `Combination`'s types in order, a space between. A choice that
+                    // names a card by its `name` is told by it (a companion's reveal, CR
+                    // 702.139a — the card is outside the game, with no object to point at).
+                    "choice" => {
+                        label = mana_of(value)
+                            .or_else(|| {
+                                let name = value.get("data")?.get("name")?.as_str()?;
+                                Some(name.to_string())
+                            })
+                            .or_else(|| tag_of(value))
+                    }
                     _ => {}
                 }
             }
@@ -3430,7 +3613,7 @@ impl Playtest {
                         ));
                     }
                 }
-                self.apply(self.you, pick_answer(ids, answer), out)?;
+                self.apply(self.you, self.answer_of(ids, answer), out)?;
                 self.advance(out)
             }
             PlaytestAction::AssignDamage { blockers, excess } => {
@@ -3601,6 +3784,7 @@ impl Playtest {
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
             PlaytestAction::Foretell { id } => self.foretell(ObjectId(id), out),
             PlaytestAction::TapForMana { id } => self.tap_for_mana(ObjectId(id), out),
+            PlaytestAction::CompanionToHand => self.companion_to_hand(out),
             PlaytestAction::Pass => {
                 self.apply(self.you, GameAction::PassPriority, out)?;
                 self.advance(out)
@@ -3782,6 +3966,40 @@ impl Playtest {
                 format!("{name} can't be foretold right now: it has no foretell, or {{2}} can't be paid.")
             }
         })
+    }
+
+    /// The rules only: the companion's special action (CR 702.139c), {3} to put it from outside
+    /// the game into the reader's hand — paid as a cast is, so a payment the engine asks about is
+    /// a question `cancel` takes back — or a refusal that says why.
+    fn companion_to_hand(&mut self, out: &mut Log) -> Result<(), String> {
+        let companion = self
+            .player(self.you)
+            .companion
+            .as_ref()
+            .map(|c| (c.card.card.name.clone(), c.used));
+        let ways: Vec<GameAction> = self
+            .answers()
+            .into_iter()
+            .filter(|a| matches!(a, GameAction::CompanionToHand))
+            .collect();
+        let name = companion
+            .as_ref()
+            .map(|(n, _)| n.clone())
+            .unwrap_or_default();
+        self.take_one(
+            ways,
+            "AbilityChoice",
+            name.clone(),
+            out,
+            || match companion {
+                None => "You have no companion outside the game.".to_string(),
+                Some((_, true)) => format!("{name} is already in the game."),
+                Some(_) => format!(
+                "{name} can be put into your hand only in your main phase with the stack empty, \
+                 for {{3}}."
+            ),
+            },
+        )
     }
 
     /// The rules only: a card's one activated ability, a question about which, or a refusal. A
@@ -4974,14 +5192,22 @@ enum PickAnswer {
     FreeCast,
     /// `SubmitPilePartition`: the cards of the first pile.
     PileA,
+    /// `ChooseOutsideGameCards`: the selections the picked cards stand for (`answer_of`).
+    Outside,
     /// `CrewVehicle`: the creatures tapped to crew this Vehicle.
     Crew(ObjectId),
     /// `SaddleMount`: the creatures tapped to saddle this Mount.
     Saddle(ObjectId),
 }
 
+/// The first id a card outside the game is given in a pick (`outside_choices`): 2^48, far past
+/// any object the engine numbers, and still a whole number the page's JavaScript holds exactly.
+pub(super) const OUTSIDE_IDS: u64 = 1 << 48;
+
 /// A pick's answer: the cards, as the question takes them.
 fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
+    // Answered by `answer_of`, which knows the question's selections.
+    debug_assert!(answer != PickAnswer::Outside);
     let objects = || ids.iter().copied().map(ObjectId).collect();
     match answer {
         PickAnswer::Cards => GameAction::SelectCards { cards: objects() },
@@ -4997,6 +5223,9 @@ fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
             selection: ids.first().copied().map(ObjectId),
         },
         PickAnswer::PileA => GameAction::SubmitPilePartition { pile_a: objects() },
+        PickAnswer::Outside => GameAction::ChooseOutsideGameCards {
+            selections: Vec::new(),
+        },
         PickAnswer::Crew(vehicle_id) => GameAction::CrewVehicle {
             vehicle_id,
             creature_ids: objects(),
@@ -5438,6 +5667,19 @@ pub(super) fn tell(
             continue;
         }
         match event {
+            // A companion is public from its reveal (CR 702.139a), and so is its move to a hand.
+            GameEvent::CompanionRevealed { player, card_name } => {
+                out.push(PlaytestHappened::CompanionRevealed {
+                    seat: eyes.seat(*player),
+                    name: card_name.clone(),
+                })
+            }
+            GameEvent::CompanionMovedToHand { player, card_name } => {
+                out.push(PlaytestHappened::CompanionToHand {
+                    seat: eyes.seat(*player),
+                    name: card_name.clone(),
+                })
+            }
             GameEvent::TurnStarted {
                 player_id,
                 turn_number,
