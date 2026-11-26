@@ -205,8 +205,9 @@ pub struct PlaytestSeat {
     /// sandbox's free cast's.
     pub emblems: Vec<PlaytestEmblem>,
     pub library: u32,
-    /// The reader's library, **top first**, for the library menu's look and search; empty for the
-    /// opponent.
+    /// The reader's library, **top first**, for the sandbox's look and search — sent only while
+    /// the sandbox is on (CR 401.2 hides a library's order from its owner too, issue #1749);
+    /// empty for the opponent.
     pub library_cards: Vec<GameCard>,
     /// The top card of this seat's library when the reader may see it (CR 401.5, issue #1722):
     /// revealed to everyone (Courser of Kruphix, "play with the top card of your library revealed"), or the

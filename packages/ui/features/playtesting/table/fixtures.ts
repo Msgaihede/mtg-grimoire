@@ -159,8 +159,7 @@ export function openingHandView(): OpeningHandView {
   return {
     hand: seat.hand,
     library: seat.library,
-    mulligan: { mulligans: 2, bottom: 1, freeFirst: true },
-    libraryLands: 37,
+    mulligan: { mulligans: 2, bottom: 1, freeFirst: true, libraryLands: 37 },
   };
 }
 
