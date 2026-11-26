@@ -106,12 +106,16 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   `play` takes it by the rules alone — the sandbox's ways (unpaid, put, activate) are for the
   reader's own cards (`own`).
 - **Tapping for mana is the rules', never the sandbox's** (`tap_for_mana`, issue #1326). It is
-  taken sandbox or not, wherever the reader has priority, from phase's own board list
+  taken sandbox or not, wherever the reader has priority or is paying a cost (`paying`: phase's
+  `ManaPayment`, `ManaAbilityManaPayment`, `UnlessPayment`, issue #1743), from phase's own board list
   (`activatable_mana_actions_for_player`) — never a list of this crate's, and never the
   manual-selection list, which the land-tap reducer does not accept. The mana floats until a cast
   spends it or the rules empty the pool (CR 500.4); nothing plays on after it (`make_mana`), so a
-  stop is not passed over. Never put it in `is_sandbox`, and never let the sandbox's `Tap` make
-  mana.
+  stop is not passed over; inside a payment window the window stays open and the cast keeps its
+  `Pending`. The reader's casts and activations are stamped `AutoExceptSacrificialMana`
+  (`ask_before_sacrificing`), so a source that sacrifices itself is the engine's
+  `ManaSourceSelection`, answered from its `options` — never spent without asking. Never put it in
+  `is_sandbox`, and never let the sandbox's `Tap` make mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The exceptions are `pick` — the few questions answered by
   a set of cards (or an order of them), whose fields give the count — `damage`, the attacker's

@@ -519,8 +519,9 @@ export type PlaytestAction =
   | { type: "foretell"; id: number }
   /** Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: its
    *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
-   *  Several kinds of mana are a `ManaChoice` prompt. Offered when its
-   *  {@link GameCard.canTapForMana} says so. */
+   *  Taken at priority and inside a payment window (`ManaPayment`, `ManaAbilityManaPayment`,
+   *  `UnlessPayment`, issue #1743), which stays open after the tap. Several kinds of mana are a
+   *  `ManaChoice` prompt. Offered when its {@link GameCard.canTapForMana} says so. */
   | { type: "tapForMana"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
