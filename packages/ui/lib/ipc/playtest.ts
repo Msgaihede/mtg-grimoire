@@ -26,6 +26,7 @@
 import { core } from "@/lib/core";
 import type { DeckVariant } from "./decks";
 import type {
+  CardCounter,
   GameCard,
   GameManaKind,
   GamePlace,
@@ -64,7 +65,9 @@ export type PlaytestPickPurpose =
   | "cast"
   | "order"
   | "pay"
-  | "pile";
+  | "pile"
+  | "crew"
+  | "saddle";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -371,6 +374,56 @@ export interface PlaytestPrompt {
   /** The question is to name something, and any legal word may be answered (`name`), not only
    *  the options listed. */
   nameEntry: boolean;
+  /**
+   * How many counters of each kind to remove from a card, or to move from it onto which
+   * permanents (`RemoveCountersChoice`, `MoveCountersDistribution` — Rhys the Evermore,
+   * Tetravus), which `options` cannot list: `moveCounters` answers.
+   */
+  counters: PlaytestCounters | null;
+  /**
+   * The reader's triggers to put in order when the engine lists only some orders (five or more):
+   * the abilities in the engine's order. `orderTriggers` answers with a permutation of their
+   * indices.
+   */
+  triggers: PlaytestCardRef[] | null;
+  /**
+   * Coin flips to keep or die rolls to ignore (Krark's Thumb, CR 705.1; CR 706.6), with the
+   * results: `keepResults` answers.
+   */
+  results: PlaytestResults | null;
+}
+
+/** Counters of each kind on a card to remove, or to move onto other permanents (CR 107.1c). */
+export interface PlaytestCounters {
+  /** The card the counters are on. */
+  source: PlaytestCardRef | null;
+  /** Each kind that may be taken, and how many the card has, by the kind's name. */
+  kinds: CardCounter[];
+  /** Where the counters may go, for a move; empty for a removal. */
+  destinations: PlaytestCardRef[];
+  /** The most that may be taken in all ("remove up to three"); `null` for any number. */
+  maxTotal: number | null;
+}
+
+/** So many counters of one `kind` taken: removed (`to` null), or moved onto the permanent `to`. */
+export interface PlaytestCounterShare {
+  kind: string;
+  to: number | null;
+  count: number;
+}
+
+/** Coin flips or die rolls made for one instruction: `count` coins are kept, or `count` dice
+ *  ignored. */
+export interface PlaytestResults {
+  /** Die rolls, whose indices name the rolls ignored; `false` for coins, whose indices name the
+   *  flips kept. */
+  dice: boolean;
+  /** A die's natural roll, or a coin's 1 for heads (won) and 0 for tails (lost). */
+  results: number[];
+  /** The indices that may be named — for dice, the rolls tied for the lowest. */
+  eligible: number[];
+  /** How many indices the answer names, exactly. */
+  count: number;
 }
 
 /** An amount to divide among targets (CR 601.2d). */
@@ -442,6 +495,16 @@ export interface PlaytestPick {
    * power 4 or less", issue #1079); `null` for a pick bounded by its count alone.
    */
   powerCap: number | null;
+  /**
+   * The least the picked creatures' power must add up to — crewing a Vehicle, saddling a Mount
+   * ("total power N or more"); `null` for a pick bounded by its count alone.
+   */
+  powerMin: number | null;
+  /**
+   * What each eligible card counts toward `powerMin`, aligned with `eligible` — the engine's own
+   * reckoning. Empty for a pick that counts each card's `GameCard.power`.
+   */
+  contributions: number[];
   /**
    * Where the cards lie, when they all lie in one place — the graveyard a cast is offered from
    * (issue #1329). `null` for cards from several places.
@@ -536,6 +599,14 @@ export type PlaytestAction =
   | { type: "assignDamage"; blockers: PlaytestDamageShare[]; excess: number }
   /** Answer the prompt's `distribute`: so much to each target, adding up to its `total`. */
   | { type: "distribute"; shares: PlaytestShare[] }
+  /** Answer the prompt's `counters`: so many of each kind removed, or moved onto each
+   *  destination. None at all is an answer. */
+  | { type: "moveCounters"; shares: PlaytestCounterShare[] }
+  /** Answer the prompt's `triggers`: their indices in the order they go on the stack, the first
+   *  put on first (so it resolves last). */
+  | { type: "orderTriggers"; order: number[] }
+  /** Answer the prompt's `results`: the indices of the flips kept, or of the rolls ignored. */
+  | { type: "keepResults"; indices: number[] }
   /** Answer a naming prompt (`nameEntry`) with a word of the reader's own. */
   | { type: "name"; text: string }
   | { type: "auto" }
