@@ -801,7 +801,6 @@ export function PlaytestBoard({
                 hand: view.you.hand,
                 mulligan: view.mulligan,
                 library: view.you.library,
-                libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
               }}
               onAct={offer}
               busy={busy}
@@ -938,6 +937,7 @@ export function PlaytestBoard({
                         canUndo: view.canUndo && !busy,
                         canRedo: view.canRedo && !busy,
                         sandbox: view.sandbox,
+                        hold: view.hold,
                       },
                 playing: playing && !frozen,
                 sandbox: edits,

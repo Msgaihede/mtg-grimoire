@@ -61,6 +61,13 @@ const TITLES: Record<string, string> = {
   ChooseRoomDoor: "Which door?",
   ChooseDungeon: "Choose a dungeon",
   DistributeAmong: "Divide",
+  AssignBlockerDamage: "Divide the blocker’s damage",
+  MoveCountersDistribution: "Move counters",
+  RemoveCountersChoice: "Remove counters",
+  CoinFlipKeepChoice: "Keep a coin flip",
+  DieKeepChoice: "Ignore a die roll",
+  CrewVehicle: "Crew",
+  SaddleMount: "Saddle",
   CombatTaxPayment: "Pay to attack?",
 };
 

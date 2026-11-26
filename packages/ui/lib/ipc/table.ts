@@ -59,6 +59,11 @@ export interface MulliganView {
   /** How many cards keeping this hand puts on the bottom. */
   bottom: number;
   freeFirst: boolean;
+  /**
+   * The lands in the reader's library: a count, never the cards, whose order the reader may not
+   * know (CR 401.2) — `libraryCards` is sent only while the sandbox is on.
+   */
+  libraryLands: number;
 }
 
 export interface GameCard {

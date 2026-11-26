@@ -262,6 +262,21 @@ fn to_main(game: &mut Playtest) -> PlaytestStep {
     panic!("never came back to the main phase");
 }
 
+/// Issue #1749: the sandbox's look and search read the reader's library, top first — sent while
+/// the sandbox is on, and only then.
+#[test]
+fn the_readers_library_is_sent_in_order_only_while_the_sandbox_is_on() {
+    engine(|| {
+        let (mut game, step) = deal(green(), 2);
+        assert!(!step.view.sandbox && step.view.you.library_cards.is_empty());
+        let on = game.act(A::SetSandbox { on: true }).unwrap().view;
+        assert_eq!(on.you.library_cards.len(), on.you.library as usize);
+        assert!(on.opponents[0].library_cards.is_empty());
+        let off = game.act(A::SetSandbox { on: false }).unwrap().view;
+        assert!(off.you.library_cards.is_empty());
+    });
+}
+
 #[test]
 fn a_new_game_waits_on_the_opening_hand_and_hides_the_opponents_cards() {
     let view: PlaytestView = engine(|| deal(green(), 2).1.view);
@@ -282,7 +297,12 @@ fn a_new_game_waits_on_the_opening_hand_and_hides_the_opponents_cards() {
     // The AI has decided its own hand (it may have mulliganed): what it holds is a count.
     assert!((5..=7).contains(&view.opponents[0].hand_count));
     assert_eq!(view.opponents[0].hand_count + view.opponents[0].library, 40);
-    assert_eq!(view.you.library_cards.len(), 40 - 7);
+    // Issue #1749: the reader's library is a count while the sandbox is off — its order is hidden
+    // from its owner too (CR 401.2) — and the opening hand's land figure is a number of its own.
+    assert_eq!(view.you.library, 40 - 7);
+    assert!(view.you.library_cards.is_empty());
+    let kept_lands = view.you.hand.iter().filter(|c| c.is_land).count() as u32;
+    assert_eq!(view.mulligan.unwrap().library_lands, 17 - kept_lands);
     assert!(view.you.hand.iter().all(|c| c.card_id.is_some()));
     assert_eq!(
         view.started,
