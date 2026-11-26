@@ -481,3 +481,127 @@ fn damage_divided_among_targets_is_asked_as_a_division() {
         .collect();
     assert_eq!(damaged, vec![1, 1], "{:?}", divided.happened);
 }
+
+/// Issue #1746: phase's game menu offers Concede (CR 104.3a), always legal though never among
+/// the legal answers. Against the goldfish — which nobody can lose to otherwise — it ends the
+/// game as the reader's loss, and once it is over there is nothing left to concede.
+#[test]
+fn conceding_to_the_goldfish_ends_the_game_as_a_loss() {
+    let (step, again) = engine(|| {
+        let mut game = kept(&deck(vec![]));
+        let step = game.act(A::Concede).expect("conceded");
+        let again = game.act(A::Concede).unwrap_err();
+        (step, again)
+    });
+    assert_eq!(step.view.stage, Stage::Over);
+    assert_eq!(
+        step.view.winner,
+        Some(super::view::PlaytestPlayer::Opponent),
+        "the goldfish wins"
+    );
+    assert!(
+        step.happened
+            .iter()
+            .any(|h| matches!(h, H::GameOver { winner: Some(_) })),
+        "{:?}",
+        step.happened
+    );
+    assert!(
+        step.view.specials.is_empty(),
+        "nothing is offered once over"
+    );
+    assert!(again.contains("over"), "{again}");
+}
+
+/// Concede is taken at the opening hand too: the game is unfinished.
+#[test]
+fn a_concession_is_taken_before_the_keep() {
+    let step = engine(|| {
+        let (mut game, _) =
+            Playtest::new(&deck(vec![]), &[], &[], 7, Difficulty::default()).expect("a game");
+        game.act(A::Concede).expect("conceded at the opening hand")
+    });
+    assert_eq!(step.view.stage, Stage::Over);
+}
+
+/// Issue #1746: an action of the rules' that belongs to no card — paying to end a Licid's effect
+/// (CR 116.2c) — is offered beside Pass (`specials`), with the card's name and the cost as the
+/// engine gives them, and taken by `special`; the reader keeps priority after it (CR 116.1).
+#[test]
+fn a_licids_effect_is_ended_by_a_special_action() {
+    let (before, offered, after, refused) = engine(|| {
+        let licid = card(
+            "Tempting Licid",
+            Some("{2}{G}"),
+            "Creature — Licid",
+            "{G}, {T}: Tempting Licid loses this ability and becomes an Aura enchantment with enchant creature. Attach it to target creature. You may pay {G} to end this effect.\nAll creatures able to block enchanted creature do so.",
+            1,
+        );
+        let mut game = kept(&deck(vec![licid]));
+        for _ in 0..3 {
+            put(&mut game, "Forest", Place::Battlefield);
+        }
+        put(&mut game, "Grizzly Bears", Place::Battlefield);
+        put(&mut game, "Tempting Licid", Place::Battlefield);
+        // A turn round, so the Licid is no longer summoning sick.
+        game.act(A::EndTurn).expect("the goldfish's turn");
+        let before = game.view();
+        let licid = find(&before.you.battlefield, "Tempting Licid")
+            .expect("the Licid")
+            .id;
+        let mut step = game.act(A::Activate { id: licid }).expect("activated");
+        // Its target, and then the ability on the stack: let it resolve.
+        for _ in 0..6 {
+            match step.view.stage {
+                Stage::Prompt => {
+                    let bears = step
+                        .view
+                        .prompt
+                        .as_ref()
+                        .and_then(|p| {
+                            p.options
+                                .iter()
+                                .find(|o| o.cards.iter().any(|c| c.name == "Grizzly Bears"))
+                        })
+                        .map(|o| o.index)
+                        .unwrap_or(0);
+                    step = game.act(A::Choose { index: bears }).expect("aimed");
+                }
+                Stage::Respond => step = game.act(A::Pass).expect("resolved"),
+                _ => break,
+            }
+        }
+        let offered = step.view.clone();
+        let index = offered
+            .specials
+            .iter()
+            .find(|o| o.kind == "EndContinuousEffect")
+            .map(|o| o.index)
+            .expect("ending the effect is offered");
+        let after = game.act(A::Special { index }).expect("ended");
+        let refused = game.act(A::Special { index: 9 }).unwrap_err();
+        (before, offered, after, refused)
+    });
+    assert!(before.specials.is_empty(), "no effect to end yet");
+    let special = offered
+        .specials
+        .iter()
+        .find(|o| o.kind == "EndContinuousEffect")
+        .unwrap();
+    assert_eq!(special.label.as_deref(), Some("Tempting Licid"));
+    assert_eq!(special.cost.as_deref(), Some("{G}"));
+    assert!(
+        !offered.specials.iter().any(|o| o.kind == "PassPriority"),
+        "passing is the foot's own button"
+    );
+    assert_eq!(after.view.stage, offered.stage, "the reader keeps priority");
+    assert!(
+        after
+            .view
+            .specials
+            .iter()
+            .all(|o| o.kind != "EndContinuousEffect"),
+        "the effect is over"
+    );
+    assert!(!refused.is_empty());
+}

@@ -63,6 +63,7 @@ import {
   aimablePlayers,
   pickAttacker,
   pickBlocker,
+  specialButtons,
   stageButtons,
   tableMarks,
   tablePicks,
@@ -72,6 +73,7 @@ import {
 import { aimDrop, canCarry, retractDrop, useAimFollowThrough, type AimAt } from "./aim";
 import { combatArrows, targetArrows } from "./arrows";
 import { BoardArrows } from "./BoardArrows";
+import { EndGameDialog } from "./EndGameDialog";
 import { DamagePops } from "./DamagePops";
 import { MiddleLine, StackColumn } from "./MiddleLine";
 import { OpponentArea } from "./OpponentArea";
@@ -367,6 +369,8 @@ export function PlaytestBoard({
   // whole of a turn and the opponent's after it, and the busy state should say that is what it is
   // doing rather than that the opponent is thinking. Held against the view it was pressed on.
   const [ending, setEnding] = useState<PlaytestView | null>(null);
+  // The game menu's Concede, asked about first (issue #1746): it ends the game as a loss.
+  const [conceding, setConceding] = useState(false);
   const passing = (ending !== null && ending === view) || (view?.endingTurn ?? false);
 
   // **A life change still in its plate's wait goes first** (issue #1593): a plate sends `setLife`
@@ -950,6 +954,10 @@ export function PlaytestBoard({
                 onNewGame,
                 onBack,
                 onLook: lookYou,
+                onConcede:
+                  view !== null && view.stage !== "over" && !frozen
+                    ? () => setConceding(true)
+                    : null,
               }),
             )}
           >
@@ -1237,6 +1245,23 @@ export function PlaytestBoard({
               buttons !== null &&
               buttons.primary !== null && (
                 <div className="flex items-end gap-2">
+                  {/* The rules' actions that belong to no card (issue #1746), beside Pass. */}
+                  {view !== null &&
+                    specialButtons(view).map((special, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => act(special.action)}
+                        className={cn(
+                          "inline-flex h-11 items-center rounded-2xl border border-accent bg-surface px-4",
+                          "text-[13px] text-text transition-colors motion-reduce:transition-none hover:bg-accent hover:text-accent-fg",
+                          PRESS,
+                          FOCUS,
+                        )}
+                      >
+                        {special.label}
+                      </button>
+                    ))}
                   {buttons.secondary !== null && (
                     <button
                       type="button"
@@ -1415,6 +1440,20 @@ export function PlaytestBoard({
             }}
           />
         )}
+        <EndGameDialog
+          open={conceding}
+          title="Concede the game?"
+          confirmLabel="Concede"
+          onConfirm={() => {
+            setConceding(false);
+            act({ type: "concede" });
+          }}
+          onCancel={() => setConceding(false)}
+        >
+          {view?.lobby === true
+            ? "You leave the game and lose it. The others play on without you."
+            : "You leave the game and lose it."}
+        </EndGameDialog>
       </div>
     </LifeCommitsContext.Provider>
   );

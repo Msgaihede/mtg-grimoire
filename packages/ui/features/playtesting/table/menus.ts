@@ -430,6 +430,7 @@ export function gameMenu({
   onNewGame,
   onBack,
   onLook,
+  onConcede = null,
 }: {
   view: GameMenuView | null;
   /** A game is on the table: not being dealt, not its opening hand, not over. */
@@ -447,6 +448,11 @@ export function gameMenu({
   onNewGame: () => void;
   onBack: () => void;
   onLook: (l: ZoneLook) => void;
+  /**
+   * Concede the game (CR 104.3a, issue #1746), as phase's own game menu offers it: `null` while
+   * there is no unfinished game to concede, or the engine is busy. The board asks before it does.
+   */
+  onConcede?: (() => void) | null;
 }): MenuItem[] {
   const tokens = view?.tokens ?? [];
   const edits = playing && sandbox;
@@ -536,6 +542,7 @@ export function gameMenu({
     submenu("playmat", "Playmat", mats),
     { kind: "separator", id: "sep" },
     ...newGameRows,
+    action("concede", "Concede", () => onConcede?.(), onConcede === null),
     action("back", backLabel, onBack),
   ];
 }

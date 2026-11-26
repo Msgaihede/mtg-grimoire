@@ -397,6 +397,24 @@ the reader's `tapped`, and undone like any action. `canTapForMana` is on each of
 battlefield cards the rules would tap now, read once per view like `castable`. It is not a sandbox
 action: it is a rules action, so the sandbox's gate does not touch it.
 
+**`concede`** is phase's `Concede` (CR 104.3a, issue #1746), offered as the game menu's Concede
+and asked about first (`EndGameDialog`). The rules never list it among the legal answers, and it
+is taken at any stage of an unfinished game — the opening hand, a question, a lobby's `waiting`
+— for the acting person's seat (a guest's `act_by` concedes the guest). Whatever the reader had
+half made goes with them. Against the goldfish it ends the game as a loss (its emblems do not stop
+a concession), in a duel the other side wins, and in a four-player game the others play on without
+the reader (CR 800.4a). Once the game is over it is refused, like every other action.
+
+**`specials`** are the rules' answers at the reader's priority (`main`, `respond`) that belong to
+no card — phase's own `source_object` is `None` — passing aside: paying to end a Licid's effect
+(CR 116.2c, `EndContinuousEffect`), which phase's client offers as buttons beside Pass
+(`end_continuous_effect_offers`), and any other the engine lists. Each is a `PlaytestOption` read
+as a prompt's are, with the effect's card in `label` (`source_name`) and what it costs in `cost`
+(`{W}`, by phase's own shard symbols); `special { index }` takes one. A special action uses no
+stack (CR 116.1), so the reader keeps priority at the decision they took it at (`play_on`'s
+`held`). The foot draws one button for each beside the stage buttons (`combat.ts`'
+`specialButtons`). None in a replay frame.
+
 **`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
 from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
 reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a
@@ -1171,7 +1189,6 @@ putting a host's game away closes its lobby: dealt or being dealt, never refused
   `AutoExceptSacrificialMana`, so a Treasure may be spent without asking.
 - **The companion and the sideboard** (`CompanionToHand`, wishes' `ChooseOutsideGameCards`): the
   deck sent to a game is its main deck and commanders only (`grimoire-core`'s `play.rs`).
-- **Conceding** (`Concede`) and phase's sourceless specials (ending a Licid's effect).
 - **Ordering five or more triggers freely.** phase lists every order up to four, and only two
   orders past that.
 - **The light app.** Playtesting is not a destination there.

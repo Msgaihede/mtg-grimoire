@@ -20,6 +20,7 @@ function option(over: Partial<PlaytestOption>): PlaytestOption {
     number: null,
     yes: null,
     label: null,
+    cost: null,
     ...over,
   };
 }
@@ -125,6 +126,7 @@ describe("optionLabel", () => {
       option({
         kind: "CastAdventure",
         label: "Stomp",
+        cost: null,
         cards: [{ id: 1, name: "B", cardId: null, text: null, cause: null }],
       }),
       { kind: "CastChoice" },
@@ -192,6 +194,7 @@ describe("answers told apart by their kind", () => {
     const pile = option({
       kind: "ChoosePile",
       label: "A",
+      cost: null,
       cards: [card("Opt"), card("Island")],
     });
     expect(optionLabel(pile, { kind: "SeparatePilesChoice" })).toEqual({

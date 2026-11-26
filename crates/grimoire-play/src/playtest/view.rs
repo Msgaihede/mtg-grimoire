@@ -127,6 +127,11 @@ pub struct PlaytestView {
     /// On the reader's own turn, the lands they may still play this turn (CR 305.2) — 1 for
     /// the turn's land drop not yet made, more with an Azusa. `None` on another player's turn.
     pub lands_left: Option<u32>,
+    /// The rules' answers at the reader's priority (`main`, `respond`) that belong to no card —
+    /// phase's own `source_object` is `None` — other than passing: a special action such as
+    /// paying to end a Licid's effect (CR 116.2c, `EndContinuousEffect`), offered beside Pass and
+    /// answered with `special`. Empty at every other stage and in a replay frame.
+    pub specials: Vec<PlaytestOption>,
 }
 
 /// It is day or night (CR 731).
@@ -578,8 +583,12 @@ pub struct PlaytestOption {
     pub number: Option<i64>,
     /// A yes or a no: accept the "may", pay the cost, put it on top.
     pub yes: Option<bool>,
-    /// A named choice's own word, as the card prints it (a color, a creature type, a mode).
+    /// A named choice's own word, as the card prints it (a color, a creature type, a mode), or
+    /// the card a special action is about, as the engine names it (`source_name`).
     pub label: Option<String>,
+    /// What the answer costs, in mana symbols (`{1}{W}`), when the answer names a cost of its
+    /// own — a special action's (CR 116.2c).
+    pub cost: Option<String>,
 }
 
 /// A card an option names: its id (which the board lights up) and its name.
@@ -740,6 +749,16 @@ pub enum PlaytestAction {
     Auto,
     /// Take back the cast or activation the prompt came out of.
     Cancel,
+    /// Take the view's `specials[index]`: an action of the rules' that belongs to no card, at the
+    /// reader's priority (paying to end a Licid's effect).
+    Special {
+        index: u32,
+    },
+    /// Concede the game (CR 104.3a): the reader leaves it and loses. Taken at any stage of an
+    /// unfinished game, a guest's decision included, as phase takes it — though the rules never
+    /// list it among the legal answers. Against the goldfish it ends the game as a loss; in a
+    /// game of more than two the others play on without the reader (CR 800.4a).
+    Concede,
     // The sandbox, refused while it is off, taken wherever the reader plays or declares (`main`,
     // `respond`, `attack`, `block`; issue #1522), never in a question: on any card the
     // reader owns or controls, and on any card the table shows (an opponent's battlefield,

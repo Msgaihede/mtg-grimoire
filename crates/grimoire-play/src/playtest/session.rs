@@ -78,6 +78,7 @@ use engine::types::game_state::{
     PayCostKind, StackEntry, StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
+use engine::types::mana::ManaCost;
 use engine::types::phase::Phase;
 use engine::types::player::PlayerCounterKind;
 use engine::types::statics::{CastFreeOrigin, CastFrequency, StaticMode};
@@ -159,6 +160,7 @@ const NO_SUCH_PLAYER: &str = "There is no such player in this game.";
 const MANA_EDIT_LIMIT: i32 = 99;
 const PLAYER_OUT: &str = "That player is out of the game.";
 const NOT_A_PERSON: &str = "That seat is not a person's at this table.";
+const NO_SPECIAL: &str = "That is no longer on offer.";
 const NOT_YOURS: &str = "Another player is deciding. Wait for your turn to act.";
 const NO_UNDO_TOGETHER: &str = "A game with other people at the table cannot be taken back.";
 const NO_SANDBOX_TOGETHER: &str = "The sandbox stays off in a game with other people.";
@@ -1168,7 +1170,31 @@ impl Playtest {
             lands_left: (s.active_player == self.you).then(|| {
                 u32::from(s.max_lands_per_turn).saturating_sub(u32::from(s.lands_played_this_turn))
             }),
+            specials: if watching {
+                Vec::new()
+            } else {
+                self.specials()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| self.option_of(i, a, &[], &Value::Null))
+                    .collect()
+            },
         }
+    }
+
+    /// The rules' answers at the reader's priority that belong to no card (phase's
+    /// `source_object` is `None`), passing aside: the special actions phase's own client offers
+    /// as buttons beside Pass — paying to end a Licid's effect (CR 116.2c), and any other the
+    /// engine lists, by its classification and never a list of ours. Only at `main` and
+    /// `respond`, as the other offers.
+    fn specials(&self) -> Vec<GameAction> {
+        if !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
+            return Vec::new();
+        }
+        self.answers()
+            .into_iter()
+            .filter(|a| a.source_object().is_none() && !matches!(a, GameAction::PassPriority))
+            .collect()
     }
 
     /// What phase's own projection for the reader's seat lets them see (`filter_state_for_viewer`,
@@ -2528,6 +2554,7 @@ impl Playtest {
         let mut number = None;
         let mut yes = None;
         let mut label = None;
+        let mut cost = None;
         let mut named: Vec<PlaytestCardRef> = Vec::new();
         let ability = |v: &Value| v.as_u64().and_then(|i| abilities.get(i as usize)).cloned();
         let phrases = phrases(question);
@@ -2631,6 +2658,10 @@ impl Playtest {
                     // mana color's answer is told by its mana (issue #1363): `SingleColor`'s
                     // `Black`, or `Combination`'s types in order, a space between.
                     "choice" => label = mana_of(value).or_else(|| tag_of(value)),
+                    // A special action's own words (CR 116.2c): the card whose effect it ends, as
+                    // the engine names it, and what taking it costs.
+                    "source_name" => label = value.as_str().map(str::to_string),
+                    "cost" => cost = symbols_of(value),
                     _ => {}
                 }
             }
@@ -2676,6 +2707,7 @@ impl Playtest {
             number,
             yes,
             label,
+            cost,
         }
     }
 
@@ -2819,6 +2851,21 @@ impl Playtest {
         }
         if stage == PlaytestStage::Over {
             return Err(OVER.into());
+        }
+        if let PlaytestAction::Concede = action {
+            // CR 104.3a: at any time in an unfinished game — at the opening hand, in a question,
+            // while another person decides. Whatever the reader had half made goes with them
+            // (CR 800.4a), the board's own question and cast too.
+            self.pending = None;
+            self.ending = None;
+            self.apply(
+                self.you,
+                GameAction::Concede {
+                    player_id: self.you,
+                },
+                out,
+            )?;
+            return self.advance(out);
         }
         if stage == PlaytestStage::Waiting {
             return Err(NOT_YOURS.into());
@@ -3118,6 +3165,17 @@ impl Playtest {
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
             PlaytestAction::Foretell { id } => self.foretell(ObjectId(id), out),
             PlaytestAction::TapForMana { id } => self.tap_for_mana(ObjectId(id), out),
+            PlaytestAction::Special { index } => {
+                let special = self
+                    .specials()
+                    .into_iter()
+                    .nth(index as usize)
+                    .ok_or(NO_SPECIAL)?;
+                self.apply(self.you, special, out)?;
+                // A special action uses no stack and passes nothing (CR 116.1): the reader keeps
+                // priority, at the decision they took it at.
+                self.play_on(true, out)
+            }
             PlaytestAction::Pass => {
                 self.apply(self.you, GameAction::PassPriority, out)?;
                 self.advance(out)
@@ -4594,6 +4652,26 @@ fn option_word(option: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| tag_of(option))
+}
+
+/// A mana cost on the wire in its printed symbols (`{1}{W}`), by phase's own `symbol` for each
+/// shard. `None` for anything else — a cost that stands for the card's own (`SelfManaCost`).
+fn symbols_of(value: &Value) -> Option<String> {
+    match serde_json::from_value::<ManaCost>(value.clone()).ok()? {
+        ManaCost::NoCost => Some("{0}".into()),
+        ManaCost::Cost { shards, generic } => {
+            let mut symbols = if generic > 0 || shards.is_empty() {
+                format!("{{{generic}}}")
+            } else {
+                String::new()
+            };
+            for shard in shards {
+                symbols.push_str(&format!("{{{}}}", shard.symbol()));
+            }
+            Some(symbols)
+        }
+        _ => None,
+    }
 }
 
 /// A word on the wire: a string, or the tag of one of phase's `#[serde(tag = "type")]` enums.
