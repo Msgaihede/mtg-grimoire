@@ -13,7 +13,9 @@
  * is offered only within the bounds, rather than letting the reader send a set the engine will
  * only refuse. A keep within a total
  * power (`powerCap`, issue #1079) is bounded by the picked creatures' power as well: a creature
- * that would pass the cap is not picked.
+ * that would pass the cap is not picked. A crew or a saddle (`powerMin`) is bounded below: Confirm
+ * waits until the picked creatures' power — each as the engine counts it (`contributions`) —
+ * reaches it.
  *
  * **An optional cast is asked before it is picked** (issue #1329): "you may cast a spell from
  * your graveyard" is a yes or a no first (`pickOffer`), and only a yes shows the cards.
@@ -64,6 +66,10 @@ export function pickTitle(pick: PlaytestPick): string {
       return `Choose ${bound(pick)} to pay the cost`;
     case "pile":
       return "Separate into two piles: picked cards are pile A";
+    case "crew":
+      return `Crew ${pick.powerMin ?? 0}: tap creatures with total power ${pick.powerMin ?? 0} or more`;
+    case "saddle":
+      return `Saddle ${pick.powerMin ?? 0}: tap creatures with total power ${pick.powerMin ?? 0} or more`;
     case "split":
       return `Put ${pick.max} onto the battlefield and the rest into your hand`;
   }
@@ -195,10 +201,27 @@ export function pickPosition(
     : { badge: at - top + 1, words: `bottom ${at - top + 1}` };
 }
 
-/** "2 of up to 3", "1 of 2"; under a power cap, "2 kept, power 3 of 4". */
+/** "2 of up to 3", "1 of 2"; under a power cap, "2 kept, power 3 of 4"; for a crew, "2 tapped,
+ *  power 4 of 3". */
 export function pickCounter(pick: PlaytestPick, n: number, power = 0): string {
   if (pick.powerCap !== null) return `${n} kept, power ${power} of ${pick.powerCap}`;
+  if (pick.powerMin !== null) return `${n} tapped, power ${power} of ${pick.powerMin}`;
   return `${n} of ${bound(pick)}`;
+}
+
+/**
+ * What one card counts toward a pick's power: the engine's own reckoning when it gives one
+ * (`contributions`, a crew's "as though its power were 2 greater"), else `power(id)`.
+ */
+export function powerIn(
+  pick: Pick<PlaytestPick, "eligible" | "contributions">,
+  power: (id: number) => number,
+): (id: number) => number {
+  if (pick.contributions.length === 0) return power;
+  return (id) => {
+    const at = pick.eligible.indexOf(id);
+    return at < 0 ? 0 : (pick.contributions[at] ?? 0);
+  };
 }
 
 /** The picked cards' power added up, as a total-power keep counts it. */
@@ -208,12 +231,18 @@ export function pickedPower(picked: readonly number[], powerOf: (id: number) => 
 
 /** Whether `n` picked cards of `power` in all is an answer the engine takes. */
 export function canConfirm(
-  pick: Pick<PlaytestPick, "min" | "max"> & Partial<Pick<PlaytestPick, "powerCap">>,
+  pick: Pick<PlaytestPick, "min" | "max"> & Partial<Pick<PlaytestPick, "powerCap" | "powerMin">>,
   n: number,
   power = 0,
 ): boolean {
   const cap = pick.powerCap ?? null;
-  return n >= pick.min && n <= pick.max && (cap === null || power <= cap);
+  const least = pick.powerMin ?? null;
+  return (
+    n >= pick.min &&
+    n <= pick.max &&
+    (cap === null || power <= cap) &&
+    (least === null || power >= least)
+  );
 }
 
 /** The confirm button's words for `n` picked: "Discard 2", "Find 1", "Done". */
@@ -246,6 +275,10 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return "Pay";
     case "pile":
       return "Make piles";
+    case "crew":
+      return "Crew";
+    case "saddle":
+      return "Saddle";
     case "split":
       return "Put them";
   }

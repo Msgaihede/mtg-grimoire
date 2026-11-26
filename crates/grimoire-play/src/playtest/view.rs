@@ -16,7 +16,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::view::{GameCard, ManaKind, ManaTable, MulliganView, Place, Seat, TokenOffer};
+use crate::view::{
+    CardCounter, GameCard, ManaKind, ManaTable, MulliganView, Place, Seat, TokenOffer,
+};
 
 /// A player at the table, from the reader's seat: the reader, or one of up to three opponents in
 /// turn order after them. On the wire `"you"`, `"opponent"`, `"opponent2"` and `"opponent3"`, so a
@@ -209,8 +211,9 @@ pub struct PlaytestSeat {
     /// sandbox's free cast's.
     pub emblems: Vec<PlaytestEmblem>,
     pub library: u32,
-    /// The reader's library, **top first**, for the library menu's look and search; empty for the
-    /// opponent.
+    /// The reader's library, **top first**, for the sandbox's look and search — sent only while
+    /// the sandbox is on (CR 401.2 hides a library's order from its owner too, issue #1749);
+    /// empty for the opponent.
     pub library_cards: Vec<GameCard>,
     /// The top card of this seat's library when the reader may see it (CR 401.5, issue #1722):
     /// revealed to everyone (Courser of Kruphix, "play with the top card of your library revealed"), or the
@@ -410,6 +413,64 @@ pub struct PlaytestPrompt {
     /// The question is to name something — a card, a creature type — and any legal word may be
     /// answered, not only the options listed (`name`).
     pub name_entry: bool,
+    /// Present when the question is how many counters of each kind to remove from a card, or to
+    /// move from it onto which permanents (`RemoveCountersChoice`, `MoveCountersDistribution` —
+    /// Rhys the Evermore, Tetravus; CR 107.1c, 122.5), which `options` cannot list (the engine
+    /// offers only the extremes). `moveCounters` answers it.
+    pub counters: Option<PlaytestCounters>,
+    /// Present when the question is the order to put the reader's triggers on the stack
+    /// (`OrderTriggers`, CR 603.3b) and the engine lists only some orders — every order up to
+    /// four triggers, only as they are and reversed past that. The abilities, in the engine's
+    /// order; `orderTriggers` answers it with a permutation of their indices.
+    pub triggers: Option<Vec<PlaytestCardRef>>,
+    /// Present when the question is which of several coin flips to keep, or which die rolls to
+    /// ignore (`CoinFlipKeepChoice`, `DieKeepChoice` — Krark's Thumb, CR 705.1; CR 706.6), which
+    /// `options` lists only for some counts. `keepResults` answers it.
+    pub results: Option<PlaytestResults>,
+}
+
+/// Counters of each kind on a card to remove, or to move onto other permanents, as the reader
+/// chooses (CR 107.1c: none is always an answer).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCounters {
+    /// The card the counters are on.
+    pub source: Option<PlaytestCardRef>,
+    /// Each kind of counter that may be taken off it, and how many there are — by the kind's
+    /// name as `CardCounter` gives it.
+    pub kinds: Vec<CardCounter>,
+    /// Where the counters may go, for a move; empty for a removal.
+    pub destinations: Vec<PlaytestCardRef>,
+    /// The most counters that may be taken in all, across every kind ("remove up to three");
+    /// `None` for any number.
+    pub max_total: Option<u32>,
+}
+
+/// So many counters of one kind (`kind`, a `PlaytestCounters.kinds` name) taken off the card:
+/// removed, or moved onto the permanent `to`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCounterShare {
+    pub kind: String,
+    pub to: Option<u64>,
+    pub count: u32,
+}
+
+/// Coin flips or die rolls made for one instruction, of which the reader keeps some: `count` of
+/// the coins are kept, or `count` of the dice are ignored (the rest stand).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestResults {
+    /// Die rolls, whose `indices` name the rolls ignored; `false` for coin flips, whose `indices`
+    /// name the flips kept.
+    pub dice: bool,
+    /// Each result, in order: a die's natural roll (CR 706.2), or a coin's 1 for heads (or won)
+    /// and 0 for tails (or lost, CR 705.2).
+    pub results: Vec<u32>,
+    /// The indices that may be named — for dice, the rolls tied for the lowest (CR 706.6).
+    pub eligible: Vec<u32>,
+    /// How many indices the answer names, exactly.
+    pub count: u32,
 }
 
 /// An amount to divide among targets as the reader chooses (CR 601.2d).
@@ -497,6 +558,14 @@ pub struct PlaytestPick {
     /// `GameCard.power` (Slaughter the Strong's "total power 4 or less", issue #1079). `None` for
     /// a pick bounded by its count alone.
     pub power_cap: Option<i32>,
+    /// The least the picked cards' power must add up to — crewing a Vehicle or saddling a Mount
+    /// (CR 702.122a, 702.171a): "tap any number of untapped creatures with total power N or
+    /// more". `None` for a pick bounded by its count alone.
+    pub power_min: Option<i32>,
+    /// What each eligible card counts toward `power_min`, aligned with `eligible`: the engine's
+    /// own reckoning ("as though its power were 2 greater", "using its toughness"). Empty for a
+    /// pick that counts each card's `GameCard.power`.
+    pub contributions: Vec<i32>,
     /// Where the cards lie, when they all lie in one place — the graveyard a cast is offered
     /// from (issue #1329). `None` for cards from several places, or from the stack.
     pub zone: Option<Place>,
@@ -540,6 +609,10 @@ pub enum PlaytestPickPurpose {
     Pay,
     /// The picked cards are one pile, the rest the other (CR 700.3 — Fact or Fiction).
     Pile,
+    /// The picked creatures are tapped to crew the Vehicle (CR 702.122a).
+    Crew,
+    /// The picked creatures are tapped to saddle the Mount (CR 702.171a).
+    Saddle,
     /// A search's finds split between two places (CR 701.23a, Cultivate — issue #1751): the
     /// picked cards go onto the battlefield, as the card says (tapped, for Cultivate), and the
     /// rest into the hand.
@@ -756,6 +829,21 @@ pub enum PlaytestAction {
     /// whole `total`.
     Distribute {
         shares: Vec<PlaytestShare>,
+    },
+    /// Answer the prompt's `counters`: so many of each kind removed, or moved onto each
+    /// destination. None at all is an answer.
+    MoveCounters {
+        shares: Vec<PlaytestCounterShare>,
+    },
+    /// Answer the prompt's `triggers`: the triggers in the order they go on the stack, each by
+    /// its index there — the first put on the stack first, so it resolves last (CR 405.3).
+    OrderTriggers {
+        order: Vec<u32>,
+    },
+    /// Answer the prompt's `results`: the indices of the coin flips kept, or of the die rolls
+    /// ignored.
+    KeepResults {
+        indices: Vec<u32>,
     },
     /// Answer a naming prompt (`name_entry`) with a word of the reader's own: a card's name, a
     /// creature type. Refused when the rules would not take it.
