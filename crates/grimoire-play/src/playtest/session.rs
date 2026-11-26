@@ -104,10 +104,10 @@ use super::view::{
     PlaytestCombat, PlaytestCommanderDamage, PlaytestCounterShare, PlaytestCounters,
     PlaytestDamage, PlaytestDamageBlocker, PlaytestDamageShare, PlaytestDayNight,
     PlaytestDesignation, PlaytestDistribute, PlaytestDistributeTarget, PlaytestDungeon,
-    PlaytestEmblem, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
-    PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestResults, PlaytestSeat,
-    PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep,
-    PlaytestView,
+    PlaytestEmblem, PlaytestFirst, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase,
+    PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestResults,
+    PlaytestSeat, PlaytestShare, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop,
+    PlaytestStopStep, PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -269,6 +269,8 @@ pub struct Playtest {
     dead_on: Option<u32>,
     /// The steps the reader asked to stop at (`setStops`).
     stops: Vec<PlaytestStop>,
+    /// The reader holds priority over their own spells and abilities (`setHold`, issue #1751).
+    hold: bool,
     /// The turn the reader is ending (`endTurn`): until it changes, nothing but a block or a
     /// question stops the game.
     ending: Option<u32>,
@@ -320,6 +322,7 @@ struct Chair {
     pending: Option<Pending>,
     choice: Option<BoardChoice>,
     stops: Vec<PlaytestStop>,
+    hold: bool,
     ending: Option<u32>,
     stopped_at: Option<(u32, Phase)>,
     mulligans: u8,
@@ -477,6 +480,27 @@ impl Playtest {
         opponents: &[OpponentDeck],
         seed: u64,
         difficulty: Difficulty,
+    ) -> Result<(Self, PlaytestStep), String> {
+        Playtest::new_first(
+            you,
+            your_tokens,
+            opponents,
+            seed,
+            difficulty,
+            PlaytestFirst::Random,
+        )
+    }
+
+    /// `new`, with who takes the first turn picked (issue #1751): `Random` is `new`'s coin flip,
+    /// `Play` the reader, and `Draw` an opponent — in a four-player game the one the seed picks
+    /// among them (the seed modulo three, after the reader), against the goldfish the goldfish.
+    pub fn new_first(
+        you: &[CardFacts],
+        your_tokens: &[TokenFacts],
+        opponents: &[OpponentDeck],
+        seed: u64,
+        difficulty: Difficulty,
+        first: PlaytestFirst,
     ) -> Result<(Self, PlaytestStep), String> {
         if opponents.len() > MAX_OPPONENTS {
             return Err(format!(
@@ -672,11 +696,13 @@ impl Playtest {
             Difficulty::Hard => AiDifficulty::Hard,
             Difficulty::VeryHard => AiDifficulty::VeryHard,
         };
-        // The goldfish never takes the first turn: a goldfish game counts the reader's turns.
-        let started = if goldfish {
-            HOST
-        } else {
-            PlayerId((seed % players as u64) as u8)
+        // The goldfish takes the first turn only when the reader asks to be on the draw: its
+        // `dead_on` counts the reader's own turns either way.
+        let started = match first {
+            PlaytestFirst::Play => HOST,
+            PlaytestFirst::Draw => PlayerId(1 + (seed % (players as u64 - 1)) as u8),
+            PlaytestFirst::Random if goldfish => HOST,
+            PlaytestFirst::Random => PlayerId((seed % players as u64) as u8),
         };
         let mut game = Playtest {
             state,
@@ -719,6 +745,7 @@ impl Playtest {
             out_told: HashSet::new(),
             dead_on: None,
             stops: Vec::new(),
+            hold: false,
             ending: None,
             stopped_at: None,
             frames: Vec::new(),
@@ -822,6 +849,7 @@ impl Playtest {
             pending: self.pending.take(),
             choice: self.choice.take(),
             stops: std::mem::take(&mut self.stops),
+            hold: std::mem::take(&mut self.hold),
             ending: self.ending.take(),
             stopped_at: self.stopped_at.take(),
             mulligans: self.mulligans,
@@ -832,6 +860,7 @@ impl Playtest {
         self.pending = down.pending;
         self.choice = down.choice;
         self.stops = down.stops;
+        self.hold = down.hold;
         self.ending = down.ending;
         self.stopped_at = down.stopped_at;
         self.mulligans = down.mulligans;
@@ -1151,6 +1180,7 @@ impl Playtest {
             winner,
             tokens: self.tokens.clone(),
             stops: self.stops.clone(),
+            hold: self.hold,
             ending_turn: self.ending == Some(s.turn_number),
             sandbox: self.sandbox,
             goldfish: self.fish.is_some(),
@@ -2301,6 +2331,29 @@ impl Playtest {
                 false,
                 PickAnswer::Cards,
             ),
+            // A search that splits its finds (CR 701.23a, Cultivate: "put one onto the
+            // battlefield tapped and the other into your hand", issue #1751): exactly
+            // `primary_count` of the found cards, picked, go onto the battlefield; the rest into
+            // the hand. Only that split, the one phase parks; any other is the generic options'.
+            WaitingFor::SearchPartitionChoice {
+                player,
+                cards,
+                primary_destination: Zone::Battlefield,
+                primary_count,
+                rest_destination: Zone::Hand,
+                ..
+            } if *player == self.you => {
+                let n = (*primary_count as usize).min(cards.len());
+                (
+                    PlaytestPickPurpose::Split,
+                    all(cards),
+                    all(cards),
+                    n,
+                    n,
+                    false,
+                    PickAnswer::Cards,
+                )
+            }
             WaitingFor::DigChoice {
                 player,
                 cards,
@@ -3017,7 +3070,7 @@ impl Playtest {
     /// Do what the board asked, play on until the reader next decides, and answer with the
     /// table then. A refusal is one sentence and leaves the game exactly as it was.
     ///
-    /// Every action taken but `setStops` and `setSandbox` (settings) can be undone, and with it
+    /// Every action taken but `setStops`, `setSandbox` and `setHold` (settings) can be undone, and with it
     /// everything the AI did after it up to the reader's next decision: undo goes back to the
     /// reader's last decision, never into the middle of the opponent's turn. Undo and redo happen
     /// nothing and play nothing back — taken at any stage, a finished game's included.
@@ -3050,7 +3103,9 @@ impl Playtest {
         let remembered = !self.together()
             && !matches!(
                 action,
-                PlaytestAction::SetStops { .. } | PlaytestAction::SetSandbox { .. }
+                PlaytestAction::SetStops { .. }
+                    | PlaytestAction::SetSandbox { .. }
+                    | PlaytestAction::SetHold { .. }
             );
         // The whole moment, not the checkpoint alone: a refusal puts back the session's own place
         // in the game too — the board's question, a cast half made, the turn being ended — and,
@@ -3148,6 +3203,12 @@ impl Playtest {
             // A setting too: the game is as it was, only what the reader's hand may do changes.
             self.choice = choice;
             self.sandbox = on;
+            return Ok(());
+        }
+        if let PlaytestAction::SetHold { on } = action {
+            // And a setting of the chair's own, as its stops are: what stops it from now on.
+            self.choice = choice;
+            self.hold = on;
             return Ok(());
         }
         if stage == PlaytestStage::Over {
@@ -4392,7 +4453,9 @@ impl Playtest {
     ///   is on top of the stack, and in combat once blockers are declared — the combat trick's
     ///   moment.
     ///
-    /// Their own spell on top never stops them: it resolves, as Arena has it.
+    /// Their own spell on top stops them only while they hold priority (`setHold`, issue #1751
+    /// — phase's full control), and then only when they could respond: otherwise it resolves,
+    /// as Arena has it.
     fn stops_here(&mut self) -> bool {
         if self.at_home() {
             return true;
@@ -4411,7 +4474,10 @@ impl Playtest {
                 return true;
             }
         }
-        let theirs = s.stack.last().is_some_and(|top| top.controller != self.you);
+        let theirs = s
+            .stack
+            .last()
+            .is_some_and(|top| top.controller != self.you || self.hold);
         let after_blocks = s.stack.is_empty()
             && s.phase == Phase::DeclareBlockers
             && s.combat.as_ref().is_some_and(|c| !c.attackers.is_empty());

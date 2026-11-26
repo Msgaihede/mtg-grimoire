@@ -67,7 +67,8 @@ export type PlaytestPickPurpose =
   | "pay"
   | "pile"
   | "crew"
-  | "saddle";
+  | "saddle"
+  | "split";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -89,6 +90,13 @@ export type PlaytestPlayer = "you" | "opponent" | "opponent2" | "opponent3";
 
 /** What the AI opponent plays like: phase's presets, random to strong. */
 export type PlaytestDifficulty = "veryEasy" | "easy" | "medium" | "hard" | "veryHard";
+
+/**
+ * Who takes the first turn (issue #1751): the seed's coin flip, the reader on the play, or on the
+ * draw — in a four-player game the seed then picks which opponent starts. Against the goldfish the
+ * coin flip is the reader.
+ */
+export type PlaytestFirst = "random" | "play" | "draw";
 
 /** The whole table after an action, from the reader's seat. */
 export interface PlaytestView {
@@ -135,6 +143,12 @@ export interface PlaytestView {
    * the goldfish, off against the AI.
    */
   sandbox: boolean;
+  /**
+   * The reader holds priority over their own spells and abilities (`setHold`, issue #1751): one of
+   * theirs on top of the stack stops them, when they could respond, as an opponent's does. Off at
+   * the start of every game.
+   */
+  hold: boolean;
   /**
    * The opponent is the goldfish: one seat that keeps its hand, passes every priority, never
    * attacks or blocks, and — like the reader — cannot lose (its `deadOn` says when it would
@@ -593,6 +607,9 @@ export type PlaytestAction =
   | { type: "setStops"; stops: PlaytestStop[] }
   /** Turn the sandbox on or off. A setting, as `setStops`: taken at any stage, never undone. */
   | { type: "setSandbox"; on: boolean }
+  /** Hold priority over the reader's own spells and abilities, or stop (issue #1751). A setting,
+   *  as `setStops`: taken at any stage, never undone. */
+  | { type: "setHold"; on: boolean }
   | { type: "attack"; attacks: PlaytestAttackPair[] }
   | { type: "block"; blocks: PlaytestBlockPair[] }
   | { type: "choose"; index: number }
@@ -821,7 +838,7 @@ export const playtestCommands = {
    * duel, three for a four-player game), each played by the AI at `difficulty` — or, with **no
    * opponents, against the goldfish** (`difficulty` unused; the reader plays first). Answers at
    * the reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and
-   * the coin flip. `game` is the page's name for this game, fresh per deal, which every later call
+   * the coin flip; `first`, who takes the first turn (issue #1751) — the coin flip when left out. `game` is the page's name for this game, fresh per deal, which every later call
    * for it carries: the host acts on and ends only the game named, so a board that has gone never
    * touches the one that replaced it (issue #1141).
    */
@@ -832,6 +849,7 @@ export const playtestCommands = {
     opponents: PlaytestOpponent[],
     difficulty: PlaytestDifficulty,
     seed: number,
+    first: PlaytestFirst = "random",
   ) =>
     invoke<PlaytestStep>("playtest_start", {
       game,
@@ -840,6 +858,7 @@ export const playtestCommands = {
       opponents,
       difficulty,
       seed,
+      first,
     }),
   /**
    * One action on `game`, and everything the opponent does after it until the reader next decides.
