@@ -138,6 +138,28 @@ export function soundOf(h: PlaytestHappened): SoundId | null {
       return "choose";
     case "countered":
       return "graveyard";
+    case "removed":
+      // Off the table or out of the hand: where it went, as a move.
+      return h.to === "exile" ? "exile" : "graveyard";
+    case "countersChanged":
+      return h.delta > 0 ? "counterAdd" : "counterRemove";
+    case "becameTapped":
+      return h.tapped ? "tap" : "untap";
+    case "attached":
+      return h.attached ? "play" : null;
+    // What the rules did beside a card, and to a player, is read, not heard.
+    case "triggered":
+    case "transformed":
+    case "turnedFaceUp":
+    case "turnedFaceDown":
+    case "playerCounters":
+    case "roomEntered":
+    case "dungeonCompleted":
+    case "voted":
+    case "voteResolved":
+    case "clashed":
+    case "extraTurn":
+      return null;
     // A reveal, a coin, a die, a name, a designation and the day are read, not heard.
     case "revealed":
     case "flipped":

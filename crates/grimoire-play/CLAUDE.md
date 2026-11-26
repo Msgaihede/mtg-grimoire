@@ -58,7 +58,9 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
   the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
   face-down exile card they may look at. Never decide that in this crate, and never read a
-  position off the projection (it reorders a library's hidden cards).
+  position off the projection (it reorders a library's hidden cards). The log's events go
+  through phase's `filter_events_for_viewer` for each seat first (`shown_to`, issue #1748): an
+  event it keeps from a seat is told to them only as a nameless move, or not at all.
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
@@ -186,8 +188,8 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 
 ## Commands
 
-| Command                                                      | Action                                                                                                      |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Command                                                      | Action                                                                                                                           |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish, a `VeryEasy` AI and a person (`lobby_tests.rs`); the drafts too |
-| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                       |
-| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                      |
+| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                                            |
+| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                                           |

@@ -17,8 +17,8 @@ use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, ManaKind, 
 use super::session::Playtest;
 use super::view::{
     Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestHappened as H, PlaytestPhase,
-    PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep, PlaytestStop,
-    PlaytestStopStep, PlaytestView,
+    PlaytestPickPurpose, PlaytestPlayer, PlaytestRemoval, PlaytestStage as Stage, PlaytestStep,
+    PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
 const YOU: PlaytestPlayer = PlaytestPlayer::You;
@@ -470,9 +470,9 @@ fn a_turn_passed_over_the_hand_size_asks_the_reader_which_cards_to_discard() {
         .filter(|h| {
             matches!(
                 h,
-                H::Moved {
+                H::Removed {
                     seat: YOU,
-                    from: Place::Hand,
+                    how: PlaytestRemoval::Discarded,
                     to: Place::Graveyard,
                     ..
                 }

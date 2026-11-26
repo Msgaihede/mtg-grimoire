@@ -633,19 +633,37 @@ and the action `tapForMana { id }`, and reuses the fact `tapped`. `ipc.test.ts` 
 **Facts come from phase's events** (`tell`). Each applied action returns `GameEvent`s, and so does
 each of the AI's actions. They become the log's facts:
 
-| Event                                    | Fact                                                                                                 |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `TurnStarted`                            | `turnBegan`                                                                                          |
-| `LandPlayed`                             | `played`                                                                                             |
-| `SpellCast`                              | `cast`                                                                                               |
-| `AbilityActivated` (not mana)            | `activated`                                                                                          |
-| `Foretold`                               | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again     |
-| `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
-| `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
-| `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
-| `LifeChanged`                            | `life`: the change and the total after it                                                            |
-| `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
-| `EffectResolved` of a `CreateEmblem`     | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)        |
+| Event                                                             | Fact                                                                                                                                          |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TurnStarted`                                                     | `turnBegan`                                                                                                                                   |
+| `LandPlayed`                                                      | `played`                                                                                                                                      |
+| `SpellCast`                                                       | `cast`                                                                                                                                        |
+| `AbilityActivated` (not mana)                                     | `activated`                                                                                                                                   |
+| `Foretold`                                                        | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again                                              |
+| `ZoneChanged`                                                     | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again                                          |
+| `AttackersDeclared` / `BlockersDeclared`                          | `attacked` / `blocked`                                                                                                                        |
+| `DamageDealt` to a permanent                                      | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)                                                        |
+| `LifeChanged`                                                     | `life`: the change and the total after it                                                                                                     |
+| `TokenCreated`                                                    | `tokensCreated`, with consecutive tokens of one name counted together                                                                         |
+| `EffectResolved` of a `CreateEmblem`                              | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)                                                 |
+| `CounterAdded` / `CounterRemoved`                                 | `countersChanged`: the permanent, the counter's kind and the change (issue #1748)                                                             |
+| `PermanentTapped` / `PermanentUntapped`                           | `becameTapped`: only a tap an effect made (phase's `caused_by`), never for mana, an attack or a cost; consecutive ones of one player's merged |
+| `AbilityTriggered`                                                | `triggered`, naming the source                                                                                                                |
+| `ControllerChanged`                                               | `controlled` with `byHand: false` (the sandbox's own is `byHand: true`)                                                                       |
+| `Transformed` / `TurnedFaceUp` / `TurnedFaceDown`                 | `transformed` / `turnedFaceUp` (always named: face up is public) / `turnedFaceDown`                                                           |
+| `Attached` / `Unattached`                                         | `attached`, with `attached` false for an unattach; `to` is `null` for a player                                                                |
+| `CreatureDestroyed`, `PermanentSacrificed`, `Cycled`, `Discarded` | `removed` with its `how`, told in place of the card's `moved`                                                                                 |
+| `EnergyChanged`, `PlayerCounterChanged`, `SpeedChanged`           | `playerCounters`: the kind, the change and the total after it                                                                                 |
+| `RoomEntered` / `DungeonCompleted`                                | `roomEntered` / `dungeonCompleted`                                                                                                            |
+| `VoteCast` / `VoteResolved` / `Clash`                             | `voted` / `voteResolved` (each choice's votes) / `clashed`                                                                                    |
+| `ExtraTurnCreated`                                                | `extraTurn`                                                                                                                                   |
+
+**Every seat's events go through phase's own filter first** (`shown_to`, over
+`filter_events_for_viewer`, issue #1748), the event stream's counterpart of the state's
+`filter_state_for_viewer`. An event phase would not send a seat is told to it only as a card that
+moved, never named (a hidden draw, a hidden find, a manifest), and any other kind not at all, so an
+event `tell` learns later can never say what that seat may not see. The filter drops events and
+rewrites only kinds it never drops, so `shown_to` finds each kept event again in order.
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
 

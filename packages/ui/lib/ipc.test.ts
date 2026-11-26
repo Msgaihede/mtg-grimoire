@@ -1027,6 +1027,11 @@ describe("ipc argument names match the Rust command signatures", () => {
       "PlaytestPickPurpose",
       "PlaytestStopStep",
       "PlaytestPlayer",
+      "PlaytestDesignation",
+      "PlaytestDayNight",
+      "PlaytestRemoval",
+      "PlaytestPlayerCounter",
+      "PlaytestClash",
       "Difficulty",
     ]) {
       const ts = name === "Difficulty" ? "PlaytestDifficulty" : name;
