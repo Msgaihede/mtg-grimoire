@@ -58,9 +58,7 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   projection for that seat shows it** (`sight`, over `filter_state_for_viewer`): a library's top
   the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
   face-down exile card they may look at. Never decide that in this crate, and never read a
-  position off the projection (it reorders a library's hidden cards). **The reader's own library
-  in order (`library_cards`) is the sandbox's alone**, sent only while it is on (CR 401.2, issue
-  #1749); anything else that needs the library reads a number off it (`MulliganView.library_lands`).
+  position off the projection (it reorders a library's hidden cards), nor send `library_cards` with the sandbox off (#1749).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
