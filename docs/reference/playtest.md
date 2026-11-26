@@ -60,6 +60,15 @@ constant so that it is not the shuffle's own stream. The same seed and decks pla
 and the session's tests rely on that. The seed modulo the player count is the coin flip: 0, the
 reader plays first (in a duel, an even seed).
 
+**Who plays first is the reader's to pick** (issue #1751, phase's own client's
+`ChooseStartingPlayer` / `ChoosePlayDraw`): `playtest_start`'s `first`, a `PlaytestFirst` —
+`random` (the coin flip above, and the default when it is left out), `play` (the reader) or `draw`
+(an opponent: in a duel the one, at a table of four the seed modulo three after the reader). The
+session hands it to phase's `start_game_with_starting_player` (`Playtest::new_first`; `new` is the
+coin flip). Against the goldfish the coin flip is the reader, as it always was, and `draw` lets the
+goldfish take the first turn; its `deadOn` still counts the reader's own turns. A lobby's game is
+always the coin flip.
+
 **Measured** (debug build, this container, 2026-10-13): a Medium AI's keep and first turn took
 1.8 s. The crate's fourteen playtest tests, six AI turns among them at VeryEasy, ran in about 4 s
 together. Medium and above search with phase's 1.5 s budget a decision, so a long AI turn takes
@@ -98,10 +107,18 @@ The owner's choice of 2026-10-13, Arena's arrangement. With priority, the reader
 | A step they asked to stop at (`setStops`), the stack empty | `respond` | Once per step                        |
 | The opponent's spell or ability on top of the stack        | `respond` | If they have something they could do |
 | Combat, once blockers are declared, the stack empty        | `respond` | If they have something they could do |
+| Their own spell or ability on top, holding priority        | `respond` | If they have something they could do |
 
 "Something they could do" is phase's `has_meaningful_priority_action`: a spell or ability other
 than a mana ability. Without one there is nothing to decide, and the stop would only cost a click.
-**The reader's own spell on top never stops them**: it resolves, as on Arena.
+**The reader's own spell on top does not stop them unless they hold priority**: it resolves, as on
+Arena. **Holding priority** (issue #1751, phase's client's full-control toggle,
+`SetPriorityPassingMode`) is a setting, `setHold { on }`, read back as `view.hold`: on, their own
+spell or ability on top stops them as an opponent's does, so they can answer it themselves (a
+second spell on top of the first); `pass` then lets the top resolve. Like `setStops` it is taken at
+any stage, plays nothing on, is not remembered by undo, and is each person's own in a lobby's game
+(kept in their `Chair`). The game menu's "Hold priority on your spells" row sets it; it is off at
+the start of every game.
 
 **The stops** are `PlaytestStop { seat, step }`, a step of either seat's turn: upkeep, draw, first
 main, beginning of combat, after attackers, after blockers, damage, second main or end. They are
@@ -299,23 +316,24 @@ The answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or th
 (`ChooseKeptCreatures`, `ChooseKeptPermanents`) for a keep. The meaning of the picked cards is
 phase's:
 
-| Question                                         | `purpose`   | The picked cards                                                 | Count                                               |
-| ------------------------------------------------ | ----------- | ---------------------------------------------------------------- | --------------------------------------------------- |
-| `ScryChoice`                                     | `scry`      | Stay on top, first picked on top; the rest go to the bottom      | 0 to all, ordered                                   |
-| `SurveilChoice`                                  | `surveil`   | Stay on top, in order; the rest go to the graveyard              | 0 to all, ordered                                   |
-| `DiscardChoice`, `DiscardToHandSize`             | `discard`   | Are discarded                                                    | `count`, or up to it                                |
-| `SearchChoice`                                   | `search`    | Are found                                                        | `count`, or up to it when a partial find is allowed |
-| `DigChoice`                                      | `dig`       | Are kept, from `selectable_cards`                                | `keep_count`, or up to it                           |
-| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`    | Are chosen                                                       | as the question says                                |
-| `RevealChoice`                                   | `reveal`    | Is revealed                                                      | one, or none when optional                          |
-| `MultiTargetSelection`                           | `targets`   | Are the targets                                                  | `min_targets` to `max_targets`                      |
-| `KeepWithinTotalPowerChoice`                     | `keep`      | Are kept; the rest are sacrificed                                | any, their total power at most `powerCap`           |
-| `KeepExactPermanentsChoice`                      | `keep`      | Are kept; the rest are sacrificed                                | `required_count`                                    |
-| `EffectZoneChoice` of `Sacrifice`                | `sacrifice` | Are sacrificed                                                   | `min_count` to `count`, or `count`                  |
-| `EffectZoneChoice` of `CastFromZone`             | `cast`      | Is cast                                                          | `min_count` to `count`, or `count`                  |
-| `EffectZoneChoice` of `Discard`                  | `discard`   | Are discarded                                                    | `min_count` to `count`, or `count`                  |
-| `EffectZoneChoice` of any other kind             | `choose`    | Are what the effect acts on; into a library, in the order picked | `min_count` to `count`, or `count`                  |
-| `CastOffer`'s `FreeCastWindow`                   | `cast`      | Is cast; none closes the window                                  | one, or none                                        |
+| Question                                         | `purpose`   | The picked cards                                                           | Count                                               |
+| ------------------------------------------------ | ----------- | -------------------------------------------------------------------------- | --------------------------------------------------- |
+| `ScryChoice`                                     | `scry`      | Stay on top, first picked on top; the rest go to the bottom                | 0 to all, ordered                                   |
+| `SurveilChoice`                                  | `surveil`   | Stay on top, in order; the rest go to the graveyard                        | 0 to all, ordered                                   |
+| `DiscardChoice`, `DiscardToHandSize`             | `discard`   | Are discarded                                                              | `count`, or up to it                                |
+| `SearchChoice`                                   | `search`    | Are found                                                                  | `count`, or up to it when a partial find is allowed |
+| `SearchPartitionChoice`, battlefield and hand    | `split`     | Go onto the battlefield (tapped, as the card says); the rest into the hand | exactly `primary_count`                             |
+| `DigChoice`                                      | `dig`       | Are kept, from `selectable_cards`                                          | `keep_count`, or up to it                           |
+| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`    | Are chosen                                                                 | as the question says                                |
+| `RevealChoice`                                   | `reveal`    | Is revealed                                                                | one, or none when optional                          |
+| `MultiTargetSelection`                           | `targets`   | Are the targets                                                            | `min_targets` to `max_targets`                      |
+| `KeepWithinTotalPowerChoice`                     | `keep`      | Are kept; the rest are sacrificed                                          | any, their total power at most `powerCap`           |
+| `KeepExactPermanentsChoice`                      | `keep`      | Are kept; the rest are sacrificed                                          | `required_count`                                    |
+| `EffectZoneChoice` of `Sacrifice`                | `sacrifice` | Are sacrificed                                                             | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of `CastFromZone`             | `cast`      | Is cast                                                                    | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of `Discard`                  | `discard`   | Are discarded                                                              | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of any other kind             | `choose`    | Are what the effect acts on; into a library, in the order picked           | `min_count` to `count`, or `count`                  |
+| `CastOffer`'s `FreeCastWindow`                   | `cast`      | Is cast; none closes the window                                            | one, or none                                        |
 
 Every `EffectZoneChoice` asked of the reader is a pick, whatever its effect (issue #1416): its
 fields give the count, and its kind only what the picked cards are for. Before, only a cast was;
@@ -414,6 +432,26 @@ priority: nothing plays on after a tap, so a step they stopped at is not passed 
 the reader's `tapped`, and undone like any action. `canTapForMana` is on each of the reader's
 battlefield cards the rules would tap now, read once per view like `castable`. It is not a sandbox
 action: it is a rules action, so the sandbox's gate does not touch it.
+
+**Inside a payment window too** (issue #1743, from the phase.rs parity audit). phase's own board
+lights the sources up and lets the player tap them while a cost is paid (`ManaPaymentUI.tsx`), and
+so does this one: `mana_ways` answers in `ManaPayment`, `ManaAbilityManaPayment` and
+`UnlessPayment` (`paying`) as well as at priority, `run` takes `tapForMana` there before the
+prompt's refusal, and `canTapForMana` is drawn through the prompt (not while the board asks its own
+`ManaChoice`). The cast being paid keeps its `Pending`, so `cancel` takes the whole cast back, the
+taps with it; the window stays open after a tap, and the reader taps on, pays (the window's
+`PassPriority`, said "Pay") or cancels. A window the reader could tap a source in is never a
+`sole_answer`. `UnlessPaymentChooseCost` is left out: phase's reducer has no tap arm there, and
+phase's board leaves it out too.
+
+**A source that sacrifices itself is asked about.** The reader's casts and activations are stamped
+`AutoExceptSacrificialMana` (`ask_before_sacrificing`, in `apply`), as phase's client stamps them
+(`castPaymentMode.ts`): paid automatically, except that a Treasure or a Lotus Petal is the engine's
+question, `ManaSourceSelection`, never spent without asking. phase's flat `legal_actions` leaves
+every mana ability out, so its sources are read off the question's own `options` (`answers`), one
+`ActivateManaSource` each — named by its source card, so a click on it on the table picks it — beside
+`BackToManaPayment` ("Pay another way"), which opens the payment window and is an answer, never a
+take-back. An activation phase offers only as `Manual` keeps its mode.
 
 **`concede`** is phase's `Concede` (CR 104.3a, issue #1746), offered as the game menu's Concede
 and asked about first (`EndGameDialog`). The rules never list it among the legal answers, and it
@@ -586,8 +624,8 @@ motion is reduced, and a count would have to agree with every way of logging the
 **One action is one step back, and an action is the reader's.** The AI's turn is never a moment of
 its own: it happened inside the reader's action that passed to it, so undo lands where the reader
 last decided, never in the middle of the opponent's turn. Undo and redo answer with no facts and no
-frames, so nothing plays back. **The stops and the sandbox are settings** (`setStops`,
-`setSandbox`): not remembered, and left as they are by undo. A finished game can be undone too, which is how a reader takes back the play
+frames, so nothing plays back. **The stops, the sandbox and holding priority are settings**
+(`setStops`, `setSandbox`, `setHold`): not remembered, and left as they are by undo. A finished game can be undone too, which is how a reader takes back the play
 that lost it.
 
 ## What the reader may see
@@ -674,19 +712,37 @@ and the action `tapForMana { id }`, and reuses the fact `tapped`. `ipc.test.ts` 
 **Facts come from phase's events** (`tell`). Each applied action returns `GameEvent`s, and so does
 each of the AI's actions. They become the log's facts:
 
-| Event                                    | Fact                                                                                                 |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `TurnStarted`                            | `turnBegan`                                                                                          |
-| `LandPlayed`                             | `played`                                                                                             |
-| `SpellCast`                              | `cast`                                                                                               |
-| `AbilityActivated` (not mana)            | `activated`                                                                                          |
-| `Foretold`                               | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again     |
-| `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
-| `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
-| `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
-| `LifeChanged`                            | `life`: the change and the total after it                                                            |
-| `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
-| `EffectResolved` of a `CreateEmblem`     | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)        |
+| Event                                                             | Fact                                                                                                                                          |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TurnStarted`                                                     | `turnBegan`                                                                                                                                   |
+| `LandPlayed`                                                      | `played`                                                                                                                                      |
+| `SpellCast`                                                       | `cast`                                                                                                                                        |
+| `AbilityActivated` (not mana)                                     | `activated`                                                                                                                                   |
+| `Foretold`                                                        | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again                                              |
+| `ZoneChanged`                                                     | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again                                          |
+| `AttackersDeclared` / `BlockersDeclared`                          | `attacked` / `blocked`                                                                                                                        |
+| `DamageDealt` to a permanent                                      | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)                                                        |
+| `LifeChanged`                                                     | `life`: the change and the total after it                                                                                                     |
+| `TokenCreated`                                                    | `tokensCreated`, with consecutive tokens of one name counted together                                                                         |
+| `EffectResolved` of a `CreateEmblem`                              | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)                                                 |
+| `CounterAdded` / `CounterRemoved`                                 | `countersChanged`: the permanent, the counter's kind and the change (issue #1748)                                                             |
+| `PermanentTapped` / `PermanentUntapped`                           | `becameTapped`: only a tap an effect made (phase's `caused_by`), never for mana, an attack or a cost; consecutive ones of one player's merged |
+| `AbilityTriggered`                                                | `triggered`, naming the source                                                                                                                |
+| `ControllerChanged`                                               | `controlled` with `byHand: false` (the sandbox's own is `byHand: true`)                                                                       |
+| `Transformed` / `TurnedFaceUp` / `TurnedFaceDown`                 | `transformed` / `turnedFaceUp` (always named: face up is public) / `turnedFaceDown`                                                           |
+| `Attached` / `Unattached`                                         | `attached`, with `attached` false for an unattach; `to` is `null` for a player                                                                |
+| `CreatureDestroyed`, `PermanentSacrificed`, `Cycled`, `Discarded` | `removed` with its `how`, told in place of the card's `moved`                                                                                 |
+| `EnergyChanged`, `PlayerCounterChanged`, `SpeedChanged`           | `playerCounters`: the kind, the change and the total after it                                                                                 |
+| `RoomEntered` / `DungeonCompleted`                                | `roomEntered` / `dungeonCompleted`                                                                                                            |
+| `VoteCast` / `VoteResolved` / `Clash`                             | `voted` / `voteResolved` (each choice's votes) / `clashed`                                                                                    |
+| `ExtraTurnCreated`                                                | `extraTurn`                                                                                                                                   |
+
+**Every seat's events go through phase's own filter first** (`shown_to`, over
+`filter_events_for_viewer`, issue #1748), the event stream's counterpart of the state's
+`filter_state_for_viewer`. An event phase would not send a seat is told to it only as a card that
+moved, never named (a hidden draw, a hidden find, a manifest), and any other kind not at all, so an
+event `tell` learns later can never say what that seat may not see. The filter drops events and
+rewrites only kinds it never drops, so `shown_to` finds each kept event again in order.
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
 
@@ -757,7 +813,8 @@ wall's own heading row, drawn as the bar rather than as a row of its own under i
 - **The table, on the right** — **Gamemode** (three tiles: "Goldfish", "Duel", the default, and
   "Four-player", each drawn as its table), **Seats** (one row per player: "You", then "Opponent"
   or "Opponent 1" to "Opponent 3"), **AI skill** (five segments, "Very easy" to "Very hard",
-  starting on Medium) and **Start game**.
+  starting on Medium), **Plays first** ("Coin flip", the default, "You" or "Opponent" — issue
+  #1751, `PlaytestPicks.first`, sent only when it is not the coin flip) and **Start game**.
 
 **One seat is always the one being picked for** — `aria-pressed`, ringed in accent, and named over
 the wall ("Picking for Opponent 2"). A deck pressed on the wall sits there, and the next empty seat
@@ -1199,19 +1256,16 @@ putting a host's game away closes its lobby: dealt or being dealt, never refused
 
 ## What is not there yet
 
-- **Holding priority over your own spell.** The reader's own spell on top never stops them, so
-  they cannot respond to it themselves (a second spell on top of their first).
-- **Choosing who plays first.** It is the seed's coin flip against the AI, and the reader against
-  the goldfish.
+- **Choosing who plays first in a lobby's game.** It is the seed's coin flip; the setup page's
+  pick is a solo game's.
 - **Choosing the payment inside a cast.** The reader taps sources for mana first (`tapForMana`),
   and whatever the pool does not cover is paid by phase's `Auto`; the cast itself never stops for
   a payment (`CastPaymentMode::Manual`).
-- **A search that splits its finds between zones** is still its generic options or `auto`.
+- **A search that splits its finds between other zones than the battlefield and the hand** is
+  still its generic options or `auto`; Cultivate's split is the `split` pick.
 - **Mana payment inside a payment window.** phase's client taps sources during `ManaPayment`,
   `UnlessPayment` and the like; here those are paid by phase's `Auto`, and a cast never stamps
   `AutoExceptSacrificialMana`, so a Treasure may be spent without asking.
-- **The companion and the sideboard** (`CompanionToHand`, wishes' `ChooseOutsideGameCards`): the
-  deck sent to a game is its main deck and commanders only (`grimoire-core`'s `play.rs`).
 - **Ordering five or more triggers freely.** phase lists every order up to four, and only two
   orders past that.
 - **The light app.** Playtesting is not a destination there.

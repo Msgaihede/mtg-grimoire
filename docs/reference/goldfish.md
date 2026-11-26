@@ -153,10 +153,23 @@ A few details of the bridge:
   empty there, and only `face_index` is filled. Use `get_face_by_name`. Found the first time a test
   ran.
 
-Which cards start the game is the deck's own rule. An inactive pile is not in the deck. The
-sideboard, the maybeboard and a companion start outside the game. The commander pile starts in the
-command zone, and its cards make the game a Commander game (40 life, a free first mulligan, tax).
-Without a commander the format is phase's `freeform`.
+Which cards start the game is the deck's own rule. An inactive pile is not in the deck, and the
+maybeboard is not dealt. The commander pile starts in the command zone, and its cards make the game
+a Commander game (40 life, a free first mulligan, tax). Without a commander the format is phase's
+`freeform`.
+
+**The sideboard and the companion are outside the game** (issue #1744): `play.rs` deals them with
+`PlayCard::outside`, and `Playtest::new` hands them to phase as `PlayerDeckList.sideboard` and
+`.companion`. phase takes a companion where the format has a slot for one: a Commander game's own
+slot (and no sideboard, CR 903.5e), and otherwise the sideboard, so outside a Commander game the
+companion pile is sideboard cards too. phase asks for the reveal before the opening hand
+(`CompanionReveal`, a generic prompt whose answers name the card), and a revealed companion is on
+its owner's `PlaytestSeat.companion`, public, until it is in the game. Its special action has no
+object, so the board offers it from the plate (`toHand`, a `companionToHand`). A wish, Karn or
+Coax (`OutsideGameChoice`) is a `pick` of purpose `outside`: each copy is a card to pick, a face-up
+exiled card by its object id, and a sideboard copy, the companion or a pack's card — in no zone —
+by an id from `OUTSIDE_IDS` (2^48) on; the answer is phase's selections for them
+(`ChooseOutsideGameCards`). The deck's support verdict counts the library and command zone alone.
 
 ## The hybrid model: what is a rule and what is a hand
 

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
-use grimoire_core::play::{PlayCard, PlayToken};
+use grimoire_core::play::{OutsidePile, PlayCard, PlayToken};
 use grimoire_play::playtest::session::MAX_OPPONENTS;
 use grimoire_play::{
     on_engine_stack, Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestStep,
@@ -79,6 +79,10 @@ pub struct GuestCard {
     pub card_id: String,
     pub quantity: u32,
     pub commander: bool,
+    /// The sideboard or the companion (issue #1744). Absent from a guest of an older build: the
+    /// row is the library's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outside: Option<OutsidePile>,
 }
 
 /// The deck a guest brings to a game's lobby: its name, its rows and its tokens in the printings
@@ -256,6 +260,7 @@ pub fn guest_cards(
             Ok(PlayCard {
                 quantity: row.quantity,
                 commander: row.commander,
+                outside: row.outside,
                 ..card.clone()
             })
         })
@@ -401,7 +406,7 @@ pub async fn guest_deck(
         let cards = grimoire_core::play::deck_cards(&conn, deck_id, &variant)?;
         let tokens = grimoire_core::play::deck_tokens(&conn, deck_id, &variant)?;
         let name = deck_name(&conn, deck_id, &variant)?;
-        if cards.iter().all(|c| c.commander) {
+        if !cards.iter().any(PlayCard::in_library) {
             return Err(EMPTY.to_owned());
         }
         if cards.len() > MAX_ROWS || tokens.len() > MAX_TOKENS {
@@ -415,6 +420,7 @@ pub async fn guest_deck(
                     card_id: c.card_id,
                     quantity: c.quantity.min(MAX_COPIES),
                     commander: c.commander,
+                    outside: c.outside,
                 })
                 .collect(),
             tokens,
@@ -523,12 +529,12 @@ async fn read_and_deal(
     .await
     .map_err(|e| format!("the decks could not be read: {e}"))??;
     let (yours, your_tokens, theirs, seats) = read;
-    if yours.iter().all(|c| c.commander) {
+    if !yours.iter().any(PlayCard::in_library) {
         return Err("Your deck has no cards to play with yet.".into());
     }
     if let Some(n) = theirs
         .iter()
-        .position(|(cards, _, _)| cards.iter().all(|c| c.commander))
+        .position(|(cards, _, _)| !cards.iter().any(PlayCard::in_library))
     {
         return Err(format!(
             "{}'s deck has no cards to play with yet.",
@@ -579,6 +585,7 @@ mod tests {
                 card_id: "c-forest".into(),
                 quantity: 40,
                 commander: false,
+                outside: None,
             }],
             tokens: Vec::new(),
         }
@@ -639,6 +646,7 @@ mod tests {
             name: "Forest".into(),
             quantity: 1,
             commander: false,
+            outside: None,
             oracle_id: None,
             mana_cost: None,
             type_line: Some("Basic Land — Forest".into()),

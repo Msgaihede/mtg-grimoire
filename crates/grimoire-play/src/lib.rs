@@ -13,13 +13,14 @@ mod table;
 pub mod tokens;
 pub mod view;
 
-pub use cards::{CardFacts, FaceFacts};
+pub use cards::{CardFacts, FaceFacts, OutsidePile};
 pub use draft::{
     Draft, DraftCard, DraftCardFacts, DraftMode, DraftSaved, DraftSeatSetup, DraftSeatView,
     DraftSetup, DraftStatus, DraftView, PodFormat, WinstonPile, WinstonView,
 };
 pub use playtest::{
-    Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView,
+    Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestFirst, PlaytestPlayer,
+    PlaytestStep, PlaytestView,
 };
 pub use support::{deck_support, DeckSupport, SupportCache, UnsupportedCard};
 pub use tokens::TokenFacts;

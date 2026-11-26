@@ -107,6 +107,10 @@ pub struct PlaytestView {
     /// the table shows, and a card the rules cannot play is put down unpaid. On from the start
     /// against the goldfish, off against the AI.
     pub sandbox: bool,
+    /// The reader holds priority over their own spells and abilities (`setHold`, issue #1751):
+    /// one of theirs on top of the stack stops them, when they could respond, as an opponent's
+    /// does. Off at the start of every game.
+    pub hold: bool,
     /// The opponent is the goldfish: one seat that keeps its hand, passes every priority and
     /// never attacks or blocks, and that — like the reader — cannot lose (its `dead_on` says when
     /// it would have). The game is never `Over`.
@@ -260,6 +264,23 @@ pub struct PlaytestSeat {
     /// The ids of the permanents on the battlefield attached to this player — a Curse, an Aura
     /// that enchants a player (CR 303.4).
     pub enchanted_by: Vec<u64>,
+    /// This player's companion while it is still outside the game (CR 702.139a): revealed, so
+    /// public to every seat, from the reveal until it is put into a hand or an effect brings it
+    /// in. `None` for a player who revealed none, and once it is in the game.
+    pub companion: Option<PlaytestCompanion>,
+}
+
+/// A revealed companion outside the game (CR 702.139a).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCompanion {
+    pub name: String,
+    /// The deck's printing of it, for its picture.
+    pub card_id: Option<String>,
+    /// The rules offer the reader its special action now — {3} to put it into their hand, in
+    /// their main phase with the stack empty (CR 702.139c): a `CompanionToHand`. Only ever on the
+    /// reader's own seat.
+    pub to_hand: bool,
 }
 
 /// A player's place in a dungeon (CR 309): its name and the room the venture marker is on.
@@ -610,10 +631,18 @@ pub enum PlaytestPickPurpose {
     Pay,
     /// The picked cards are one pile, the rest the other (CR 700.3 — Fact or Fiction).
     Pile,
+    /// The picked cards are brought in from outside the game (CR 400.11): a wish's sideboard
+    /// card, the revealed companion, or Karn's face-up exiled card (issue #1744). A card that is
+    /// not in the game has no object: its id is one the pick alone gives it (`OUTSIDE_IDS`).
+    Outside,
     /// The picked creatures are tapped to crew the Vehicle (CR 702.122a).
     Crew,
     /// The picked creatures are tapped to saddle the Mount (CR 702.171a).
     Saddle,
+    /// A search's finds split between two places (CR 701.23a, Cultivate — issue #1751): the
+    /// picked cards go onto the battlefield, as the card says (tapped, for Cultivate), and the
+    /// rest into the hand.
+    Split,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
@@ -717,6 +746,18 @@ pub struct PlaytestStackItem {
     pub target_players: Vec<PlaytestPlayer>,
 }
 
+/// Who takes the first turn (CR 103.1, issue #1751), as the setup page picked it: the seed's coin
+/// flip, the reader on the play, or the reader on the draw — in a four-player game, then, the
+/// seed picks which opponent starts. Against the goldfish the coin flip is the reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestFirst {
+    #[default]
+    Random,
+    Play,
+    Draw,
+}
+
 /// What the AI opponent plays like: phase's difficulty presets, from random to competitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -762,6 +803,10 @@ pub enum PlaytestAction {
     Foretell {
         id: u64,
     },
+    /// Put the reader's revealed companion into their hand by the rules (CR 702.139c): the
+    /// special action, {3}, in their main phase with the stack empty, once a game. Refused,
+    /// saying why, when the rules do not offer it (`PlaytestCompanion::to_hand`).
+    CompanionToHand,
     /// Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: the
     /// reader picks which sources pay rather than the engine. The mana floats in their pool, and
     /// the next cast spends it first, until the step or phase ends (CR 500.4). One way is taken;
@@ -783,6 +828,12 @@ pub enum PlaytestAction {
     /// Turn the sandbox on or off. A setting, as `SetStops`: taken at any stage, never undone,
     /// and nothing plays on after it.
     SetSandbox {
+        on: bool,
+    },
+    /// Hold priority over the reader's own spells and abilities, or stop holding it (issue
+    /// #1751). A setting, as `SetStops`: taken at any stage, never undone, and nothing plays on
+    /// after it.
+    SetHold {
         on: bool,
     },
     /// Declare these attacks. Empty is no attack.
@@ -958,6 +1009,16 @@ pub enum PlaytestHappened {
         from: Place,
         to: Place,
     },
+    /// A companion revealed from outside the game at the start (CR 702.139a). Public.
+    CompanionRevealed {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A companion put into its owner's hand by the special action (CR 702.139c). Public.
+    CompanionToHand {
+        seat: PlaytestPlayer,
+        name: String,
+    },
     /// Cards drawn. `name` is the card for the reader's draw, `None` for an opponent's.
     Drew {
         seat: PlaytestPlayer,
@@ -1014,14 +1075,16 @@ pub enum PlaytestHappened {
         from: Place,
         to: Place,
     },
-    /// The reader put a card under a player's control by hand (`control`): `seat` is whose card
-    /// it is, `from` where it was — the battlefield, for a change of control alone — and
-    /// `controller` who controls it on the battlefield now.
+    /// A card put under a player's control: `seat` is whose card it is, `from` where it was —
+    /// the battlefield, for a change of control alone — and `controller` who controls it on the
+    /// battlefield now. `by_hand` is the reader's sandbox edit (`control`); otherwise the rules
+    /// changed it (CR 108.4), always where it lies.
     Controlled {
         seat: PlaytestPlayer,
         name: String,
         from: Place,
         controller: PlaytestPlayer,
+        by_hand: bool,
     },
     Tapped {
         seat: PlaytestPlayer,
@@ -1090,6 +1153,103 @@ pub enum PlaytestHappened {
     DayNight {
         now: PlaytestDayNight,
     },
+    /// Counters the rules put on a permanent (`delta` above zero) or took off it (below), of
+    /// `kind` (`+1/+1`, `loyalty`). `name` is `None` for an opponent's face-down permanent.
+    CountersChanged {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+        kind: String,
+        delta: i32,
+    },
+    /// Permanents an effect tapped or untapped (CR 701.26) — never a tap for mana, an attack or
+    /// a cost, which their own facts tell. `seat` is their controller's; a name is `None` for an
+    /// opponent's face-down permanent.
+    BecameTapped {
+        seat: PlaytestPlayer,
+        names: Vec<Option<String>>,
+        tapped: bool,
+    },
+    /// A triggered ability triggered (CR 603.2); `name` is its source's, `None` for an
+    /// opponent's face-down one, and `seat` the ability's controller.
+    Triggered {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+    },
+    /// A double-faced card transformed (CR 701.27); `name` is the face it shows now.
+    Transformed {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A face-down permanent turned face up (CR 708.8), and so public: `name` is what it is.
+    TurnedFaceUp {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A permanent turned face down (CR 708.2); `name` is the card for the reader's own, `None`
+    /// for an opponent's.
+    TurnedFaceDown {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+    },
+    /// An Aura, an Equipment or a Fortification attached to something (`attached`) or no longer
+    /// attached to it (CR 701.3). `to` is the permanent's name, `None` for a player (a Curse);
+    /// `to_seat` is that permanent's controller, or that player.
+    Attached {
+        seat: PlaytestPlayer,
+        name: String,
+        to: Option<String>,
+        to_seat: PlaytestPlayer,
+        attached: bool,
+    },
+    /// A card the rules moved for a reason its move alone does not say — destroyed, sacrificed,
+    /// cycled, discarded — told in place of its `Moved`. `to` is where it went.
+    Removed {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+        how: PlaytestRemoval,
+        to: Place,
+    },
+    /// A player's counters or speed changed (CR 122.1, CR 702.179): `delta` the change, `total`
+    /// what they have after it.
+    PlayerCounters {
+        seat: PlaytestPlayer,
+        kind: PlaytestPlayerCounter,
+        delta: i32,
+        total: u32,
+    },
+    /// A player ventured into a dungeon's room (CR 309.4): the dungeon's name and the room's.
+    RoomEntered {
+        seat: PlaytestPlayer,
+        dungeon: String,
+        room: String,
+    },
+    /// A player completed a dungeon (CR 309.7).
+    DungeonCompleted {
+        seat: PlaytestPlayer,
+        dungeon: String,
+    },
+    /// A player voted (CR 701.38) for `choice`.
+    Voted {
+        seat: PlaytestPlayer,
+        choice: String,
+    },
+    /// A vote's count, each choice with its votes, in the engine's order.
+    VoteResolved {
+        tallies: Vec<PlaytestTally>,
+    },
+    /// A clash (CR 701.30): `seat` clashed with `with`, each revealing a card of the mana value
+    /// given (`None` for an empty library), and `result` is `seat`'s.
+    Clashed {
+        seat: PlaytestPlayer,
+        with: PlaytestPlayer,
+        mana_value: Option<u32>,
+        their_mana_value: Option<u32>,
+        result: PlaytestClash,
+    },
+    /// A player will take an extra turn (CR 500.7).
+    ExtraTurn {
+        seat: PlaytestPlayer,
+    },
     /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
     /// or the question had only one answer and the session took it (`sole_answer`).
     Chose {
@@ -1103,6 +1263,45 @@ pub enum PlaytestHappened {
     GameOver {
         winner: Option<PlaytestPlayer>,
     },
+}
+
+/// Why the rules moved a card (`Removed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestRemoval {
+    Destroyed,
+    Sacrificed,
+    Cycled,
+    Discarded,
+}
+
+/// A count a player has (`PlayerCounters`): phase's player counters, energy, and speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestPlayerCounter {
+    Poison,
+    Energy,
+    Experience,
+    Rad,
+    Ticket,
+    Speed,
+}
+
+/// How a clash came out for the player who clashed (`Clashed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestClash {
+    Won,
+    Lost,
+    Tied,
+}
+
+/// One choice of a vote and how many voted for it (`VoteResolved`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestTally {
+    pub choice: String,
+    pub votes: u32,
 }
 
 /// A designation a player takes (`Became`).

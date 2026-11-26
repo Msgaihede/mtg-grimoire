@@ -8,12 +8,16 @@ pub mod session;
 pub mod view;
 
 pub use session::{OpponentDeck, Playtest};
-pub use view::{Difficulty, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView};
+pub use view::{
+    Difficulty, PlaytestAction, PlaytestFirst, PlaytestPlayer, PlaytestStep, PlaytestView,
+};
 
 #[cfg(test)]
 mod goldfish_tests;
 #[cfg(test)]
 mod lobby_tests;
+#[cfg(test)]
+mod outside_tests;
 #[cfg(test)]
 mod parity_tests;
 #[cfg(test)]

@@ -66,8 +66,10 @@ export type PlaytestPickPurpose =
   | "order"
   | "pay"
   | "pile"
+  | "outside"
   | "crew"
-  | "saddle";
+  | "saddle"
+  | "split";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -89,6 +91,13 @@ export type PlaytestPlayer = "you" | "opponent" | "opponent2" | "opponent3";
 
 /** What the AI opponent plays like: phase's presets, random to strong. */
 export type PlaytestDifficulty = "veryEasy" | "easy" | "medium" | "hard" | "veryHard";
+
+/**
+ * Who takes the first turn (issue #1751): the seed's coin flip, the reader on the play, or on the
+ * draw — in a four-player game the seed then picks which opponent starts. Against the goldfish the
+ * coin flip is the reader.
+ */
+export type PlaytestFirst = "random" | "play" | "draw";
 
 /** The whole table after an action, from the reader's seat. */
 export interface PlaytestView {
@@ -135,6 +144,12 @@ export interface PlaytestView {
    * the goldfish, off against the AI.
    */
   sandbox: boolean;
+  /**
+   * The reader holds priority over their own spells and abilities (`setHold`, issue #1751): one of
+   * theirs on top of the stack stops them, when they could respond, as an opponent's does. Off at
+   * the start of every game.
+   */
+  hold: boolean;
   /**
    * The opponent is the goldfish: one seat that keeps its hand, passes every priority, never
    * attacks or blocks, and — like the reader — cannot lose (its `deadOn` says when it would
@@ -257,6 +272,23 @@ export interface PlaytestSeat {
   dungeon: PlaytestDungeon | null;
   /** The ids of the battlefield permanents attached to this player — a Curse (CR 303.4). */
   enchantedBy: number[];
+  /**
+   * This player's companion while it is still outside the game (CR 702.139a): revealed, so
+   * public to every seat. `null` for a player who revealed none, and once it is in the game.
+   */
+  companion: PlaytestCompanion | null;
+}
+
+/** A revealed companion outside the game (CR 702.139a). */
+export interface PlaytestCompanion {
+  name: string;
+  /** The deck's printing of it, for its picture. */
+  cardId: string | null;
+  /**
+   * The rules offer the reader its special action now — {3} to put it into their hand, in their
+   * main phase with the stack empty (CR 702.139c): a `companionToHand`. Only on the reader's seat.
+   */
+  toHand: boolean;
 }
 
 /** A player's place in a dungeon: its name, the room the marker is on and that room's words. */
@@ -594,16 +626,23 @@ export type PlaytestAction =
   /** Foretell a hand card (CR 702.143a): pay {2}, exile it face down, cast it on a later turn
    *  (a `play` of it in exile). Offered when its {@link GameCard.canForetell} says so. */
   | { type: "foretell"; id: number }
+  /** Put the reader's revealed companion into their hand (CR 702.139c): {3}, in their main phase
+   *  with the stack empty, once a game. Offered when their seat's `companion.toHand` says so. */
+  | { type: "companionToHand" }
   /** Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: its
    *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
-   *  Several kinds of mana are a `ManaChoice` prompt. Offered when its
-   *  {@link GameCard.canTapForMana} says so. */
+   *  Taken at priority and inside a payment window (`ManaPayment`, `ManaAbilityManaPayment`,
+   *  `UnlessPayment`, issue #1743), which stays open after the tap. Several kinds of mana are a
+   *  `ManaChoice` prompt. Offered when its {@link GameCard.canTapForMana} says so. */
   | { type: "tapForMana"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
   | { type: "setStops"; stops: PlaytestStop[] }
   /** Turn the sandbox on or off. A setting, as `setStops`: taken at any stage, never undone. */
   | { type: "setSandbox"; on: boolean }
+  /** Hold priority over the reader's own spells and abilities, or stop (issue #1751). A setting,
+   *  as `setStops`: taken at any stage, never undone. */
+  | { type: "setHold"; on: boolean }
   | { type: "attack"; attacks: PlaytestAttackPair[] }
   | { type: "block"; blocks: PlaytestBlockPair[] }
   | { type: "choose"; index: number }
@@ -678,6 +717,8 @@ export type PlaytestHappened =
   | { type: "foretold"; seat: PlaytestPlayer; name: string | null }
   /** `name` is `null` for an opponent's card face down where it went (a hideaway card, a manifest). */
   | { type: "moved"; seat: PlaytestPlayer; name: string | null; from: GamePlace; to: GamePlace }
+  | { type: "companionRevealed"; seat: PlaytestPlayer; name: string }
+  | { type: "companionToHand"; seat: PlaytestPlayer; name: string }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }
   | { type: "blocked"; seat: PlaytestPlayer; blocker: string; attacker: string }
@@ -709,8 +750,9 @@ export type PlaytestHappened =
   /** The reader put a card somewhere by hand; `seat` is whose card it is. */
   | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   /**
-   * The reader put a card under a player's control by hand; `seat` is whose card it is, `from`
-   * where it was (the battlefield for a change of control alone), `controller` who has it now.
+   * A card put under a player's control; `seat` is whose card it is, `from` where it was (the
+   * battlefield for a change of control alone), `controller` who has it now. `byHand` is the
+   * reader's sandbox edit; otherwise the rules changed it.
    */
   | {
       type: "controlled";
@@ -718,6 +760,7 @@ export type PlaytestHappened =
       name: string;
       from: GamePlace;
       controller: PlaytestPlayer;
+      byHand: boolean;
     }
   | { type: "tapped"; seat: PlaytestPlayer; name: string; count: number; tapped: boolean }
   | { type: "untappedAll" }
@@ -743,9 +786,88 @@ export type PlaytestHappened =
   | { type: "became"; seat: PlaytestPlayer; what: PlaytestDesignation }
   /** It became day or night (CR 731). */
   | { type: "dayNight"; now: PlaytestDayNight }
+  /** Counters the rules put on a permanent (`delta` above zero) or took off it; `name` is `null`
+   *  for an opponent's face-down permanent. */
+  | {
+      type: "countersChanged";
+      seat: PlaytestPlayer;
+      name: string | null;
+      kind: string;
+      delta: number;
+    }
+  /** Permanents an effect tapped or untapped (never for mana, an attack or a cost); a name is
+   *  `null` for an opponent's face-down permanent. */
+  | { type: "becameTapped"; seat: PlaytestPlayer; names: (string | null)[]; tapped: boolean }
+  /** A triggered ability triggered; `name` is its source's, `null` for an opponent's face-down one. */
+  | { type: "triggered"; seat: PlaytestPlayer; name: string | null }
+  /** A double-faced card transformed; `name` is the face it shows now. */
+  | { type: "transformed"; seat: PlaytestPlayer; name: string }
+  /** A face-down permanent turned face up, and so named. */
+  | { type: "turnedFaceUp"; seat: PlaytestPlayer; name: string }
+  /** A permanent turned face down; `name` is `null` for an opponent's. */
+  | { type: "turnedFaceDown"; seat: PlaytestPlayer; name: string | null }
+  /** An Aura or an Equipment attached (`attached`) or unattached; `to` is `null` for a player,
+   *  `toSeat` the permanent's controller or that player. */
+  | {
+      type: "attached";
+      seat: PlaytestPlayer;
+      name: string;
+      to: string | null;
+      toSeat: PlaytestPlayer;
+      attached: boolean;
+    }
+  /** A card destroyed, sacrificed, cycled or discarded, told in place of its `moved`. */
+  | {
+      type: "removed";
+      seat: PlaytestPlayer;
+      name: string | null;
+      how: PlaytestRemoval;
+      to: GamePlace;
+    }
+  /** A player's counters or speed changed: `delta` the change, `total` what they have now. */
+  | {
+      type: "playerCounters";
+      seat: PlaytestPlayer;
+      kind: PlaytestPlayerCounter;
+      delta: number;
+      total: number;
+    }
+  /** A player ventured into a dungeon's room. */
+  | { type: "roomEntered"; seat: PlaytestPlayer; dungeon: string; room: string }
+  | { type: "dungeonCompleted"; seat: PlaytestPlayer; dungeon: string }
+  | { type: "voted"; seat: PlaytestPlayer; choice: string }
+  /** A vote's count, each choice with its votes. */
+  | { type: "voteResolved"; tallies: PlaytestTally[] }
+  /** A clash: `seat` clashed with `with`; the mana values are `null` for an empty library, and
+   *  `result` is `seat`'s. */
+  | {
+      type: "clashed";
+      seat: PlaytestPlayer;
+      with: PlaytestPlayer;
+      manaValue: number | null;
+      theirManaValue: number | null;
+      result: PlaytestClash;
+    }
+  /** A player will take an extra turn. */
+  | { type: "extraTurn"; seat: PlaytestPlayer }
   | { type: "chose"; what: string }
   | { type: "eliminated"; seat: PlaytestPlayer }
   | { type: "gameOver"; winner: PlaytestPlayer | null };
+
+/** Why the rules moved a card (`removed`). */
+export type PlaytestRemoval = "destroyed" | "sacrificed" | "cycled" | "discarded";
+
+/** A count a player has (`playerCounters`). */
+export type PlaytestPlayerCounter = "poison" | "energy" | "experience" | "rad" | "ticket" | "speed";
+
+/** How a clash came out for the player who clashed (`clashed`). */
+export type PlaytestClash = "won" | "lost" | "tied";
+
+/** One choice of a vote and how many voted for it (`voteResolved`). */
+export interface PlaytestTally {
+  choice: string;
+  votes: number;
+}
 
 /** A designation a player takes (`became`). */
 export type PlaytestDesignation = "monarch" | "initiative" | "cityBlessing" | "ringTempted";
@@ -837,7 +959,7 @@ export const playtestCommands = {
    * duel, three for a four-player game), each played by the AI at `difficulty` — or, with **no
    * opponents, against the goldfish** (`difficulty` unused; the reader plays first). Answers at
    * the reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and
-   * the coin flip. `game` is the page's name for this game, fresh per deal, which every later call
+   * the coin flip; `first`, who takes the first turn (issue #1751) — the coin flip when left out. `game` is the page's name for this game, fresh per deal, which every later call
    * for it carries: the host acts on and ends only the game named, so a board that has gone never
    * touches the one that replaced it (issue #1141).
    */
@@ -848,6 +970,7 @@ export const playtestCommands = {
     opponents: PlaytestOpponent[],
     difficulty: PlaytestDifficulty,
     seed: number,
+    first: PlaytestFirst = "random",
   ) =>
     invoke<PlaytestStep>("playtest_start", {
       game,
@@ -856,6 +979,7 @@ export const playtestCommands = {
       opponents,
       difficulty,
       seed,
+      first,
     }),
   /**
    * One action on `game`, and everything the opponent does after it until the reader next decides.

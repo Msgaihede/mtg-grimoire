@@ -41,6 +41,7 @@ import {
   type LobbyPeer,
   type LobbyState,
   type PlaytestDifficulty,
+  type PlaytestFirst,
 } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
@@ -93,7 +94,16 @@ export interface SetupPicks {
    */
   seats: SetupSeat[];
   difficulty: PlaytestDifficulty;
+  /** Who takes the first turn (issue #1751); the coin flip when unset. */
+  first?: PlaytestFirst;
 }
+
+/** Who plays first, as the setup page offers it: the coin flip, the reader, an opponent. */
+export const FIRSTS: readonly { id: PlaytestFirst; label: string }[] = [
+  { id: "random", label: "Coin flip" },
+  { id: "play", label: "You" },
+  { id: "draw", label: "Opponent" },
+];
 
 export const DIFFICULTIES: readonly { id: PlaytestDifficulty; label: string }[] = [
   { id: "veryEasy", label: "Very easy" },
@@ -355,11 +365,20 @@ export function PlaytestSetup({
       deckId: deck.id,
       variant: dealt(deck, held.seats[i + 1].variant),
     }));
-    // The goldfish plays no skill: its picks say only what the reader plays.
+    // The goldfish plays no skill: its picks say only what the reader plays. Who plays first
+    // rides along only when it is not the coin flip.
+    const first = held.first ?? "random";
+    const firstPick = first === "random" ? {} : { first };
     onStart(
       opponents === 0
-        ? { deckId: yours.id, variant, opponents: opponentPicks }
-        : { deckId: yours.id, variant, opponents: opponentPicks, difficulty: held.difficulty },
+        ? { deckId: yours.id, variant, opponents: opponentPicks, ...firstPick }
+        : {
+            deckId: yours.id,
+            variant,
+            opponents: opponentPicks,
+            difficulty: held.difficulty,
+            ...firstPick,
+          },
     );
   };
 
@@ -422,9 +441,7 @@ export function PlaytestSetup({
         <PageBar title="Playtesting" />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6">
           <p className="m-0 text-sm text-dim">
-            {loading
-              ? "Loading your decks…"
-              : "No decks yet. Make one in Decks to playtest."}
+            {loading ? "Loading your decks…" : "No decks yet. Make one in Decks to playtest."}
           </p>
         </div>
       </section>
@@ -477,6 +494,13 @@ export function PlaytestSetup({
           onPick={(difficulty) => pick({ difficulty })}
         />
       )}
+
+      <Segmented
+        label="Plays first"
+        options={FIRSTS}
+        value={held.first ?? "random"}
+        onPick={(first) => pick({ first })}
+      />
 
       <div className="mt-auto flex flex-col gap-2 pt-2">
         <StartButton ready={ready} onPress={start} />

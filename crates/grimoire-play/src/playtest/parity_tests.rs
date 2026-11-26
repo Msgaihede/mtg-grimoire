@@ -805,6 +805,187 @@ fn a_coin_flip_kept_shows_the_flips() {
     assert!(refused.contains("Keep 1 flip"), "{refused}");
 }
 
+/// Issue #1751: a search that splits its finds between zones — Cultivate's "put one onto the
+/// battlefield tapped and the other into your hand" — is asked as a split pick, the picked card
+/// onto the battlefield and the rest into the hand, never the generic options.
+#[test]
+fn a_search_that_splits_its_finds_asks_which_goes_onto_the_battlefield() {
+    let (split, done) = engine(|| {
+        let cultivate = card(
+            "Cultivate",
+            Some("{2}{G}"),
+            "Sorcery",
+            "Search your library for up to two basic land cards, reveal those cards, put one onto the battlefield tapped and the other into your hand, then shuffle.",
+            1,
+        );
+        let mut game = kept(&deck(vec![cultivate]));
+        let id = find(
+            &put(&mut game, "Cultivate", Place::Hand).view.you.hand,
+            "Cultivate",
+        )
+        .unwrap()
+        .id;
+        let asked = game
+            .act(A::Play { id })
+            .expect("cast unpaid in the sandbox");
+        let search = asked
+            .view
+            .prompt
+            .as_ref()
+            .and_then(|p| p.pick.clone())
+            .unwrap_or_else(|| panic!("a search: {:?}", asked.view.prompt));
+        assert_eq!(search.purpose, PlaytestPickPurpose::Search);
+        let forests: Vec<u64> = search
+            .cards
+            .iter()
+            .filter(|c| c.name == "Forest")
+            .take(2)
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(forests.len(), 2, "two Forests to find");
+        let found = game
+            .act(A::PickCards {
+                ids: forests.clone(),
+            })
+            .expect("found two");
+        let split = found
+            .view
+            .prompt
+            .as_ref()
+            .and_then(|p| p.pick.clone())
+            .unwrap_or_else(|| panic!("a split: {:?}", found.view.prompt));
+        let done = game
+            .act(A::PickCards {
+                ids: vec![forests[0]],
+            })
+            .expect("split");
+        (split, done)
+    });
+    assert_eq!(split.purpose, PlaytestPickPurpose::Split);
+    assert_eq!((split.min, split.max), (1, 1));
+    assert_eq!(split.cards.len(), 2);
+    assert!(done.view.prompt.is_none(), "{:?}", done.view.prompt);
+    let lands: Vec<&GameCard> = done
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.name == "Forest")
+        .collect();
+    assert_eq!(lands.len(), 1, "one Forest onto the battlefield");
+    assert!(lands[0].tapped, "tapped, as Cultivate says");
+    assert!(
+        done.view.you.hand.iter().any(|c| c.name == "Forest"),
+        "the other into the hand"
+    );
+}
+
+/// The reader's own spell on the stack, with an instant in hand they could cast: held, they stop
+/// over it (`setHold`, issue #1751) and may pass to let it resolve; not held, it resolves.
+#[test]
+fn holding_priority_stops_the_reader_over_their_own_spell() {
+    fn cast_bears(hold: bool) -> (PlaytestStep, Option<PlaytestStep>) {
+        engine(move || {
+            let growth = card(
+                "Giant Growth",
+                Some("{G}"),
+                "Instant",
+                "Target creature gets +3/+3 until end of turn.",
+                1,
+            );
+            let mut game = kept(&deck(vec![growth]));
+            for _ in 0..3 {
+                put(&mut game, "Forest", Place::Battlefield);
+            }
+            put(&mut game, "Grizzly Bears", Place::Battlefield);
+            put(&mut game, "Giant Growth", Place::Hand);
+            let bears = find(
+                &put(&mut game, "Grizzly Bears", Place::Hand).view.you.hand,
+                "Grizzly Bears",
+            )
+            .unwrap()
+            .id;
+            let set = game.act(A::SetHold { on: hold }).expect("a setting");
+            assert_eq!(set.view.hold, hold);
+            let cast = game
+                .act(A::Play { id: bears })
+                .expect("cast from the Forests");
+            let passed =
+                (cast.view.stage == Stage::Respond).then(|| game.act(A::Pass).expect("pass"));
+            (cast, passed)
+        })
+    }
+    let (cast, passed) = cast_bears(false);
+    assert_eq!(cast.view.stage, Stage::Main, "not held: it resolves");
+    assert!(cast.view.stack.is_empty());
+    assert!(passed.is_none());
+
+    let (cast, passed) = cast_bears(true);
+    assert_eq!(
+        cast.view.stage,
+        Stage::Respond,
+        "held over the reader's own spell"
+    );
+    assert_eq!(cast.view.stack.len(), 1);
+    assert_eq!(cast.view.stack[0].name, "Grizzly Bears");
+    let passed = passed.expect("passed");
+    assert!(passed.view.stack.is_empty(), "passing lets it resolve");
+    assert_eq!(
+        passed
+            .view
+            .you
+            .battlefield
+            .iter()
+            .filter(|c| c.name == "Grizzly Bears")
+            .count(),
+        2
+    );
+}
+
+/// Who plays first is the reader's to pick (issue #1751): on the draw against the goldfish, the
+/// goldfish takes the first turn; on the play against the AI the reader does, whatever the coin
+/// flip would have said.
+#[test]
+fn who_plays_first_is_picked() {
+    use super::session::OpponentDeck;
+    use super::view::{PlaytestFirst, PlaytestPlayer};
+    let (fish_random, fish_draw, ai_coin, ai_play, ai_draw) = engine(|| {
+        let mine = deck(vec![]);
+        let theirs = [OpponentDeck {
+            cards: deck(vec![]),
+            tokens: vec![],
+            person: false,
+        }];
+        let started = |opponents: &[OpponentDeck], seed: u64, first: PlaytestFirst| {
+            Playtest::new_first(&mine, &[], opponents, seed, Difficulty::VeryEasy, first)
+                .expect("a game")
+                .1
+                .view
+                .started
+        };
+        (
+            started(&[], 1, PlaytestFirst::Random),
+            started(&[], 1, PlaytestFirst::Draw),
+            started(&theirs, 1, PlaytestFirst::Random),
+            started(&theirs, 1, PlaytestFirst::Play),
+            started(&theirs, 2, PlaytestFirst::Draw),
+        )
+    });
+    assert_eq!(
+        fish_random,
+        PlaytestPlayer::You,
+        "the goldfish's coin flip is the reader"
+    );
+    assert_eq!(fish_draw, PlaytestPlayer::Opponent);
+    assert_eq!(
+        ai_coin,
+        PlaytestPlayer::Opponent,
+        "an odd seed: the opponent"
+    );
+    assert_eq!(ai_play, PlaytestPlayer::You);
+    assert_eq!(ai_draw, PlaytestPlayer::Opponent);
+}
+
 /// Issue #1746: phase's game menu offers Concede (CR 104.3a), always legal though never among
 /// the legal answers. Against the goldfish — which nobody can lose to otherwise — it ends the
 /// game as the reader's loss, and once it is over there is nothing left to concede.

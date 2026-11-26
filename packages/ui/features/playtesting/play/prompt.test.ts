@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { PlaytestCause, PlaytestOption } from "@/lib/ipc";
+import type { PlaytestCause, PlaytestOption, PlaytestPrompt } from "@/lib/ipc";
 import {
   distinctOptions,
   optionCards,
   optionDetail,
   optionLabel,
   pickableCards,
+  promptHelp,
   promptSource,
   promptTitle,
   words,
@@ -50,6 +51,32 @@ describe("optionLabel", () => {
     expect(optionLabel(option({ kind: "ActivateAbility", number: 1 }), prompt).text).toBe(
       "Ability 2",
     );
+  });
+
+  it("asks before a sacrificial source pays, and says a payment window's pay (issue #1743)", () => {
+    expect(promptTitle("ManaSourceSelection")).toBe("Sacrifice it for mana?");
+    expect(promptTitle("ManaPayment")).toBe("Pay the mana");
+    expect(promptHelp("ManaPayment")).toBe("Tap sources on the table, or pay");
+    const asked = { kind: "ManaSourceSelection" };
+    const petal = { id: 9, name: "Lotus Petal", cardId: null, text: null, cause: null };
+    expect(
+      optionLabel(
+        option({ kind: "ActivateManaSource", label: "Green", cards: [petal] }),
+        asked,
+      ),
+    ).toEqual({ text: "Add green mana", hint: "Lotus Petal" });
+    expect(optionLabel(option({ kind: "BackToManaPayment" }), asked).text).toBe(
+      "Pay another way",
+    );
+    expect(optionLabel(option({ kind: "PassPriority" }), { kind: "ManaPayment" }).text).toBe(
+      "Pay",
+    );
+    expect(
+      pickableCards({
+        kind: "ManaSourceSelection",
+        options: [option({ kind: "ActivateManaSource", label: "Green", cards: [petal] })],
+      } as PlaytestPrompt).get(9),
+    ).toBe(0);
   });
 
   it("says the color a mana-color answer makes, never the shape of the choice (issue #1363)", () => {
@@ -161,6 +188,16 @@ describe("answers told apart by their kind", () => {
     expect(text({ kind: "PayUnlessCost", yes: false })).toBe("Don’t pay");
     // A plain may stays a yes or a no.
     expect(text({ kind: "DecideOptionalEffect", yes: true })).toBe("Yes");
+  });
+
+  it("reveals a companion by its name, or none", () => {
+    const reveal = { kind: "DeclareCompanion" };
+    expect(text({ ...reveal, label: "Lurrus of the Dream-Den" }, "CompanionReveal")).toBe(
+      "Reveal Lurrus of the Dream-Den",
+    );
+    expect(text({ ...reveal, label: "Decline" }, "CompanionReveal")).toBe(
+      "Don’t reveal a companion",
+    );
   });
 
   it("pays an optional cost by its keyword, or declines it", () => {

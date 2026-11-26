@@ -48,6 +48,9 @@ const TITLES: Record<string, string> = {
   AlternativeCastChoice: "Which cost do you pay?",
   CastOffer: "Cast it?",
   UnlessPayment: "Pay?",
+  ManaPayment: "Pay the mana",
+  ManaAbilityManaPayment: "Pay the mana",
+  ManaSourceSelection: "Sacrifice it for mana?",
   ReplacementChoice: "Choose a replacement effect",
   OrderTriggers: "Order your triggers",
   AssignCombatDamage: "Assign combat damage",
@@ -75,6 +78,9 @@ const TITLES: Record<string, string> = {
 const HELP: Record<string, string> = {
   OrderTriggers: "Pick which resolves first",
   ReplacementChoice: "Pick the effect that applies",
+  ManaPayment: "Tap sources on the table, or pay",
+  ManaAbilityManaPayment: "Tap sources on the table, or pay",
+  ManaSourceSelection: "Paying with it sacrifices it",
 };
 
 /** The panel's title for a kind of question. */
@@ -174,6 +180,9 @@ export interface OptionLabel {
   hint: string | null;
 }
 
+/** The payment windows, where the reader taps sources by hand and a pass pays (issue #1743). */
+const PAYMENT_WINDOWS = new Set(["ManaPayment", "ManaAbilityManaPayment"]);
+
 /** The questions whose answers differ by their kind more than by what they point at. */
 const BY_KIND = new Set(["CastChoice", "AbilityChoice"]);
 
@@ -215,6 +224,9 @@ function kindText(
     return prompt.keyword ? `Pay ${words(prompt.keyword).toLowerCase()}` : "Pay";
   }
   if (option.label === null) return null;
+  // A companion's reveal (CR 702.139a): the card it names, or none.
+  if (option.kind === "DeclareCompanion")
+    return option.label === "Decline" ? "Don’t reveal a companion" : `Reveal ${option.label}`;
   if (option.kind === "ChoosePile") {
     const n = option.cards.length;
     return `Pile ${option.label} (${n} ${n === 1 ? "card" : "cards"})`;
@@ -273,6 +285,14 @@ export function optionLabel(
   // So does an answer to the engine's own "which color" (issue #1363).
   if ((prompt.kind === "ManaChoice" || option.kind === "ChooseManaColor") && option.label !== null)
     return { text: `Add ${manaText(option.label)} mana`, hint: null };
+  // The engine's "spend this sacrificial source?" (issue #1743): the mana, its source beside — or
+  // back to the payment window, to pay another way.
+  if (option.kind === "ActivateManaSource" && option.label !== null)
+    return { text: `Add ${manaText(option.label)} mana`, hint: option.cards[0]?.name ?? null };
+  if (option.kind === "BackToManaPayment") return { text: "Pay another way", hint: null };
+  // A payment window's pass pays the rest, as phase's own "Pay" does.
+  if (option.kind === "PassPriority" && PAYMENT_WINDOWS.has(prompt.kind))
+    return { text: "Pay", hint: null };
   if (prompt.kind === "OrderTriggers" && option.cards.length > 0) {
     const refs = optionCards(option, prompt);
     const [first, ...rest] = refs.map((ref) => abilityName(ref, refs, opponents));

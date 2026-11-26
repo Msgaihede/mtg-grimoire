@@ -964,9 +964,10 @@ describe("ipc argument names match the Rust command signatures", () => {
       opponents,
       difficulty: "hard",
       seed: 99,
+      first: "random",
     });
     // No opponents is the goldfish: the same command, an empty list.
-    await ipc.playtestStart(22, 4, "theory", [], "medium", 7);
+    await ipc.playtestStart(22, 4, "theory", [], "medium", 7, "draw");
     expect(invoke).toHaveBeenLastCalledWith("playtest_start", {
       game: 22,
       deckId: 4,
@@ -974,6 +975,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       opponents: [],
       difficulty: "medium",
       seed: 7,
+      first: "draw",
     });
     await ipc.playtestAct(22, { type: "setSandbox", on: true });
     expect(invoke).toHaveBeenLastCalledWith("playtest_act", {
@@ -996,7 +998,15 @@ describe("ipc argument names match the Rust command signatures", () => {
       expect(playtestRs, `\`${command}\` declares no \`${param}\``).toMatch(
         new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
       );
-    for (const param of ["game", "deck_id", "variant", "opponents", "difficulty", "seed"]) {
+    for (const param of [
+      "game",
+      "deck_id",
+      "variant",
+      "opponents",
+      "difficulty",
+      "seed",
+      "first",
+    ]) {
       declares("playtest_start", param);
     }
     declares("playtest_act", "game");
@@ -1027,6 +1037,12 @@ describe("ipc argument names match the Rust command signatures", () => {
       "PlaytestPickPurpose",
       "PlaytestStopStep",
       "PlaytestPlayer",
+      "PlaytestFirst",
+      "PlaytestDesignation",
+      "PlaytestDayNight",
+      "PlaytestRemoval",
+      "PlaytestPlayerCounter",
+      "PlaytestClash",
       "Difficulty",
     ]) {
       const ts = name === "Difficulty" ? "PlaytestDifficulty" : name;

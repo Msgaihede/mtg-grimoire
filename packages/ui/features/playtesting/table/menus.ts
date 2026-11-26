@@ -394,7 +394,7 @@ function sandboxLibraryRows(
 /** What the game menu reads of a game: the reader's graveyard and exile, the deck's tokens,
  *  whether there is anything to undo or redo, and whether the sandbox is on. */
 export type GameMenuView = Pick<PlaytestSeat, "graveyard" | "exile"> &
-  Pick<PlaytestView, "tokens" | "canUndo" | "canRedo" | "sandbox">;
+  Pick<PlaytestView, "tokens" | "canUndo" | "canRedo" | "sandbox" | "hold">;
 
 /**
  * The game menu, under the board's top-left button. `view` is `null` while a game is being
@@ -408,7 +408,10 @@ export type GameMenuView = Pick<PlaytestSeat, "graveyard" | "exile"> &
  *
  * **The sandbox's own row is a setting, not a move**: a check mark that turns it on or off
  * (`setSandbox`) at any stage, the opening hand included, whatever the two flags say. Only a game
- * still being dealt has no sandbox to set.
+ * still being dealt has no sandbox to set. **Holding priority is a setting too** (`setHold`, issue
+ * #1751): checked, the reader's own spell or ability on top of the stack stops them when they could
+ * respond, so they can answer it themselves. A lobby game's menu has it as well — each person's
+ * own.
  *
  * **Undo and redo head it** (issue #1022), greyed when the view has nothing to go back or forward
  * to — the menu's way to the same two actions `Ctrl+Z` and `Ctrl+Y` send, for a reader who does
@@ -487,6 +490,17 @@ export function gameMenu({
           onSelect: () => onAct({ type: "setSandbox", on: !view.sandbox }),
         };
 
+  const holdRow: MenuItem =
+    view === null
+      ? action("hold", "Hold priority on your spells", () => {}, true)
+      : {
+          kind: "radio",
+          id: "hold",
+          label: "Hold priority on your spells",
+          checked: view.hold,
+          onSelect: () => onAct({ type: "setHold", on: !view.hold }),
+        };
+
   const undoRows: MenuItem[] = lobby
     ? []
     : [
@@ -501,6 +515,7 @@ export function gameMenu({
 
   return [
     ...undoRows,
+    holdRow,
     action("untap", "Untap everything", () => onAct({ type: "untapAll" }), !edits),
     submenu(
       "token",

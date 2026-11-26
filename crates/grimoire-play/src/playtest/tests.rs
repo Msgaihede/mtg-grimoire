@@ -6,11 +6,11 @@
 
 use engine::game::create_object;
 use engine::types::ability::{Effect, KeywordAction, ResolvedAbility, TargetRef};
-use engine::types::events::GameEvent;
+use engine::types::events::{ClashResult, GameEvent, TriggeredAbilityOrigin};
 use engine::types::game_state::{StackEntry, StackEntryKind};
 use engine::types::identifiers::{CardId, ObjectId};
 use engine::types::zones::Zone;
-use engine::types::{GameState, PlayerId};
+use engine::types::{CounterType, GameState, PlayerId};
 
 use crate::cards::CardFacts;
 use crate::on_engine_stack;
@@ -18,9 +18,10 @@ use crate::view::{GameCard, Lane, Place, Seat};
 
 use super::session::{stack_targets, tell, Eyes, OpponentDeck, Playtest};
 use super::view::{
-    Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestHappened as H,
-    PlaytestPhase, PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep,
-    PlaytestStop, PlaytestStopStep, PlaytestView,
+    Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestClash,
+    PlaytestHappened as H, PlaytestPhase, PlaytestPickPurpose, PlaytestPlayer,
+    PlaytestPlayerCounter, PlaytestRemoval, PlaytestStage as Stage, PlaytestStep, PlaytestStop,
+    PlaytestStopStep, PlaytestView,
 };
 
 pub(super) fn card(
@@ -1817,7 +1818,9 @@ fn an_opponents_face_down_permanent_is_nameless_on_the_table() {
 }
 
 /// Issue #1142: an AI card exiled from its library face down (hideaway) is told with no name,
-/// and so is a spell it casts face down; the reader's own are named.
+/// and so is a spell it casts face down. Since issue #1748 the move goes through phase's own
+/// event filter, which hides a face-down exile card from its owner too unless an effect lets
+/// them look at it (CR 406.3) — none does here, so the reader's own is told without its name.
 #[test]
 fn an_opponents_card_exiled_face_down_is_told_without_its_name() {
     let happened = engine(|| {
@@ -1867,11 +1870,174 @@ fn an_opponents_card_exiled_face_down_is_told_without_its_name() {
         vec![
             exiled(PlaytestPlayer::Opponent, None),
             exiled(PlaytestPlayer::Opponent, Some("Hill Giant")),
-            exiled(PlaytestPlayer::You, Some("Grizzly Bears")),
+            exiled(PlaytestPlayer::You, None),
             H::Cast {
                 seat: PlaytestPlayer::Opponent,
                 name: None,
             },
+        ]
+    );
+}
+
+/// Issue #1748: the rules' own doings phase's log tells are facts too — counters, an effect's
+/// taps (never a tap for mana, an attack or a cost), triggers, a change of control, an Aura's
+/// attaching, a destruction told in place of its move, a player's energy, a clash and an extra
+/// turn — and an opponent's face-down permanent is never named in any of them.
+#[test]
+fn the_rules_doings_are_told_as_facts() {
+    let happened = engine(|| {
+        let mut state = GameState::new_two_player(7);
+        let mut put = |owner: PlayerId, name: &str, face_down: bool| {
+            let id = create_object(&mut state, CardId(1), owner, name.into(), Zone::Battlefield);
+            state.objects.get_mut(&id).unwrap().face_down = face_down;
+            id
+        };
+        let bears = put(PlayerId(0), "Grizzly Bears", false);
+        let rancor = put(PlayerId(0), "Rancor", false);
+        let giant = put(PlayerId(1), "Hill Giant", false);
+        let morph = put(PlayerId(1), "Willbender", true);
+        let ogre = put(PlayerId(1), "Gray Ogre", false);
+        state.players[0].energy = 2;
+        let died = GameEvent::ZoneChanged {
+            object_id: ogre,
+            from: Some(Zone::Battlefield),
+            to: Zone::Graveyard,
+            record: Box::new(state.objects[&ogre].snapshot_for_zone_change(
+                ogre,
+                Some(Zone::Battlefield),
+                Zone::Graveyard,
+            )),
+        };
+        let events = vec![
+            GameEvent::CounterAdded {
+                object_id: bears,
+                counter_type: CounterType::Plus1Plus1,
+                count: 2,
+                actor: PlayerId(0),
+            },
+            GameEvent::CounterRemoved {
+                object_id: morph,
+                counter_type: CounterType::Plus1Plus1,
+                count: 1,
+                instruction_lead: None,
+            },
+            GameEvent::PermanentTapped {
+                object_id: giant,
+                caused_by: Some(bears),
+                incarnation: None,
+            },
+            GameEvent::PermanentTapped {
+                object_id: morph,
+                caused_by: Some(bears),
+                incarnation: None,
+            },
+            // A cost's or a mana ability's tap: told by its own fact, never as this.
+            GameEvent::PermanentTapped {
+                object_id: bears,
+                caused_by: None,
+                incarnation: None,
+            },
+            GameEvent::AbilityTriggered {
+                stack_entry: None,
+                source_id: morph,
+                controller: PlayerId(1),
+                origin: TriggeredAbilityOrigin::SourceAbility,
+                causes: Vec::new(),
+            },
+            GameEvent::ControllerChanged {
+                object_id: giant,
+                old_controller: PlayerId(1),
+                new_controller: PlayerId(0),
+                evidence: Default::default(),
+            },
+            GameEvent::Attached {
+                attachment_id: rancor,
+                target: TargetRef::Object(bears),
+            },
+            died,
+            GameEvent::CreatureDestroyed {
+                object_id: ogre,
+                source_id: None,
+            },
+            GameEvent::EnergyChanged {
+                player: PlayerId(0),
+                delta: 2,
+            },
+            GameEvent::Clash {
+                controller: PlayerId(1),
+                opponent: PlayerId(0),
+                controller_mana_value: Some(3),
+                opponent_mana_value: None,
+                result: ClashResult::Won,
+            },
+            GameEvent::ExtraTurnCreated {
+                player_id: PlayerId(0),
+                anchor: PlayerId(0),
+            },
+        ];
+        let mut out = Vec::new();
+        tell(&state, &events, Eyes::host(state.players.len()), &mut out);
+        out
+    });
+    let (you, them) = (PlaytestPlayer::You, PlaytestPlayer::Opponent);
+    assert_eq!(
+        happened,
+        vec![
+            H::CountersChanged {
+                seat: you,
+                name: Some("Grizzly Bears".into()),
+                kind: "+1/+1".into(),
+                delta: 2,
+            },
+            H::CountersChanged {
+                seat: them,
+                name: None,
+                kind: "+1/+1".into(),
+                delta: -1,
+            },
+            H::BecameTapped {
+                seat: them,
+                names: vec![Some("Hill Giant".into()), None],
+                tapped: true,
+            },
+            H::Triggered {
+                seat: them,
+                name: None,
+            },
+            H::Controlled {
+                seat: them,
+                name: "Hill Giant".into(),
+                from: Place::Battlefield,
+                controller: you,
+                by_hand: false,
+            },
+            H::Attached {
+                seat: you,
+                name: "Rancor".into(),
+                to: Some("Grizzly Bears".into()),
+                to_seat: you,
+                attached: true,
+            },
+            H::Removed {
+                seat: them,
+                name: Some("Gray Ogre".into()),
+                how: PlaytestRemoval::Destroyed,
+                to: Place::Graveyard,
+            },
+            H::PlayerCounters {
+                seat: you,
+                kind: PlaytestPlayerCounter::Energy,
+                delta: 2,
+                total: 2,
+            },
+            H::Clashed {
+                seat: them,
+                with: you,
+                mana_value: Some(3),
+                their_mana_value: None,
+                result: PlaytestClash::Won,
+            },
+            H::ExtraTurn { seat: you },
         ]
     );
 }
@@ -2057,10 +2223,10 @@ fn each_other_player_sacrifices_and_the_caster_makes_a_zombie_for_each() {
         PlaytestPlayer::Opponent3,
     ] {
         assert!(
-            step.happened.contains(&H::Moved {
+            step.happened.contains(&H::Removed {
                 seat,
                 name: Some("Raging Goblin".into()),
-                from: Place::Battlefield,
+                how: PlaytestRemoval::Sacrificed,
                 to: Place::Graveyard,
             }),
             "{seat:?} sacrificed: {:?}",
@@ -2169,6 +2335,7 @@ fn the_sandbox_takes_an_opponents_permanent_and_it_stays_taken() {
             name: "Hill Giant".into(),
             from: Place::Battlefield,
             controller: PlaytestPlayer::You,
+            by_hand: true,
         }]
     );
     assert!(sick, "summoning sick for its new controller (CR 302.6)");
@@ -2220,6 +2387,7 @@ fn the_sandbox_puts_an_opponents_graveyard_creature_onto_the_readers_battlefield
         name: "Hill Giant".into(),
         from: Place::Graveyard,
         controller: PlaytestPlayer::You,
+        by_hand: true,
     }));
     assert!(
         find(&buried.view.opponents[0].graveyard, "Hill Giant").is_some(),
@@ -2292,6 +2460,7 @@ fn control_is_given_and_taken_back_but_never_reaches_a_hidden_or_nonpermanent_ca
         name: "Grizzly Bears".into(),
         from: Place::Battlefield,
         controller: PlaytestPlayer::Opponent,
+        by_hand: true,
     }));
     assert!(find(&back.view.you.battlefield, "Grizzly Bears").is_some());
     assert_eq!(

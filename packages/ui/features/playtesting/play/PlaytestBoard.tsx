@@ -941,6 +941,7 @@ export function PlaytestBoard({
                         canUndo: view.canUndo && !busy,
                         canRedo: view.canRedo && !busy,
                         sandbox: view.sandbox,
+                        hold: view.hold,
                       },
                 playing: playing && !frozen,
                 sandbox: edits,
@@ -1000,6 +1001,7 @@ export function PlaytestBoard({
                 commanderDamage={opponent?.commanderDamage}
                 lethal={view?.commanderDamageLethal}
                 standing={opponent}
+                companion={opponent?.companion ?? null}
                 curses={opponent === null || view === null ? undefined : cursesOn(opponent, view)}
                 onPointCard={pointCard}
                 onUnpoint={unpoint}
@@ -1188,6 +1190,8 @@ export function PlaytestBoard({
             commanderDamage={you?.commanderDamage}
             lethal={view?.commanderDamageLethal}
             standing={you}
+            companion={you?.companion ?? null}
+            onCompanion={replaying ? undefined : () => act({ type: "companionToHand" })}
             curses={you === null || view === null ? undefined : cursesOn(you, view)}
             onPointCard={pointCard}
             onUnpoint={unpoint}
