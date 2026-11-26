@@ -43,9 +43,8 @@ import type { Pointed } from "./types";
  * stage button does on every other stage.
  */
 export interface OpeningHandView extends Pick<PlaytestSeat, "hand" | "library"> {
+  /** The mulligan's state, and the lands in the library (`libraryLands`, a count of its own). */
   mulligan: MulliganView | null;
-  /** The lands among the library's cards. */
-  libraryLands: number;
 }
 
 export interface OpeningHandProps {
@@ -208,7 +207,7 @@ function Deciding({
         <Figure label="Spell mana value" value={average} note="average" />
         <Figure
           label="In the library"
-          value={`${view.libraryLands} lands`}
+          value={`${view.mulligan?.libraryLands ?? 0} lands`}
           note={`of ${view.library}`}
         />
       </dl>

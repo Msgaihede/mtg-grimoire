@@ -199,6 +199,28 @@ describe("PlaytestSetup", () => {
     });
   });
 
+  it("hands over who plays first only when the reader picks it (issue #1751)", async () => {
+    const { onStart } = setup();
+    await userEvent.click(tile("Boros Aggro"));
+    await userEvent.click(tile("Boros Aggro"));
+    const first = screen.getByRole("group", { name: "Plays first" });
+    expect(within(first).getByRole("button", { name: "Coin flip" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(within(first).getByRole("button", { name: "Opponent" }));
+    await userEvent.click(start());
+    expect(onStart).toHaveBeenLastCalledWith(expect.objectContaining({ first: "draw" }));
+    await userEvent.click(within(first).getByRole("button", { name: "You" }));
+    await userEvent.click(start());
+    expect(onStart).toHaveBeenLastCalledWith(expect.objectContaining({ first: "play" }));
+    await userEvent.click(within(first).getByRole("button", { name: "Coin flip" }));
+    await userEvent.click(start());
+    expect(onStart).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ first: expect.anything() }),
+    );
+  });
+
   it("allows a mirror match", async () => {
     const { onStart } = setup();
     await userEvent.click(tile("Boros Aggro"));

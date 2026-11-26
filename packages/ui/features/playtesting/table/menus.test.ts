@@ -40,6 +40,7 @@ function menuView(over: Partial<GameMenuView> = {}): GameMenuView {
     canUndo: true,
     canRedo: false,
     sandbox: true,
+    hold: false,
     ...over,
   };
 }
@@ -633,6 +634,27 @@ describe("gameMenu", () => {
     expect(onAct).toHaveBeenLastCalledWith({ type: "setSandbox", on: true });
 
     expect(act(gameMenu({ ...base, view: null }), "Sandbox").disabled).toBe(true);
+  });
+
+  it("holds priority over the reader's own spells from its own row, a lobby game's too", () => {
+    const onAct = vi.fn();
+    const label = "Hold priority on your spells";
+    const off = row(gameMenu({ ...base, view: menuView(), onAct }), label);
+    if (off.kind !== "radio") throw new Error("not a radio");
+    expect(off.checked).toBe(false);
+    off.onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "setHold", on: true });
+
+    const on = row(
+      gameMenu({ ...base, view: menuView({ hold: true }), lobby: true, onAct }),
+      label,
+    );
+    if (on.kind !== "radio") throw new Error("not a radio");
+    expect(on.checked).toBe(true);
+    on.onSelect();
+    expect(onAct).toHaveBeenLastCalledWith({ type: "setHold", on: false });
+
+    expect(act(gameMenu({ ...base, view: null }), label).disabled).toBe(true);
   });
 
   it("greys the sandbox's rows while its moves do not work, and keeps the browsing", () => {

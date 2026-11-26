@@ -180,6 +180,7 @@ export function turnFive(): TurnFive {
     stops: [],
     endingTurn: false,
     sandbox: false,
+    hold: false,
     goldfish: false,
     commanderDamageLethal: null,
     canUndo: false,
@@ -360,6 +361,9 @@ export function targetPrompt(): TurnFive {
         shown: [],
         distribute: null,
         nameEntry: false,
+        counters: null,
+        triggers: null,
+        results: null,
       },
       stack: [],
     },
@@ -406,6 +410,9 @@ export function orderTriggersPrompt(): TurnFive {
         shown: [],
         distribute: null,
         nameEntry: false,
+        counters: null,
+        triggers: null,
+        results: null,
       },
       stack: [],
     },
@@ -455,6 +462,9 @@ export function castChoicePrompt(): TurnFive {
         shown: [],
         distribute: null,
         nameEntry: false,
+        counters: null,
+        triggers: null,
+        results: null,
       },
     },
   };
@@ -493,6 +503,9 @@ export function optionalEffectPrompt(): TurnFive {
         shown: [],
         distribute: null,
         nameEntry: false,
+        counters: null,
+        triggers: null,
+        results: null,
       },
     },
   };
@@ -571,7 +584,12 @@ export function openingHand(): PlaytestView {
     stage: "mulligan",
     turn: 0,
     phase: "beginning",
-    mulligan: { mulligans: 0, bottom: 0, freeFirst: false },
+    mulligan: {
+      mulligans: 0,
+      bottom: 0,
+      freeFirst: false,
+      libraryLands: library(53).filter((c) => c.isLand).length,
+    },
     you: {
       ...t.view.you,
       life: 20,
@@ -696,6 +714,9 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
         shown: [],
         distribute: null,
         nameEntry: false,
+        counters: null,
+        triggers: null,
+        results: null,
       },
     },
   };
@@ -745,6 +766,9 @@ export function damagePrompt(trample = false): TurnFive {
         shown: [],
         distribute: null,
         nameEntry: false,
+        counters: null,
+        triggers: null,
+        results: null,
         damage: {
           attacker: ref(t.goyf),
           total,
@@ -775,6 +799,8 @@ export function scryPick(): TurnFive {
     max: 3,
     ordered: true,
     powerCap: null,
+    powerMin: null,
+    contributions: [],
     zone: "libraryTop",
     split: null,
   });
@@ -798,6 +824,8 @@ export function discardPick(): TurnFive {
     max: 2,
     ordered: false,
     powerCap: null,
+    powerMin: null,
+    contributions: [],
     zone: "hand",
     split: null,
   });
@@ -825,6 +853,8 @@ export function keepPick(): TurnFive {
     max: cards.length,
     ordered: false,
     powerCap: 4,
+    powerMin: null,
+    contributions: [],
     zone: "battlefield",
     split: null,
   });
@@ -847,6 +877,8 @@ export function sacrificePick(): TurnFive {
     max: 2,
     ordered: false,
     powerCap: null,
+    powerMin: null,
+    contributions: [],
     zone: "battlefield",
     split: null,
   });
@@ -873,6 +905,8 @@ export function castPick(): TurnFive {
     max: 1,
     ordered: false,
     powerCap: null,
+    powerMin: null,
+    contributions: [],
     zone: "graveyard",
     split: null,
   });
@@ -1193,7 +1227,12 @@ export function goldfishOpeningHand(): PlaytestView {
     turn: 0,
     phase: "beginning",
     step: null,
-    mulligan: { mulligans: 2, bottom: 1, freeFirst: true },
+    mulligan: {
+      mulligans: 2,
+      bottom: 1,
+      freeFirst: true,
+      libraryLands: openingHandSeat().libraryCards.filter((c) => c.isLand).length,
+    },
     you: openingHandSeat(),
     opponents: [goldfishSeat({ handCount: 7, library: 194 })],
     canUndo: false,
@@ -1210,6 +1249,8 @@ export function playLocally(view: PlaytestView, action: PlaytestAction): Playtes
   switch (action.type) {
     case "setSandbox":
       return { ...view, sandbox: action.on };
+    case "setHold":
+      return { ...view, hold: action.on };
     case "setLife":
       return action.seat === "you"
         ? { ...view, you: { ...view.you, life: action.life } }

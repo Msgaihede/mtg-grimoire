@@ -138,7 +138,7 @@ describe("OpeningHand", () => {
     // The same names, new ids — the engine's answer to a mulligan that happened to redraw them.
     const redrawn: OpeningHandView = {
       ...view,
-      mulligan: { mulligans: 3, bottom: 2, freeFirst: true },
+      mulligan: { ...view.mulligan!, mulligans: 3, bottom: 2, freeFirst: true },
       hand: view.hand.map((c) => gameCard(c.name)),
     };
     rerender(<OpeningHand view={redrawn} onAct={onAct} />);
@@ -159,7 +159,7 @@ describe("OpeningHand", () => {
     await userEvent.click(hand().getByRole("button", { name: land.name }));
     expect(screen.getByText("Lands kept").nextElementSibling).toHaveTextContent(`${lands - 1}of 6`);
     expect(screen.getByText("In the library").nextElementSibling).toHaveTextContent(
-      `${view.libraryLands} landsof ${view.library}`,
+      `${view.mulligan!.libraryLands} landsof ${view.library}`,
     );
   });
 

@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use grimoire_play::playtest::session::MAX_OPPONENTS;
 use grimoire_play::{
     deck_support, on_engine_stack, CardFacts, DeckSupport, Difficulty, FaceFacts, OpponentDeck,
-    Playtest, PlaytestAction, PlaytestStep, SupportCache, TokenFacts,
+    Playtest, PlaytestAction, PlaytestFirst, PlaytestStep, SupportCache, TokenFacts,
 };
 
 use crate::sync::AppState;
@@ -131,14 +131,15 @@ pub struct PlaytestOpponent {
 /// each of `opponents` — one for a duel, three for a four-player game (issue #994) — each played
 /// by the AI at `difficulty`; or, with **no opponents, against the goldfish** (the deck editor's
 /// goldfish button, or the setup page's Goldfish table; `difficulty` is then unused). `seed` is
-/// the shuffle and the coin flip; a page sends a fresh one per game. Answers at the reader's
+/// the shuffle and the coin flip; a page sends a fresh one per game. `first` is who takes the
+/// first turn (issue #1751): left out, the coin flip. Answers at the reader's
 /// first decision, the opening hand. Each deck's tokens are drawn in the printings the reader set
 /// for them (issue #991). `game` is the page's name for it, which every later call carries: the
 /// slot is this game's from the moment the call arrives, so the game it replaces is gone at once
 /// and a deal an end or a newer start overtook is dropped, not put on the board.
 ///
 /// Flat parameters, as every command's, because Tauri maps each camelCase key to one; the two
-/// states are Tauri's, the six the page's.
+/// states are Tauri's, the seven the page's.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn playtest_start(
@@ -150,6 +151,7 @@ pub async fn playtest_start(
     opponents: Vec<PlaytestOpponent>,
     difficulty: Difficulty,
     seed: u64,
+    first: Option<PlaytestFirst>,
 ) -> Result<PlaytestStep, String> {
     slot.0.lock().map_err(|_| NO_GAME)?.claim(game);
     let dealt = deal(
@@ -159,6 +161,7 @@ pub async fn playtest_start(
         opponents,
         difficulty,
         seed,
+        first.unwrap_or_default(),
     )
     .await;
     let mut held = slot.0.lock().map_err(|_| NO_GAME)?;
@@ -179,6 +182,7 @@ async fn deal(
     opponents: Vec<PlaytestOpponent>,
     difficulty: Difficulty,
     seed: u64,
+    first: PlaytestFirst,
 ) -> Result<(Playtest, PlaytestStep), String> {
     if opponents.len() > MAX_OPPONENTS {
         return Err(format!(
@@ -232,7 +236,9 @@ async fn deal(
         });
     }
     tauri::async_runtime::spawn_blocking(move || {
-        on_engine_stack(move || Playtest::new(&yours, &your_tokens, &theirs, seed, difficulty))
+        on_engine_stack(move || {
+            Playtest::new_first(&yours, &your_tokens, &theirs, seed, difficulty, first)
+        })
     })
     .await
     .map_err(|e| e.to_string())??

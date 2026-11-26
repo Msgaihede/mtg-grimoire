@@ -5,6 +5,7 @@ import {
   type LobbyGameSeat,
   type PlaytestAction,
   type PlaytestDifficulty,
+  type PlaytestFirst,
   type PlaytestHappened,
   type PlaytestStep,
   type PlaytestView,
@@ -26,6 +27,9 @@ export interface PlaytestPicks {
   /** How well the AI plays; {@link DEFAULT_DIFFICULTY} when left out, and unused by the goldfish,
    *  whose page has nothing to pick. */
   difficulty?: PlaytestDifficulty;
+  /** Who takes the first turn (issue #1751); the coin flip when left out. A lobby's game is
+   *  always the coin flip. */
+  first?: PlaytestFirst;
   /**
    * **A game with people at the table, over the lobby** (issue #1419) — the host's — dealt by
    * `ipc.lobbyGameStart` from `seats` (`opponents` is then empty and unread): the opponents in turn
@@ -55,6 +59,7 @@ export function picksKey(picks: PlaytestPicks): string {
     picks.variant,
     picks.opponents.map((o) => [o.deckId, o.variant]),
     picks.difficulty ?? DEFAULT_DIFFICULTY,
+    picks.first ?? "random",
     ...(picks.lobby === undefined
       ? []
       : [picks.lobby.seats.map((s) => [s.peer, s.deckId, s.variant])]),
@@ -125,9 +130,9 @@ export interface HeldBoard {
  * **Undo and redo are actions** (`{ type: "undo" }`, issue #1022): the engine goes back to the
  * reader's last decision with all the opponents did after it, and answers with no facts and no
  * frames. The log is kept beside the engine's history as it stood before each action
- * (`../undo.ts`' `LogBook`), once the last replay has been logged whole. **The stops and the
- * sandbox are settings, not actions** (`setStops`, `setSandbox`): the engine does not remember
- * them for undo, so neither does the log.
+ * (`../undo.ts`' `LogBook`), once the last replay has been logged whole. **The stops, the
+ * sandbox and holding priority are settings, not actions** (`setStops`, `setSandbox`,
+ * `setHold`): the engine does not remember them for undo, so neither does the log.
  *
  * **A lobby game (`picks.lobby`, issue #1419) is the host's, played here**: dealt by
  * `lobbyGameStart` and acted on by `playtestAct` like any other, with two differences. **The game
@@ -173,6 +178,7 @@ function fresh(): number {
 export function holdGame(picks: PlaytestPicks): HeldGame {
   const { deckId, variant } = picks;
   const difficulty = picks.difficulty ?? DEFAULT_DIFFICULTY;
+  const first = picks.first ?? "random";
   const opponents = picks.opponents.map((o) => ({ deckId: o.deckId, variant: o.variant }));
   const lobby = picks.lobby;
   /** How many opponents the table seats, for the deal's line. */
@@ -246,7 +252,7 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
       if (mine !== generation) return Promise.resolve();
       const dealing =
         lobby === undefined
-          ? ipc.playtestStart(named, deckId, variant, opponents, difficulty, fresh())
+          ? ipc.playtestStart(named, deckId, variant, opponents, difficulty, fresh(), first)
           : ipc.lobbyGameStart(named, deckId, variant, lobby.seats, difficulty, fresh());
       return dealing.then(
         (step) => {
@@ -320,7 +326,11 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
             }
             // The stops and the sandbox are settings, which the engine does not remember as
             // actions: nothing to take back, so no log to go back to.
-            if (action.type !== "setStops" && action.type !== "setSandbox") {
+            if (
+              action.type !== "setStops" &&
+              action.type !== "setSandbox" &&
+              action.type !== "setHold"
+            ) {
               skip();
               set((s) => ({ book: rememberLog(s.book) }));
             }

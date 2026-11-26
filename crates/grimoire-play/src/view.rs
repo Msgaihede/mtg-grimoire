@@ -54,6 +54,9 @@ pub struct MulliganView {
     pub bottom: u8,
     /// Whether this game's first mulligan is free (the Commander rule, CR 103.5c).
     pub free_first: bool,
+    /// The lands in the reader's library, for the opening hand's figure: a count, never the cards,
+    /// whose order the reader may not know (CR 401.2, issue #1749).
+    pub library_lands: u32,
 }
 
 /// One card the reader can see, wherever it is.
