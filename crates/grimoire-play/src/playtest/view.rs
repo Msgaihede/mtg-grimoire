@@ -1021,14 +1021,16 @@ pub enum PlaytestHappened {
         from: Place,
         to: Place,
     },
-    /// The reader put a card under a player's control by hand (`control`): `seat` is whose card
-    /// it is, `from` where it was — the battlefield, for a change of control alone — and
-    /// `controller` who controls it on the battlefield now.
+    /// A card put under a player's control: `seat` is whose card it is, `from` where it was —
+    /// the battlefield, for a change of control alone — and `controller` who controls it on the
+    /// battlefield now. `by_hand` is the reader's sandbox edit (`control`); otherwise the rules
+    /// changed it (CR 108.4), always where it lies.
     Controlled {
         seat: PlaytestPlayer,
         name: String,
         from: Place,
         controller: PlaytestPlayer,
+        by_hand: bool,
     },
     Tapped {
         seat: PlaytestPlayer,
@@ -1097,6 +1099,103 @@ pub enum PlaytestHappened {
     DayNight {
         now: PlaytestDayNight,
     },
+    /// Counters the rules put on a permanent (`delta` above zero) or took off it (below), of
+    /// `kind` (`+1/+1`, `loyalty`). `name` is `None` for an opponent's face-down permanent.
+    CountersChanged {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+        kind: String,
+        delta: i32,
+    },
+    /// Permanents an effect tapped or untapped (CR 701.26) — never a tap for mana, an attack or
+    /// a cost, which their own facts tell. `seat` is their controller's; a name is `None` for an
+    /// opponent's face-down permanent.
+    BecameTapped {
+        seat: PlaytestPlayer,
+        names: Vec<Option<String>>,
+        tapped: bool,
+    },
+    /// A triggered ability triggered (CR 603.2); `name` is its source's, `None` for an
+    /// opponent's face-down one, and `seat` the ability's controller.
+    Triggered {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+    },
+    /// A double-faced card transformed (CR 701.27); `name` is the face it shows now.
+    Transformed {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A face-down permanent turned face up (CR 708.8), and so public: `name` is what it is.
+    TurnedFaceUp {
+        seat: PlaytestPlayer,
+        name: String,
+    },
+    /// A permanent turned face down (CR 708.2); `name` is the card for the reader's own, `None`
+    /// for an opponent's.
+    TurnedFaceDown {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+    },
+    /// An Aura, an Equipment or a Fortification attached to something (`attached`) or no longer
+    /// attached to it (CR 701.3). `to` is the permanent's name, `None` for a player (a Curse);
+    /// `to_seat` is that permanent's controller, or that player.
+    Attached {
+        seat: PlaytestPlayer,
+        name: String,
+        to: Option<String>,
+        to_seat: PlaytestPlayer,
+        attached: bool,
+    },
+    /// A card the rules moved for a reason its move alone does not say — destroyed, sacrificed,
+    /// cycled, discarded — told in place of its `Moved`. `to` is where it went.
+    Removed {
+        seat: PlaytestPlayer,
+        name: Option<String>,
+        how: PlaytestRemoval,
+        to: Place,
+    },
+    /// A player's counters or speed changed (CR 122.1, CR 702.179): `delta` the change, `total`
+    /// what they have after it.
+    PlayerCounters {
+        seat: PlaytestPlayer,
+        kind: PlaytestPlayerCounter,
+        delta: i32,
+        total: u32,
+    },
+    /// A player ventured into a dungeon's room (CR 309.4): the dungeon's name and the room's.
+    RoomEntered {
+        seat: PlaytestPlayer,
+        dungeon: String,
+        room: String,
+    },
+    /// A player completed a dungeon (CR 309.7).
+    DungeonCompleted {
+        seat: PlaytestPlayer,
+        dungeon: String,
+    },
+    /// A player voted (CR 701.38) for `choice`.
+    Voted {
+        seat: PlaytestPlayer,
+        choice: String,
+    },
+    /// A vote's count, each choice with its votes, in the engine's order.
+    VoteResolved {
+        tallies: Vec<PlaytestTally>,
+    },
+    /// A clash (CR 701.30): `seat` clashed with `with`, each revealing a card of the mana value
+    /// given (`None` for an empty library), and `result` is `seat`'s.
+    Clashed {
+        seat: PlaytestPlayer,
+        with: PlaytestPlayer,
+        mana_value: Option<u32>,
+        their_mana_value: Option<u32>,
+        result: PlaytestClash,
+    },
+    /// A player will take an extra turn (CR 500.7).
+    ExtraTurn {
+        seat: PlaytestPlayer,
+    },
     /// The engine's AI answered a question for the reader (`auto`, or one the board does not ask),
     /// or the question had only one answer and the session took it (`sole_answer`).
     Chose {
@@ -1110,6 +1209,45 @@ pub enum PlaytestHappened {
     GameOver {
         winner: Option<PlaytestPlayer>,
     },
+}
+
+/// Why the rules moved a card (`Removed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestRemoval {
+    Destroyed,
+    Sacrificed,
+    Cycled,
+    Discarded,
+}
+
+/// A count a player has (`PlayerCounters`): phase's player counters, energy, and speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestPlayerCounter {
+    Poison,
+    Energy,
+    Experience,
+    Rad,
+    Ticket,
+    Speed,
+}
+
+/// How a clash came out for the player who clashed (`Clashed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestClash {
+    Won,
+    Lost,
+    Tied,
+}
+
+/// One choice of a vote and how many voted for it (`VoteResolved`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestTally {
+    pub choice: String,
+    pub votes: u32,
 }
 
 /// A designation a player takes (`Became`).

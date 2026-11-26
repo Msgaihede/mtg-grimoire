@@ -36,6 +36,7 @@ describe("soundOf", () => {
         name: "Hill Giant",
         from: "battlefield",
         controller: "you",
+        byHand: true,
       },
       "play",
     ],
