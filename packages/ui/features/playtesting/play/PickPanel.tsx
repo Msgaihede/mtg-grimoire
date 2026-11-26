@@ -16,6 +16,7 @@ import {
   pickPosition,
   pickRows,
   pickTitle,
+  powerIn,
   togglePick,
 } from "./pick";
 import { cardOfRef } from "./prompt";
@@ -72,10 +73,10 @@ export function PickPanel({
   const title = pickTitle(pick);
   const rows = pickRows(pick, picked);
   const byId = new Map(pick.cards.map((c) => [c.id, c]));
-  const powerOf = (id: number) => {
+  const powerOf = powerIn(pick, (id: number) => {
     const ref = byId.get(id);
     return ref === undefined ? 0 : (cardOfRef(ref, table).power ?? 0);
-  };
+  });
   const power = pickedPower(picked, powerOf);
   const ready = canConfirm(pick, picked.length, power) && !disabled;
 

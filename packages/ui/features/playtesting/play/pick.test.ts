@@ -9,6 +9,7 @@ import {
   pickPosition,
   pickRows,
   pickTitle,
+  powerIn,
   pickZones,
   togglePick,
 } from "./pick";
@@ -30,6 +31,8 @@ function pick(over: Partial<PlaytestPick>): PlaytestPick {
     max: 3,
     ordered: false,
     powerCap: null,
+    powerMin: null,
+    contributions: [],
     zone: null,
     split: null,
     ...over,
@@ -104,6 +107,19 @@ describe("an order, a cost and piles", () => {
     ]);
     expect(pickPosition(pile, 0)).toBeNull();
   });
+
+  it("splits a search's finds: the picked onto the battlefield, the rest into the hand", () => {
+    const split = pick({ purpose: "split", min: 1, max: 1 });
+    expect(pickTitle(split)).toBe("Put 1 onto the battlefield and the rest into your hand");
+    expect(confirmLabel(split, 1)).toBe("Put them");
+    expect(pickZones(split)).toEqual({ picked: "Battlefield", rest: "Hand" });
+    expect(pickRows(split, [3])).toEqual([
+      { label: "Battlefield", ids: [3], empty: "Click a card to put it onto the battlefield." },
+      { label: "Hand", ids: [1, 2], empty: "Every card goes onto the battlefield." },
+    ]);
+    expect(canConfirm(split, 0)).toBe(false);
+    expect(canConfirm(split, 1)).toBe(true);
+  });
 });
 
 describe("the picker's rules", () => {
@@ -145,6 +161,24 @@ describe("a keep within a total power (issue #1079)", () => {
     expect(canConfirm(keep, 0, 0)).toBe(true);
     expect(canConfirm(keep, 2, 4)).toBe(true);
     expect(canConfirm(keep, 2, 5)).toBe(false);
+  });
+});
+
+describe("a crew or a saddle (issue #1745)", () => {
+  // The engine counts card 1 as 3 ("as though its power were 2 greater"), 2 and 3 as 2.
+  const crew = pick({ purpose: "crew", powerMin: 4, contributions: [3, 2, 2] });
+
+  it("counts each creature as the engine does, and confirms only at the crew number", () => {
+    const powerOf = powerIn(crew, () => 99);
+    expect(powerOf(1)).toBe(3);
+    expect(powerOf(9)).toBe(0);
+    expect(powerIn(pick({}), (id) => id * 10)(2)).toBe(20);
+    expect(pickTitle(crew)).toBe("Crew 4: tap creatures with total power 4 or more");
+    expect(pickTitle({ ...crew, purpose: "saddle" })).toMatch(/^Saddle 4/);
+    expect(pickCounter(crew, 1, 3)).toBe("1 tapped, power 3 of 4");
+    expect(canConfirm(crew, 1, 3)).toBe(false);
+    expect(canConfirm(crew, 2, 5)).toBe(true);
+    expect(confirmLabel(crew, 2)).toBe("Crew");
   });
 });
 

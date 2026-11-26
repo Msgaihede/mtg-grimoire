@@ -52,18 +52,13 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   holds each struct field for field, and every `PlaytestAction` / `PlaytestHappened` variant and
   field. A change to either side is one commit with the other.
 - **A game never sends what the reader may not see.** Each opponent's hand and library are counts
-  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). In a
-  lobby's game that holds for every person: each guest is sent the view from its own seat
-  (`guest_steps`, `view_of`), never the host's. **A hidden card is sent only when phase's own
-  projection for that seat shows it** (`Sight::of`, over `filter_state_for_viewer`): a library's top
-  the reader may look at or that is revealed (`library_top`, issue #1722), an opponent's revealed or known hand card, a
-  face-down exile card they may look at. Never decide that in this crate, and never read a
-  position off the projection (it reorders a library's hidden cards).
-- **What the board shows of the game beyond its cards is phase's derived views** (issue #1747):
-  a stack item's modes, payments, copy and reveals, the cards exiled with a permanent, the storm
-  count, the turn order and each player's conditions come from `derive_filtered_views` over the
-  same projection, made **once a view** in `view_as` — never derived in this crate, and never a
-  second projection. The page words them (`play/details.ts`); the wire carries facts.
+  in `PlaytestSeat`, their draws `Drew` with no name (`playtest/session.rs`' `tell`). In a lobby's
+  game that holds for every person: each guest is sent the view from its own seat (`guest_steps`,
+  `view_of`). **A hidden card is sent only when phase's own projection for that seat shows it**
+  (`Sight::of`, over `filter_state_for_viewer`): a library's top (#1722), an opponent's revealed or
+  known hand card, a face-down exile card they may look at. Never decide that here, never read a
+  position off the projection (it reorders hidden cards), nor send `library_cards` with the sandbox
+  off (#1749). The board's derived facts are phase's `derive_filtered_views`, once a view (#1747).
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
@@ -82,12 +77,12 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 - **The game plays on by itself until the reader decides** (`advance`): the AI takes its own
   decisions through phase's `run_ai_actions`, the goldfish its own through `fish_answer`, and the
   reader's priority is passed for them except where `stops_here` stops them (their main phase, a
-  step they asked for, the opponent's spell or combat after blocks when they could respond). The
-  reader is stopped only at a `PlaytestStage`. A new stop is a new stage or a new `stops_here`
+  step they asked for, the opponent's spell — or their own, held (`setHold`) — or combat after
+  blocks when they could respond). The reader is stopped only at a `PlaytestStage`. A new stop is a new stage or a new `stops_here`
   rule, never a pause elsewhere in `advance` — the one exception is a sandbox edit's own decision
   (`play_on`'s `held`, below), which keeps the reader where they already were.
-- **The sandbox is a setting, checked in `run`** (`is_sandbox`). `SetSandbox`, like `SetStops`, is
-  taken at any stage, plays nothing on and is not remembered by undo. Off, every hand edit is
+- **The sandbox is a setting, checked in `run`** (`is_sandbox`). `SetSandbox`, like `SetStops` and
+  `SetHold`, is taken at any stage, plays nothing on and is not remembered by undo. Off, every hand edit is
   refused; on, hand edits are taken wherever the game waits on the reader to play or to declare —
   `main`, `respond`, `attack`, `block` (`edit`, issue #1522) — never in a question or at the
   opening hand, on the reader's cards and on any card the table shows (`editable`) — **never an
@@ -111,20 +106,26 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   `play` takes it by the rules alone — the sandbox's ways (unpaid, put, activate) are for the
   reader's own cards (`own`).
 - **Tapping for mana is the rules', never the sandbox's** (`tap_for_mana`, issue #1326). It is
-  taken sandbox or not, wherever the reader has priority, from phase's own board list
-  (`activatable_mana_actions_for_player`) — never a list of this crate's, and never the
-  manual-selection list, which the land-tap reducer does not accept. The mana floats until a cast
-  spends it or the rules empty the pool (CR 500.4); nothing plays on after it (`make_mana`), so a
-  stop is not passed over. Never put it in `is_sandbox`, and never let the sandbox's `Tap` make
-  mana.
+  taken sandbox or not, at the reader's priority or in a payment window (`paying`, issue #1743),
+  from phase's own board list (`activatable_mana_actions_for_player`) — never a list of this
+  crate's, nor the manual-selection list the land-tap reducer refuses. The mana floats until spent
+  or the pool empties (CR 500.4); nothing plays on after it (`make_mana`), and a window stays open.
+  The reader's casts are stamped `AutoExceptSacrificialMana` (`ask_before_sacrificing`): a Treasure
+  is asked about, never spent unasked. Never put it in `is_sandbox`, nor let the sandbox's `Tap` make mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The exceptions are `pick` — the few questions answered by
   a set of cards (or an order of them), whose fields give the count — `damage`, the attacker's
   division of combat damage among its blockers (issue #1448), whose one listed answer is the
   engine's own split and so never a `sole_answer`, `distribute`, any other division of an amount
-  among targets (`DistributeAmong`), for the same reason, and `name_entry`, a name the reader
-  types. An index an answer carries is put in words from the question's own data, by phase's
-  field names (`options`, `*_descriptions`), never by the kind of question. `auto` must answer
+  among targets (`DistributeAmong`) or a banded blocker's damage among the attackers it blocks
+  (`AssignBlockerDamage`), for the same reason, `counters`, counters of each kind removed or
+  moved (`RemoveCountersChoice`, `MoveCountersDistribution`), `triggers`, five triggers or more
+  to order (`OrderTriggers` past phase's four), `results`, coin flips kept or die rolls ignored
+  (`CoinFlipKeepChoice`, `DieKeepChoice`), and `name_entry`, a name the reader types (issue
+  #1745 added the crew and saddle picks, bounded below by `power_min` over the engine's own
+  `contributions`, and every one after `distribute`'s banding). An index an answer carries is
+  put in words from the question's own data, by phase's field names (`options`,
+  `*_descriptions`), never by the kind of question. `auto` must answer
   any prompt (phase-ai for the reader). A question with one answer (`sole_answer`) is taken by
   `advance`, never asked.
 - **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no

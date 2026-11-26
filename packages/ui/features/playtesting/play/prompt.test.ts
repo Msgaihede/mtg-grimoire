@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { PlaytestCause, PlaytestOption } from "@/lib/ipc";
+import type { PlaytestCause, PlaytestOption, PlaytestPrompt } from "@/lib/ipc";
 import {
   distinctOptions,
   optionCards,
   optionDetail,
   optionLabel,
   pickableCards,
+  promptHelp,
   promptSource,
   promptTitle,
   words,
@@ -49,6 +50,32 @@ describe("optionLabel", () => {
     expect(optionLabel(option({ kind: "ActivateAbility", number: 1 }), prompt).text).toBe(
       "Ability 2",
     );
+  });
+
+  it("asks before a sacrificial source pays, and says a payment window's pay (issue #1743)", () => {
+    expect(promptTitle("ManaSourceSelection")).toBe("Sacrifice it for mana?");
+    expect(promptTitle("ManaPayment")).toBe("Pay the mana");
+    expect(promptHelp("ManaPayment")).toBe("Tap sources on the table, or pay");
+    const asked = { kind: "ManaSourceSelection" };
+    const petal = { id: 9, name: "Lotus Petal", cardId: null, text: null, cause: null };
+    expect(
+      optionLabel(
+        option({ kind: "ActivateManaSource", label: "Green", cards: [petal] }),
+        asked,
+      ),
+    ).toEqual({ text: "Add green mana", hint: "Lotus Petal" });
+    expect(optionLabel(option({ kind: "BackToManaPayment" }), asked).text).toBe(
+      "Pay another way",
+    );
+    expect(optionLabel(option({ kind: "PassPriority" }), { kind: "ManaPayment" }).text).toBe(
+      "Pay",
+    );
+    expect(
+      pickableCards({
+        kind: "ManaSourceSelection",
+        options: [option({ kind: "ActivateManaSource", label: "Green", cards: [petal] })],
+      } as PlaytestPrompt).get(9),
+    ).toBe(0);
   });
 
   it("says the color a mana-color answer makes, never the shape of the choice (issue #1363)", () => {
@@ -97,6 +124,9 @@ describe("optionLabel", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
     };
     expect(pickableCards(prompt)).toEqual(new Map([[7, 1]]));
   });
@@ -401,6 +431,9 @@ describe("pickableCards", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
       options: [
         option({ index: 0, cards: [a] }),
         option({ index: 1, cards: [a, b] }),
@@ -428,6 +461,9 @@ describe("pickableCards", () => {
       shown: [],
       distribute: null,
       nameEntry: false,
+      counters: null,
+      triggers: null,
+      results: null,
       options: [option({ index: 0, kind: "ChooseReplacement", cards: [effect] })],
     });
     expect(picks.size).toBe(0);

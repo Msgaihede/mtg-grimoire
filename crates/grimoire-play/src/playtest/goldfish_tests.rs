@@ -3247,3 +3247,151 @@ fn an_exiled_card_is_linked_to_its_ring_and_storm_and_conditions_are_shown() {
         );
     }
 }
+
+/// A deck with a source that sacrifices itself for mana (a fixed-color Lotus Petal) beside a
+/// Forest, and a {2} creature the two pay for together.
+fn petal_deck() -> Vec<CardFacts> {
+    vec![
+        card(
+            "Forest",
+            None,
+            "Basic Land — Forest",
+            "({T}: Add {G}.)",
+            None,
+            20,
+        ),
+        card(
+            "Lotus Petal",
+            Some("{0}"),
+            "Artifact",
+            "{T}, Sacrifice Lotus Petal: Add {G}.",
+            None,
+            20,
+        ),
+        card(
+            "Iron Bear",
+            Some("{2}"),
+            "Artifact Creature — Bear",
+            "",
+            Some(("2", "2")),
+            20,
+        ),
+    ]
+}
+
+/// The Forest and the Petal on the battlefield, the Bear in hand, the sandbox off: the Petal's
+/// id and the Bear's.
+fn petal_game() -> (Playtest, u64, u64) {
+    let (mut game, _) = fish(&petal_deck(), 7);
+    game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+    put_down(&mut game, "Forest");
+    let petal = put_down(&mut game, "Lotus Petal");
+    let bear = in_hand(&mut game, "Iron Bear");
+    game.act(A::SetSandbox { on: false }).unwrap();
+    (game, petal, bear)
+}
+
+fn option_of<'a>(view: &'a PlaytestView, kind: &str) -> &'a crate::playtest::view::PlaytestOption {
+    view.prompt
+        .as_ref()
+        .and_then(|p| p.options.iter().find(|o| o.kind == kind))
+        .unwrap_or_else(|| panic!("a {kind} answer in {:?}", view.prompt))
+}
+
+/// Issue #1743: the reader's casts are paid as phase's own board pays them
+/// (`AutoExceptSacrificialMana`) — automatically, but a source that sacrifices itself is the
+/// engine's question, never spent without asking. Its answer names the source, and a tap by hand
+/// is refused there (it is not a payment window).
+#[test]
+fn a_sacrificial_source_is_spent_only_when_the_reader_says_so() {
+    let (asked, refused, spent) = engine(|| {
+        let (mut game, petal, bear) = petal_game();
+        let asked = game.act(A::Play { id: bear }).unwrap().view;
+        let refused = game.act(A::TapForMana { id: petal }).unwrap_err();
+        let index = option_of(&asked, "ActivateManaSource").index;
+        let spent = game.act(A::Choose { index }).unwrap().view;
+        (asked, refused, spent)
+    });
+    assert_eq!(asked.stage, Stage::Prompt);
+    let prompt = asked.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "ManaSourceSelection");
+    assert!(prompt.cancellable, "the cast can still be taken back");
+    let source = option_of(&asked, "ActivateManaSource");
+    assert_eq!(source.label.as_deref(), Some("Green"));
+    assert_eq!(
+        source
+            .cards
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Lotus Petal"]
+    );
+    option_of(&asked, "BackToManaPayment");
+    assert!(
+        find(&asked.you.battlefield, "Lotus Petal").is_some(),
+        "asking spends nothing"
+    );
+    assert_eq!(refused, "Lotus Petal can't make mana right now.");
+
+    assert_ne!(spent.stage, Stage::Prompt);
+    assert!(
+        find(&spent.you.battlefield, "Lotus Petal").is_none(),
+        "sacrificed"
+    );
+    assert!(
+        find(&spent.you.hand, "Iron Bear").is_none(),
+        "the Bear was cast"
+    );
+}
+
+/// Issue #1743: declining the sacrificial source opens the payment window, where the reader taps
+/// sources by hand, as phase's own board lets them. The window stays open after a tap — the mana
+/// waits in the pool for the reader to pay — and a cancel takes the whole cast back, the tap with
+/// it.
+#[test]
+fn a_source_is_tapped_by_hand_inside_a_payment_window_and_the_window_stays_open() {
+    let (window, tapped, paid, cancelled) = engine(|| {
+        let (mut game, petal, bear) = petal_game();
+        let asked = game.act(A::Play { id: bear }).unwrap().view;
+        let index = option_of(&asked, "BackToManaPayment").index;
+        let window = game.act(A::Choose { index }).unwrap().view;
+        let tapped = game.act(A::TapForMana { id: petal }).unwrap().view;
+        let cancelled = game.act(A::Cancel).unwrap().view;
+        // Again, and paid this time.
+        let asked = game.act(A::Play { id: bear }).unwrap().view;
+        let index = option_of(&asked, "BackToManaPayment").index;
+        game.act(A::Choose { index }).unwrap();
+        let after = game.act(A::TapForMana { id: petal }).unwrap().view;
+        let index = option_of(&after, "PassPriority").index;
+        let paid = game.act(A::Choose { index }).unwrap().view;
+        (window, tapped, paid, cancelled)
+    });
+    assert_eq!(window.stage, Stage::Prompt);
+    assert_eq!(window.prompt.as_ref().unwrap().kind, "ManaPayment");
+    assert!(
+        find(&window.you.battlefield, "Lotus Petal")
+            .unwrap()
+            .can_tap_for_mana,
+        "the window lights the source up"
+    );
+
+    assert_eq!(tapped.stage, Stage::Prompt, "the window stays open");
+    assert_eq!(tapped.prompt.as_ref().unwrap().kind, "ManaPayment");
+    assert!(find(&tapped.you.battlefield, "Lotus Petal").is_none());
+
+    assert_eq!(cancelled.stage, Stage::Main);
+    assert!(
+        find(&cancelled.you.hand, "Iron Bear").is_some(),
+        "the cast is taken back"
+    );
+    let petal = find(&cancelled.you.battlefield, "Lotus Petal").expect("the Petal is back");
+    assert!(petal.can_tap_for_mana);
+    assert!(!find(&cancelled.you.battlefield, "Forest").unwrap().tapped);
+
+    assert_ne!(paid.stage, Stage::Prompt);
+    assert!(
+        find(&paid.you.hand, "Iron Bear").is_none(),
+        "the Bear was cast"
+    );
+    assert!(find(&paid.you.battlefield, "Lotus Petal").is_none());
+}

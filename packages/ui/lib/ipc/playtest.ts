@@ -26,6 +26,7 @@
 import { core } from "@/lib/core";
 import type { DeckVariant } from "./decks";
 import type {
+  CardCounter,
   GameCard,
   GameManaKind,
   GamePlace,
@@ -64,7 +65,10 @@ export type PlaytestPickPurpose =
   | "cast"
   | "order"
   | "pay"
-  | "pile";
+  | "pile"
+  | "crew"
+  | "saddle"
+  | "split";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -86,6 +90,13 @@ export type PlaytestPlayer = "you" | "opponent" | "opponent2" | "opponent3";
 
 /** What the AI opponent plays like: phase's presets, random to strong. */
 export type PlaytestDifficulty = "veryEasy" | "easy" | "medium" | "hard" | "veryHard";
+
+/**
+ * Who takes the first turn (issue #1751): the seed's coin flip, the reader on the play, or on the
+ * draw — in a four-player game the seed then picks which opponent starts. Against the goldfish the
+ * coin flip is the reader.
+ */
+export type PlaytestFirst = "random" | "play" | "draw";
 
 /** The whole table after an action, from the reader's seat. */
 export interface PlaytestView {
@@ -132,6 +143,12 @@ export interface PlaytestView {
    * the goldfish, off against the AI.
    */
   sandbox: boolean;
+  /**
+   * The reader holds priority over their own spells and abilities (`setHold`, issue #1751): one of
+   * theirs on top of the stack stops them, when they could respond, as an opponent's does. Off at
+   * the start of every game.
+   */
+  hold: boolean;
   /**
    * The opponent is the goldfish: one seat that keeps its hand, passes every priority, never
    * attacks or blocks, and — like the reader — cannot lose (its `deadOn` says when it would
@@ -252,7 +269,10 @@ export interface PlaytestSeat {
    */
   emblems: PlaytestEmblem[];
   library: number;
-  /** The reader's library, top first; empty for the opponent. */
+  /**
+   * The reader's library, top first, for the sandbox's look and search: sent only while the
+   * sandbox is on (CR 401.2 hides a library's order from its owner too); empty for the opponent.
+   */
   libraryCards: GameCard[];
   /**
    * The top card of this seat's library when the reader may see it (CR 401.5): revealed to every
@@ -425,6 +445,56 @@ export interface PlaytestPrompt {
   /** The question is to name something, and any legal word may be answered (`name`), not only
    *  the options listed. */
   nameEntry: boolean;
+  /**
+   * How many counters of each kind to remove from a card, or to move from it onto which
+   * permanents (`RemoveCountersChoice`, `MoveCountersDistribution` — Rhys the Evermore,
+   * Tetravus), which `options` cannot list: `moveCounters` answers.
+   */
+  counters: PlaytestCounters | null;
+  /**
+   * The reader's triggers to put in order when the engine lists only some orders (five or more):
+   * the abilities in the engine's order. `orderTriggers` answers with a permutation of their
+   * indices.
+   */
+  triggers: PlaytestCardRef[] | null;
+  /**
+   * Coin flips to keep or die rolls to ignore (Krark's Thumb, CR 705.1; CR 706.6), with the
+   * results: `keepResults` answers.
+   */
+  results: PlaytestResults | null;
+}
+
+/** Counters of each kind on a card to remove, or to move onto other permanents (CR 107.1c). */
+export interface PlaytestCounters {
+  /** The card the counters are on. */
+  source: PlaytestCardRef | null;
+  /** Each kind that may be taken, and how many the card has, by the kind's name. */
+  kinds: CardCounter[];
+  /** Where the counters may go, for a move; empty for a removal. */
+  destinations: PlaytestCardRef[];
+  /** The most that may be taken in all ("remove up to three"); `null` for any number. */
+  maxTotal: number | null;
+}
+
+/** So many counters of one `kind` taken: removed (`to` null), or moved onto the permanent `to`. */
+export interface PlaytestCounterShare {
+  kind: string;
+  to: number | null;
+  count: number;
+}
+
+/** Coin flips or die rolls made for one instruction: `count` coins are kept, or `count` dice
+ *  ignored. */
+export interface PlaytestResults {
+  /** Die rolls, whose indices name the rolls ignored; `false` for coins, whose indices name the
+   *  flips kept. */
+  dice: boolean;
+  /** A die's natural roll, or a coin's 1 for heads (won) and 0 for tails (lost). */
+  results: number[];
+  /** The indices that may be named — for dice, the rolls tied for the lowest. */
+  eligible: number[];
+  /** How many indices the answer names, exactly. */
+  count: number;
 }
 
 /** An amount to divide among targets (CR 601.2d). */
@@ -496,6 +566,16 @@ export interface PlaytestPick {
    * power 4 or less", issue #1079); `null` for a pick bounded by its count alone.
    */
   powerCap: number | null;
+  /**
+   * The least the picked creatures' power must add up to — crewing a Vehicle, saddling a Mount
+   * ("total power N or more"); `null` for a pick bounded by its count alone.
+   */
+  powerMin: number | null;
+  /**
+   * What each eligible card counts toward `powerMin`, aligned with `eligible` — the engine's own
+   * reckoning. Empty for a pick that counts each card's `GameCard.power`.
+   */
+  contributions: number[];
   /**
    * Where the cards lie, when they all lie in one place — the graveyard a cast is offered from
    * (issue #1329). `null` for cards from several places.
@@ -586,14 +666,18 @@ export type PlaytestAction =
   | { type: "foretell"; id: number }
   /** Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: its
    *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
-   *  Several kinds of mana are a `ManaChoice` prompt. Offered when its
-   *  {@link GameCard.canTapForMana} says so. */
+   *  Taken at priority and inside a payment window (`ManaPayment`, `ManaAbilityManaPayment`,
+   *  `UnlessPayment`, issue #1743), which stays open after the tap. Several kinds of mana are a
+   *  `ManaChoice` prompt. Offered when its {@link GameCard.canTapForMana} says so. */
   | { type: "tapForMana"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
   | { type: "setStops"; stops: PlaytestStop[] }
   /** Turn the sandbox on or off. A setting, as `setStops`: taken at any stage, never undone. */
   | { type: "setSandbox"; on: boolean }
+  /** Hold priority over the reader's own spells and abilities, or stop (issue #1751). A setting,
+   *  as `setStops`: taken at any stage, never undone. */
+  | { type: "setHold"; on: boolean }
   | { type: "attack"; attacks: PlaytestAttackPair[] }
   | { type: "block"; blocks: PlaytestBlockPair[] }
   | { type: "choose"; index: number }
@@ -603,6 +687,14 @@ export type PlaytestAction =
   | { type: "assignDamage"; blockers: PlaytestDamageShare[]; excess: number }
   /** Answer the prompt's `distribute`: so much to each target, adding up to its `total`. */
   | { type: "distribute"; shares: PlaytestShare[] }
+  /** Answer the prompt's `counters`: so many of each kind removed, or moved onto each
+   *  destination. None at all is an answer. */
+  | { type: "moveCounters"; shares: PlaytestCounterShare[] }
+  /** Answer the prompt's `triggers`: their indices in the order they go on the stack, the first
+   *  put on first (so it resolves last). */
+  | { type: "orderTriggers"; order: number[] }
+  /** Answer the prompt's `results`: the indices of the flips kept, or of the rolls ignored. */
+  | { type: "keepResults"; indices: number[] }
   /** Answer a naming prompt (`nameEntry`) with a word of the reader's own. */
   | { type: "name"; text: string }
   | { type: "auto" }
@@ -814,7 +906,7 @@ export const playtestCommands = {
    * duel, three for a four-player game), each played by the AI at `difficulty` — or, with **no
    * opponents, against the goldfish** (`difficulty` unused; the reader plays first). Answers at
    * the reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and
-   * the coin flip. `game` is the page's name for this game, fresh per deal, which every later call
+   * the coin flip; `first`, who takes the first turn (issue #1751) — the coin flip when left out. `game` is the page's name for this game, fresh per deal, which every later call
    * for it carries: the host acts on and ends only the game named, so a board that has gone never
    * touches the one that replaced it (issue #1141).
    */
@@ -825,6 +917,7 @@ export const playtestCommands = {
     opponents: PlaytestOpponent[],
     difficulty: PlaytestDifficulty,
     seed: number,
+    first: PlaytestFirst = "random",
   ) =>
     invoke<PlaytestStep>("playtest_start", {
       game,
@@ -833,6 +926,7 @@ export const playtestCommands = {
       opponents,
       difficulty,
       seed,
+      first,
     }),
   /**
    * One action on `game`, and everything the opponent does after it until the reader next decides.
