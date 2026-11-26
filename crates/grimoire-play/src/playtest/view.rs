@@ -105,6 +105,10 @@ pub struct PlaytestView {
     /// the table shows, and a card the rules cannot play is put down unpaid. On from the start
     /// against the goldfish, off against the AI.
     pub sandbox: bool,
+    /// The reader holds priority over their own spells and abilities (`setHold`, issue #1751):
+    /// one of theirs on top of the stack stops them, when they could respond, as an opponent's
+    /// does. Off at the start of every game.
+    pub hold: bool,
     /// The opponent is the goldfish: one seat that keeps its hand, passes every priority and
     /// never attacks or blocks, and that — like the reader — cannot lose (its `dead_on` says when
     /// it would have). The game is never `Over`.
@@ -536,6 +540,10 @@ pub enum PlaytestPickPurpose {
     Pay,
     /// The picked cards are one pile, the rest the other (CR 700.3 — Fact or Fiction).
     Pile,
+    /// A search's finds split between two places (CR 701.23a, Cultivate — issue #1751): the
+    /// picked cards go onto the battlefield, as the card says (tapped, for Cultivate), and the
+    /// rest into the hand.
+    Split,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
@@ -635,6 +643,18 @@ pub struct PlaytestStackItem {
     pub target_players: Vec<PlaytestPlayer>,
 }
 
+/// Who takes the first turn (CR 103.1, issue #1751), as the setup page picked it: the seed's coin
+/// flip, the reader on the play, or the reader on the draw — in a four-player game, then, the
+/// seed picks which opponent starts. Against the goldfish the coin flip is the reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaytestFirst {
+    #[default]
+    Random,
+    Play,
+    Draw,
+}
+
 /// What the AI opponent plays like: phase's difficulty presets, from random to competitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -701,6 +721,12 @@ pub enum PlaytestAction {
     /// Turn the sandbox on or off. A setting, as `SetStops`: taken at any stage, never undone,
     /// and nothing plays on after it.
     SetSandbox {
+        on: bool,
+    },
+    /// Hold priority over the reader's own spells and abilities, or stop holding it (issue
+    /// #1751). A setting, as `SetStops`: taken at any stage, never undone, and nothing plays on
+    /// after it.
+    SetHold {
         on: bool,
     },
     /// Declare these attacks. Empty is no attack.

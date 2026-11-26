@@ -938,6 +938,7 @@ export function PlaytestBoard({
                         canUndo: view.canUndo && !busy,
                         canRedo: view.canRedo && !busy,
                         sandbox: view.sandbox,
+                        hold: view.hold,
                       },
                 playing: playing && !frozen,
                 sandbox: edits,

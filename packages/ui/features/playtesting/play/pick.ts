@@ -1,13 +1,15 @@
 /**
  * The multi-card picker's words and rules, with nothing drawn — a scry's, a surveil's, a discard's,
- * a search's, a sacrifice's, a cast's, an order's, a cost's, a separation into piles'
- * (`PlaytestPrompt.pick`, answered by `pickCards`).
+ * a search's, a sacrifice's, a cast's, an order's, a cost's, a separation into piles', a search's
+ * split of its finds (`PlaytestPrompt.pick`, answered by `pickCards`).
  *
  * **The engine sends the bounds, the board keeps to them**: `min` and `max` say how many may be
  * picked, `eligible` which, and `ordered` whether the order is the answer (a scry's or surveil's
  * picked cards stay on top, the first picked on top; an order's every card is picked, in the
  * order it goes, and a split order's first `split` picked go on top, the rest on the bottom).
- * A separation into piles (Fact or Fiction) picks pile A; the cards left are pile B. Confirm
+ * A separation into piles (Fact or Fiction) picks pile A; the cards left are pile B. A search that
+ * splits its finds (Cultivate, issue #1751) picks the ones for the battlefield; the rest go to the
+ * hand. Confirm
  * is offered only within the bounds, rather than letting the reader send a set the engine will
  * only refuse. A keep within a total
  * power (`powerCap`, issue #1079) is bounded by the picked creatures' power as well: a creature
@@ -62,6 +64,8 @@ export function pickTitle(pick: PlaytestPick): string {
       return `Choose ${bound(pick)} to pay the cost`;
     case "pile":
       return "Separate into two piles: picked cards are pile A";
+    case "split":
+      return `Put ${pick.max} onto the battlefield and the rest into your hand`;
   }
 }
 
@@ -107,12 +111,13 @@ export function pickOffer(
   };
 }
 
-/** The two zones a scry, a surveil or a separation into piles sorts into; `null` for a picker
- *  that is one row. */
+/** The two zones a scry, a surveil, a separation into piles or a search's split sorts into;
+ *  `null` for a picker that is one row. */
 export function pickZones(pick: PlaytestPick): { picked: string; rest: string } | null {
   if (pick.purpose === "scry") return { picked: "Keep on top", rest: "Bottom" };
   if (pick.purpose === "surveil") return { picked: "Top", rest: "Graveyard" };
   if (pick.purpose === "pile") return { picked: "Pile A", rest: "Pile B" };
+  if (pick.purpose === "split") return { picked: "Battlefield", rest: "Hand" };
   return null;
 }
 
@@ -150,18 +155,25 @@ export function pickRows(pick: PlaytestPick, picked: readonly number[]): PickRow
   const zones = pickZones(pick);
   if (zones === null) return null;
   const pile = pick.purpose === "pile";
+  const split = pick.purpose === "split";
   return [
     {
       label: zones.picked,
       ids: [...picked],
       empty: pile
         ? "Click a card to put it in pile A."
-        : "Click a card to keep it here. The first click goes on top.",
+        : split
+          ? "Click a card to put it onto the battlefield."
+          : "Click a card to keep it here. The first click goes on top.",
     },
     {
       label: zones.rest,
       ids: rest,
-      empty: pile ? "Every card is in pile A." : "Every card stays on top.",
+      empty: pile
+        ? "Every card is in pile A."
+        : split
+          ? "Every card goes onto the battlefield."
+          : "Every card stays on top.",
     },
   ];
 }
@@ -234,6 +246,8 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return "Pay";
     case "pile":
       return "Make piles";
+    case "split":
+      return "Put them";
   }
 }
 

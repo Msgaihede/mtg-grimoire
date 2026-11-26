@@ -77,12 +77,13 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 - **The game plays on by itself until the reader decides** (`advance`): the AI takes its own
   decisions through phase's `run_ai_actions`, the goldfish its own through `fish_answer`, and the
   reader's priority is passed for them except where `stops_here` stops them (their main phase, a
-  step they asked for, the opponent's spell or combat after blocks when they could respond). The
+  step they asked for, the opponent's spell or combat after blocks when they could respond, their
+  own spell while they hold priority — `setHold`, issue #1751). The
   reader is stopped only at a `PlaytestStage`. A new stop is a new stage or a new `stops_here`
   rule, never a pause elsewhere in `advance` — the one exception is a sandbox edit's own decision
   (`play_on`'s `held`, below), which keeps the reader where they already were.
-- **The sandbox is a setting, checked in `run`** (`is_sandbox`). `SetSandbox`, like `SetStops`, is
-  taken at any stage, plays nothing on and is not remembered by undo. Off, every hand edit is
+- **The sandbox is a setting, checked in `run`** (`is_sandbox`). `SetSandbox`, like `SetStops` and
+  `SetHold`, is taken at any stage, plays nothing on and is not remembered by undo. Off, every hand edit is
   refused; on, hand edits are taken wherever the game waits on the reader to play or to declare —
   `main`, `respond`, `attack`, `block` (`edit`, issue #1522) — never in a question or at the
   opening hand, on the reader's cards and on any card the table shows (`editable`) — **never an

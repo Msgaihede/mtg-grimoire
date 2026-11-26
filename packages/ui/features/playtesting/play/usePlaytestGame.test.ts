@@ -54,6 +54,7 @@ describe("usePlaytestGame", () => {
       [{ deckId: 9, variant: "live" }],
       "hard",
       expect.any(Number),
+      "random",
     );
     expect(Number.isSafeInteger(playtestStart.mock.calls[0][5])).toBe(true);
     expect(result.current.log.map((l) => l.text)).toEqual([
@@ -207,6 +208,7 @@ describe("usePlaytestGame", () => {
       [],
       "medium",
       expect.any(Number),
+      "random",
     );
     expect(result.current.log.map((l) => l.text)).toEqual(["Shuffled and drew seven"]);
   });

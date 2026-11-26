@@ -104,6 +104,19 @@ describe("an order, a cost and piles", () => {
     ]);
     expect(pickPosition(pile, 0)).toBeNull();
   });
+
+  it("splits a search's finds: the picked onto the battlefield, the rest into the hand", () => {
+    const split = pick({ purpose: "split", min: 1, max: 1 });
+    expect(pickTitle(split)).toBe("Put 1 onto the battlefield and the rest into your hand");
+    expect(confirmLabel(split, 1)).toBe("Put them");
+    expect(pickZones(split)).toEqual({ picked: "Battlefield", rest: "Hand" });
+    expect(pickRows(split, [3])).toEqual([
+      { label: "Battlefield", ids: [3], empty: "Click a card to put it onto the battlefield." },
+      { label: "Hand", ids: [1, 2], empty: "Every card goes onto the battlefield." },
+    ]);
+    expect(canConfirm(split, 0)).toBe(false);
+    expect(canConfirm(split, 1)).toBe(true);
+  });
 });
 
 describe("the picker's rules", () => {

@@ -180,6 +180,7 @@ export function turnFive(): TurnFive {
     stops: [],
     endingTurn: false,
     sandbox: false,
+    hold: false,
     goldfish: false,
     commanderDamageLethal: null,
     canUndo: false,
@@ -1210,6 +1211,8 @@ export function playLocally(view: PlaytestView, action: PlaytestAction): Playtes
   switch (action.type) {
     case "setSandbox":
       return { ...view, sandbox: action.on };
+    case "setHold":
+      return { ...view, hold: action.on };
     case "setLife":
       return action.seat === "you"
         ? { ...view, you: { ...view.you, life: action.life } }
