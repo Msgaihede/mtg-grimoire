@@ -62,6 +62,8 @@ export function pickTitle(pick: PlaytestPick): string {
       return `Choose ${bound(pick)} to pay the cost`;
     case "pile":
       return "Separate into two piles: picked cards are pile A";
+    case "outside":
+      return `Choose ${bound(pick)} from outside the game`;
   }
 }
 
@@ -234,6 +236,8 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return "Pay";
     case "pile":
       return "Make piles";
+    case "outside":
+      return n === 0 ? "Take nothing" : `Take ${n}`;
   }
 }
 

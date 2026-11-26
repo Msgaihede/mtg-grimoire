@@ -104,6 +104,12 @@ describe("an order, a cost and piles", () => {
     ]);
     expect(pickPosition(pile, 0)).toBeNull();
   });
+
+  it("brings cards in from outside the game: a wish's sideboard card or the companion", () => {
+    expect(pickTitle(pick({ purpose: "outside", min: 0, max: 1 }))).toBe(
+      "Choose up to 1 from outside the game",
+    );
+  });
 });
 
 describe("the picker's rules", () => {

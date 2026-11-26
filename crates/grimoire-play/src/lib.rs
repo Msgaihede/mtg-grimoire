@@ -13,7 +13,7 @@ mod table;
 pub mod tokens;
 pub mod view;
 
-pub use cards::{CardFacts, FaceFacts};
+pub use cards::{CardFacts, FaceFacts, OutsidePile};
 pub use draft::{
     Draft, DraftCard, DraftCardFacts, DraftMode, DraftSaved, DraftSeatSetup, DraftSeatView,
     DraftSetup, DraftStatus, DraftView, PodFormat, WinstonPile, WinstonView,

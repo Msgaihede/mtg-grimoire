@@ -64,7 +64,8 @@ export type PlaytestPickPurpose =
   | "cast"
   | "order"
   | "pay"
-  | "pile";
+  | "pile"
+  | "outside";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -244,6 +245,23 @@ export interface PlaytestSeat {
   dungeon: PlaytestDungeon | null;
   /** The ids of the battlefield permanents attached to this player — a Curse (CR 303.4). */
   enchantedBy: number[];
+  /**
+   * This player's companion while it is still outside the game (CR 702.139a): revealed, so
+   * public to every seat. `null` for a player who revealed none, and once it is in the game.
+   */
+  companion: PlaytestCompanion | null;
+}
+
+/** A revealed companion outside the game (CR 702.139a). */
+export interface PlaytestCompanion {
+  name: string;
+  /** The deck's printing of it, for its picture. */
+  cardId: string | null;
+  /**
+   * The rules offer the reader its special action now — {3} to put it into their hand, in their
+   * main phase with the stack empty (CR 702.139c): a `companionToHand`. Only on the reader's seat.
+   */
+  toHand: boolean;
 }
 
 /** A player's place in a dungeon: its name, the room the marker is on and that room's words. */
@@ -521,6 +539,7 @@ export type PlaytestAction =
    *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
    *  Several kinds of mana are a `ManaChoice` prompt. Offered when its
    *  {@link GameCard.canTapForMana} says so. */
+  | { type: "companionToHand" }
   | { type: "tapForMana"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
@@ -588,6 +607,8 @@ export type PlaytestHappened =
   | { type: "foretold"; seat: PlaytestPlayer; name: string | null }
   /** `name` is `null` for an opponent's card face down where it went (a hideaway card, a manifest). */
   | { type: "moved"; seat: PlaytestPlayer; name: string | null; from: GamePlace; to: GamePlace }
+  | { type: "companionRevealed"; seat: PlaytestPlayer; name: string }
+  | { type: "companionToHand"; seat: PlaytestPlayer; name: string }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }
   | { type: "blocked"; seat: PlaytestPlayer; blocker: string; attacker: string }

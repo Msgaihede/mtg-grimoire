@@ -114,7 +114,9 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The exceptions are `pick` — the few questions answered by
-  a set of cards (or an order of them), whose fields give the count — `damage`, the attacker's
+  a set of cards (or an order of them), whose fields give the count; a card from outside the game
+  (a wish's sideboard card, the companion) has no object, and is picked by an id from
+  `OUTSIDE_IDS` on that `answer_of` turns back into phase's selection — `damage`, the attacker's
   division of combat damage among its blockers (issue #1448), whose one listed answer is the
   engine's own split and so never a `sole_answer`, `distribute`, any other division of an amount
   among targets (`DistributeAmong`), for the same reason, and `name_entry`, a name the reader
@@ -186,8 +188,8 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 
 ## Commands
 
-| Command                                                      | Action                                                                                                      |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Command                                                      | Action                                                                                                                           |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish, a `VeryEasy` AI and a person (`lobby_tests.rs`); the drafts too |
-| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                       |
-| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                      |
+| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                                            |
+| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                                           |

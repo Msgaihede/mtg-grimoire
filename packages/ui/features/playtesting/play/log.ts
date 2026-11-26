@@ -317,6 +317,14 @@ export function playtestSentence(
       return h.name === null ? "Foretold a card" : `Foretold ${h.name}`;
     case "moved":
       return movedSentence(h.seat, h.name, h.from, h.to, opponents);
+    case "companionRevealed":
+      return h.seat === "you"
+        ? `Revealed ${h.name} as your companion`
+        : `${playerName(h.seat, opponents)} revealed ${h.name} as their companion`;
+    case "companionToHand":
+      return h.seat === "you"
+        ? `Put ${h.name}, your companion, into your hand`
+        : `${playerName(h.seat, opponents)} put ${h.name}, their companion, into their hand`;
     case "drew":
       if (h.seat !== "you") return `${playerName(h.seat, opponents)} drew a card`;
       return h.name === null ? "Drew a card" : `Drew ${h.name}`;
@@ -432,7 +440,10 @@ export function playtestKind(h: PlaytestHappened): LogKind {
       return "token";
     case "revealed":
     case "named":
+    case "companionRevealed":
       return "reveal";
+    case "companionToHand":
+      return "move";
     case "countered":
       return "cast";
     case "flipped":

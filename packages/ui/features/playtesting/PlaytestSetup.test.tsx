@@ -476,9 +476,7 @@ describe("PlaytestSetup with friends", () => {
     const { onStart, rerender } = setup(DECKS, FOLDERS, hosting());
     expect(screen.getByRole("complementary", { name: "Game lobby" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Lobby code" })).toHaveTextContent("K7QX2M");
-    expect(
-      screen.getByText("Share the code. A game needs another player."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Share the code. A game needs another player.")).toBeInTheDocument();
     await userEvent.click(tile("Simic Tempo"));
     rerender(hosting({ peers: [guestPeer("Bea")] }));
     expect(screen.getByText("Picking a deck…")).toBeInTheDocument();

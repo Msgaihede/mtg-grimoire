@@ -1169,8 +1169,6 @@ putting a host's game away closes its lobby: dealt or being dealt, never refused
 - **Mana payment inside a payment window.** phase's client taps sources during `ManaPayment`,
   `UnlessPayment` and the like; here those are paid by phase's `Auto`, and a cast never stamps
   `AutoExceptSacrificialMana`, so a Treasure may be spent without asking.
-- **The companion and the sideboard** (`CompanionToHand`, wishes' `ChooseOutsideGameCards`): the
-  deck sent to a game is its main deck and commanders only (`grimoire-core`'s `play.rs`).
 - **Conceding** (`Concede`) and phase's sourceless specials (ending a Licid's effect).
 - **Ordering five or more triggers freely.** phase lists every order up to four, and only two
   orders past that.

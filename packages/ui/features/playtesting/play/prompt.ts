@@ -208,6 +208,9 @@ function kindText(
     return prompt.keyword ? `Pay ${words(prompt.keyword).toLowerCase()}` : "Pay";
   }
   if (option.label === null) return null;
+  // A companion's reveal (CR 702.139a): the card it names, or none.
+  if (option.kind === "DeclareCompanion")
+    return option.label === "Decline" ? "Don’t reveal a companion" : `Reveal ${option.label}`;
   if (option.kind === "ChoosePile") {
     const n = option.cards.length;
     return `Pile ${option.label} (${n} ${n === 1 ? "card" : "cards"})`;
