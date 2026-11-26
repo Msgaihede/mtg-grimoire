@@ -203,7 +203,10 @@ export interface PlaytestSeat {
    */
   emblems: PlaytestEmblem[];
   library: number;
-  /** The reader's library, top first; empty for the opponent. */
+  /**
+   * The reader's library, top first, for the sandbox's look and search: sent only while the
+   * sandbox is on (CR 401.2 hides a library's order from its owner too); empty for the opponent.
+   */
   libraryCards: GameCard[];
   /**
    * The top card of this seat's library when the reader may see it (CR 401.5): revealed to every

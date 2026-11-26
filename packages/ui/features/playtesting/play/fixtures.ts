@@ -583,7 +583,12 @@ export function openingHand(): PlaytestView {
     stage: "mulligan",
     turn: 0,
     phase: "beginning",
-    mulligan: { mulligans: 0, bottom: 0, freeFirst: false },
+    mulligan: {
+      mulligans: 0,
+      bottom: 0,
+      freeFirst: false,
+      libraryLands: library(53).filter((c) => c.isLand).length,
+    },
     you: {
       ...t.view.you,
       life: 20,
@@ -1221,7 +1226,12 @@ export function goldfishOpeningHand(): PlaytestView {
     turn: 0,
     phase: "beginning",
     step: null,
-    mulligan: { mulligans: 2, bottom: 1, freeFirst: true },
+    mulligan: {
+      mulligans: 2,
+      bottom: 1,
+      freeFirst: true,
+      libraryLands: openingHandSeat().libraryCards.filter((c) => c.isLand).length,
+    },
     you: openingHandSeat(),
     opponents: [goldfishSeat({ handCount: 7, library: 194 })],
     canUndo: false,

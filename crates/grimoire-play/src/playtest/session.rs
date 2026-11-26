@@ -1284,7 +1284,9 @@ impl Playtest {
             emblems: self.emblems(seat),
             library: player.library.len() as u32,
             // phase's library is a vector whose **front is the top** (`DrawCards` takes from it).
-            library_cards: if reader {
+            // Sent only while the sandbox is on, for its look and search: a library's order is
+            // hidden from its owner too (CR 401.2, issue #1749).
+            library_cards: if reader && self.sandbox {
                 cards(&mut player.library.iter())
             } else {
                 Vec::new()
@@ -1699,10 +1701,24 @@ impl Playtest {
                 }
             }
         };
+        // A count, never the cards: the reader may not know their library's order (CR 401.2).
+        let library_lands = self
+            .player(self.you)
+            .library
+            .iter()
+            .filter(|id| {
+                self.state.objects.get(id).is_some_and(|o| {
+                    o.card_types
+                        .core_types
+                        .contains(&engine::types::card_type::CoreType::Land)
+                })
+            })
+            .count() as u32;
         Some(MulliganView {
             mulligans: entry.mulligan_count,
             bottom,
             free_first: *free_first_mulligan,
+            library_lands,
         })
     }
 

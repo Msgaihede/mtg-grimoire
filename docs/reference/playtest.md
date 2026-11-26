@@ -575,7 +575,12 @@ that lost it.
 ## What the reader may see
 
 Each opponent's hand and library are **counts** (`handCount`, `library`), the goldfish's too.
-Their `libraryCards` are always empty on the wire, and the sandbox never reaches them.
+Their `libraryCards` are always empty on the wire, and the sandbox never reaches them. **The
+reader's own `libraryCards` (top first) are sent only while the sandbox is on**, for its library
+dialog's look and search (issue #1749): CR 401.2 hides a library's order from its owner too, and
+phase's projection hides every library card but a top the player may look at or that is revealed
+(`libraryTop`). The opening hand's _In the library_ figure is a count of its own,
+`MulliganView.libraryLands`.
 
 **What phase's own projection shows the reader, the board shows** (phase 0.132.0 parity,
 2026-11-25; `Playtest::sight`). Every view asks phase's `filter_state_for_viewer` for the reader's
@@ -1150,9 +1155,9 @@ ever, and every guest is sent its step after each change. A guest's action is `l
 goes to the host's board as `playtest:step` (`HostStep`) and to each guest as `lobby:game`
 (`GuestGame`: the step, the others' names from its seat, its deck's name, `dealt` for a deal's first
 step). A refusal goes back to that guest alone, as `lobby:refused`. A guest's step crosses packed
-(body `game`, gzip in base64): a Commander board with the guest's own library is well past the
-relay's 64 KiB frame as JSON and a tenth of that packed; one that still would not fit is sent
-without the library, which only the sandbox draws.
+(body `game`, gzip in base64), under the relay's 64 KiB frame. It never carries the guest's
+library's cards: those are sent only while the sandbox is on, and the sandbox stays off in a
+lobby's game.
 
 **The page.** The setup's aside has a _Play with friends_ block (`features/playtesting/lobby/`):
 **Create lobby** for a supporter (`useMayHostPod`, the draft's own reading of the membership) and
