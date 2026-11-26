@@ -255,6 +255,24 @@ generically, never matched variant by variant.
     `distribute` and never a `sole_answer` while two targets share it;
   - **a name** (`nameEntry`): a `NamedChoice` that takes a free word is answered with any name
     (`name`), checked by phase's `accepts_free_entry_answer`, beside its listed sample.
+  - **a crew or a saddle** (`crew`, `saddle`; `CrewVehicle`, `SaddleMount`, issue #1745): any
+    of the untapped creatures, so long as their power reaches `powerMin` — each counted by the
+    engine's own `contributions` ("as though its power were 2 greater"), never `GameCard.power`;
+    one creature that may is tapped unasked;
+  - **a banded blocker's damage** (`AssignBlockerDamage`, CR 510.1d, 702.22k): a `distribute`
+    of all of it among the attackers it blocks, none the least, answered `AssignBlockerDamage` —
+    the engine lists only all of it to the first, which `sole_answer` used to take silently;
+  - **counters taken off a card** (`counters`, `RemoveCountersChoice` and
+    `MoveCountersDistribution` — Rhys the Evermore, Tetravus; CR 107.1c, 122.5): a stepper per
+    kind (and per destination, for a move) within what the card has and `maxTotal`, answered by
+    `moveCounters`; none at all is an answer, so it is never a `sole_answer` while there are any;
+  - **five triggers or more in order** (`triggers`, `OrderTriggers`): phase lists every order up
+    to four, and only as they are and reversed past that, so the board lists the abilities in
+    the order they resolve, with up and down, and `orderTriggers` sends the permutation (the
+    first index put on the stack first);
+  - **coin flips kept and die rolls ignored** (`results`, `CoinFlipKeepChoice` — Krark's Thumb —
+    and `DieKeepChoice`, CR 705.1, 706.6): the results drawn, exactly `count` of the `eligible`
+    picked, answered by `keepResults`; phase lists nothing when more than one coin is kept.
 - **`auto`** answers any prompt with `phase_ai::choose_action` for the reader, at Medium.
   `Happened::Chose` says so. It is also the answer to a prompt with no options the board can draw.
 - **A question with one answer is never asked** (issue #999, `sole_answer`). phase already fills
