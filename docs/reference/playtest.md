@@ -453,6 +453,24 @@ every mana ability out, so its sources are read off the question's own `options`
 `BackToManaPayment` ("Pay another way"), which opens the payment window and is an answer, never a
 take-back. An activation phase offers only as `Manual` keeps its mode.
 
+**`concede`** is phase's `Concede` (CR 104.3a, issue #1746), offered as the game menu's Concede
+and asked about first (`EndGameDialog`). The rules never list it among the legal answers, and it
+is taken at any stage of an unfinished game — the opening hand, a question, a lobby's `waiting`
+— for the acting person's seat (a guest's `act_by` concedes the guest). Whatever the reader had
+half made goes with them. Against the goldfish it ends the game as a loss (its emblems do not stop
+a concession), in a duel the other side wins, and in a four-player game the others play on without
+the reader (CR 800.4a). Once the game is over it is refused, like every other action.
+
+**`specials`** are the rules' answers at the reader's priority (`main`, `respond`) that belong to
+no card — phase's own `source_object` is `None` — passing aside: paying to end a Licid's effect
+(CR 116.2c, `EndContinuousEffect`), which phase's client offers as buttons beside Pass
+(`end_continuous_effect_offers`), and any other the engine lists. Each is a `PlaytestOption` read
+as a prompt's are, with the effect's card in `label` (`source_name`) and what it costs in `cost`
+(`{W}`, by phase's own shard symbols); `special { index }` takes one. A special action uses no
+stack (CR 116.1), so the reader keeps priority at the decision they took it at (`play_on`'s
+`held`). The foot draws one button for each beside the stage buttons (`combat.ts`'
+`specialButtons`). None in a replay frame.
+
 **`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
 from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
 reader's turn or with {2} out of reach. **What the rules offer is on the card**: `canForetell` on a
@@ -732,19 +750,37 @@ and the action `tapForMana { id }`, and reuses the fact `tapped`. `ipc.test.ts` 
 **Facts come from phase's events** (`tell`). Each applied action returns `GameEvent`s, and so does
 each of the AI's actions. They become the log's facts:
 
-| Event                                    | Fact                                                                                                 |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `TurnStarted`                            | `turnBegan`                                                                                          |
-| `LandPlayed`                             | `played`                                                                                             |
-| `SpellCast`                              | `cast`                                                                                               |
-| `AbilityActivated` (not mana)            | `activated`                                                                                          |
-| `Foretold`                               | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again     |
-| `ZoneChanged`                            | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again |
-| `AttackersDeclared` / `BlockersDeclared` | `attacked` / `blocked`                                                                               |
-| `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
-| `LifeChanged`                            | `life`: the change and the total after it                                                            |
-| `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
-| `EffectResolved` of a `CreateEmblem`     | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)        |
+| Event                                                             | Fact                                                                                                                                          |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TurnStarted`                                                     | `turnBegan`                                                                                                                                   |
+| `LandPlayed`                                                      | `played`                                                                                                                                      |
+| `SpellCast`                                                       | `cast`                                                                                                                                        |
+| `AbilityActivated` (not mana)                                     | `activated`                                                                                                                                   |
+| `Foretold`                                                        | `foretold`, naming the reader's own card only; its move from the hand to exile is not told again                                              |
+| `ZoneChanged`                                                     | `moved`, or `drew` (library to hand). A move to or from the stack is the cast, and is not told again                                          |
+| `AttackersDeclared` / `BlockersDeclared`                          | `attacked` / `blocked`                                                                                                                        |
+| `DamageDealt` to a permanent                                      | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)                                                        |
+| `LifeChanged`                                                     | `life`: the change and the total after it                                                                                                     |
+| `TokenCreated`                                                    | `tokensCreated`, with consecutive tokens of one name counted together                                                                         |
+| `EffectResolved` of a `CreateEmblem`                              | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)                                                 |
+| `CounterAdded` / `CounterRemoved`                                 | `countersChanged`: the permanent, the counter's kind and the change (issue #1748)                                                             |
+| `PermanentTapped` / `PermanentUntapped`                           | `becameTapped`: only a tap an effect made (phase's `caused_by`), never for mana, an attack or a cost; consecutive ones of one player's merged |
+| `AbilityTriggered`                                                | `triggered`, naming the source                                                                                                                |
+| `ControllerChanged`                                               | `controlled` with `byHand: false` (the sandbox's own is `byHand: true`)                                                                       |
+| `Transformed` / `TurnedFaceUp` / `TurnedFaceDown`                 | `transformed` / `turnedFaceUp` (always named: face up is public) / `turnedFaceDown`                                                           |
+| `Attached` / `Unattached`                                         | `attached`, with `attached` false for an unattach; `to` is `null` for a player                                                                |
+| `CreatureDestroyed`, `PermanentSacrificed`, `Cycled`, `Discarded` | `removed` with its `how`, told in place of the card's `moved`                                                                                 |
+| `EnergyChanged`, `PlayerCounterChanged`, `SpeedChanged`           | `playerCounters`: the kind, the change and the total after it                                                                                 |
+| `RoomEntered` / `DungeonCompleted`                                | `roomEntered` / `dungeonCompleted`                                                                                                            |
+| `VoteCast` / `VoteResolved` / `Clash`                             | `voted` / `voteResolved` (each choice's votes) / `clashed`                                                                                    |
+| `ExtraTurnCreated`                                                | `extraTurn`                                                                                                                                   |
+
+**Every seat's events go through phase's own filter first** (`shown_to`, over
+`filter_events_for_viewer`, issue #1748), the event stream's counterpart of the state's
+`filter_state_for_viewer`. An event phase would not send a seat is told to it only as a card that
+moved, never named (a hidden draw, a hidden find, a manifest), and any other kind not at all, so an
+event `tell` learns later can never say what that seat may not see. The filter drops events and
+rewrites only kinds it never drops, so `shown_to` finds each kept event again in order.
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
 
@@ -1268,9 +1304,6 @@ putting a host's game away closes its lobby: dealt or being dealt, never refused
 - **Mana payment inside a payment window.** phase's client taps sources during `ManaPayment`,
   `UnlessPayment` and the like; here those are paid by phase's `Auto`, and a cast never stamps
   `AutoExceptSacrificialMana`, so a Treasure may be spent without asking.
-- **The companion and the sideboard** (`CompanionToHand`, wishes' `ChooseOutsideGameCards`): the
-  deck sent to a game is its main deck and commanders only (`grimoire-core`'s `play.rs`).
-- **Conceding** (`Concede`) and phase's sourceless specials (ending a Licid's effect).
 - **Ordering five or more triggers freely.** phase lists every order up to four, and only two
   orders past that.
 - **The light app.** Playtesting is not a destination there.

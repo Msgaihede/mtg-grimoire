@@ -418,3 +418,19 @@ fn the_attacker_divides_its_damage_among_two_blockers() {
     assert!(standing.contains(&first), "the goblin given none lives");
     assert!(!standing.contains(&second), "the goblin given both dies");
 }
+
+/// Issue #1746: a concession in a lobby's game is the acting person's — a guest concedes while
+/// the reader decides, and the reader wins the duel.
+#[test]
+fn a_guest_concedes_on_the_readers_decision() {
+    let (host, guest) = engine(|| {
+        let (mut game, _, _) = duel(4);
+        let host = game.act_by(1, A::Concede).expect("the guest conceded");
+        let guest = game.guest_steps().into_iter().find(|(s, _)| *s == 1);
+        (host, guest.map(|(_, step)| step))
+    });
+    assert_eq!(host.view.stage, Stage::Over);
+    assert_eq!(host.view.winner, Some(PlaytestPlayer::You));
+    let guest = guest.expect("the guest is told");
+    assert_eq!(guest.view.winner, Some(PlaytestPlayer::Opponent));
+}

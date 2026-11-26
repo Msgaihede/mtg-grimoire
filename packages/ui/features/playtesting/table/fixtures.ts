@@ -130,6 +130,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     dungeon: null,
     enchantedBy: [],
     conditions: [],
+    companion: null,
     ...over,
   };
 }

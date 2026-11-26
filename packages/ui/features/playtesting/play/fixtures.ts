@@ -76,6 +76,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     dungeon: null,
     enchantedBy: [],
     conditions: [],
+    companion: null,
     ...over,
   };
 }
@@ -193,6 +194,7 @@ export function turnFive(): TurnFive {
     storm: 0,
     turnOrder: [],
     exiledWith: [],
+    specials: [],
   };
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
@@ -346,6 +348,7 @@ export function targetPrompt(): TurnFive {
     number: null,
     yes: null,
     label: null,
+    cost: null,
   });
   return {
     ...t,
@@ -392,6 +395,7 @@ export function orderTriggersPrompt(): TurnFive {
     number: null,
     yes: null,
     label: null,
+    cost: null,
   });
   return {
     ...t,
@@ -448,6 +452,7 @@ export function castChoicePrompt(): TurnFive {
             number: null,
             yes: null,
             label: "Bonecrusher Giant",
+            cost: null,
           },
           {
             index: 1,
@@ -457,6 +462,7 @@ export function castChoicePrompt(): TurnFive {
             number: null,
             yes: null,
             label: "Stomp",
+            cost: null,
           },
         ],
         cancellable: true,
@@ -486,6 +492,7 @@ export function optionalEffectPrompt(): TurnFive {
     number: null,
     yes,
     label: null,
+    cost: null,
   });
   return {
     ...t,
@@ -772,6 +779,7 @@ export function damagePrompt(trample = false): TurnFive {
             number: null,
             yes: null,
             label: null,
+            cost: null,
           },
         ],
         cancellable: false,
@@ -1347,6 +1355,7 @@ export function parityMarks(): ParityMarks {
     storm: 0,
     turnOrder: [],
     exiledWith: [],
+    specials: [],
     you: { ...t.view.you, ring: 1, enchantedBy: [curse.id] },
     opponents: [
       {

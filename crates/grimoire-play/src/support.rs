@@ -71,10 +71,11 @@ impl SupportCache {
 }
 
 /// What the engine plays of `cards`, a deck as `deck_cards` answers it. **Runs the oracle
-/// parser**, so it belongs on `on_engine_stack` like a game.
+/// parser**, so it belongs on `on_engine_stack` like a game. The deck is its library and command
+/// zone: a sideboard card or a companion (`outside`) starts outside the game and is not counted.
 pub fn deck_support(cards: &[CardFacts], known: &mut SupportCache) -> Result<DeckSupport, String> {
     let mut seen: BTreeMap<String, Option<UnsupportedCard>> = BTreeMap::new();
-    for card in cards {
+    for card in cards.iter().filter(|c| c.outside.is_none()) {
         let gaps = known.gaps(card)?;
         let entry = seen.entry(engine_name(card)).or_insert_with(|| {
             (!gaps.is_empty()).then(|| UnsupportedCard {

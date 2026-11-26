@@ -20,6 +20,10 @@
  * **What only the game itself does is said with its subject, the reader's too**: "You won the
  * flip", "You rolled 4 on a d6", "You named Lightning Bolt", "You became the monarch", "The Ring
  * tempted you", "It became night" — there is no action of the reader's for the line to echo.
+ * So is what the rules did to a card, whoever's it is: "Tarmogoyf got two +1/+1 counters",
+ * "Llanowar Elves became tapped", "Soul Warden's ability triggered", "Grizzly Bears was
+ * destroyed", "The opponent gained control of Grizzly Bears" — where a sandbox edit of the same
+ * reads as the reader's own doing ("Tapped Llanowar Elves").
  *
  * `turn` on a line is the game's turn (`PlaytestView.turn`, every seat's turns counted), so the
  * log's headings follow the table's own "Turn 5".
@@ -27,9 +31,13 @@
 import type {
   GameManaKind,
   GamePlace,
+  PlaytestClash,
   PlaytestDesignation,
   PlaytestHappened,
   PlaytestPlayer,
+  PlaytestPlayerCounter,
+  PlaytestRemoval,
+  PlaytestTally,
 } from "@/lib/ipc";
 import { lifeSentence, type LogKind, type LogLine } from "../table/log";
 import { playerName, playerPossessive } from "./players";
@@ -157,6 +165,154 @@ function putSentence(
   return `${name} to ${PUT_YOURS[to]}`;
 }
 
+/** A card the rules moved for a reason: "Grizzly Bears was destroyed", "The opponent sacrificed
+ *  Food", "Cycled Lórien Revealed", "The opponent discarded Lightning Bolt". A destroyed or
+ *  sacrificed card that went somewhere other than a graveyard says where. */
+function removedSentence(
+  seat: PlaytestPlayer,
+  named: string | null,
+  how: PlaytestRemoval,
+  to: GamePlace,
+  opponents: number,
+) {
+  const you = seat === "you";
+  const who = playerName(seat, opponents);
+  const name = named ?? "a face-down card";
+  const where = to === "graveyard" ? "" : ` · to ${(you ? YOUR : THEIR)[to]}`;
+  switch (how) {
+    case "destroyed": {
+      const card = you
+        ? (named ?? "Your face-down card")
+        : `${playerPossessive(seat, opponents)} ${named ?? "face-down card"}`;
+      return `${card} was destroyed${where}`;
+    }
+    case "sacrificed":
+      return `${you ? "Sacrificed" : `${who} sacrificed`} ${name}${where}`;
+    case "cycled":
+      return you ? `Cycled ${name}` : `${who} cycled ${name}`;
+    case "discarded":
+      return `${you ? "Discarded" : `${who} discarded`} ${name}${where}`;
+  }
+}
+
+/** A card the rules gave to a player (CR 108.4): "The opponent gained control of Grizzly Bears",
+ *  "You gained control of Opponent 2's Hill Giant", "You regained control of Grizzly Bears". */
+function controlledByRulesSentence(
+  seat: PlaytestPlayer,
+  name: string,
+  controller: PlaytestPlayer,
+  opponents: number,
+) {
+  const who = playerName(controller, opponents);
+  if (controller === seat) return `${who} regained control of ${name}`;
+  const whose = seat === "you" ? "your" : playerPossessive(seat, opponents, "mid");
+  return `${who} gained control of ${whose} ${name}`;
+}
+
+/** Whose permanent it is, as the start of a sentence: "Tarmogoyf", "The opponent's Tarmogoyf",
+ *  and a face-down one of an opponent's as just that. */
+function permanent(seat: PlaytestPlayer, name: string | null, opponents: number) {
+  if (seat === "you") return name ?? "Your face-down permanent";
+  return `${playerPossessive(seat, opponents)} ${name ?? "face-down permanent"}`;
+}
+
+/** "Tarmogoyf got two +1/+1 counters", "The opponent's Jace lost one loyalty counter". */
+function countersChangedSentence(
+  seat: PlaytestPlayer,
+  name: string | null,
+  kind: string,
+  delta: number,
+  opponents: number,
+) {
+  const n = Math.abs(delta);
+  const what = `${spelled(n)} ${kind} counter${n === 1 ? "" : "s"}`;
+  return `${permanent(seat, name, opponents)} ${delta >= 0 ? "got" : "lost"} ${what}`;
+}
+
+/** "Llanowar Elves became tapped", "The opponent's Grizzly Bears and Hill Giant became untapped". */
+function becameTappedSentence(
+  seat: PlaytestPlayer,
+  names: readonly (string | null)[],
+  tapped: boolean,
+  opponents: number,
+) {
+  const shown = names.map((n) => n ?? "a face-down permanent");
+  const cards =
+    seat === "you" ? listed(shown) : `${playerPossessive(seat, opponents)} ${listed(shown)}`;
+  return `${cards} became ${tapped ? "tapped" : "untapped"}`;
+}
+
+/** "Rancor was attached to Grizzly Bears", "Bonesplitter was unattached from the opponent's
+ *  Hill Giant", "Curse of Opulence was attached to Opponent 2". */
+function attachedSentence(
+  seat: PlaytestPlayer,
+  name: string,
+  to: string | null,
+  toSeat: PlaytestPlayer,
+  attached: boolean,
+  opponents: number,
+) {
+  const what = seat === "you" ? name : `${playerPossessive(seat, opponents)} ${name}`;
+  const onto =
+    to === null
+      ? playerName(toSeat, opponents, "mid")
+      : toSeat === "you"
+        ? to
+        : `${playerPossessive(toSeat, opponents, "mid")} ${to}`;
+  return attached ? `${what} was attached to ${onto}` : `${what} was unattached from ${onto}`;
+}
+
+const PLAYER_COUNTER: Record<Exclude<PlaytestPlayerCounter, "speed">, string> = {
+  poison: "poison counter",
+  energy: "energy",
+  experience: "experience counter",
+  rad: "rad counter",
+  ticket: "ticket",
+};
+
+/** "You got two energy, up to 5", "The opponent got one poison counter, up to 3", "Your speed
+ *  is now 2". */
+function playerCountersSentence(
+  seat: PlaytestPlayer,
+  kind: PlaytestPlayerCounter,
+  delta: number,
+  total: number,
+  opponents: number,
+) {
+  if (kind === "speed") {
+    const whose = seat === "you" ? "Your" : playerPossessive(seat, opponents);
+    return `${whose} speed is now ${total}`;
+  }
+  const n = Math.abs(delta);
+  const noun = PLAYER_COUNTER[kind];
+  // Energy is a count of its own ("two energy"); the rest are counters ("two poison counters").
+  const what =
+    kind === "energy" ? `${spelled(n)} ${noun}` : `${spelled(n)} ${noun}${n === 1 ? "" : "s"}`;
+  const verb = delta >= 0 ? "got" : "lost";
+  const now = delta >= 0 ? `up to ${total}` : `down to ${total}`;
+  return `${playerName(seat, opponents)} ${verb} ${what}, ${now}`;
+}
+
+/** "Lightning Bolt 2 · Counterspell 1". */
+function talliesSentence(tallies: readonly PlaytestTally[]) {
+  const counted = tallies.map((t) => `${t.choice} ${t.votes}`).join(" · ");
+  return counted === "" ? "The vote is in" : `The vote is in: ${counted}`;
+}
+
+/** "You won a clash with the opponent (3 to 1)", "Opponent 2 tied a clash with you". */
+function clashedSentence(
+  seat: PlaytestPlayer,
+  withSeat: PlaytestPlayer,
+  mine: number | null,
+  theirs: number | null,
+  result: PlaytestClash,
+  opponents: number,
+) {
+  const verb = result === "won" ? "won" : result === "lost" ? "lost" : "tied";
+  const values = mine === null || theirs === null ? "" : ` (${mine} to ${theirs})`;
+  return `${playerName(seat, opponents)} ${verb} a clash with ${playerName(withSeat, opponents, "mid")}${values}`;
+}
+
 /**
  * A card put under a player's control by hand (issue #1713), by whose card it is and who has it
  * now. On the battlefield it is a change of control alone — "Gained control of the opponent's
@@ -277,7 +433,9 @@ export function playtestSentence(
     case "put":
       return putSentence(h.seat, h.name, h.from, h.to, opponents);
     case "controlled":
-      return controlledSentence(h.seat, h.name, h.from, h.controller, opponents);
+      return h.byHand
+        ? controlledSentence(h.seat, h.name, h.from, h.controller, opponents)
+        : controlledByRulesSentence(h.seat, h.name, h.controller, opponents);
     case "tapped":
       return tappedSentence(h.seat, h.name, h.count, h.tapped, opponents);
     case "untappedAll":
@@ -317,6 +475,14 @@ export function playtestSentence(
       return h.name === null ? "Foretold a card" : `Foretold ${h.name}`;
     case "moved":
       return movedSentence(h.seat, h.name, h.from, h.to, opponents);
+    case "companionRevealed":
+      return h.seat === "you"
+        ? `Revealed ${h.name} as your companion`
+        : `${playerName(h.seat, opponents)} revealed ${h.name} as their companion`;
+    case "companionToHand":
+      return h.seat === "you"
+        ? `Put ${h.name}, your companion, into your hand`
+        : `${playerName(h.seat, opponents)} put ${h.name}, their companion, into their hand`;
     case "drew":
       if (h.seat !== "you") return `${playerName(h.seat, opponents)} drew a card`;
       return h.name === null ? "Drew a card" : `Drew ${h.name}`;
@@ -369,6 +535,44 @@ export function playtestSentence(
       return becameSentence(h.seat, h.what, opponents);
     case "dayNight":
       return `It became ${h.now}`;
+    case "countersChanged":
+      return h.delta === 0
+        ? null
+        : countersChangedSentence(h.seat, h.name, h.kind, h.delta, opponents);
+    case "becameTapped":
+      return becameTappedSentence(h.seat, h.names, h.tapped, opponents);
+    case "triggered":
+      return h.seat === "you"
+        ? `${h.name ?? "Your face-down permanent"}'s ability triggered`
+        : `${playerPossessive(h.seat, opponents)} ${h.name ?? "face-down permanent"}'s ability triggered`;
+    case "transformed":
+      return `${permanent(h.seat, h.name, opponents)} transformed`;
+    case "turnedFaceUp":
+      return `${permanent(h.seat, h.name, opponents)} was turned face up`;
+    case "turnedFaceDown":
+      return `${permanent(h.seat, h.name, opponents)} was turned face down`;
+    case "attached":
+      return attachedSentence(h.seat, h.name, h.to, h.toSeat, h.attached, opponents);
+    case "removed":
+      return removedSentence(h.seat, h.name, h.how, h.to, opponents);
+    case "playerCounters":
+      return h.delta === 0
+        ? null
+        : playerCountersSentence(h.seat, h.kind, h.delta, h.total, opponents);
+    case "roomEntered":
+      return `${playerName(h.seat, opponents)} entered ${h.room} (${h.dungeon})`;
+    case "dungeonCompleted":
+      return `${playerName(h.seat, opponents)} completed ${h.dungeon}`;
+    case "voted":
+      return `${playerName(h.seat, opponents)} voted for ${h.choice}`;
+    case "voteResolved":
+      return talliesSentence(h.tallies);
+    case "clashed":
+      return clashedSentence(h.seat, h.with, h.manaValue, h.theirManaValue, h.result, opponents);
+    case "extraTurn":
+      return h.seat === "you"
+        ? "You will take an extra turn"
+        : `${playerName(h.seat, opponents)} will take an extra turn`;
     case "chose":
       return `The engine chose for you: ${promptTitle(h.what)}`;
     case "eliminated":
@@ -432,7 +636,10 @@ export function playtestKind(h: PlaytestHappened): LogKind {
       return "token";
     case "revealed":
     case "named":
+    case "companionRevealed":
       return "reveal";
+    case "companionToHand":
+      return "move";
     case "countered":
       return "cast";
     case "flipped":
@@ -441,6 +648,30 @@ export function playtestKind(h: PlaytestHappened): LogKind {
     case "became":
       return "status";
     case "dayNight":
+      return "turn";
+    case "countersChanged":
+      return "counter";
+    case "becameTapped":
+      return "tap";
+    case "triggered":
+      return "cast";
+    case "transformed":
+    case "turnedFaceUp":
+    case "turnedFaceDown":
+    case "attached":
+      return "move";
+    case "removed":
+      return "move";
+    case "playerCounters":
+      return "counter";
+    case "roomEntered":
+    case "dungeonCompleted":
+    case "voted":
+    case "voteResolved":
+      return "status";
+    case "clashed":
+      return "reveal";
+    case "extraTurn":
       return "turn";
     case "chose":
       return "engine";

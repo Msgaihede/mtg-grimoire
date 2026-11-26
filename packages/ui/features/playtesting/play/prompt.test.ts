@@ -21,6 +21,7 @@ function option(over: Partial<PlaytestOption>): PlaytestOption {
     number: null,
     yes: null,
     label: null,
+    cost: null,
     ...over,
   };
 }
@@ -155,6 +156,7 @@ describe("optionLabel", () => {
       option({
         kind: "CastAdventure",
         label: "Stomp",
+        cost: null,
         cards: [{ id: 1, name: "B", cardId: null, text: null, cause: null }],
       }),
       { kind: "CastChoice" },
@@ -186,6 +188,16 @@ describe("answers told apart by their kind", () => {
     expect(text({ kind: "PayUnlessCost", yes: false })).toBe("Don’t pay");
     // A plain may stays a yes or a no.
     expect(text({ kind: "DecideOptionalEffect", yes: true })).toBe("Yes");
+  });
+
+  it("reveals a companion by its name, or none", () => {
+    const reveal = { kind: "DeclareCompanion" };
+    expect(text({ ...reveal, label: "Lurrus of the Dream-Den" }, "CompanionReveal")).toBe(
+      "Reveal Lurrus of the Dream-Den",
+    );
+    expect(text({ ...reveal, label: "Decline" }, "CompanionReveal")).toBe(
+      "Don’t reveal a companion",
+    );
   });
 
   it("pays an optional cost by its keyword, or declines it", () => {
@@ -222,6 +234,7 @@ describe("answers told apart by their kind", () => {
     const pile = option({
       kind: "ChoosePile",
       label: "A",
+      cost: null,
       cards: [card("Opt"), card("Island")],
     });
     expect(optionLabel(pile, { kind: "SeparatePilesChoice" })).toEqual({

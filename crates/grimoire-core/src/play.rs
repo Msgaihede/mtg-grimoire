@@ -10,9 +10,11 @@
 //! deck view draws. Read per printing, as the rest of a deck row is.
 //!
 //! **Which cards are in the game is the deck's own rule** (`features/decks/CLAUDE.md` §2): an
-//! inactive pile is not in the deck, so it is not in the game; the sideboard, the maybeboard and
-//! a companion start outside it (CR 702.139a — a companion is revealed from outside the game,
-//! which a goldfish board does not model yet); the commander pile starts in the command zone.
+//! inactive pile is not in the deck, so it is not in the game, and neither is the maybeboard; the
+//! commander pile starts in the command zone. The sideboard and a companion start **outside the
+//! game** ([`PlayCard::outside`], issue #1744): a wish (Living Wish, Karn, the Great Creator)
+//! finds a sideboard card, and a companion is revealed from outside the game (CR 702.139a) and
+//! may be put into its owner's hand for {3} (CR 702.139c).
 //!
 //! **The deck's tokens are its own printings** ([`deck_tokens`], issue #991): one printing per
 //! token the list keeps, the one its token wall draws, so a Treasure made on the board wears the
@@ -33,6 +35,9 @@ pub struct PlayCard {
     pub name: String,
     pub quantity: u32,
     pub commander: bool,
+    /// Outside the game at the start: the sideboard or the companion. `None` for a card of the
+    /// library or the command zone.
+    pub outside: Option<OutsidePile>,
     pub oracle_id: Option<String>,
     pub mana_cost: Option<String>,
     pub type_line: Option<String>,
@@ -51,6 +56,21 @@ pub struct PlayCard {
     pub faces: Option<String>,
 }
 
+impl PlayCard {
+    /// Shuffled into the library at the start: neither a commander nor outside the game.
+    pub fn in_library(&self) -> bool {
+        !self.commander && self.outside.is_none()
+    }
+}
+
+/// Where a card outside the game waits (CR 400.11): the deck's sideboard, or its companion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OutsidePile {
+    Sideboard,
+    Companion,
+}
+
 /// One token the deck's list keeps, in the printing a game draws it by. A lobby game's guest
 /// sends its deck's to the host (`Deserialize`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,8 +87,9 @@ pub struct PlayToken {
     pub sources: Vec<String>,
 }
 
-/// The categories whose cards start the game: the main deck and the commander.
-const IN_THE_GAME: &[&str] = &["main", "commander"];
+/// The categories a game deals: the main deck and the commander in the game, the sideboard and
+/// the companion outside it ([`OutsidePile`]).
+const IN_THE_GAME: &[&str] = &["main", "commander", "side", "companion"];
 
 /// What a deck that cannot be played says.
 pub const NO_DECK: &str = "That deck is gone.";
@@ -129,6 +150,7 @@ pub fn cards_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<PlayCard>, 
                         name: r.get(1)?,
                         quantity: 1,
                         commander: false,
+                        outside: None,
                         oracle_id: r.get(2)?,
                         mana_cost: r.get(3)?,
                         type_line: r.get(4)?,
@@ -259,6 +281,11 @@ fn card(
 ) -> PlayCard {
     PlayCard {
         commander: row.category_kind == "commander",
+        outside: match row.category_kind.as_str() {
+            "side" => Some(OutsidePile::Sideboard),
+            "companion" => Some(OutsidePile::Companion),
+            _ => None,
+        },
         quantity: u32::try_from(row.quantity).unwrap_or(0),
         card_id: row.card_id,
         name: row.name,
@@ -350,6 +377,27 @@ mod tests {
             let (deck, main, _) = deck_with_piles(&conn);
             play(&conn, deck, main, &tithe());
             (conn, deck)
+        }
+
+        #[test]
+        fn the_sideboard_and_the_companion_are_dealt_outside_the_game() {
+            let conn = open();
+            tithe().insert(&conn);
+            let (deck, main, maybe) = deck_with_piles(&conn);
+            let side = crate::schema::fixtures::category(&conn, deck, "side", "Sideboard");
+            let companion =
+                crate::schema::fixtures::category(&conn, deck, "companion", "Companion");
+            for pile in [main, maybe, side, companion] {
+                play(&conn, deck, pile, &tithe());
+            }
+            let out = super::super::deck_cards(&conn, deck, "live").unwrap();
+            let piles: Vec<Option<super::super::OutsidePile>> =
+                out.iter().map(|c| c.outside).collect();
+            assert_eq!(out.len(), 3, "the maybeboard is not dealt: {piles:?}");
+            assert!(piles.contains(&None));
+            assert!(piles.contains(&Some(super::super::OutsidePile::Sideboard)));
+            assert!(piles.contains(&Some(super::super::OutsidePile::Companion)));
+            assert_eq!(out.iter().filter(|c| c.in_library()).count(), 1);
         }
 
         #[test]

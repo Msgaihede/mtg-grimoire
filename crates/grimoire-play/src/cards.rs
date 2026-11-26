@@ -34,6 +34,10 @@ pub struct CardFacts {
     pub quantity: u32,
     /// In the command zone at the start, rather than the library.
     pub commander: bool,
+    /// Outside the game at the start (CR 400.11), rather than the library: a sideboard card a
+    /// wish finds, or the companion (CR 702.139a). `None` for the library and the command zone.
+    #[serde(default)]
+    pub outside: Option<OutsidePile>,
     pub oracle_id: Option<String>,
     pub mana_cost: Option<String>,
     pub type_line: Option<String>,
@@ -50,6 +54,22 @@ pub struct CardFacts {
     /// Scryfall's `card_faces`, for a card with two or more: a modal double-faced card, a
     /// transforming one, an adventure, a split card. Empty for a card of one face.
     pub faces: Vec<FaceFacts>,
+}
+
+impl CardFacts {
+    /// Shuffled into the library at the start: neither a commander nor outside the game.
+    pub fn in_library(&self) -> bool {
+        !self.commander && self.outside.is_none()
+    }
+}
+
+/// Where a card outside the game waits: the deck's sideboard (CR 400.11a), or its companion
+/// (CR 702.139a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OutsidePile {
+    Sideboard,
+    Companion,
 }
 
 /// One face of a card with several, as Scryfall's `card_faces` has it.

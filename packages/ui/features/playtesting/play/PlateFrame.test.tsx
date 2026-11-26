@@ -102,6 +102,41 @@ describe("PlateFrame", () => {
     expect(container.querySelector("[data-curse]")).toBeNull();
   });
 
+  it("shows a revealed companion, and puts the reader's into the hand when the rules offer it", () => {
+    const companion = { name: "Lurrus of the Dream-Den", cardId: "lurrus", toHand: false };
+    const onCompanion = vi.fn();
+    const { rerender } = render(
+      <PlateFrame
+        seat="you"
+        active={false}
+        poison={0}
+        companion={companion}
+        onCompanion={onCompanion}
+      >
+        <span>plate</span>
+      </PlateFrame>,
+    );
+    expect(screen.getByLabelText("Companion: Lurrus of the Dream-Den")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+    rerender(
+      <PlateFrame
+        seat="you"
+        active={false}
+        poison={0}
+        companion={{ ...companion, toHand: true }}
+        onCompanion={onCompanion}
+      >
+        <span>plate</span>
+      </PlateFrame>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Put Lurrus of the Dream-Den, your companion, into your hand for {3}",
+      }),
+    );
+    expect(onCompanion).toHaveBeenCalledOnce();
+  });
+
   it("chips each Curse on the player by name, and points at its card", () => {
     const curse = gameCard("Curse of Opulence", { lane: "other" });
     const onPointCard = vi.fn();

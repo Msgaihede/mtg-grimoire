@@ -57,6 +57,7 @@ const named = (index: number, label: string) => ({
   number: null,
   yes: null,
   label,
+  cost: null,
 });
 
 describe("PromptPanel", () => {
