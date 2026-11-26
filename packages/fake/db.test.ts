@@ -12392,7 +12392,7 @@ describe("the third deck kind", () => {
 });
 
 /**
- * Issue #1673: a `THEORY ONLY` deck's tile reads its plan, so the gallery's two reads answer the
+ * Issue #1673: a tile turned to its theory list reads its plan, so the gallery's two reads answer the
  * plan's size and costs beside the Actual list's — `DECK_SELECT`'s subquery and `PIP_COSTS_SQL`
  * over the other variant, with the same three exclusions.
  */

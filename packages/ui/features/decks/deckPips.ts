@@ -31,8 +31,8 @@ import { tileList } from "./deckCover";
  *
  * **A row whose asked-for list is empty is a deck with nothing to say in that list**, and is
  * absent for the same reason: the read answers a deck that has costs in *either* list, so a
- * `THEORY ONLY` deck arrives with an empty Actual half and must not become an all-zero record in
- * the Actual map.
+ * deck with an empty Actual list arrives with an empty Actual half and must not become an
+ * all-zero record in the Actual map.
  *
  * The rows are folded rather than replaced, so a backend that ever answered two rows for one
  * deck adds them instead of losing one — there is no unique index on `(deck, cost)` in the
@@ -62,10 +62,10 @@ export function deckPips(
  * count printed under the bar, so the two stay one list (issue #1673).
  *
  * **Hands `live` back as it is when no deck in `decks` reads its plan**, which is every gallery
- * without a `THEORY ONLY` deck: the map's identity is what the colour sort's memo and the tiles
- * hold still on, and a copy made for nothing would move both. A theory-only deck's Actual list
- * is empty by definition — `cardCount` is `0`, and the bar's pile is that count's — so it has no
- * Actual entry to replace, only a plan entry to add.
+ * where no tile's `THEORY | ACTUAL` chip is on Theory: the map's identity is what the colour
+ * sort's memo and the tiles hold still on, and a copy made for nothing would move both. A deck
+ * showing its plan has its Actual entry replaced by the plan's, or removed when the plan has no
+ * costs, so its bar is never the other list's.
  */
 export function tilePips(
   decks: readonly DeckRow[],

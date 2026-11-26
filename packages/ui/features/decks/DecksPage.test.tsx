@@ -62,6 +62,7 @@ const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
 const importPickFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
+const deckSetViewState = vi.hoisted(() => vi.fn());
 // The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
 // resolve; what it is called with is asserted in its own test below.
 const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -94,6 +95,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckImportCommit,
     importPickFile,
     syncStatus,
+    deckSetViewState,
   },
 }));
 
@@ -2129,8 +2131,9 @@ describe("DecksPage", () => {
    * **The virtual arm is asserted to answer _before_ the theory ones** by the fixture rather
    * than by a second case: `ARENA` is a Virtual deck with sixty cards, so a `deckBadge` that
    * tested `theoryEnabled` first would read it as `regular` and draw nothing — and one that
-   * tested `cardCount` first would call it `THEORY + ACTUAL`. Both wrong answers are a failure
-   * here.
+   * asked for a plan first would call it `THEORY | ACTUAL`. Both wrong answers are a failure
+   * here. A theory deck with an empty Actual list wears the same chip as any other: the chip is
+   * a switch between the two lists, never a reading of which one holds cards.
    */
   it("badges a deck by what kind of deck it is", async () => {
     deckList.mockResolvedValue([
@@ -2145,35 +2148,56 @@ describe("DecksPage", () => {
     const burn = (await tileFor("Burn")).closest("li")!;
     expect(within(burn).queryByText(/THEORY|ACTUAL|LIVE|VIRTUAL/)).not.toBeInTheDocument();
     const kenrith = (await tileFor("Kenrith Two-Drops")).closest("li")!;
-    expect(within(kenrith).getByText("THEORY + ACTUAL")).toBeInTheDocument();
+    expect(
+      within(kenrith).getByRole("button", { name: /^Showing the actual list/ }),
+    ).toHaveTextContent(/THEORY.*\|.*ACTUAL/);
     const sketch = (await tileFor("Sketch")).closest("li")!;
-    expect(within(sketch).getByText("THEORY ONLY")).toBeInTheDocument();
+    expect(
+      within(sketch).getByRole("button", { name: /^Showing the actual list/ }),
+    ).toBeInTheDocument();
+    expect(within(sketch).queryByText(/ONLY/)).not.toBeInTheDocument();
     const arena = (await tileFor("Arena Mono-Red")).closest("li")!;
     expect(within(arena).getByText("VIRTUAL")).toBeInTheDocument();
   });
 
   /**
-   * The dash means **provisional**, and a virtual deck's list is not.
-   *
-   * A class assertion, because jsdom loads no stylesheet and lays nothing out — there is no
-   * computed border style to read, so the source text of the class list is the only thing here
-   * that can go red. It is worth one case anyway: which of the two treatments a new badge takes
-   * is a *ruling* (`DeckTile.tsx` argues it at the site), and a ruling with no test is a line of
-   * prose the next `cn(…)` edit can quietly reverse. `THEORY ONLY` is asserted beside it so the
-   * case cannot pass by the class having been dropped from both.
+   * The chip is a switch: the bold word is the list the tile reads, a press turns the tile to
+   * the other list at once (optimistic) and stores the choice as the deck's `lastVariant`
+   * through `deck_set_view_state` — the per-deck memory the editor opens on. Bold is a class
+   * assertion, since jsdom lays nothing out; the invisible bold copy behind each word is what
+   * keeps the chip's width, and it is asserted present so a tidy-up cannot drop it.
    */
-  it("dashes the plan's badge and not the virtual one", async () => {
-    deckList.mockResolvedValue([
-      { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
-      ARENA,
-    ]);
-
+  it("turns a theory deck's tile between its two lists from the chip", async () => {
+    const SPLIT: DeckRow = {
+      ...KENRITH,
+      id: 41,
+      name: "Split",
+      cardCount: 12,
+      theoryCardCount: 99,
+      folderId: null,
+    };
+    deckList.mockResolvedValue([SPLIT]);
+    deckSetViewState.mockResolvedValue(undefined);
     wrap(<DecksPage />);
 
-    const sketch = (await tileFor("Sketch")).closest("li")!;
-    expect(within(sketch).getByText("THEORY ONLY")).toHaveClass("border-dashed");
-    const arena = (await tileFor("Arena Mono-Red")).closest("li")!;
-    expect(within(arena).getByText("VIRTUAL")).not.toHaveClass("border-dashed");
+    const tile = (await tileFor("Split")).closest("li")!;
+    const chip = within(tile).getByRole("button", { name: /^Showing the actual list/ });
+    const bold = () => [...chip.querySelectorAll(".font-bold:not(.invisible)")].map((e) => e.textContent);
+    expect(bold()).toEqual(["ACTUAL"]);
+    expect(chip.querySelectorAll(".invisible.font-bold")).toHaveLength(2);
+    expect(chip).toHaveAttribute("data-no-drag");
+    expect(within(tile).getByText("12")).toBeInTheDocument();
+
+    deckList.mockResolvedValue([{ ...SPLIT, lastVariant: "theory" }]);
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(within(tile).getByText("99")).toBeInTheDocument());
+    expect(deckSetViewState).toHaveBeenCalledWith(41, { variant: "theory" });
+    const turned = within(tile).getByRole("button", { name: /^Showing the theory list/ });
+    expect(
+      [...turned.querySelectorAll(".font-bold:not(.invisible)")].map((e) => e.textContent),
+    ).toEqual(["THEORY"]);
+    expect(within(tile).getByText("in the theory list")).toHaveClass("sr-only");
   });
 });
 
@@ -2229,21 +2253,29 @@ describe("the card count's fit to the format", () => {
   });
 
   /**
-   * Issue #1673: a `THEORY ONLY` deck is a plan being built, so its tile — the count, its
-   * verdict and the colour bar — is about the plan, and the screen reader hears which list the
-   * number is. A deck with an Actual list keeps reading that list, whatever its plan holds.
+   * A theory deck turned to its plan (`lastVariant: "theory"`) reads its tile — the count, its
+   * verdict and the colour bar — from the plan, and the screen reader hears which list the number
+   * is. One turned to Actual reads that list, whatever its plan holds — even when it is empty.
    */
-  it("reads a THEORY ONLY deck's count, verdict and colours from its plan", async () => {
+  it("reads a theory deck's count, verdict and colours from the list its chip shows", async () => {
     const PLAN: DeckRow = {
       ...KENRITH,
       id: 31,
       name: "Full Plan",
       cardCount: 0,
       theoryCardCount: 100,
+      lastVariant: "theory",
       folderId: null,
     };
     const SHORT_PLAN: DeckRow = { ...PLAN, id: 32, name: "Short Plan", theoryCardCount: 73 };
-    const BUILT: DeckRow = { ...PLAN, id: 33, name: "Built", cardCount: 100, theoryCardCount: 40 };
+    const BUILT: DeckRow = {
+      ...PLAN,
+      id: 33,
+      name: "Built",
+      cardCount: 100,
+      theoryCardCount: 40,
+      lastVariant: "live",
+    };
     deckList.mockResolvedValue([PLAN, SHORT_PLAN, BUILT]);
     deckPipCosts.mockResolvedValue([
       { deckId: 31, costs: [], theoryCosts: [{ cost: "{U}", copies: 4 }] },
@@ -2266,7 +2298,9 @@ describe("the card count's fit to the format", () => {
 
     const plan = await tileOf(31);
     await waitFor(() => expect(within(plan).getByText("Blue")).toBeInTheDocument());
-    expect(within(plan).getByText("THEORY ONLY")).toBeInTheDocument();
+    expect(
+      within(plan).getByRole("button", { name: /^Showing the theory list/ }),
+    ).toBeInTheDocument();
     expect(within(plan).getByText("100")).not.toHaveClass("text-destructive");
     expect(within(plan).getByText("in the theory list")).toHaveClass("sr-only");
 
@@ -2276,7 +2310,7 @@ describe("the card count's fit to the format", () => {
       /73 cards in the theory list .*you have 73\./,
     );
 
-    // An Actual list wins the tile back: its count and its colours, not the plan's.
+    // Turned to Actual: its count and its colours, not the plan's.
     const built = await tileOf(33);
     await waitFor(() => expect(within(built).getByText("Green")).toBeInTheDocument());
     expect(within(built).queryByText("Black")).not.toBeInTheDocument();

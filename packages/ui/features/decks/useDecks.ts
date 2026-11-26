@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, ipcError, type DeckInput, type DeckPatch, type DeckRow } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type DeckInput,
+  type DeckPatch,
+  type DeckRow,
+  type DeckVariant,
+} from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 
 /** Stable identity for "no decks yet" — the gallery's `useMemo`s key off this array. */
@@ -165,6 +172,33 @@ export function useDecks() {
     ...writes,
   });
 
+  /**
+   * Which of a theory deck's two lists its tile shows — the tile's `THEORY | ACTUAL` chip.
+   *
+   * **The deck's `lastVariant`, written through `deck_set_view_state`**, the editor's own
+   * per-deck memory of which list it is on: one choice per deck, kept in SQLite and synced with
+   * the deck, and the editor then opens on the list the tile was showing. That command moves no
+   * `updatedAt`, so the gallery's order holds still under a press.
+   *
+   * **Optimistic**, because the chip is a switch the reader is looking at: the row in
+   * `["decks", "list"]` flips at the press, and the root is re-read once the write settles —
+   * success or refusal — so a refused write puts the chip back and a cached editor detail is not
+   * left opening on the old list.
+   */
+  const setVariant = useMutation({
+    mutationFn: ({ id, variant }: { id: number; variant: DeckVariant }) =>
+      ipc.deckSetViewState(id, { variant }),
+    onMutate: async ({ id, variant }) => {
+      await queryClient.cancelQueries({ queryKey: ["decks", "list"] });
+      queryClient.setQueryData<DeckRow[]>(["decks", "list"], (rows) =>
+        rows?.map((row) => (row.id === id ? { ...row, lastVariant: variant } : row)),
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    },
+  });
+
   return {
     query,
     /** Every deck, archived last and most recently touched first. Empty until the first
@@ -176,6 +210,7 @@ export function useDecks() {
     remove,
     duplicate,
     setFolder,
+    setVariant,
   };
 }
 

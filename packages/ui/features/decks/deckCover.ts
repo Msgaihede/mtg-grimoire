@@ -17,11 +17,12 @@ import { rowKind } from "./deckKind";
  * What kind of deck this is, in one word — which of its two lists exist, or that it keeps no
  * cardboard at all. The one thing a tile can say about a deck that a card count cannot.
  *
- * Derived rather than stored, from fields `deck_list` already answers.
- * {@link DeckRow.cardCount} counts the **actual** list only, so a deck with theory switched on
- * and nothing in that list is a plan and not yet a deck: `THEORY ONLY`. One derivation, because
- * a badge and the editor's Theory/Actual switch must never disagree about which lists a deck
- * has.
+ * Derived rather than stored, from fields `deck_list` already answers. A deck with theory
+ * switched on wears `THEORY | ACTUAL` whatever is in either list: on the gallery the chip is the
+ * tile's switch between the two lists ({@link tileList}), so it says which lists the deck has and,
+ * in bold, which one the tile is showing. It used to read `THEORY ONLY` when the Actual list was
+ * empty and turn the tile to the plan by itself, which hid an empty or oversized list and the
+ * other list's colours from the reader — the reader now picks.
  *
  * **A deck that keeps no plan wears no badge at all**, and that is the caption's `Any` argument
  * read across: one list is what every deck is born with, so a word for it would sit on nearly
@@ -41,43 +42,34 @@ import { rowKind } from "./deckKind";
  * `deckKind.ts`, which argues why that is the safer of the two readings. Asking the flags here
  * in this file's own order would be a second answer to that question, agreeing today.
  *
- * `THEORY ONLY` is the state **switching the theory list on now produces**, rather than an
- * unusual one: the write moves the actual list into the plan and leaves it empty, so the badge
- * reads the deck the way the editor does from that moment.
- *
  * **`Actual` is the word and `live` is still the stored variant** — the split the editor's
  * switch argues, which this file only follows. Issue #357 was this badge still reading
  * `LIVE + THEORY` a week after the tabs stopped: the vocabulary a reader meets inside a deck and
  * the one on its tile are one vocabulary. A Virtual deck's rows are `live` rows too, which is
  * exactly why its badge cannot be built out of the variant either.
  */
-export type DeckBadge = "VIRTUAL" | "THEORY + ACTUAL" | "THEORY ONLY";
+export type DeckBadge = "VIRTUAL" | "THEORY | ACTUAL";
 
 export function deckBadge(deck: DeckRow): DeckBadge | null {
   const kind = rowKind(deck);
   if (kind === "virtual") return "VIRTUAL";
   if (kind === "regular") return null;
-  return deck.cardCount === 0 ? "THEORY ONLY" : "THEORY + ACTUAL";
+  return "THEORY | ACTUAL";
 }
 
 /**
  * Which of a deck's two lists its tile's figures are read from — the card count, the colour bar
- * and the size verdict on it, and the `Cards` sort (issue #1673).
+ * and the size verdict on it, and the `Cards` sort.
  *
- * **The Actual list, unless the deck is `THEORY ONLY`.** A deck the reader is building from a
- * plan has nothing in its Actual list for as long as the plan is being built, and a tile reading
- * `0 cards` over an empty bar says nothing about the list being worked on — the report was a
- * wall of Commander plans, every one of them a red `0`. So that deck's tile is about its plan,
- * and every other deck's is about its cardboard, as it always was: the moment the first card
- * lands in the Actual list the badge turns to `THEORY + ACTUAL` and the tile goes back to the
- * deck the reader has.
- *
- * **Decided by {@link deckBadge} and nothing else**, so the badge is what tells the reader which
- * list the figures under it are: a tile cannot draw the plan's count under a badge that says the
- * deck has an Actual list, nor the reverse. A plan that is empty too draws `0` either way.
+ * **The list the reader picked on the tile's `THEORY | ACTUAL` chip**, which is the deck's stored
+ * {@link DeckRow.lastVariant} — the same per-deck choice the editor opens on, so the tile and the
+ * editor agree about which list the deck is looked at through, and the choice survives a restart
+ * and syncs with the deck. **Never chosen by what is in the lists**: an empty or oversized list is
+ * a fact the reader wants to see, not one to switch away from. A deck without a plan reads its
+ * Actual list.
  */
-export function tileList(deck: DeckRow): DeckVariant {
-  return deckBadge(deck) === "THEORY ONLY" ? "theory" : "live";
+export function tileList(deck: Pick<DeckRow, "theoryEnabled" | "virtualOnly" | "lastVariant">): DeckVariant {
+  return rowKind(deck) === "theory" ? deck.lastVariant : "live";
 }
 
 /** The card count a deck's tile prints — {@link tileList}'s list, sized the one way both are. */

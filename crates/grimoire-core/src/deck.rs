@@ -1168,10 +1168,9 @@ pub struct DeckRow {
     /// of kind `main`, `commander` or `maybe`, the same three exclusions word for word, so the
     /// plan is sized exactly the way the deck is (issue #1673).
     ///
-    /// **A fact for every deck, and which number a tile prints is TypeScript's.** A deck with
-    /// theory switched on and nothing in its Actual list is a plan the reader is still building
-    /// — the `THEORY ONLY` badge — and a caption reading `0 cards` under it says nothing about
-    /// the list being worked on. `deckCover.ts`' `tileList` is the one rule that picks which of
+    /// **A fact for every deck, and which number a tile prints is TypeScript's.** A theory
+    /// deck's tile shows whichever list the reader turned it to with its `THEORY | ACTUAL` chip
+    /// (the deck's `last_variant`). `deckCover.ts`' `tileList` is the one rule that picks which of
     /// the two counts a gallery tile draws; this column only makes the second one readable
     /// without a `deck_get` per tile. `0` on a deck that keeps no plan, which is what it holds.
     ///
@@ -4434,7 +4433,7 @@ pub fn list_draft_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
 /// empty `costs` array for each of them would be one object per deck saying nothing.
 ///
 /// **Two lists, and either may be the empty one** (issue #1673): a deck is present when its
-/// Actual list *or* its theory list has a cost to fold, so a `THEORY ONLY` deck arrives with
+/// Actual list *or* its theory list has a cost to fold, so a deck turned to its theory list arrives with
 /// `costs: []` and its plan in [`Self::theory_costs`]. Which of the two a tile colours its bar
 /// from is TypeScript's (`deckCover.ts`' `tileList`), the same rule that picks its card count.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -10572,7 +10571,7 @@ mod tests {
     /// **The plan is sized the way the deck is** (issue #1673): [`DeckRow::theory_card_count`]
     /// is [`DeckRow::card_count`] with the variant turned over and nothing else — a live row,
     /// a switched-off pile, a sideboard and a companion count toward neither number in the
-    /// other's list, and an active Maybeboard counts in its own. A `THEORY ONLY` tile prints
+    /// other's list, and an active Maybeboard counts in its own. A tile turned to its theory list prints
     /// this, so it has to mean what the Actual count would mean once the plan is built.
     #[test]
     fn the_theory_count_reads_only_theory_rows_in_active_categories() {
@@ -10823,7 +10822,7 @@ mod tests {
     }
 
     /// **The plan's bar counts the pile [`DeckRow::theory_card_count`] counts** (issue #1673),
-    /// so a `THEORY ONLY` tile, which prints that count, colours its bar from the same cards.
+    /// so a tile turned to its theory list, which prints that count, colours its bar from the same cards.
     /// The colour bar test above asked in the other direction; this one asks the plan's half —
     /// a live row, a plan sideboard, a plan companion and a switched-off plan pile, in turn —
     /// and pins that a deck whose only costs are its plan's is **present**, with an empty
@@ -12277,7 +12276,7 @@ mod tests {
                 // would be iterated a character at a time. One word, so no casing to get wrong.
                 "tags": ["No Gamechangers", "Meme"],
                 // Issue #1673, and `theoryCardCount` rather than `theory_card_count`: a gallery
-                // tile of a `THEORY ONLY` deck prints this key, and a snake-cased one would be
+                // tile of a deck turned to its theory list prints this key, and a snake-cased one would be
                 // `undefined` — `NaN cards` on exactly the tiles the column was added for.
                 "theoryCardCount": 98
             })

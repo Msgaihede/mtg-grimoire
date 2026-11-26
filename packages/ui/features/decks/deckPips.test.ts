@@ -119,8 +119,8 @@ describe("deckPips", () => {
   });
 
   /**
-   * Issue #1673: the read answers both lists, each folded into its own map. A `THEORY ONLY` deck
-   * arrives with an empty Actual half, and it must be **absent** from the Actual map — the same
+   * Issue #1673: the read answers both lists, each folded into its own map. A deck with an empty
+   * Actual list arrives with an empty Actual half, and it must be **absent** from the Actual map — the same
    * "told nothing" as a deck the read never mentioned — rather than a record of zeroes.
    */
   it("folds the plan's half when asked for the theory list, and each half alone", () => {
@@ -142,9 +142,16 @@ describe("deckPips", () => {
 /** A gallery row with only the fields {@link tilePips} reads through `tileList` set. */
 function deckRow(
   id: number,
-  shape: Partial<Pick<DeckRow, "theoryEnabled" | "virtualOnly" | "cardCount">>,
+  shape: Partial<Pick<DeckRow, "theoryEnabled" | "virtualOnly" | "cardCount" | "lastVariant">>,
 ): DeckRow {
-  return { id, theoryEnabled: false, virtualOnly: false, cardCount: 0, ...shape } as DeckRow;
+  return {
+    id,
+    theoryEnabled: false,
+    virtualOnly: false,
+    cardCount: 0,
+    lastVariant: "live",
+    ...shape,
+  } as DeckRow;
 }
 
 describe("tilePips", () => {
@@ -155,13 +162,13 @@ describe("tilePips", () => {
     [3, pips({ B: 1 })],
   ]);
 
-  /** The badge decides: `THEORY ONLY` (theory on, nothing in the Actual list) reads the plan,
-   *  and every other deck its Actual list — whatever its plan holds. */
-  it("colours a THEORY ONLY deck's tile from its plan and every other tile from its cards", () => {
+  /** The chip decides: a theory deck turned to Theory reads the plan, and every other deck its
+   *  Actual list — whatever either holds. A regular deck's stale `lastVariant` is never read. */
+  it("colours a tile turned to its plan from the plan and every other tile from its cards", () => {
     const decks = [
       deckRow(1, { theoryEnabled: true, cardCount: 4 }),
-      deckRow(2, { theoryEnabled: true, cardCount: 0 }),
-      deckRow(3, { cardCount: 0 }),
+      deckRow(2, { theoryEnabled: true, cardCount: 0, lastVariant: "theory" }),
+      deckRow(3, { cardCount: 0, lastVariant: "theory" }),
     ];
 
     const byDeck = tilePips(decks, live, theory);
@@ -178,10 +185,18 @@ describe("tilePips", () => {
     expect(tilePips(decks, live, theory)).toBe(live);
   });
 
-  it("draws no bar for a THEORY ONLY deck whose plan has no costs either", () => {
-    const decks = [deckRow(4, { theoryEnabled: true, cardCount: 0 })];
+  it("draws no bar for a tile turned to a plan with no costs, though its cards have some", () => {
+    const decks = [deckRow(1, { theoryEnabled: true, cardCount: 4, lastVariant: "theory" })];
+    const planless = new Map<number, ReturnType<typeof pips>>();
 
-    expect(tilePips(decks, live, theory).has(4)).toBe(false);
+    expect(tilePips(decks, live, planless).has(1)).toBe(false);
+  });
+
+  /** An empty Actual list is shown as it is — no automatic switch to the plan. */
+  it("leaves a theory deck with an empty Actual list on that list until it is turned", () => {
+    const decks = [deckRow(2, { theoryEnabled: true, cardCount: 0 })];
+
+    expect(tilePips(decks, live, theory).has(2)).toBe(false);
   });
 });
 

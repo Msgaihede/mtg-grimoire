@@ -15,7 +15,7 @@ import { deckPips, tilePips } from "./deckPips";
 
 /**
  * The pip distribution of every deck in `decks`, keyed by id — each from the list its tile is
- * about (`tilePips`: the Actual list, or the plan on a `THEORY ONLY` deck, issue #1673).
+ * about (`tilePips`: the Actual list, or the plan on a deck turned to its theory list, issue #1673).
  *
  * `["decks", "pips"]`, **under the `["decks"]` root every deck write already invalidates**, and
  * that is the whole of what keeps a bar honest: adding a card, moving one between piles,
@@ -45,7 +45,7 @@ export function useDeckPips(decks: readonly DeckRow[]): {
    */
   const live = useMemo(() => deckPips(query.data ?? []), [query.data]);
   const theory = useMemo(() => deckPips(query.data ?? [], "theory"), [query.data]);
-  /** `live` itself on a wall with no `THEORY ONLY` deck, so the map is as still as it was. */
+  /** `live` itself on a wall with no tile turned to its theory list, so the map is as still as it was. */
   const byDeck = useMemo(() => tilePips(decks, live, theory), [decks, live, theory]);
 
   return {

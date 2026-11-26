@@ -1560,10 +1560,9 @@ export interface DeckRow {
    * word, so a plan is sized exactly as the deck it becomes will be. `0` on a deck that keeps no
    * plan (issue #1673).
    *
-   * **A fact, and which count a tile prints is `deckCover.ts`' `tileList`**: a `THEORY ONLY`
-   * deck — theory on, nothing in its Actual list — captions and colours its tile from the plan,
-   * because `0 cards` under a deck the reader is building says nothing about it. Everywhere
-   * else the Actual count is the deck's size.
+   * **A fact, and which count a tile prints is `deckCover.ts`' `tileList`**: a theory deck
+   * captions and colours its tile from whichever list its `THEORY | ACTUAL` chip is turned to
+   * ({@link DeckRow.lastVariant}). Everywhere else the Actual count is the deck's size.
    */
   theoryCardCount: number;
   /** Unix seconds. The gallery's sort key, and every card write moves it — including a
@@ -2047,8 +2046,8 @@ export interface PipCost {
  * variant, in **active** categories of kind `main`, `commander` or `maybe` — and
  * {@link theoryCosts} is `DeckRow.theoryCardCount`'s, the same rule over the plan. So the bar
  * and the card count on the tile beside it are always two readings of one list, whichever list
- * the tile is about (`deckCover.ts`' `tileList`, issue #1673): the Actual list, unless the deck
- * is `THEORY ONLY`.
+ * the tile is about (`deckCover.ts`' `tileList`, issue #1673): the Actual list, or the plan on a
+ * theory deck whose chip is turned to it.
  *
  * **A deck with nothing to say is absent from the answer rather than present and empty**, which
  * is what a `GROUP BY` gives and what the caller must be written for: an all-lands pile and a

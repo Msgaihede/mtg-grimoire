@@ -18,6 +18,7 @@ import {
   tileList,
 } from "@grimoire/ui/features/decks/deckCover";
 import { deckColorsLabel } from "@grimoire/ui/features/decks/deckPips";
+import { listChipLabel, ListWords, otherList } from "@grimoire/ui/features/decks/listChip";
 import { DeckCardCount, deckSizeProblem } from "@grimoire/ui/features/decks/deckSizeMark";
 import { sortDecks } from "@grimoire/ui/features/decks/deckSort";
 import { bracketLabel, useDeckBrackets } from "@grimoire/ui/features/decks/useDeckBrackets";
@@ -89,7 +90,7 @@ const openDeck = (deckId: number) => navigate({ view: "decks", deckId, cardId: n
  * of it, and its first card is then one press away.
  */
 export function DecksPage({ folderId }: { folderId: number | null }) {
-  const { decks, query, create } = useDecks();
+  const { decks, query, create, setVariant } = useDecks();
   const newDeckFormatKey = useNewDeckFormat();
   /** Which door is open: the blank deck's dialog, the list's sheet, or neither. Page state, not a
    *  place — a half-made deck is nothing worth sending to somebody. */
@@ -231,6 +232,9 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
           pips={pipsByDeck.get(deck.id) ?? null}
           bracket={bracketFor(deck)}
           sizeProblem={deckSizeProblem(deck, formatSpecFor(deck.formatKey))}
+          onToggleList={() =>
+            setVariant.mutate({ id: deck.id, variant: otherList(tileList(deck)) })
+          }
         />
       ))}
     </ul>
@@ -428,12 +432,15 @@ function DeckCover({
   pips,
   bracket,
   sizeProblem,
+  onToggleList,
 }: {
   deck: DeckRow;
   pips: PipCounts | null;
   bracket: string | null;
   /** Why the count does not fit the format, or `null` — the desktop tile's red count (#1524). */
   sizeProblem: string | null;
+  /** Turn a theory deck's tile to its other list — the `THEORY | ACTUAL` chip's press. */
+  onToggleList: () => void;
 }) {
   const image = useImageRetry(coverUrl(deck));
   const badge = deckBadge(deck);
@@ -487,11 +494,27 @@ function DeckCover({
           style={{ aspectRatio: ART_ASPECT }}
         >
           {/* Stacked down one corner rather than spread across the top edge: a cover is about
-              160px wide at 360, and `THEORY + ACTUAL` beside `BRACKET ~3` does not fit on one
-              line there — each mark keeps its words whole, and the second goes under the first. */}
+              160px wide at 360, and `THEORY | ACTUAL` beside `BRACKET ~3` does not fit on one
+              line there — each mark keeps its words whole, and the second goes under the first.
+
+              A theory deck's chip is a button, as the desktop tile's is: the bold word is the list
+              the count and the colour bar are read from. It keeps the mark's size, and its press
+              area reaches past its edges to a finger's (`after:`), so the chip draws no bigger. */}
           <span className="flex flex-col items-start gap-1">
-            {badge !== null && (
-              <span className={cn(MARK, badge === "THEORY ONLY" && "border-dashed")}>{badge}</span>
+            {badge === "VIRTUAL" && <span className={MARK}>{badge}</span>}
+            {badge === "THEORY | ACTUAL" && (
+              <button
+                type="button"
+                onClick={onToggleList}
+                aria-label={listChipLabel(tileList(deck), true)}
+                className={cn(
+                  MARK,
+                  "pointer-events-auto relative after:absolute after:-inset-x-1 after:-inset-y-3 after:content-['']",
+                  FOCUS,
+                )}
+              >
+                <ListWords showing={tileList(deck)} />
+              </button>
             )}
             {bracket !== null && <span className={cn(MARK, "uppercase")}>{bracket}</span>}
           </span>
