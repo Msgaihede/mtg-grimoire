@@ -30,6 +30,32 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.75.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.74.0...v0.75.0) (2026-11-26)
+
+
+### Features
+
+* **decks:** THEORY | ACTUAL chip switches a theory deck's tile between its lists ([#1754](https://github.com/Msgaihede/mtg-grimoire/issues/1754)) ([6e4895d](https://github.com/Msgaihede/mtg-grimoire/commit/6e4895dc114ece0accc0313000f0d0fbce755585))
+* **playtest:** ask the free choices phase lists only a few answers for ([961387e](https://github.com/Msgaihede/mtg-grimoire/commit/961387e5e66c6fa14555ddcc9e53dee1e99ebc3d))
+* **playtest:** ask the free choices phase lists only a few answers for ([7f582e8](https://github.com/Msgaihede/mtg-grimoire/commit/7f582e802e09014c2990a61535451edf36da24a9)), closes [#1745](https://github.com/Msgaihede/mtg-grimoire/issues/1745)
+* **playtest:** concede, and the rules' actions that belong to no card ([8905996](https://github.com/Msgaihede/mtg-grimoire/commit/89059962be8034214b855b20ed12be17b08e53e2))
+* **playtest:** concede, and the rules' actions that belong to no card ([09192e6](https://github.com/Msgaihede/mtg-grimoire/commit/09192e63f12c146661b08c87883423d1d8424052)), closes [#1746](https://github.com/Msgaihede/mtg-grimoire/issues/1746)
+* **playtest:** hold priority over your own spell, pick who plays first, split a search's finds ([#1757](https://github.com/Msgaihede/mtg-grimoire/issues/1757)) ([49a3c24](https://github.com/Msgaihede/mtg-grimoire/commit/49a3c249c5f2e32352ba1338520e0a2b7d902f55)), closes [#1751](https://github.com/Msgaihede/mtg-grimoire/issues/1751)
+* **playtest:** stack details, exiled-with links, storm count, turn order and player conditions ([c1e67ca](https://github.com/Msgaihede/mtg-grimoire/commit/c1e67ca4fad1924cdc6d6504ff0c7e61bb50a92b))
+* **playtest:** stack details, exiled-with links, storm count, turn order and player conditions ([b4ed189](https://github.com/Msgaihede/mtg-grimoire/commit/b4ed1895827cf67913ca244f025526349f307eb9)), closes [#1747](https://github.com/Msgaihede/mtg-grimoire/issues/1747)
+* **playtest:** tap sources inside a payment window, ask before sacrificial mana ([eb594b0](https://github.com/Msgaihede/mtg-grimoire/commit/eb594b0f534a1e92644f98d623b044f3c26762e9))
+* **playtest:** tap sources inside a payment window, ask before sacrificial mana ([cc410ce](https://github.com/Msgaihede/mtg-grimoire/commit/cc410ce8024c8c2395d0638a8d6eab975948243d)), closes [#1743](https://github.com/Msgaihede/mtg-grimoire/issues/1743)
+* **playtest:** tell the rules events the log still dropped ([ac98e40](https://github.com/Msgaihede/mtg-grimoire/commit/ac98e4026d73f78d49cb3e96397550c1e6eb86d0))
+* **playtest:** tell the rules events the log still dropped ([#1748](https://github.com/Msgaihede/mtg-grimoire/issues/1748)) ([e7f1b01](https://github.com/Msgaihede/mtg-grimoire/commit/e7f1b0101c27fe0a4bae728123ad070672cdf5c6))
+* **playtest:** the companion and the sideboard outside the game ([a15db30](https://github.com/Msgaihede/mtg-grimoire/commit/a15db30ebec7f48c77976712240991e53c2d4d6d))
+* **playtest:** the companion and the sideboard outside the game ([#1744](https://github.com/Msgaihede/mtg-grimoire/issues/1744)) ([af1b0c6](https://github.com/Msgaihede/mtg-grimoire/commit/af1b0c66b2173d47b6357527cced146cf147e625))
+
+
+### Bug Fixes
+
+* **playtest:** send the reader's library in order only while the sandbox is on ([49e1bd4](https://github.com/Msgaihede/mtg-grimoire/commit/49e1bd4766bd927881942e9e35febbded18a0e87))
+* **playtest:** send the reader's library in order only while the sandbox is on ([c3cd41f](https://github.com/Msgaihede/mtg-grimoire/commit/c3cd41f2c60467658d96b5c45bc9a8deb6c6673e)), closes [#1749](https://github.com/Msgaihede/mtg-grimoire/issues/1749)
+
 ## [0.74.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.73.0...v0.74.0) (2026-11-25)
 
 
